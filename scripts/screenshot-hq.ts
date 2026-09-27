@@ -102,6 +102,8 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "access-review", path: "/access-review", ready: "main#main-content" },
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
+  { name: "admin-settings", path: "/admin/settings", ready: ".sla-rows" },
+  { name: "admin-danger", path: "/admin/danger", ready: "main#main-content" },
   { name: "admin-staff", path: "/admin/staff", ready: ".data-table" },
   {
     name: "admin-staff-member",
@@ -251,6 +253,38 @@ async function captureInteractions(page: Page, folder: string) {
   } else {
     console.log(`  ✓ ${folder}/export (${name})`);
   }
+
+  // Retention, run by hand: type the phrase the page shows, then open a lead it reached.
+  // The first pass anonymises; later passes find nothing due and only look.
+  await page.goto(`${BASE}/admin/danger`, { waitUntil: "networkidle" });
+  if ((await page.locator("#retention-run-confirm").count()) > 0) {
+    const phrase = (await page.locator(".typed-phrase").first().textContent()) ?? "";
+    await page.fill("#retention-run-reason", "Screenshot run of the retention rules");
+    await page.fill("#retention-run-confirm", phrase);
+    await page.locator("button", { hasText: "Anonymise now" }).click();
+    await page.waitForSelector(".form-sent", { timeout: 10_000 });
+    // The form is gone, so focus must land on its result rather than fall to the page.
+    const focused = await page.evaluate(
+      () => document.activeElement?.classList.contains("danger-result") ?? false,
+    );
+    if (!focused) report(`${folder}/admin-retention-ran`, "focus did not move to the result");
+  }
+  // Focusing the result scrolled the page; a full-page capture taken scrolled draws the
+  // sticky header, and the skip link hidden above it, halfway down the image.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await assertNoOverflow(page, `${folder}/admin-retention-ran`);
+  await assertAccessible(page, `${folder}/admin-retention-ran`);
+  await page.screenshot({ path: `${OUT}/${folder}/admin-retention-ran.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/admin-retention-ran`);
+  await page.goto(`${BASE}/leads/1e000000-0000-4000-8000-0000000000d1`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("h1", { hasText: "Anonymised lead" }).count()) === 0) {
+    report(`${folder}/lead-anonymised`, "the lead the run reached does not read as anonymised");
+  }
+  await assertAccessible(page, `${folder}/lead-anonymised`);
+  await page.screenshot({ path: `${OUT}/${folder}/lead-anonymised.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/lead-anonymised`);
 }
 
 async function run(browser: Browser) {

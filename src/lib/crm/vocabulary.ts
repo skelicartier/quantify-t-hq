@@ -136,6 +136,23 @@ export const FIRM_TYPES = [
 export const TEAM_SIZE_BANDS = ["1", "2-10", "11-50", "51-200", "201+"] as const;
 
 /** A source key read as words when the settings list is unavailable. */
+type SourceOption = { key: string; label: string };
+
+/**
+ * Every source's label, archived ones included: a record keeps the source it was filed
+ * under after that source leaves the pickers, and should still read as words.
+ */
+export function sourceNamesFrom(
+  settings: { sources: SourceOption[]; archived_sources: SourceOption[] } | null,
+): Map<string, string> {
+  return new Map(
+    [...(settings?.sources ?? []), ...(settings?.archived_sources ?? [])].map((source) => [
+      source.key,
+      source.label,
+    ]),
+  );
+}
+
 export function sourceLabel(key: string, labels?: ReadonlyMap<string, string>): string {
   if (!key) return "—";
   return labels?.get(key) ?? formatSentence(key);

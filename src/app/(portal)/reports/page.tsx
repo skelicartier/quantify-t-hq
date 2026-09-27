@@ -11,7 +11,12 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings } from "@/lib/api/crm";
 import { EXPORT_KINDS, readWeeklyReport, type WeeklyReport } from "@/lib/api/reports";
-import { LOSS_REASON_LABELS, MOVEMENT_KIND_LABELS, sourceLabel } from "@/lib/crm/vocabulary";
+import {
+  LOSS_REASON_LABELS,
+  MOVEMENT_KIND_LABELS,
+  sourceLabel,
+  sourceNamesFrom,
+} from "@/lib/crm/vocabulary";
 import { formatAbsolute, formatDate, formatMoney, formatMrr, formatWait } from "@/lib/format";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -62,9 +67,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   }
   let sourceNames = new Map<string, string>();
   try {
-    sourceNames = new Map(
-      (await readCrmSettings(context.token)).sources.map((source) => [source.key, source.label]),
-    );
+    sourceNames = sourceNamesFrom(await readCrmSettings(context.token));
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;

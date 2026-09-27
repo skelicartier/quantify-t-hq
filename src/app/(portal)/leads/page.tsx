@@ -15,7 +15,7 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLeads, type CrmSettings, type LeadsPage } from "@/lib/api/crm";
 import { directoryOrEmpty } from "@/lib/api/staff";
-import { LEAD_STAGES, LEAD_STAGE_LABELS, sourceLabel } from "@/lib/crm/vocabulary";
+import { LEAD_STAGES, LEAD_STAGE_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -67,9 +67,7 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
       throw error;
   }
   const names = await directoryOrEmpty(context.token);
-  const sourceNames = new Map(
-    (settings?.sources ?? []).map((source) => [source.key, source.label]),
-  );
+  const sourceNames = sourceNamesFrom(settings);
   const canWrite = hasCapability(context, "crm:write");
 
   const filterLink = (name: keyof typeof filters, value: string) => {
@@ -159,6 +157,11 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
                     {settings.sources.map((source) => (
                       <option key={source.key} value={source.key}>
                         {source.label}
+                      </option>
+                    ))}
+                    {settings.archived_sources.map((source) => (
+                      <option key={source.key} value={source.key}>
+                        {source.label} (archived)
                       </option>
                     ))}
                   </select>

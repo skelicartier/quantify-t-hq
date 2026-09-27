@@ -4,7 +4,9 @@ const TABS = [
   { href: "/admin/staff", label: "Staff" },
   { href: "/admin/integrations", label: "Integrations" },
   { href: "/admin/settings/pipeline", label: "Pipeline" },
+  { href: "/admin/settings", label: "Settings" },
   { href: "/admin/audit", label: "Audit" },
+  { href: "/admin/danger", label: "Danger zone" },
 ] as const;
 
 /** The admin area's own tabs; the sidebar has one Admin entry for all of it. */

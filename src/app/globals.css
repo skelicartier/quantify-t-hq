@@ -2100,6 +2100,24 @@
     background: var(--accent);
   }
 
+  /* Too wide for a phone, the strip wraps instead of pushing the page sideways. Each
+     item then draws its own border, collapsed onto its neighbours', so two rows still
+     read as one control. */
+  @media (max-width: 720px) {
+    .segmented {
+      flex-wrap: wrap;
+      max-width: 100%;
+      padding: 0 1px 1px 0;
+      border: 0;
+    }
+
+    .segmented a,
+    .segmented a + a {
+      margin: 0 -1px -1px 0;
+      border: 1px solid var(--line-strong);
+    }
+  }
+
   .pagination {
     display: flex;
     flex-wrap: wrap;
@@ -5358,5 +5376,123 @@
     font-family: var(--font-heading);
     font-size: 20px !important;
     font-weight: 600;
+  }
+}
+
+@layer pages {
+  /* --- Admin: settings and the danger zone ------------------------------------------ */
+  .sla-rows,
+  .source-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* One priority per row: its name, the two targets, then save. The name is a fixed
+     column so the four rows line up and read as one table of promises. */
+  .sla-row {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px 14px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    background: var(--panel);
+  }
+
+  /* Level with the inputs, beneath the field labels. */
+  .sla-row__name {
+    margin: 27px 0 0;
+    font-weight: 600;
+  }
+
+  .sla-row__foot {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding-top: 22px;
+  }
+
+  .source-rows__title {
+    margin: 20px 0 8px;
+  }
+
+  /* Fixed key and action columns, so every row's name field ends at the same place. */
+  .source-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 190px 150px;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .source-row > .callout,
+  .source-row > .form-sent {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+
+  .source-row__key {
+    color: var(--quiet);
+    font-size: 11.5px;
+  }
+
+  .source-row__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .source-row__fixed {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .danger-count {
+    margin: 0 0 14px;
+  }
+
+  /* Takes focus when an act replaces its own form; the outline would only frame text. */
+  .danger-result:focus {
+    outline: none;
+  }
+
+  /* The phrase to type, set apart so it is read as a literal, not as prose. */
+  .typed-phrase {
+    padding: 1px 6px;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    border: 1px solid var(--line);
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+
+  @media (max-width: 720px) {
+    .sla-row {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .sla-row__name,
+    .sla-row__foot {
+      grid-column: 1 / -1;
+      margin: 0;
+      padding-top: 0;
+    }
+
+    .source-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .source-row__key {
+      grid-column: 1;
+      grid-row: 2;
+    }
   }
 }

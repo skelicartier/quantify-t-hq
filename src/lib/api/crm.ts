@@ -221,6 +221,8 @@ export const leadSchema = z.object({
   converted_person_id: z.string(),
   converted_deal_id: z.string(),
   created_at: z.string().nullable(),
+  /** Set when retention emptied the personal fields; the lead is kept for the counts. */
+  anonymised_at: z.string().nullable(),
 });
 export type Lead = z.infer<typeof leadSchema>;
 
@@ -337,6 +339,9 @@ export type PipelineStage = z.infer<typeof pipelineStageSchema>;
 const crmSettingsSchema = okEnvelope.extend({
   pipeline: z.array(pipelineStageSchema),
   sources: z.array(z.object({ key: z.string(), label: z.string() })),
+  archived_sources: z.array(z.object({ key: z.string(), label: z.string() })),
+  /** New leads fall back to these, so they cannot be archived. */
+  protected_sources: z.array(z.string()),
   lead_stages: z.array(z.string()),
   disqualify_reasons: z.array(z.string()),
 });

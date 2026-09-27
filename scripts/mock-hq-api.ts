@@ -232,6 +232,7 @@ function audit(
   entity: string,
   entityId: string,
   reason = "",
+  detail: Record<string, unknown> = {},
 ) {
   auditEvents.unshift({
     occurred_at: now(),
@@ -241,7 +242,7 @@ function audit(
     entity_type: entity,
     entity_id: entityId,
     reason,
-    detail: {},
+    detail,
     correlation_id: `mock-${randomUUID().slice(0, 8)}`,
   });
 }
@@ -315,12 +316,30 @@ function caller(headers: Record<string, string | string[] | undefined>) {
   return member ? { member, session } : null;
 }
 
-const SLA_TARGETS: Record<string, { first: number; next: number }> = {
+/** Mirrors 0009's seeded targets; `hq/settings/sla/update` changes them. */
+const SLA_SEED: Record<string, { first: number; next: number }> = {
   urgent: { first: 60, next: 120 },
   high: { first: 240, next: 480 },
   normal: { first: 480, next: 960 },
   low: { first: 1440, next: 2880 },
 };
+const SLA_TARGETS: Record<string, { first: number; next: number }> = {};
+/** Most urgent first, the order the service checks and shows them in. */
+const SLA_ORDER = ["urgent", "high", "normal", "low"] as const;
+const SLA_MIN_MINUTES = 15;
+const SLA_MAX_MINUTES = 14 * 24 * 60;
+function seedSla() {
+  for (const [priority, targets] of Object.entries(SLA_SEED))
+    SLA_TARGETS[priority] = { ...targets };
+}
+seedSla();
+function slaView() {
+  return SLA_ORDER.map((priority) => ({
+    priority,
+    first_reply_minutes: SLA_TARGETS[priority]!.first,
+    next_reply_minutes: SLA_TARGETS[priority]!.next,
+  }));
+}
 
 function hoursAgo(hours: number): string {
   return new Date(Date.now() - hours * 3600_000).toISOString().replace(/\.\d{3}Z$/, "+00:00");
@@ -1492,6 +1511,9 @@ type LeadRow = {
   converted_person_id: string;
   converted_deal_id: string;
   created_at: string;
+  /** Absent means never touched since creation. */
+  updated_at?: string;
+  anonymised_at?: string | null;
 };
 type DealRow = {
   id: string;
@@ -2144,17 +2166,209 @@ function seedCrm() {
     last_used_at: agoIso(3),
     revoked_at: null,
   });
+  seedRetentionExamples();
 }
 seedCrm();
 
-const SOURCES = [
-  { key: "website_early_access", label: "Early access form" },
-  { key: "website_contact", label: "Contact form" },
-  { key: "demo_booking", label: "Demo booking" },
-  { key: "outbound", label: "Outbound" },
-  { key: "referral", label: "Referral" },
-  { key: "other", label: "Other" },
+/** One lead per rule, old enough that the default rules reach it. */
+function seedRetentionExamples() {
+  const base = {
+    source_key: "website_early_access",
+    payload: {},
+    owner_staff_id: OWNER_STAFF,
+    converted_company_id: "",
+    converted_person_id: "",
+    converted_deal_id: "",
+  };
+  leads.push(
+    {
+      ...base,
+      id: "1e000000-0000-4000-8000-0000000000d1",
+      email: "iris@harlow-wealth.test",
+      full_name: "Iris Cole",
+      company_name: "Harlow Wealth",
+      message: "Looking for a retail screener.",
+      stage: "disqualified",
+      disqualify_reason: "not_a_fit",
+      first_replied_at: hoursAgo(24 * 419),
+      created_at: hoursAgo(24 * 420),
+      updated_at: hoursAgo(24 * 400),
+    },
+    {
+      ...base,
+      id: "1e000000-0000-4000-8000-0000000000d2",
+      email: "oren@quayside-capital.test",
+      full_name: "Oren Blake",
+      company_name: "Quayside Capital",
+      message: "Maybe next year.",
+      stage: "attempting",
+      disqualify_reason: "",
+      first_replied_at: hoursAgo(24 * 799),
+      created_at: hoursAgo(24 * 800),
+      updated_at: hoursAgo(24 * 790),
+    },
+  );
+}
+
+/** Mirrors 0010's seeded sources. Rows, not constants: admins add and archive them. */
+const SOURCE_SEED: ReadonlyArray<readonly [string, string]> = [
+  ["website_early_access", "Early access form"],
+  ["website_contact", "Contact form"],
+  ["demo_booking", "Demo booking"],
+  ["outbound", "Outbound"],
+  ["referral", "Referral"],
+  ["other", "Other"],
 ];
+/** Mirrors crm_routes.PROTECTED_SOURCES: new leads fall back to these. */
+const PROTECTED_SOURCES = ["website_early_access", "other", "outbound"];
+const sources: Array<{ key: string; label: string; archived: boolean }> = [];
+function seedSources() {
+  sources.length = 0;
+  for (const [key, label] of SOURCE_SEED) sources.push({ key, label, archived: false });
+}
+seedSources();
+
+/** Mirrors crm_routes._check_source: a new choice must be a live source. */
+function sourceRefusal(key: string, current = "") {
+  if (!key || key === current) return null;
+  if (sources.some((row) => row.key === key && !row.archived)) return null;
+  return refuse(400, "malformed_request", { source_key: "not a source on the list" });
+}
+
+// -- retention: mirrors account_api/hq/retention.py ----------------------------------
+const RETENTION_SEED = { disqualified: 365, quiet: 730 };
+const retentionRules = { ...RETENTION_SEED };
+const RETENTION_BATCH = 200;
+const RETENTION_STAGES: Record<"disqualified" | "quiet", string[]> = {
+  disqualified: ["disqualified"],
+  quiet: ["new", "attempting", "connected"],
+};
+const ANONYMISED_TASK_TITLE = "Task on an anonymised lead";
+const ANONYMISED = { lead: "anonymised under the retention rules; nothing on it can change" };
+const SIGN_OUT_PHRASE = "sign everyone out";
+
+function leadLastTouch(row: LeadRow): number {
+  let touched = new Date(row.updated_at ?? row.created_at).getTime();
+  for (const activity of activities) {
+    if (activity.lead_id === row.id) touched = Math.max(touched, new Date(activity.at).getTime());
+  }
+  return touched;
+}
+
+function retentionCandidates(rule: "disqualified" | "quiet"): LeadRow[] {
+  const days = retentionRules[rule];
+  if (!days) return [];
+  const cutoff = Date.now() - days * 86_400_000;
+  return leads
+    .filter(
+      (row) =>
+        !row.anonymised_at &&
+        !row.converted_company_id &&
+        !row.converted_person_id &&
+        !row.converted_deal_id &&
+        RETENTION_STAGES[rule].includes(row.stage) &&
+        !tasks.some((task) => task.lead_id === row.id && task.status === "open") &&
+        leadLastTouch(row) < cutoff,
+    )
+    .sort((a, b) => leadLastTouch(a) - leadLastTouch(b));
+}
+
+function retentionPreview() {
+  const rules = (["disqualified", "quiet"] as const).map((rule) => ({
+    rule,
+    days: retentionRules[rule],
+    untouched_since: retentionRules[rule]
+      ? new Date(Date.now() - retentionRules[rule] * 86_400_000).toISOString()
+      : null,
+    due: retentionCandidates(rule).length,
+  }));
+  const due = rules.reduce((sum, row) => sum + row.due, 0);
+  return { rules, due, this_run: Math.min(due, RETENTION_BATCH), batch: RETENTION_BATCH };
+}
+
+function onlyTheLead(row: { lead_id: string } & Record<string, unknown>, leadId: string) {
+  return (
+    row.lead_id === leadId && !row.company_id && !row.person_id && !row.deal_id && !row.meeting_id
+  );
+}
+
+function sweepRetention(staffId: string | null, reason: string, limit: number) {
+  let budget = limit;
+  const planned: Record<string, LeadRow[]> = {};
+  for (const rule of ["disqualified", "quiet"] as const) {
+    planned[rule] = budget > 0 ? retentionCandidates(rule).slice(0, budget) : [];
+    budget -= planned[rule]!.length;
+  }
+  const ids = Object.values(planned).flatMap((rows) => rows.map((row) => row.id));
+  if (ids.length)
+    audit("retention.swept", staffId, "retention", "leads", reason, {
+      rules: { ...retentionRules },
+      lead_ids: ids,
+    });
+  const anonymised: Record<string, number> = {};
+  const at = now();
+  for (const [rule, rows] of Object.entries(planned)) {
+    for (const row of rows) {
+      Object.assign(row, {
+        email: "",
+        full_name: "",
+        company_name: "",
+        message: "",
+        payload: {},
+        anonymised_at: at,
+        updated_at: at,
+      });
+      for (const activity of activities)
+        if (onlyTheLead(activity as ActivityRow & Record<string, unknown>, row.id))
+          activity.body = "";
+      for (const task of tasks)
+        if (onlyTheLead(task as TaskRow & Record<string, unknown>, row.id))
+          Object.assign(task, { title: ANONYMISED_TASK_TITLE, body: "" });
+    }
+    anonymised[rule] = rows.length;
+  }
+  const cutoff = Date.now() - 30 * 86_400_000;
+  const kept = webhookEvents.filter((row) => new Date(row.received_at).getTime() >= cutoff);
+  const pruned = webhookEvents.length - kept.length;
+  webhookEvents.splice(0, webhookEvents.length, ...kept);
+  return {
+    anonymised,
+    skipped: 0,
+    webhook_events_pruned: pruned,
+    remaining: retentionPreview().due,
+  };
+}
+
+function lastSweep() {
+  const row = auditEvents.find((event) => event.action === "retention.swept");
+  if (!row) return null;
+  const detail = row.detail as { lead_ids?: string[] };
+  return {
+    at: String(row.occurred_at),
+    by_staff: Boolean(row.staff_id),
+    leads: (detail.lead_ids ?? []).length,
+  };
+}
+
+/** Mirrors crm_routes._check_linked_lead. */
+function linkedLeadRefusal(leadId: string) {
+  if (!leadId) return null;
+  const lead = leads.find((row) => row.id === leadId);
+  if (!lead) return refuse(400, "malformed_request", { lead_id: "no such lead" });
+  if (lead.anonymised_at) return refuse(400, "malformed_request", ANONYMISED);
+  return null;
+}
+
+// -- the webhook ledger: mirrors hq_webhook_events --------------------------------------
+type WebhookRow = {
+  provider: string;
+  event_id: string;
+  received_at: string;
+  state: string;
+  outcome: string;
+  duplicates: number;
+};
+const webhookEvents: WebhookRow[] = [];
 
 function stageOf(key: string): StageRow | undefined {
   return stages.find((row) => row.key === key);
@@ -2225,6 +2439,7 @@ function leadView(row: LeadRow) {
     converted_person_id: row.converted_person_id,
     converted_deal_id: row.converted_deal_id,
     created_at: row.created_at,
+    anonymised_at: row.anonymised_at ?? null,
   };
 }
 
@@ -2522,6 +2737,8 @@ routes.push(
     handler: ({ body, headers }) => {
       const name = String(body.name ?? "").trim();
       if (!name) return refuse(400, "malformed_request", { name: "a name is required" });
+      const companySourceRefusal = sourceRefusal(String(body.source_key ?? ""));
+      if (companySourceRefusal) return companySourceRefusal;
       const domain = String(body.domain ?? "")
         .trim()
         .toLowerCase();
@@ -2574,6 +2791,10 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = companies.find((company) => company.id === params.company_id);
       if (!row) return refuse(404, "not_found");
+      if ("source_key" in body) {
+        const refusal = sourceRefusal(String(body.source_key ?? ""), row.source_key);
+        if (refusal) return refusal;
+      }
       if ("name" in body) row.name = String(body.name ?? "").trim() || row.name;
       if ("domain" in body) {
         const domain = String(body.domain ?? "")
@@ -2645,6 +2866,8 @@ routes.push(
       const fullName = String(body.full_name ?? "").trim();
       if (!email && !fullName)
         return refuse(400, "malformed_request", { reason: "a name or an email is required" });
+      const personSourceRefusal = sourceRefusal(String(body.source_key ?? ""));
+      if (personSourceRefusal) return personSourceRefusal;
       if (email && people.some((row) => row.email === email))
         return refuse(400, "malformed_request", { email: "already a person" });
       const row: PersonRow = {
@@ -2764,10 +2987,13 @@ routes.push(
       const fullName = String(body.full_name ?? "").trim();
       if (!email && !fullName)
         return refuse(400, "malformed_request", { reason: "a name or an email is required" });
+      const leadSource = String(body.source_key ?? "") || "outbound";
+      const leadSourceRefusal = sourceRefusal(leadSource);
+      if (leadSourceRefusal) return leadSourceRefusal;
       const found = caller(headers);
       const row: LeadRow = {
         id: randomUUID(),
-        source_key: String(body.source_key ?? "") || "outbound",
+        source_key: leadSource,
         email,
         full_name: fullName,
         company_name: String(body.company_name ?? ""),
@@ -2820,6 +3046,7 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = leads.find((lead) => lead.id === params.lead_id);
       if (!row) return refuse(404, "not_found");
+      if (row.anonymised_at) return refuse(400, "malformed_request", ANONYMISED);
       const stage = String(body.stage ?? "");
       if (stage) {
         if (!["new", "attempting", "connected", "disqualified"].includes(stage))
@@ -2833,6 +3060,7 @@ routes.push(
         row.stage = stage;
       }
       if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
+      row.updated_at = now();
       audit("lead.updated", caller(headers)?.member.id ?? null, "lead", row.id);
       return ok({ lead: leadView(row) });
     },
@@ -2845,6 +3073,7 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = leads.find((lead) => lead.id === params.lead_id);
       if (!row) return refuse(404, "not_found");
+      if (row.anonymised_at) return refuse(400, "malformed_request", ANONYMISED);
       if (row.stage === "qualified" || row.stage === "disqualified")
         return refuse(400, "malformed_request", { stage: "already closed" });
       const found = caller(headers);
@@ -3280,6 +3509,8 @@ routes.push(
       const meetingId = String(body.meeting_id ?? "");
       if (!Object.values(links).some(Boolean) && !meetingId)
         return refuse(400, "malformed_request", { reason: "link at least one record" });
+      const leadRefusal = linkedLeadRefusal(links.lead_id);
+      if (leadRefusal) return leadRefusal;
       const found = caller(headers);
       recordActivity({
         kind,
@@ -3345,6 +3576,8 @@ routes.push(
     handler: ({ body, headers }) => {
       const title = String(body.title ?? "").trim();
       if (!title) return refuse(400, "malformed_request", { title: "required" });
+      const taskLeadRefusal = linkedLeadRefusal(String(body.lead_id ?? ""));
+      if (taskLeadRefusal) return taskLeadRefusal;
       const found = caller(headers);
       const row: TaskRow = {
         id: randomUUID(),
@@ -3402,7 +3635,13 @@ routes.push(
     handler: () =>
       ok({
         pipeline: stagePayload(),
-        sources: SOURCES,
+        sources: sources
+          .filter((row) => !row.archived)
+          .map((row) => ({ key: row.key, label: row.label })),
+        archived_sources: sources
+          .filter((row) => row.archived)
+          .map((row) => ({ key: row.key, label: row.label })),
+        protected_sources: PROTECTED_SOURCES,
         lead_stages: ["new", "attempting", "connected", "qualified", "disqualified"],
         disqualify_reasons: DISQUALIFY_REASONS,
       }),
@@ -3453,6 +3692,240 @@ routes.push(
       }
       audit("pipeline.stage_updated", caller(headers)?.member.id ?? null, "pipeline_stage", key);
       return ok({ updated: true, key });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/settings/support",
+    auth: true,
+    capability: "tickets:read",
+    handler: () =>
+      ok({
+        sla: slaView(),
+        bounds: { min_minutes: SLA_MIN_MINUTES, max_minutes: SLA_MAX_MINUTES },
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/sla/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const priority = String(body.priority ?? "");
+      if (!(priority in SLA_TARGETS))
+        return refuse(400, "malformed_request", { priority: "one of low, normal, high, urgent" });
+      const before = { ...SLA_TARGETS[priority]! };
+      const updated = { ...before };
+      const timers = [
+        ["first_reply_minutes", "first"],
+        ["next_reply_minutes", "next"],
+      ] as const;
+      for (const [name, key] of timers) {
+        if (!(name in body)) continue;
+        const value = Number(body[name]);
+        if (!Number.isInteger(value))
+          return refuse(400, "malformed_request", { [name]: "a whole number of minutes" });
+        if (value < SLA_MIN_MINUTES || value > SLA_MAX_MINUTES)
+          return refuse(400, "malformed_request", { [name]: "15 minutes to 14 days" });
+        updated[key] = value;
+      }
+      const proposed = { ...SLA_TARGETS, [priority]: updated };
+      for (const [name, key] of timers) {
+        for (let index = 0; index + 1 < SLA_ORDER.length; index += 1) {
+          const sooner = SLA_ORDER[index]!;
+          const later = SLA_ORDER[index + 1]!;
+          if (proposed[sooner]![key] > proposed[later]![key])
+            return refuse(400, "malformed_request", {
+              [name]: `${sooner} cannot wait longer than ${later}`,
+            });
+        }
+      }
+      SLA_TARGETS[priority] = updated;
+      audit(
+        "settings.sla_updated",
+        caller(headers)?.member.id ?? null,
+        "sla_policy",
+        priority,
+        "",
+        {
+          before,
+          after: updated,
+        },
+      );
+      return ok({ updated: true, sla: slaView() });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/sources/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const key = String(body.key ?? "").trim();
+      if (!/^[a-z][a-z0-9_]{1,31}$/.test(key))
+        return refuse(400, "malformed_request", { key: "a short lowercase slug" });
+      const existing = sources.find((row) => row.key === key);
+      let label: string | undefined;
+      if ("label" in body) {
+        label = String(body.label ?? "")
+          .trim()
+          .slice(0, 80);
+        if (!label) return refuse(400, "malformed_request", { label: "cannot be empty" });
+      }
+      let archived: boolean | undefined;
+      if ("archived" in body) {
+        archived = body.archived === true;
+        if (archived && PROTECTED_SOURCES.includes(key))
+          return refuse(400, "malformed_request", {
+            archived: "new leads are filed under this source by default",
+          });
+      }
+      if (!existing) {
+        if (!label)
+          return refuse(400, "malformed_request", { label: "a new source needs a label" });
+        sources.push({ key, label, archived: false });
+      } else if (label !== undefined || archived !== undefined) {
+        if (label !== undefined) existing.label = label;
+        if (archived !== undefined) existing.archived = archived;
+      } else {
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
+      }
+      audit("settings.source_updated", caller(headers)?.member.id ?? null, "lead_source", key);
+      return ok({ updated: true, key });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/webhooks",
+    auth: true,
+    capability: "hq:admin",
+    handler: () =>
+      ok({
+        events: webhookEvents
+          .slice()
+          .sort((a, b) => b.received_at.localeCompare(a.received_at))
+          .slice(0, 50)
+          .map((row) => ({ ...row })),
+        kept_days: 30,
+      }),
+  },
+  {
+    method: "GET",
+    pattern: "hq/retention",
+    auth: true,
+    capability: "hq:admin",
+    handler: () => {
+      const view = retentionPreview();
+      return ok({
+        ...view,
+        confirm_phrase: view.this_run ? `anonymise ${view.this_run}` : "",
+        min_days: 30,
+        max_days: 3650,
+        webhook_ledger_days: 30,
+        last_sweep: lastSweep(),
+        sign_out_phrase: SIGN_OUT_PHRASE,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/retention/update",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const before = { ...retentionRules };
+      const after = { ...before };
+      for (const rule of ["disqualified", "quiet"] as const) {
+        const name = `${rule}_lead_days`;
+        if (!(name in body)) continue;
+        const value = Number(body[name]);
+        if (!Number.isInteger(value))
+          return refuse(400, "malformed_request", { [name]: "a whole number of days" });
+        if (!(value === 0 || (value >= 30 && value <= 3650)))
+          return refuse(400, "malformed_request", {
+            [name]: "0 to turn it off, or 30 to 3650 days",
+          });
+        after[rule] = value;
+      }
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say why, in a sentence" });
+      if (after.disqualified === before.disqualified && after.quiet === before.quiet)
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
+      audit(
+        "retention.rules_updated",
+        caller(headers)?.member.id ?? null,
+        "retention",
+        "leads",
+        reason,
+        {
+          before,
+          after,
+        },
+      );
+      Object.assign(retentionRules, after);
+      return ok({ updated: true, rules: { ...after } });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/retention/run",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say why, in a sentence" });
+      const view = retentionPreview();
+      if (!view.this_run) return refuse(400, "malformed_request", { confirm: "nothing is due" });
+      const expected = `anonymise ${view.this_run}`;
+      if (
+        String(body.confirm ?? "")
+          .trim()
+          .slice(0, 60)
+          .toLowerCase() !== expected
+      )
+        return refuse(400, "malformed_request", { confirm: `type: ${expected}` });
+      return ok({
+        ran: true,
+        ...sweepRetention(caller(headers)?.member.id ?? null, reason, view.this_run),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/sessions/revoke-all",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say why, in a sentence" });
+      if (
+        String(body.confirm ?? "")
+          .trim()
+          .slice(0, 60)
+          .toLowerCase() !== SIGN_OUT_PHRASE
+      )
+        return refuse(400, "malformed_request", { confirm: `type: ${SIGN_OUT_PHRASE}` });
+      const found = caller(headers)!;
+      audit("sessions.revoked_all", found.member.id, "session", "all", reason);
+      let revoked = 0;
+      for (const session of sessions.values()) {
+        if (session.revoked_at || session.id === found.session.id) continue;
+        session.revoked_at = now();
+        revoked += 1;
+      }
+      return ok({ revoked });
     },
   },
   {
@@ -3535,9 +4008,9 @@ routes.push(
       if (!email.includes("@"))
         return refuse(400, "malformed_request", { email: "an address is required" });
       live.last_used_at = now();
-      const sourceKey = SOURCES.some((source) => source.key === String(body.source_key ?? ""))
-        ? String(body.source_key)
-        : "other";
+      // As the service: no source means the website's own; an unknown one means "other".
+      const requested = String(body.source_key ?? "").trim() || "website_early_access";
+      const sourceKey = sources.some((source) => source.key === requested) ? requested : "other";
       if (
         leads.some(
           (row) =>
@@ -4126,6 +4599,14 @@ routes.push(
       calendar.account_email = "team@quantifyterminal.test";
       calendar.connected_at = now();
       calendar.last_synced_at = now();
+      webhookEvents.push({
+        provider: "calendar",
+        event_id: `${randomUUID()}:1`,
+        received_at: now(),
+        state: "sync",
+        outcome: "channel opened",
+        duplicates: 0,
+      });
       audit("calendar.connected", found.member.id, "integration", "calendar");
       return ok({
         calendar: calendarStatus(),
@@ -6070,6 +6551,10 @@ function resetWorld() {
   resetCalendar();
   seedRevenue();
   seedTeam();
+  seedSla();
+  seedSources();
+  Object.assign(retentionRules, RETENTION_SEED);
+  webhookEvents.length = 0;
   for (const member of staff) {
     member.enrolled = !member.email.startsWith("newbie");
     member.is_active = true;

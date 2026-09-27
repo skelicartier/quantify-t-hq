@@ -17,8 +17,8 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLead, type CrmSettings, type LeadDetail } from "@/lib/api/crm";
 import { directoryOrEmpty } from "@/lib/api/staff";
 import { isoDayPlus } from "@/lib/crm/dates";
-import { DISQUALIFY_LABELS, sourceLabel } from "@/lib/crm/vocabulary";
-import { formatSentence } from "@/lib/format";
+import { DISQUALIFY_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
+import { formatDate, formatSentence } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 
 export const metadata = { title: "Lead" };
@@ -74,11 +74,11 @@ export default async function LeadPage({ params }: LeadPageProps) {
   const names = await directoryOrEmpty(context.token);
 
   const { lead, matches, activities } = detail;
-  const canWrite = hasCapability(context, "crm:write");
+  const anonymised = Boolean(lead.anonymised_at);
+  // An anonymised lead is kept for the counts only; the service refuses any write to it.
+  const canWrite = hasCapability(context, "crm:write") && !anonymised;
   const closed = lead.stage === "qualified" || lead.stage === "disqualified";
-  const sourceNames = new Map(
-    (settings?.sources ?? []).map((source) => [source.key, source.label]),
-  );
+  const sourceNames = sourceNamesFrom(settings);
   const stageNames = new Map((settings?.pipeline ?? []).map((stage) => [stage.key, stage.label]));
   const openStages = (settings?.pipeline ?? [])
     .filter((stage) => !stage.outcome)
@@ -91,7 +91,7 @@ export default async function LeadPage({ params }: LeadPageProps) {
     <>
       <PageHeader
         eyebrow="Lead"
-        title={lead.full_name || lead.email || "Unnamed lead"}
+        title={anonymised ? "Anonymised lead" : lead.full_name || lead.email || "Unnamed lead"}
         breadcrumbs={[{ label: "Leads", href: "/leads" }]}
         description={
           <>
@@ -115,6 +115,13 @@ export default async function LeadPage({ params }: LeadPageProps) {
           </>
         }
       />
+      {anonymised && (
+        <Callout tone="neutral" title={`Anonymised on ${formatDate(lead.anonymised_at)}`}>
+          The retention rules removed the name, address and message after nobody had touched this
+          lead for long enough. Its stage, source and dates stay, so the funnel still adds up.
+          Nothing on it can change.
+        </Callout>
+      )}
       {lead.first_reply_overdue && (
         <Callout tone="danger" title="A first reply is overdue">
           They have waited longer than an hour. Reply, then log it below — logging the email or call
@@ -127,7 +134,11 @@ export default async function LeadPage({ params }: LeadPageProps) {
             {lead.message ? (
               <p className="prose-block">{lead.message}</p>
             ) : (
-              <p className="side-quiet">No message with this lead.</p>
+              <p className="side-quiet">
+                {anonymised
+                  ? "Removed when the lead was anonymised."
+                  : "No message with this lead."}
+              </p>
             )}
             {answers.length > 0 && (
               <KeyValue columns={2} className="answers">
@@ -183,31 +194,33 @@ export default async function LeadPage({ params }: LeadPageProps) {
               </p>
             </Card>
           )}
-          <Card title="Already known" titleAs="h3">
-            {matches.person === null && matches.company === null ? (
-              <p className="side-quiet">
-                Nobody at HQ matches this address or its domain. Converting creates both.
-              </p>
-            ) : (
-              <KeyValue>
-                {matches.person && (
-                  <KeyValueRow label="Person">
-                    <Link href={`/people/${matches.person.person_id}`}>
-                      {matches.person.full_name || matches.person.email}
-                    </Link>
-                  </KeyValueRow>
-                )}
-                {matches.company && (
-                  <KeyValueRow label="Company">
-                    <Link href={`/companies/${matches.company.company_id}`}>
-                      {matches.company.name}
-                    </Link>{" "}
-                    <LifecyclePill lifecycle={matches.company.lifecycle} />
-                  </KeyValueRow>
-                )}
-              </KeyValue>
-            )}
-          </Card>
+          {!anonymised && (
+            <Card title="Already known" titleAs="h3">
+              {matches.person === null && matches.company === null ? (
+                <p className="side-quiet">
+                  Nobody at HQ matches this address or its domain. Converting creates both.
+                </p>
+              ) : (
+                <KeyValue>
+                  {matches.person && (
+                    <KeyValueRow label="Person">
+                      <Link href={`/people/${matches.person.person_id}`}>
+                        {matches.person.full_name || matches.person.email}
+                      </Link>
+                    </KeyValueRow>
+                  )}
+                  {matches.company && (
+                    <KeyValueRow label="Company">
+                      <Link href={`/companies/${matches.company.company_id}`}>
+                        {matches.company.name}
+                      </Link>{" "}
+                      <LifecyclePill lifecycle={matches.company.lifecycle} />
+                    </KeyValueRow>
+                  )}
+                </KeyValue>
+              )}
+            </Card>
+          )}
           {canWrite && !closed && (
             <Card
               title="Qualify"

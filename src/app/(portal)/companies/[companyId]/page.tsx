@@ -31,7 +31,7 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompany, readCrmSettings, type CompanyDetail, type CrmSettings } from "@/lib/api/crm";
 import { directoryOrEmpty } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
-import { sourceLabel } from "@/lib/crm/vocabulary";
+import { sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { formatDate, formatMrr } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 
@@ -77,9 +77,7 @@ export default async function CompanyPage({ params }: CompanyPageProps) {
   const canWrite = hasCapability(context, "crm:write");
   const canDeal = hasCapability(context, "deals:write");
   const stageNames = new Map((settings?.pipeline ?? []).map((stage) => [stage.key, stage.label]));
-  const sourceNames = new Map(
-    (settings?.sources ?? []).map((source) => [source.key, source.label]),
-  );
+  const sourceNames = sourceNamesFrom(settings);
   const openStages = (settings?.pipeline ?? [])
     .filter((stage) => !stage.outcome)
     .map((stage) => ({ key: stage.key, label: stage.label }));

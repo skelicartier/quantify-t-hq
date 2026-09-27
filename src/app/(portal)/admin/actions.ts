@@ -5,9 +5,11 @@ import { redirect } from "next/navigation";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import * as authApi from "@/lib/api/auth";
+import { HqApiRequestError } from "@/lib/api/core";
 import * as crmApi from "@/lib/api/crm";
 import * as integrationsApi from "@/lib/api/integrations";
 import * as keysApi from "@/lib/api/keys";
+import * as settingsApi from "@/lib/api/settings";
 import * as staffApi from "@/lib/api/staff";
 import { fieldValue, refusalMessage } from "@/lib/auth/forms";
 import { crmRefusal } from "@/lib/crm/refusal";
@@ -16,7 +18,7 @@ import { requireSameOriginServerAction } from "@/lib/security/action-origin";
 
 /** Pages with a confirm-it's-you panel; only these are refreshed after a code. */
 const ADMIN_PAGE =
-  /^\/(?:admin\/(?:integrations|settings\/pipeline|staff(?:\/[A-Za-z0-9-]{1,64})?)|revenue\/mrr|reports)$/;
+  /^\/(?:admin\/(?:integrations|danger|settings\/pipeline|staff(?:\/[A-Za-z0-9-]{1,64})?)|revenue\/mrr|reports)$/;
 
 const NOT_ADMIN: ActionState = { status: "error", message: "Only HQ admins can change this." };
 
@@ -394,4 +396,170 @@ export async function disconnectCalendarAction(
     message: "Disconnected. Meetings already synced stay.",
     sentAt: Date.now(),
   };
+}
+
+/** A whole number from a form field, or null when it is anything else. */
+function wholeNumber(formData: FormData, name: string): number | null {
+  const raw = fieldValue(formData, name, 12).trim();
+  return /^\d{1,6}$/.test(raw) ? Number(raw) : null;
+}
+
+export async function updateSlaAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/admin/settings");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const first = wholeNumber(formData, "first_reply_minutes");
+  const next = wholeNumber(formData, "next_reply_minutes");
+  if (first === null || next === null) {
+    return { status: "error", message: "Enter both targets as whole minutes." };
+  }
+  try {
+    await settingsApi.updateSla(context.token, {
+      priority: fieldValue(formData, "priority", 12),
+      first_reply_minutes: first,
+      next_reply_minutes: next,
+    });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/admin/settings");
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
+
+export async function updateSourceAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/admin/settings");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const input: Record<string, unknown> = { key: fieldValue(formData, "key", 32).trim() };
+  const label = fieldValue(formData, "label", 80).trim();
+  if (label) input.label = label;
+  const archived = fieldValue(formData, "archived", 5);
+  if (archived === "true") input.archived = true;
+  if (archived === "false") input.archived = false;
+  try {
+    await settingsApi.updateSource(context.token, input);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/admin/settings");
+  return {
+    status: "sent",
+    message: archived === "true" ? "Archived." : archived === "false" ? "Restored." : "Saved.",
+    sentAt: Date.now(),
+  };
+}
+
+/**
+ * The danger zone's phrase is bound to what the page showed. A refusal naming a
+ * different phrase means the page is stale — the count moved — not that the person
+ * mistyped, since the button only arms on an exact match.
+ */
+function dangerRefusal(error: unknown): ActionState {
+  if (
+    error instanceof HqApiRequestError &&
+    error.code === "malformed_request" &&
+    typeof error.details["confirm"] === "string"
+  ) {
+    revalidatePath("/admin/danger");
+    return {
+      status: "error",
+      message:
+        error.details["confirm"] === "nothing is due"
+          ? "Nothing is due any more. Nothing was changed."
+          : "The number due changed since this page loaded. Nothing was changed; check the new count and type it again.",
+    };
+  }
+  return crmRefusal(error);
+}
+
+export async function updateRetentionAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/admin/danger");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const disqualified = wholeNumber(formData, "disqualified_lead_days");
+  const quiet = wholeNumber(formData, "quiet_lead_days");
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (disqualified === null || quiet === null) {
+    return { status: "error", message: "Enter both rules as whole days; 0 turns a rule off." };
+  }
+  if (reason.length < 8) {
+    return { status: "error", message: "Say why the rules are changing, in a sentence." };
+  }
+  try {
+    await settingsApi.updateRetention(context.token, {
+      disqualified_lead_days: disqualified,
+      quiet_lead_days: quiet,
+      reason,
+    });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/admin/danger");
+  return { status: "sent", message: "Rules saved.", sentAt: Date.now() };
+}
+
+export async function runRetentionAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/admin/danger");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (reason.length < 8) {
+    return { status: "error", message: "Say why this runs now, in a sentence." };
+  }
+  try {
+    const result = await settingsApi.runRetention(context.token, {
+      confirm: fieldValue(formData, "confirm", 60).trim(),
+      reason,
+    });
+    revalidatePath("/admin/danger");
+    const done = Object.values(result.anonymised).reduce((sum, count) => sum + count, 0);
+    const left = result.remaining
+      ? ` ${result.remaining} more ${result.remaining === 1 ? "is" : "are"} due; run again.`
+      : "";
+    return {
+      status: "sent",
+      message: `Anonymised ${done} ${done === 1 ? "lead" : "leads"}.${left}`,
+      sentAt: Date.now(),
+    };
+  } catch (error) {
+    return dangerRefusal(error);
+  }
+}
+
+export async function signEveryoneOutAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/admin/danger");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (reason.length < 8) {
+    return { status: "error", message: "Say what happened, in a sentence." };
+  }
+  try {
+    const { revoked } = await settingsApi.signEveryoneOut(context.token, {
+      confirm: fieldValue(formData, "confirm", 60).trim(),
+      reason,
+    });
+    return {
+      status: "sent",
+      message: `Signed out ${revoked} ${revoked === 1 ? "session" : "sessions"}. Yours stays open.`,
+      sentAt: Date.now(),
+    };
+  } catch (error) {
+    return dangerRefusal(error);
+  }
 }

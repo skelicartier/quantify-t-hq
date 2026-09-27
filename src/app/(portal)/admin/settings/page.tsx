@@ -1,0 +1,131 @@
+import { updateSlaAction, updateSourceAction } from "@/app/(portal)/admin/actions";
+import { AdminTabs } from "@/components/admin/admin-tabs";
+import { NewSourceForm, SlaRowForm, SourceRowForm } from "@/components/admin/settings-forms";
+import { PageHeader } from "@/components/shell/page-header";
+import { Callout } from "@/components/ui/callout";
+import { Card } from "@/components/ui/card";
+import { hasCapability, requireStaff } from "@/lib/access/core";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { readCrmSettings, type CrmSettings } from "@/lib/api/crm";
+import { readSupportSettings, type SupportSettings } from "@/lib/api/settings";
+
+export const metadata = { title: "Settings" };
+export const dynamic = "force-dynamic";
+
+async function orNull<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof HqApiUnavailableError || error instanceof HqApiRequestError) return null;
+    throw error;
+  }
+}
+
+export default async function SettingsPage() {
+  const context = await requireStaff("/admin/settings");
+  if (!hasCapability(context, "hq:admin")) {
+    return (
+      <>
+        <PageHeader eyebrow="Admin" title="Settings" />
+        <Callout tone="neutral">Settings are kept by HQ admins.</Callout>
+      </>
+    );
+  }
+  const [support, crm]: [SupportSettings | null, CrmSettings | null] = await Promise.all([
+    orNull(() => readSupportSettings(context.token)),
+    orNull(() => readCrmSettings(context.token)),
+  ]);
+  const fixed = new Set(crm?.protected_sources ?? []);
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="Admin"
+        title="Settings"
+        description="The reply times the desk is held to, and the sources a lead can come from."
+        actions={<AdminTabs current="/admin/settings" />}
+      />
+      <div className="record-layout">
+        <div className="record-layout__main">
+          <section className="record-section" aria-labelledby="settings-sla">
+            <h2 className="record-section__title" id="settings-sla">
+              Reply targets
+            </h2>
+            <p className="page-note">
+              First reply runs from a new ticket to the first public answer; next reply runs from
+              each customer message while the ticket is open, and pauses while it waits on them. A
+              timer is at risk in its final fifth. A more urgent priority cannot be given longer
+              than a less urgent one.
+            </p>
+            {support === null ? (
+              <Callout tone="danger" role="alert">
+                The targets could not be read just now. Nothing was changed.
+              </Callout>
+            ) : (
+              <div className="sla-rows">
+                {support.sla.map((row) => (
+                  <SlaRowForm
+                    key={row.priority}
+                    action={updateSlaAction}
+                    row={row}
+                    bounds={support.bounds}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+          <section className="record-section" aria-labelledby="settings-sources">
+            <h2 className="record-section__title" id="settings-sources">
+              Lead sources
+            </h2>
+            {crm === null ? (
+              <Callout tone="danger" role="alert">
+                The sources could not be read just now. Nothing was changed.
+              </Callout>
+            ) : (
+              <>
+                <div className="source-rows">
+                  {crm.sources.map((source) => (
+                    <SourceRowForm
+                      key={source.key}
+                      action={updateSourceAction}
+                      source={source}
+                      archived={false}
+                      fixed={fixed.has(source.key)}
+                    />
+                  ))}
+                </div>
+                {crm.archived_sources.length > 0 && (
+                  <>
+                    <h3 className="eyebrow source-rows__title">Archived</h3>
+                    <div className="source-rows">
+                      {crm.archived_sources.map((source) => (
+                        <SourceRowForm
+                          key={source.key}
+                          action={updateSourceAction}
+                          source={source}
+                          archived
+                          fixed={false}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+        <aside className="record-layout__side">
+          <Card title="Add a source" titleAs="h3">
+            <NewSourceForm action={updateSourceAction} />
+          </Card>
+          <Callout tone="neutral" compact>
+            A source is never deleted: every lead filed under it keeps it. Archiving takes it out of
+            the pickers. The website form, hand-typed leads and anything unrecognised fall back to
+            the three marked as defaults, so those stay.
+          </Callout>
+        </aside>
+      </div>
+    </>
+  );
+}

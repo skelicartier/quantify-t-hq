@@ -26,6 +26,7 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCalendarStatus, type CalendarStatus } from "@/lib/api/integrations";
 import { readApiKeys, type ApiKey } from "@/lib/api/keys";
+import { readWebhooks, type WebhookEvent } from "@/lib/api/settings";
 import { directoryOrEmpty } from "@/lib/api/staff";
 import { formatAbsolute, formatDate } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -42,6 +43,21 @@ const KEY_COLUMNS = [
   { key: "state", label: "State" },
   { key: "revoke", label: "Revoke" },
 ];
+
+const WEBHOOK_COLUMNS = [
+  { key: "received", label: "Received" },
+  { key: "from", label: "From" },
+  { key: "outcome", label: "What happened" },
+  { key: "repeats", label: "Repeats" },
+];
+
+const PROVIDER_LABELS: Record<string, string> = { calendar: "Calendar" };
+
+/** The service writes outcomes as lowercase phrases; a table cell starts with a capital. */
+function outcomeText(event: WebhookEvent): string {
+  const text = event.outcome.replace(/^sync failed: /, "") || "Received";
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
 
 /** What the calendar's round trip came back with, in words. */
 const CALENDAR_OUTCOMES: Record<string, { tone: "success" | "danger" | "neutral"; text: string }> =
@@ -97,6 +113,13 @@ export default async function IntegrationsPage({ searchParams }: IntegrationsPag
   let calendar: CalendarStatus | null = null;
   try {
     calendar = (await readCalendarStatus(context.token)).calendar;
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
+  let webhooks: { events: WebhookEvent[]; kept_days: number } | null = null;
+  try {
+    webhooks = await readWebhooks(context.token);
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
@@ -257,6 +280,52 @@ export default async function IntegrationsPage({ searchParams }: IntegrationsPag
                   <CalendarDisconnectForm action={disconnectCalendarAction} disabled={!fresh} />
                 </details>
               </>
+            )}
+          </Card>
+          <Card
+            title="Notifications received"
+            titleAs="h2"
+            description={`Each push from an outside service, recorded once: a repeat delivery is counted, not acted on again. The last ${webhooks?.kept_days ?? 30} days.`}
+          >
+            {webhooks === null ? (
+              <Callout tone="danger" compact>
+                The notification log could not be read just now. This is a read failure, not an
+                empty log.
+              </Callout>
+            ) : (
+              <DataTable
+                caption="Notifications received"
+                columns={WEBHOOK_COLUMNS}
+                scroll={false}
+                isEmpty={webhooks.events.length === 0}
+                empty={
+                  <EmptyState
+                    title="Nothing received yet"
+                    description="Once the calendar is connected, each change it announces is listed here."
+                    compact
+                  />
+                }
+              >
+                {webhooks.events.map((event) => (
+                  <tr key={`${event.provider}:${event.event_id}`}>
+                    <td>
+                      <Timestamp value={event.received_at} now={now} mode="relative" />
+                    </td>
+                    <td>{PROVIDER_LABELS[event.provider] ?? event.provider}</td>
+                    <td>
+                      {event.outcome.startsWith("sync failed") ? (
+                        <>
+                          <StatusPill value="failed" label="Failed" tone="danger" />
+                          <span className="table-sub">{outcomeText(event)}</span>
+                        </>
+                      ) : (
+                        outcomeText(event)
+                      )}
+                    </td>
+                    <td>{event.duplicates > 0 ? event.duplicates : "—"}</td>
+                  </tr>
+                ))}
+              </DataTable>
             )}
           </Card>
         </div>
