@@ -1,0 +1,258 @@
+import Link from "next/link";
+
+import { AdminTabs } from "@/components/admin/admin-tabs";
+import { PageHeader } from "@/components/shell/page-header";
+import { Callout } from "@/components/ui/callout";
+import { DataTable } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ShortId } from "@/components/ui/short-id";
+import { Timestamp } from "@/components/ui/timestamp";
+import { hasCapability, requireStaff } from "@/lib/access/core";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { directoryOrEmpty, searchAudit, type AuditPage } from "@/lib/api/staff";
+import { formatSentence } from "@/lib/format";
+import { requestNow } from "@/lib/request-time";
+import { firstSearchValue } from "@/lib/search-params";
+
+export const metadata = { title: "Audit" };
+export const dynamic = "force-dynamic";
+
+const PAGE_SIZE = 50;
+
+const COLUMNS = [
+  { key: "when", label: "When" },
+  { key: "who", label: "Who" },
+  { key: "action", label: "Action" },
+  { key: "record", label: "Record" },
+  { key: "reason", label: "Reason and detail" },
+];
+
+const ENTITY_TYPES = [
+  "staff",
+  "session",
+  "lead",
+  "company",
+  "person",
+  "deal",
+  "task",
+  "activity",
+  "ticket",
+  "saved_reply",
+  "api_key",
+  "pipeline_stage",
+] as const;
+
+const RECORD_PAGES: Record<string, string> = {
+  lead: "/leads",
+  company: "/companies",
+  person: "/people",
+  deal: "/deals",
+  staff: "/admin/staff",
+  ticket: "/support",
+};
+
+/** One line from a detail object: `role: sales → admin · sessions revoked: 2`. */
+function describeDetail(detail: Record<string, unknown>): string {
+  return Object.entries(detail)
+    .map(([key, value]) => {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const record = value as Record<string, unknown>;
+        if ("from" in record && "to" in record) {
+          return `${formatSentence(key)}: ${String(record.from) || "none"} → ${String(record.to)}`;
+        }
+        return `${formatSentence(key)}: ${JSON.stringify(value)}`;
+      }
+      if (Array.isArray(value)) return `${formatSentence(key)}: ${value.join(", ")}`;
+      return `${formatSentence(key)}: ${String(value)}`;
+    })
+    .join(" · ");
+}
+
+type AuditPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function AuditIndexPage({ searchParams }: AuditPageProps) {
+  const context = await requireStaff("/admin/audit");
+  if (!hasCapability(context, "audit:read")) {
+    return (
+      <>
+        <PageHeader eyebrow="Admin" title="Audit" />
+        <Callout tone="neutral">The audit log is read by Owners and Admins.</Callout>
+      </>
+    );
+  }
+  const parameters = await searchParams;
+  const filters = {
+    action: firstSearchValue(parameters.action) ?? "",
+    entity_type: firstSearchValue(parameters.entity_type) ?? "",
+    entity_id: firstSearchValue(parameters.entity_id) ?? "",
+    staff_id: firstSearchValue(parameters.staff_id) ?? "",
+  };
+  const offset = Math.max(0, Number(firstSearchValue(parameters.offset) ?? 0) || 0);
+  const now = requestNow();
+
+  let page: AuditPage | null = null;
+  try {
+    page = await searchAudit(context.token, filters, { limit: PAGE_SIZE, offset });
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
+  const names = await directoryOrEmpty(context.token);
+
+  const pageLink = (nextOffset: number) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);
+    if (nextOffset > 0) query.set("offset", String(nextOffset));
+    const rendered = query.toString();
+    return rendered ? `/admin/audit?${rendered}` : "/admin/audit";
+  };
+
+  return (
+    <>
+      <PageHeader
+        eyebrow="Admin"
+        title="Audit"
+        description="Every change anyone made in HQ, newest first. Rows are never edited or removed."
+        actions={
+          hasCapability(context, "hq:admin") ? <AdminTabs current="/admin/audit" /> : undefined
+        }
+      />
+      <form className="filter-strip filter-strip--form" action="/admin/audit" role="search">
+        <span className="eyebrow">Filter</span>
+        <label className="sr-only" htmlFor="audit-action">
+          Action
+        </label>
+        <input
+          id="audit-action"
+          className="input input--small"
+          name="action"
+          defaultValue={filters.action}
+          placeholder="Action, e.g. deal.closed"
+          spellCheck={false}
+        />
+        <label className="sr-only" htmlFor="audit-type">
+          Record type
+        </label>
+        <select
+          id="audit-type"
+          className="select select--small"
+          name="entity_type"
+          defaultValue={filters.entity_type}
+        >
+          <option value="">Any record</option>
+          {ENTITY_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {formatSentence(type)}
+            </option>
+          ))}
+        </select>
+        <label className="sr-only" htmlFor="audit-staff">
+          Person
+        </label>
+        <select
+          id="audit-staff"
+          className="select select--small"
+          name="staff_id"
+          defaultValue={filters.staff_id}
+        >
+          <option value="">Anyone</option>
+          {[...names.values()].map((entry) => (
+            <option key={entry.staff_id} value={entry.staff_id}>
+              {entry.display_name}
+            </option>
+          ))}
+        </select>
+        {filters.entity_id && <input type="hidden" name="entity_id" value={filters.entity_id} />}
+        <button className="btn btn--small" type="submit">
+          Apply
+        </button>
+        {Object.values(filters).some(Boolean) && (
+          <Link className="filter-strip__clear" href="/admin/audit">
+            Clear
+          </Link>
+        )}
+      </form>
+      {page === null ? (
+        <Callout tone="danger" role="alert">
+          The audit log could not be read just now. This is a read failure, not an empty log.
+        </Callout>
+      ) : (
+        <>
+          <DataTable
+            caption="Audit events"
+            columns={COLUMNS}
+            isEmpty={page.events.length === 0}
+            empty={
+              <EmptyState
+                title="No events"
+                description={
+                  Object.values(filters).some(Boolean)
+                    ? "Nothing matches these filters."
+                    : "Nothing has been recorded yet."
+                }
+              />
+            }
+          >
+            {page.events.map((event, index) => {
+              const recordPage = RECORD_PAGES[event.entity_type];
+              const who = event.staff_id
+                ? (names.get(event.staff_id)?.display_name ?? "A former colleague")
+                : formatSentence(event.actor_label || "system");
+              const detail = describeDetail(event.detail);
+              return (
+                <tr key={`${event.occurred_at}-${event.correlation_id}-${index}`}>
+                  <td>
+                    <Timestamp value={event.occurred_at} now={now} mode="both" />
+                  </td>
+                  <td>{who}</td>
+                  <td className="mono">{event.action}</td>
+                  <td>
+                    <span className="table-sub-inline">{formatSentence(event.entity_type)}</span>{" "}
+                    {event.entity_id ? (
+                      <ShortId
+                        value={event.entity_id}
+                        {...(recordPage && event.entity_id.length > 8
+                          ? { href: `${recordPage}/${event.entity_id}` }
+                          : {})}
+                      />
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>
+                    {event.reason && <span className="audit-reason">{event.reason}</span>}
+                    {detail && <span className="table-sub">{detail}</span>}
+                    {!event.reason && !detail && <span className="table-sub">—</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </DataTable>
+          <nav className="pager" aria-label="Audit pages">
+            {offset > 0 ? (
+              <Link className="btn btn--small" href={pageLink(Math.max(0, offset - PAGE_SIZE))}>
+                Newer
+              </Link>
+            ) : (
+              <span />
+            )}
+            <span className="pager__range">
+              {page.events.length === 0
+                ? "No rows"
+                : `Rows ${offset + 1}–${offset + page.events.length}`}
+            </span>
+            {page.events.length === PAGE_SIZE ? (
+              <Link className="btn btn--small" href={pageLink(offset + PAGE_SIZE)}>
+                Older
+              </Link>
+            ) : (
+              <span />
+            )}
+          </nav>
+        </>
+      )}
+    </>
+  );
+}

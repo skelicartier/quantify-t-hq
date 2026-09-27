@@ -4588,3 +4588,70 @@
     gap: 8px;
   }
 }
+
+@layer pages {
+  /* --- Admin: staff, roles matrix, audit --------------------------------------------- */
+  .role-note {
+    margin: 14px 0 0;
+  }
+
+  .matrix th[scope="row"] {
+    font-weight: 500;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .matrix__role {
+    text-align: center;
+  }
+
+  .matrix td {
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .matrix__yes {
+    color: var(--success);
+  }
+
+  .matrix__no {
+    color: var(--quiet);
+  }
+
+  .filter-strip--form {
+    gap: 8px 10px;
+  }
+
+  .filter-strip__clear {
+    color: var(--muted);
+    font-size: 12.5px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .table-sub-inline {
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  .audit-reason {
+    display: block;
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .pager__range {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+}

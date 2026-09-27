@@ -18,7 +18,8 @@ const DESCRIPTIONS: Record<string, string> = {
   admin: "Runs the portal: staff, settings, integrations, exports.",
   sales: "Works the pipeline and reads revenue.",
   support: "Runs the desk and reads the customer picture.",
-  intern_readonly: "Reads the working surfaces. No writes, no revenue, no records of people.",
+  intern_readonly:
+    "Reads the CRM, the pipeline and the desk. No writes, no revenue, no team records.",
 };
 
 export function roleLabel(role: string | null | undefined): string {
@@ -43,3 +44,19 @@ export function roleTone(role: string | null | undefined): RoleTone {
       return "user";
   }
 }
+
+const KIND_LABELS: Record<string, string> = {
+  founder: "Founder",
+  employee: "Employee",
+  intern: "Intern",
+  contractor: "Contractor",
+};
+
+export const STAFF_KINDS = ["founder", "employee", "intern", "contractor"] as const;
+
+export function kindLabel(kind: string | null | undefined): string {
+  return KIND_LABELS[kind ?? ""] ?? "Staff";
+}
+
+/** Every role, most powerful first; which of them a caller may grant is the service's call. */
+export const ROLE_ORDER = ["owner", "admin", "sales", "support", "intern_readonly"] as const;

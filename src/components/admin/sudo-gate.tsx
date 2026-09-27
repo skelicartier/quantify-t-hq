@@ -12,6 +12,8 @@ type SudoGateProps = {
   /** Pre-formatted by the page ("14:32 UTC"), so this component never reads a clock. */
   untilLabel: string | null;
   returnPath: string;
+  /** What the window unlocks on this page, in one sentence. */
+  purpose: string;
 };
 
 /**
@@ -19,7 +21,7 @@ type SudoGateProps = {
  * authenticator app buys ten minutes; the service checks the window on every such
  * request, so this panel is a convenience, not the control.
  */
-export function SudoGate({ action, fresh, untilLabel, returnPath }: SudoGateProps) {
+export function SudoGate({ action, fresh, untilLabel, returnPath, purpose }: SudoGateProps) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   if (fresh) {
     return (
@@ -34,7 +36,7 @@ export function SudoGate({ action, fresh, untilLabel, returnPath }: SudoGateProp
       <input type="hidden" name="return_path" value={returnPath} />
       <div className="sudo-gate__text">
         <strong>Confirm it&apos;s you</strong>
-        <span>Minting and revoking keys needs a fresh code from your authenticator app.</span>
+        <span>{purpose}</span>
       </div>
       <label className="sr-only" htmlFor="sudo-code">
         Authenticator code

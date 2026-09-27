@@ -68,6 +68,13 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "tasks", path: "/tasks?scope=all", ready: "main#main-content" },
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
+  { name: "admin-staff", path: "/admin/staff", ready: ".data-table" },
+  {
+    name: "admin-staff-member",
+    path: "/admin/staff/aa000000-0000-4000-8000-00000000000c",
+    ready: ".record-layout",
+  },
+  { name: "admin-audit", path: "/admin/audit", ready: "main#main-content" },
   { name: "me-security", path: "/me/security", ready: "main#main-content" },
 ];
 

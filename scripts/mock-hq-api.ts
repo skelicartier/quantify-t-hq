@@ -82,7 +82,11 @@ type Staff = {
   last_login_at: string | null;
   created_at: string;
   ends_on: string | null;
+  starts_on?: string | null;
+  personal_email?: string;
 };
+
+const STAFF_KINDS = ["founder", "employee", "intern", "contractor"];
 
 const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
@@ -625,7 +629,7 @@ function staffView(member: Staff) {
     role: member.role,
     kind: member.kind,
     is_active: member.is_active,
-    starts_on: null,
+    starts_on: member.starts_on ?? null,
     ends_on: member.ends_on,
     last_login_at: member.last_login_at,
     created_at: member.created_at,
@@ -888,7 +892,11 @@ const routes: Array<{
         last_login_at: null,
         created_at: now(),
         ends_on: typeof body.ends_on === "string" && body.ends_on ? body.ends_on : null,
+        starts_on: typeof body.starts_on === "string" && body.starts_on ? body.starts_on : null,
+        personal_email: String(body.personal_email ?? ""),
       };
+      if (!STAFF_KINDS.includes(member.kind))
+        return refuse(400, "malformed_request", { kind: `one of ${STAFF_KINDS.join(", ")}` });
       staff.push(member);
       const token = `hqi_mock_${randomUUID().replace(/-/g, "")}`;
       invites.set(token, { staffId: member.id });
@@ -912,7 +920,12 @@ const routes: Array<{
         (session) => session.staffId === member.id && !session.revoked_at,
       );
       return ok({
-        staff: { ...staffView(member), live_sessions: live.length, personal_email: "" },
+        staff: {
+          ...staffView(member),
+          live_sessions: live.length,
+          personal_email: member.personal_email ?? "",
+          joined: member.enrolled || Boolean(member.last_login_at),
+        },
       });
     },
   },
@@ -926,15 +939,45 @@ const routes: Array<{
       const found = caller(headers)!;
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
+      let changed = false;
       const role = String(body.role ?? "");
       if (role && role !== member.role) {
-        if (member.id === found.member.id) return refuse(403, "forbidden");
+        if (member.id === found.member.id) return refuse(403, "forbidden", { reason: "own-role" });
+        if (!(role in CAPABILITIES))
+          return refuse(400, "malformed_request", { role: "unknown role" });
         if (["owner", "admin"].includes(role) && found.member.role !== "owner")
-          return refuse(403, "forbidden");
+          return refuse(403, "forbidden", { required_role: "owner" });
+        if (member.role === "owner" && found.member.role !== "owner")
+          return refuse(403, "forbidden", { required_role: "owner" });
         member.role = role as Staff["role"];
-        audit("staff.role_changed", found.member.id, "staff", member.id);
+        changed = true;
+        audit("staff.role_changed", found.member.id, "staff", member.id, String(body.reason ?? ""));
       }
-      if (typeof body.display_name === "string") member.display_name = body.display_name;
+      if (typeof body.display_name === "string") {
+        member.display_name = body.display_name.trim();
+        changed = true;
+      }
+      if (typeof body.kind === "string") {
+        if (!STAFF_KINDS.includes(body.kind))
+          return refuse(400, "malformed_request", { kind: `one of ${STAFF_KINDS.join(", ")}` });
+        member.kind = body.kind;
+        changed = true;
+      }
+      if ("starts_on" in body) {
+        member.starts_on = String(body.starts_on ?? "") || null;
+        changed = true;
+      }
+      if ("ends_on" in body) {
+        member.ends_on = String(body.ends_on ?? "") || null;
+        changed = true;
+      }
+      if (typeof body.personal_email === "string") {
+        member.personal_email = body.personal_email.trim();
+        changed = true;
+      }
+      if (!changed) return refuse(400, "malformed_request", { body: "nothing to change" });
+      if (!role || role === member.role)
+        audit("staff.updated", found.member.id, "staff", member.id);
       return ok({ staff: staffView(member) });
     },
   },
@@ -948,8 +991,11 @@ const routes: Array<{
       const found = caller(headers)!;
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
-      if (member.id === found.member.id) return refuse(403, "forbidden");
-      if (!String(body.reason ?? "").trim()) return refuse(400, "malformed_request");
+      if (member.id === found.member.id) return refuse(403, "forbidden", { reason: "own-account" });
+      if (["owner", "admin"].includes(member.role) && found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      if (!String(body.reason ?? "").trim())
+        return refuse(400, "malformed_request", { reason: "a reason is required" });
       member.is_active = false;
       audit("staff.deactivated", found.member.id, "staff", member.id, String(body.reason));
       return ok({ deactivated: true, sessions_revoked: 0 });
@@ -964,9 +1010,37 @@ const routes: Array<{
     handler: ({ headers, params }) => {
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
+      if (["owner", "admin"].includes(member.role) && caller(headers)!.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
       member.is_active = true;
       audit("staff.reactivated", caller(headers)!.member.id, "staff", member.id);
       return ok({ reactivated: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/staff/{staff_id}/reinvite",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      if (member.is_active || member.enrolled || member.last_login_at)
+        return refuse(400, "malformed_request", { reason: "already-joined" });
+      if (["owner", "admin"].includes(member.role) && found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      for (const [token, invite] of invites)
+        if (invite.staffId === member.id) invites.delete(token);
+      const token = `hqi_mock_${randomUUID().replace(/-/g, "")}`;
+      invites.set(token, { staffId: member.id });
+      audit("staff.reinvited", found.member.id, "staff", member.id);
+      return ok({
+        staff_id: member.id,
+        invite_url: `http://127.0.0.1:3000/reset-password?invite=${token}`,
+        emailed: false,
+      });
     },
   },
   {
@@ -978,6 +1052,13 @@ const routes: Array<{
     handler: ({ headers, params }) => {
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
+      const self = caller(headers)!.member;
+      if (
+        ["owner", "admin"].includes(member.role) &&
+        self.role !== "owner" &&
+        self.id !== member.id
+      )
+        return refuse(403, "forbidden", { required_role: "owner" });
       member.enrolled = false;
       audit("staff.totp_reset", caller(headers)!.member.id, "staff", member.id);
       return ok({ reset: true, sessions_revoked: 0 });
@@ -1312,9 +1393,16 @@ const routes: Array<{
     pattern: "hq/audit",
     auth: true,
     capability: "audit:read",
-    handler: ({ params }) => {
-      void params;
-      return ok({ events: auditEvents.slice(0, 50), limit: 50, offset: 0 });
+    handler: ({ query }) => {
+      const limit = Math.min(Math.max(Number(query.limit ?? 50) || 50, 1), 200);
+      const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
+      const filters = (["staff_id", "action", "entity_type", "entity_id"] as const).filter(
+        (name) => query[name],
+      );
+      const rows = auditEvents.filter((row) =>
+        filters.every((name) => String(row[name] ?? "") === query[name]),
+      );
+      return ok({ events: rows.slice(offset, offset + limit), limit, offset });
     },
   },
 ];

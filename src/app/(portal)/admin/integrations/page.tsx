@@ -67,6 +67,7 @@ export default async function IntegrationsPage() {
         fresh={fresh}
         untilLabel={untilLabel}
         returnPath="/admin/integrations"
+        purpose="Minting and revoking keys needs a fresh code from your authenticator app."
       />
       <div className="record-layout">
         <div className="record-layout__main">
