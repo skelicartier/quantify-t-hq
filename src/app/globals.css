@@ -4841,3 +4841,283 @@
     margin-bottom: 12px;
   }
 }
+
+@layer pages {
+  /* --- Revenue ----------------------------------------------------------------------- */
+  .currency-note {
+    margin: 10px 0 0;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .renewal {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .num--up {
+    color: var(--success);
+  }
+
+  .num--down {
+    color: var(--danger);
+  }
+
+  .num--strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .bridge-card {
+    margin-top: 18px;
+  }
+
+  .bridge-table {
+    margin-top: 18px;
+  }
+
+  .bridge {
+    margin: 0;
+  }
+
+  .bridge__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin-bottom: 12px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .bridge__key {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .bridge__key::before {
+    content: "";
+    width: 10px;
+    height: 10px;
+    background: currentColor;
+  }
+
+  .bridge__key--end::before {
+    background: var(--line-strong);
+  }
+  .bridge__key--new::before {
+    background: var(--success);
+  }
+  .bridge__key--expansion::before {
+    background: color-mix(in srgb, var(--success) 55%, var(--panel));
+  }
+  .bridge__key--reactivation::before {
+    background: var(--info);
+  }
+  .bridge__key--contraction::before {
+    background: var(--attention);
+  }
+  .bridge__key--churn::before {
+    background: var(--danger);
+  }
+
+  .bridge__svg {
+    display: block;
+    width: 100%;
+    height: 256px;
+  }
+
+  @media (max-width: 720px) {
+    .bridge__svg {
+      height: 200px;
+    }
+  }
+
+  .bridge__months {
+    display: grid;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-align: center;
+  }
+
+  /* A label may spill into its neighbour's column; on phones every other one is hidden
+     to make that room, so nothing is ever cut. */
+  .bridge__months li {
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 720px) {
+    .bridge__months li:nth-child(even) {
+      visibility: hidden;
+    }
+  }
+
+  .bridge__axis,
+  .bridge__zero {
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+
+  .bridge__zero {
+    stroke: var(--line-strong);
+  }
+
+  .bridge__bar--end {
+    fill: var(--line-strong);
+  }
+  .bridge__month--partial .bridge__bar--end {
+    fill: var(--line);
+  }
+  .bridge__seg--new {
+    fill: var(--success);
+  }
+  .bridge__seg--expansion {
+    fill: color-mix(in srgb, var(--success) 55%, var(--panel));
+  }
+  .bridge__seg--reactivation {
+    fill: var(--info);
+  }
+  .bridge__seg--contraction {
+    fill: var(--attention);
+  }
+  .bridge__seg--churn {
+    fill: var(--danger);
+  }
+  .bridge__seg--adjustment {
+    fill: var(--muted);
+  }
+
+  /* --- The weekly report -------------------------------------------------------------- */
+  .week-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .week-nav__current {
+    padding: 0 6px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--text);
+  }
+
+  .week-nav__current--quiet {
+    color: var(--quiet);
+  }
+
+  .report-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+    margin-top: 18px;
+  }
+
+  .report-section {
+    margin-top: 18px;
+  }
+
+  .report-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .report-bars li {
+    display: grid;
+    grid-template-columns: minmax(90px, 140px) minmax(0, 1fr) 32px;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .report-bars__label {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .report-bars__track {
+    height: 8px;
+    background: var(--line-soft);
+  }
+
+  .report-bars__fill {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+  }
+
+  .report-bars__fill--loss {
+    background: var(--danger);
+  }
+
+  .report-bars__value {
+    font-family: var(--font-mono);
+    text-align: right;
+  }
+
+  .report-facts {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .report-facts li {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 13.5px;
+  }
+
+  .report-facts li:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .report-facts span {
+    color: var(--muted);
+  }
+
+  .report-facts strong {
+    font-family: var(--font-mono);
+    font-weight: 500;
+  }
+
+  .report-note {
+    margin: 12px 0 0;
+  }
+
+  .report-subhead {
+    margin: 16px 0 8px;
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .export-form {
+    margin-top: 14px;
+  }
+}
+
+@layer pages {
+  .nowrap {
+    white-space: nowrap;
+  }
+}

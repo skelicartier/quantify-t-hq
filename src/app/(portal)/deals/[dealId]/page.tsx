@@ -31,8 +31,9 @@ import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
 import { Popover } from "@/components/ui/popover";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
-import { HqApiRequestError } from "@/lib/api/core";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readDeal, type DealDetail } from "@/lib/api/deals";
+import { readContracts } from "@/lib/api/revenue";
 import { directoryOrEmpty } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS, sourceLabel, stageLabel } from "@/lib/crm/vocabulary";
@@ -58,6 +59,21 @@ export default async function DealPage({ params }: DealPageProps) {
     throw error;
   }
   const names = await directoryOrEmpty(context.token);
+  // A won deal points at its contract; offer to record one until it exists.
+  let contractId: string | null = null;
+  let contractChecked = false;
+  if (detail.deal.status === "won" && hasCapability(context, "revenue:write")) {
+    try {
+      const existing = (
+        await readContracts(context.token, { company_id: detail.deal.company_id })
+      ).contracts.find((contract) => contract.deal_id === detail.deal.deal_id);
+      contractId = existing?.contract_id ?? null;
+      contractChecked = true;
+    } catch (error) {
+      if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+        throw error;
+    }
+  }
 
   const {
     deal,
@@ -144,6 +160,26 @@ export default async function DealPage({ params }: DealPageProps) {
           </div>
           {canDeal && <NextStepForm action={updateNextStepAction} deal={deal} />}
         </section>
+      )}
+      {deal.status === "won" && contractChecked && (
+        <Callout tone="success" title="Won">
+          {contractId ? (
+            <>
+              Its contract is recorded.{" "}
+              <Link href={`/revenue/contracts/${contractId}`}>Open the contract</Link>.
+            </>
+          ) : (
+            <>
+              Record the contract so revenue counts it.{" "}
+              <Link
+                href={`/revenue/contracts?company_id=${deal.company_id}&deal_id=${deal.deal_id}&mrr_amount=${deal.mrr_amount}&seats=${deal.seats}`}
+              >
+                Record the contract
+              </Link>
+              .
+            </>
+          )}
+        </Callout>
       )}
       {!open && deal.status === "lost" && (
         <Callout

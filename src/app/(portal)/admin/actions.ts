@@ -14,7 +14,9 @@ import { crmRefusal } from "@/lib/crm/refusal";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
 
-const ADMIN_PAGE = /^\/admin\/(?:integrations|settings\/pipeline|staff(?:\/[A-Za-z0-9-]{1,64})?)$/;
+/** Pages with a confirm-it's-you panel; only these are refreshed after a code. */
+const ADMIN_PAGE =
+  /^\/(?:admin\/(?:integrations|settings\/pipeline|staff(?:\/[A-Za-z0-9-]{1,64})?)|revenue\/mrr|reports)$/;
 
 const NOT_ADMIN: ActionState = { status: "error", message: "Only HQ admins can change this." };
 

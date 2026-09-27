@@ -22,7 +22,10 @@ const contentSecurityPolicy = [
 
 const securityHeaders = [
   { key: "Content-Security-Policy", value: contentSecurityPolicy },
-  { key: "Referrer-Policy", value: "no-referrer" },
+  // "same-origin", not "no-referrer": under no-referrer a browser sends `Origin: null` on
+  // a plain same-origin form POST (the CSV export), which the same-origin check must then
+  // refuse. same-origin still sends nothing to other sites, so record URLs never leave.
+  { key: "Referrer-Policy", value: "same-origin" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   {

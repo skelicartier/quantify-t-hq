@@ -77,6 +77,14 @@ const SIGNED_IN_PAGES: Shot[] = [
     path: "/meetings/ee100000-0000-4000-8000-000000000001",
     ready: ".record-layout",
   },
+  { name: "revenue-contracts", path: "/revenue/contracts", ready: ".data-table" },
+  {
+    name: "revenue-contract",
+    path: "/revenue/contracts/cc100000-0000-4000-8000-000000000001",
+    ready: ".record-layout",
+  },
+  { name: "revenue-mrr", path: "/revenue/mrr", ready: ".bridge__svg" },
+  { name: "reports", path: "/reports", ready: ".report-grid" },
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
   { name: "admin-staff", path: "/admin/staff", ready: ".data-table" },
@@ -210,6 +218,24 @@ async function captureInteractions(page: Page, folder: string) {
   await assertAccessible(page, `${folder}/admin-key-minted`);
   await page.screenshot({ path: `${OUT}/${folder}/admin-key-minted.png`, fullPage: true });
   console.log(`  ✓ ${folder}/admin-key-minted`);
+
+  // A real CSV download through the route handler (the sudo window is still open).
+  await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
+  await page.fill("#export-reason", "Screenshot run check");
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 15_000 }),
+    page.locator("button", { hasText: "Download CSV" }).click(),
+  ]);
+  const name = download.suggestedFilename();
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const csv = Buffer.concat(chunks).toString("utf8");
+  if (!name.startsWith("hq-leads-") || !csv.startsWith("id,received_at")) {
+    report(`${folder}/export`, `unexpected download ${name}: ${csv.slice(0, 40)}`);
+  } else {
+    console.log(`  ✓ ${folder}/export (${name})`);
+  }
 }
 
 async function run(browser: Browser) {

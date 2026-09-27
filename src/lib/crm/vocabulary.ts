@@ -185,3 +185,34 @@ export const RESPONSE_LABELS: Record<string, string> = {
   tentative: "Maybe",
   needs_action: "No reply",
 };
+
+export const CANCEL_REASON_LABELS: Record<string, string> = {
+  price: "Price",
+  missing_feature: "Missing a feature",
+  budget: "Budget cut",
+  no_usage: "Not used enough",
+  switched: "Switched provider",
+  closed_down: "Closed down",
+  other: "Other",
+};
+
+export const MOVEMENT_KIND_LABELS: Record<string, string> = {
+  new: "New",
+  expansion: "Expansion",
+  contraction: "Contraction",
+  churn: "Churn",
+  reactivation: "Reactivation",
+  adjustment: "Adjustment",
+};
+
+export const CONTRACT_STATE_LABELS: Record<string, string> = {
+  active: "Active",
+  ending: "Ending",
+  ended: "Ended",
+};
+
+export function contractStateTone(state: string): PillTone {
+  if (state === "active") return "live";
+  if (state === "ending") return "attention";
+  return "neutral";
+}

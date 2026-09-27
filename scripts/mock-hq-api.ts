@@ -1701,6 +1701,22 @@ function seedCrm() {
       updated_at: agoIso(24),
     },
     {
+      id: "c0000000-0000-4000-8000-000000000004",
+      name: "Kestrel Research",
+      domain: "kestrelresearch.io",
+      firm_type: "Research firm",
+      team_size_band: "2-10",
+      country: "Ireland",
+      lifecycle: "former_customer",
+      owner_staff_id: OWNER_STAFF,
+      source_key: "outbound",
+      notes: "Left for a cheaper data terminal; open to returning.",
+      customer_since: agoIso(24 * 250).slice(0, 10),
+      archived: false,
+      created_at: agoIso(24 * 260),
+      updated_at: agoIso(24 * 95),
+    },
+    {
       id: "c0000000-0000-4000-8000-000000000003",
       name: "Bluecrest Family Office",
       domain: "bluecrestfo.com",
@@ -4150,6 +4166,760 @@ routes.push(
   },
 );
 
+// =====================================================================================
+// Revenue, mirroring hq/contracts*, hq/revenue/*: movements carry their currency and
+// sign, the bridge sums one currency in cents, the churn is dated the last day of service.
+// =====================================================================================
+
+type ContractRow = {
+  id: string;
+  company_id: string;
+  deal_id: string;
+  plan_name: string;
+  seats: number;
+  mrr_cents: number;
+  currency: string;
+  billing_cadence: string;
+  starts_on: string;
+  term_months: number;
+  renews_on: string | null;
+  status: string;
+  ends_on: string | null;
+  cancel_reason: string;
+  notes: string;
+  created_at: string;
+};
+type MovementRow = {
+  contract_id: string;
+  company_id: string;
+  kind: string;
+  cents: number;
+  currency: string;
+  effective_on: string;
+  note: string;
+  staff_id: string;
+};
+
+const CANCEL_REASONS = [
+  "price",
+  "missing_feature",
+  "budget",
+  "no_usage",
+  "switched",
+  "closed_down",
+  "other",
+];
+const contracts: ContractRow[] = [];
+const movements: MovementRow[] = [];
+
+function dayOffset(days: number): string {
+  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+}
+function addMonths(day: string, months: number): string {
+  const [year, month, date] = day.split("-").map(Number) as [number, number, number];
+  const target = new Date(Date.UTC(year, month - 1 + months, 1));
+  const last = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  target.setUTCDate(Math.min(date, last));
+  return target.toISOString().slice(0, 10);
+}
+
+function seedRevenue() {
+  contracts.length = 0;
+  movements.length = 0;
+  contracts.push(
+    {
+      id: "cc100000-0000-4000-8000-000000000001",
+      company_id: "c0000000-0000-4000-8000-000000000001",
+      deal_id: "d0000000-0000-4000-8000-000000000004",
+      plan_name: "Professional desk",
+      seats: 6,
+      mrr_cents: 119_500,
+      currency: "USD",
+      billing_cadence: "annual",
+      starts_on: dayOffset(-40),
+      term_months: 12,
+      renews_on: addMonths(dayOffset(-40), 12),
+      status: "active",
+      ends_on: null,
+      cancel_reason: "",
+      notes: "Annual prepay; the CIO signs renewals.",
+      created_at: agoIso(24 * 40),
+    },
+    {
+      id: "cc100000-0000-4000-8000-000000000002",
+      company_id: "c0000000-0000-4000-8000-000000000004",
+      deal_id: "",
+      plan_name: "Research seat",
+      seats: 3,
+      mrr_cents: 45_000,
+      currency: "USD",
+      billing_cadence: "monthly",
+      starts_on: dayOffset(-250),
+      term_months: 6,
+      renews_on: addMonths(dayOffset(-250), 6),
+      status: "canceled",
+      ends_on: dayOffset(-95),
+      cancel_reason: "price",
+      notes: "",
+      created_at: agoIso(24 * 250),
+    },
+  );
+  movements.push(
+    {
+      contract_id: "cc100000-0000-4000-8000-000000000002",
+      company_id: "c0000000-0000-4000-8000-000000000004",
+      kind: "new",
+      cents: 45_000,
+      currency: "USD",
+      effective_on: dayOffset(-250),
+      note: "Research seat",
+      staff_id: OWNER_STAFF,
+    },
+    {
+      contract_id: "cc100000-0000-4000-8000-000000000002",
+      company_id: "c0000000-0000-4000-8000-000000000004",
+      kind: "churn",
+      cents: -45_000,
+      currency: "USD",
+      effective_on: dayOffset(-95),
+      note: "price",
+      staff_id: OWNER_STAFF,
+    },
+    {
+      contract_id: "cc100000-0000-4000-8000-000000000001",
+      company_id: "c0000000-0000-4000-8000-000000000001",
+      kind: "new",
+      cents: 99_500,
+      currency: "USD",
+      effective_on: dayOffset(-40),
+      note: "Professional desk",
+      staff_id: OWNER_STAFF,
+    },
+    {
+      contract_id: "cc100000-0000-4000-8000-000000000001",
+      company_id: "c0000000-0000-4000-8000-000000000001",
+      kind: "expansion",
+      cents: 20_000,
+      currency: "USD",
+      effective_on: dayOffset(-12),
+      note: "Sixth seat",
+      staff_id: OWNER_STAFF,
+    },
+  );
+}
+seedRevenue();
+
+const today = () => new Date().toISOString().slice(0, 10);
+const money = (cents: number) => Math.round(cents) / 100;
+
+function contractState(row: ContractRow): string {
+  if (row.status !== "canceled") return "active";
+  return row.ends_on && row.ends_on > today() ? "ending" : "ended";
+}
+
+function contractView(row: ContractRow) {
+  return {
+    contract_id: row.id,
+    company_id: row.company_id,
+    company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
+    deal_id: row.deal_id,
+    plan_name: row.plan_name,
+    seats: row.seats,
+    mrr_amount: money(row.mrr_cents),
+    currency: row.currency,
+    billing_cadence: row.billing_cadence,
+    starts_on: row.starts_on,
+    term_months: row.term_months,
+    renews_on: row.renews_on,
+    renews_in_days: row.renews_on
+      ? Math.round((Date.parse(row.renews_on) - Date.parse(today())) / 86_400_000)
+      : null,
+    state: contractState(row),
+    ends_on: row.ends_on,
+    cancel_reason: row.cancel_reason,
+    notes: row.notes,
+    created_at: row.created_at,
+  };
+}
+
+function movementView(row: MovementRow) {
+  return {
+    kind: row.kind,
+    amount: money(row.cents),
+    currency: row.currency,
+    effective_on: row.effective_on,
+    note: row.note,
+    contract_id: row.contract_id,
+    company_id: row.company_id,
+    staff_id: row.staff_id,
+  };
+}
+
+function mrrCents(currency: string, onOrBefore: string): number {
+  return movements
+    .filter((row) => row.currency === currency && row.effective_on <= onOrBefore)
+    .reduce((sum, row) => sum + row.cents, 0);
+}
+
+function totalsFor(currency: string) {
+  const byCompany = new Map<string, number>();
+  for (const row of movements) {
+    if (row.currency !== currency || row.effective_on > today()) continue;
+    byCompany.set(row.company_id, (byCompany.get(row.company_id) ?? 0) + row.cents);
+  }
+  const paying = [...byCompany.values()].filter((cents) => cents > 0);
+  const total = paying.reduce((sum, cents) => sum + cents, 0);
+  return {
+    mrr: money(total),
+    arr: money(total * 12),
+    customers: paying.length,
+    arpa: paying.length ? money(total / paying.length) : 0,
+  };
+}
+
+function addMovement(row: MovementRow) {
+  if (row.cents !== 0) movements.push(row);
+}
+
+function csvCell(value: unknown): string {
+  const text = value === null || value === undefined ? "" : String(value);
+  const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/contracts",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query }) => {
+      const views = contracts
+        .filter((row) => !query.company_id || row.company_id === query.company_id)
+        .map(contractView)
+        .filter((view) => !query.state || view.state === query.state)
+        .sort(
+          (a, b) =>
+            Number(a.state !== "active") - Number(b.state !== "active") ||
+            a.company_name.localeCompare(b.company_name),
+        );
+      const currencies = [...new Set(["USD", ...movements.map((row) => row.currency)])].sort();
+      return ok({
+        contracts: views,
+        totals: Object.fromEntries(currencies.map((currency) => [currency, totalsFor(currency)])),
+        renewing_soon: views
+          .filter(
+            (view) =>
+              view.state === "active" &&
+              view.renews_in_days !== null &&
+              view.renews_in_days >= 0 &&
+              view.renews_in_days <= 90,
+          )
+          .sort((a, b) => (a.renews_in_days ?? 0) - (b.renews_in_days ?? 0)),
+        cancel_reasons: CANCEL_REASONS,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/contracts/create",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ body, headers }) => {
+      const company = companies.find((row) => row.id === String(body.company_id ?? ""));
+      if (!company) return refuse(400, "malformed_request", { company_id: "no such company" });
+      const cents = Math.round(Number(body.mrr_amount ?? 0) * 100);
+      if (!(cents > 0))
+        return refuse(400, "malformed_request", { mrr_amount: "a contract is paid for" });
+      const currency = String(body.currency ?? "USD").toUpperCase() || "USD";
+      if (!/^[A-Z]{3}$/.test(currency))
+        return refuse(400, "malformed_request", { currency: "a three-letter code" });
+      const startsOn = String(body.starts_on ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startsOn))
+        return refuse(400, "malformed_request", { starts_on: "expected YYYY-MM-DD" });
+      const earlier = contracts.filter((row) => row.company_id === company.id);
+      const live = earlier.filter(
+        (row) => !(row.status === "canceled" && row.ends_on && row.ends_on <= startsOn),
+      );
+      const kind = earlier.length === 0 ? "new" : live.length === 0 ? "reactivation" : "expansion";
+      const termMonths = Number(body.term_months ?? 12) || 12;
+      const found = caller(headers);
+      const row: ContractRow = {
+        id: randomUUID(),
+        company_id: company.id,
+        deal_id: String(body.deal_id ?? ""),
+        plan_name: String(body.plan_name ?? ""),
+        seats: Math.max(1, Number(body.seats ?? 1) || 1),
+        mrr_cents: cents,
+        currency,
+        billing_cadence: String(body.billing_cadence ?? "monthly"),
+        starts_on: startsOn,
+        term_months: termMonths,
+        renews_on: addMonths(startsOn, termMonths),
+        status: "active",
+        ends_on: null,
+        cancel_reason: "",
+        notes: String(body.notes ?? ""),
+        created_at: now(),
+      };
+      contracts.push(row);
+      addMovement({
+        contract_id: row.id,
+        company_id: company.id,
+        kind,
+        cents,
+        currency,
+        effective_on: startsOn,
+        note: row.plan_name,
+        staff_id: found?.member.id ?? "",
+      });
+      company.lifecycle = "customer";
+      company.customer_since = company.customer_since ?? startsOn;
+      audit("contract.created", found?.member.id ?? null, "contract", row.id);
+      return ok({ contract: contractView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/contracts/{contract_id}",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ params }) => {
+      const row = contracts.find((contract) => contract.id === params.contract_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        contract: contractView(row),
+        movements: movements
+          .filter((movement) => movement.contract_id === row.id)
+          .sort((a, b) => a.effective_on.localeCompare(b.effective_on))
+          .map(movementView),
+        cancel_reasons: CANCEL_REASONS,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/contracts/{contract_id}/update",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ params, body, headers }) => {
+      const row = contracts.find((contract) => contract.id === params.contract_id);
+      if (!row) return refuse(404, "not_found");
+      let changed = false;
+      if ("plan_name" in body) {
+        row.plan_name = String(body.plan_name ?? "");
+        changed = true;
+      }
+      if ("notes" in body) {
+        row.notes = String(body.notes ?? "");
+        changed = true;
+      }
+      if ("seats" in body) {
+        const seats = Number(body.seats);
+        if (!(seats >= 1)) return refuse(400, "malformed_request", { seats: "at least one" });
+        row.seats = seats;
+        changed = true;
+      }
+      if ("mrr_amount" in body) {
+        if (row.status !== "active")
+          return refuse(400, "malformed_request", {
+            mrr_amount: "a canceled contract's price is fixed",
+          });
+        const cents = Math.round(Number(body.mrr_amount) * 100);
+        if (!(cents > 0))
+          return refuse(400, "malformed_request", { mrr_amount: "cancel the contract instead" });
+        const effective = String(body.effective_on ?? "");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(effective))
+          return refuse(400, "malformed_request", { effective_on: "expected YYYY-MM-DD" });
+        if (effective < row.starts_on)
+          return refuse(400, "malformed_request", { effective_on: "before the contract started" });
+        const delta = cents - row.mrr_cents;
+        if (delta !== 0) {
+          addMovement({
+            contract_id: row.id,
+            company_id: row.company_id,
+            kind: delta > 0 ? "expansion" : "contraction",
+            cents: delta,
+            currency: row.currency,
+            effective_on: effective,
+            note: String(body.note ?? ""),
+            staff_id: caller(headers)?.member.id ?? "",
+          });
+          row.mrr_cents = cents;
+          changed = true;
+        }
+      }
+      if (!changed) return refuse(400, "malformed_request", { reason: "nothing to change" });
+      audit("contract.updated", caller(headers)?.member.id ?? null, "contract", row.id);
+      return ok({ contract: contractView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/contracts/{contract_id}/cancel",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ params, body, headers }) => {
+      const row = contracts.find((contract) => contract.id === params.contract_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.status !== "active")
+        return refuse(400, "malformed_request", { status: "already canceled" });
+      const endsOn = String(body.ends_on ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(endsOn) || endsOn < row.starts_on)
+        return refuse(400, "malformed_request", { ends_on: "a date after the start" });
+      const reason = String(body.cancel_reason ?? "");
+      if (!CANCEL_REASONS.includes(reason))
+        return refuse(400, "malformed_request", { cancel_reason: "pick a reason" });
+      row.status = "canceled";
+      row.ends_on = endsOn;
+      row.cancel_reason = reason;
+      addMovement({
+        contract_id: row.id,
+        company_id: row.company_id,
+        kind: "churn",
+        cents: -row.mrr_cents,
+        currency: row.currency,
+        effective_on: endsOn,
+        note: String(body.note ?? "") || reason,
+        staff_id: caller(headers)?.member.id ?? "",
+      });
+      if (
+        !contracts.some(
+          (other) =>
+            other.company_id === row.company_id && other.id !== row.id && other.status === "active",
+        )
+      ) {
+        const company = companies.find((candidate) => candidate.id === row.company_id);
+        if (company) company.lifecycle = "former_customer";
+      }
+      audit(
+        "contract.canceled",
+        caller(headers)?.member.id ?? null,
+        "contract",
+        row.id,
+        String(body.note ?? ""),
+      );
+      return ok({ contract: contractView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/revenue/mrr",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query }) => {
+      const currency = String(query.currency ?? "USD").toUpperCase();
+      const months = Math.max(1, Math.min(Number(query.months ?? 12) || 12, 24));
+      const first = addMonths(`${today().slice(0, 7)}-01`, -(months - 1));
+      const kinds = ["new", "expansion", "contraction", "churn", "reactivation", "adjustment"];
+      const series = Array.from({ length: months }, (_, index) => {
+        const start = addMonths(first, index);
+        const next = addMonths(start, 1);
+        const dayBefore = new Date(Date.parse(start) - 86_400_000).toISOString().slice(0, 10);
+        const startCents = mrrCents(currency, dayBefore);
+        const byKind: Record<string, number> = Object.fromEntries(kinds.map((kind) => [kind, 0]));
+        for (const row of movements)
+          if (row.currency === currency && row.effective_on >= start && row.effective_on < next)
+            byKind[row.kind] = (byKind[row.kind] ?? 0) + row.cents;
+        const moved = Object.values(byKind).reduce((sum, cents) => sum + cents, 0);
+        return {
+          month: start.slice(0, 7),
+          start: money(startCents),
+          ...Object.fromEntries(kinds.map((kind) => [kind, money(byKind[kind] ?? 0)])),
+          end: money(startCents + moved),
+          partial: next > today(),
+        };
+      });
+      return ok({
+        currency,
+        currencies: [...new Set(movements.map((row) => row.currency))].sort(),
+        months: series,
+        current: totalsFor(currency),
+        scheduled: movements
+          .filter((row) => row.currency === currency && row.effective_on > today())
+          .sort((a, b) => a.effective_on.localeCompare(b.effective_on))
+          .map(movementView),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/revenue/adjust",
+    auth: true,
+    capability: "revenue:write",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const reason = String(body.reason ?? "").trim();
+      if (!reason)
+        return refuse(400, "malformed_request", { reason: "a written reason is required" });
+      const company = companies.find((row) => row.id === String(body.company_id ?? ""));
+      if (!company) return refuse(400, "malformed_request", { company_id: "no such company" });
+      const cents = Math.round(Number(body.amount ?? 0) * 100);
+      if (!cents) return refuse(400, "malformed_request", { amount: "non-zero" });
+      const effective = String(body.effective_on ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(effective))
+        return refuse(400, "malformed_request", { effective_on: "expected YYYY-MM-DD" });
+      addMovement({
+        contract_id: "",
+        company_id: company.id,
+        kind: "adjustment",
+        cents,
+        currency: String(body.currency ?? "USD").toUpperCase(),
+        effective_on: effective,
+        note: reason,
+        staff_id: caller(headers)?.member.id ?? "",
+      });
+      audit("mrr.adjusted", caller(headers)?.member.id ?? null, "company", company.id, reason);
+      return ok({ adjusted: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/reports/weekly",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query }) => {
+      const label = String(query.week ?? "");
+      const nowDate = new Date();
+      const isoWeekStart = (date: Date) => {
+        const day = (date.getUTCDay() + 6) % 7;
+        return new Date(
+          Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - day),
+        );
+      };
+      const labelOf = (monday: Date) => {
+        const thursday = new Date(monday.getTime() + 3 * 86_400_000);
+        const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
+        const week = Math.ceil(((thursday.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+        return `${thursday.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+      };
+      let monday = isoWeekStart(nowDate);
+      if (label) {
+        const match = /^(\d{4})-W(\d{2})$/.exec(label);
+        if (!match) return refuse(400, "malformed_request", { week: "expected YYYY-Www" });
+        const jan4 = new Date(Date.UTC(Number(match[1]), 0, 4));
+        monday = new Date(isoWeekStart(jan4).getTime() + (Number(match[2]) - 1) * 7 * 86_400_000);
+        if (monday > nowDate)
+          return refuse(400, "malformed_request", { week: "that week has not started" });
+      }
+      const start = monday.getTime();
+      const end = start + 7 * 86_400_000;
+      const within = (iso: string | null) =>
+        Boolean(iso) && Date.parse(iso!) >= start && Date.parse(iso!) < end;
+      const received = leads.filter((row) => within(row.created_at));
+      const waits = received
+        .filter((row) => row.first_replied_at)
+        .map((row) => (Date.parse(row.first_replied_at!) - Date.parse(row.created_at)) / 60_000)
+        .sort((a, b) => a - b);
+      const median = waits.length
+        ? Math.round(
+            waits.length % 2
+              ? waits[(waits.length - 1) / 2]!
+              : (waits[waits.length / 2 - 1]! + waits[waits.length / 2]!) / 2,
+          )
+        : null;
+      const bySource = new Map<string, number>();
+      for (const row of received)
+        bySource.set(row.source_key, (bySource.get(row.source_key) ?? 0) + 1);
+      const weekMeetings = meetings.filter((row) => within(row.starts_at));
+      const openDeals = deals.filter((row) => row.status === "open");
+      const pipelineStages = stages
+        .filter((stage) => !stage.outcome && !stage.archived)
+        .sort((a, b) => a.position - b.position)
+        .map((stage) => {
+          const inStage = openDeals.filter((row) => row.stage_key === stage.key);
+          const mrr = inStage.reduce((sum, row) => sum + row.mrr_amount, 0);
+          return {
+            key: stage.key,
+            label: stage.label,
+            count: inStage.length,
+            mrr,
+            weighted: Math.round(mrr * stage.win_probability) / 100,
+          };
+        });
+      const won = deals.filter((row) => row.status === "won" && within(row.closed_at));
+      const lost = deals.filter((row) => row.status === "lost" && within(row.closed_at));
+      const reasons = (rows: DealRow[]) => {
+        const counts = new Map<string, number>();
+        for (const row of rows)
+          counts.set(
+            row.loss_reason || "unrecorded",
+            (counts.get(row.loss_reason || "unrecorded") ?? 0) + 1,
+          );
+        return [...counts.entries()].map(([reason, count]) => ({ reason, count }));
+      };
+      const todayIso = today();
+      const slipped = openDeals
+        .filter((row) => row.expected_close_date && row.expected_close_date < todayIso)
+        .map((row) => ({
+          deal_id: row.id,
+          name: row.name,
+          company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
+          expected_close_date: row.expected_close_date,
+          days_late: Math.round(
+            (Date.parse(todayIso) - Date.parse(row.expected_close_date)) / 86_400_000,
+          ),
+        }));
+      const horizon = dayOffset(30);
+      const inHorizon = openDeals.filter(
+        (row) =>
+          row.expected_close_date &&
+          row.expected_close_date >= todayIso &&
+          row.expected_close_date <= horizon,
+      );
+      const weekEnd = new Date(Math.min(end - 86_400_000, Date.now())).toISOString().slice(0, 10);
+      const mondayIso = new Date(start).toISOString().slice(0, 10);
+      const byKind: Record<string, number> = {};
+      for (const row of movements)
+        if (row.currency === "USD" && row.effective_on >= mondayIso && row.effective_on <= weekEnd)
+          byKind[row.kind] = money((byKind[row.kind] ?? 0) * 100 + row.cents);
+      const nextMonday = new Date(end);
+      return ok({
+        week: {
+          label: labelOf(monday),
+          starts_on: mondayIso,
+          ends_on: new Date(end - 86_400_000).toISOString().slice(0, 10),
+          previous: labelOf(new Date(start - 7 * 86_400_000)),
+          next: nextMonday <= nowDate ? labelOf(nextMonday) : null,
+          in_progress: nowDate.getTime() < end,
+        },
+        leads: {
+          received: received.length,
+          by_source: [...bySource.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .map(([source_key, count]) => ({ source_key, count })),
+          answered: waits.length,
+          median_first_reply_minutes: median,
+          answered_within_target: waits.filter((wait) => wait <= 60).length,
+          first_reply_target_minutes: 60,
+          qualified: activities.filter(
+            (row) =>
+              within(row.at) &&
+              row.lead_id &&
+              row.kind === "system" &&
+              row.body.includes("Qualified"),
+          ).length,
+        },
+        meetings: {
+          demos_held: weekMeetings.filter(
+            (row) => row.kind === "demo" && row.status === "completed",
+          ).length,
+          demo_no_shows: weekMeetings.filter(
+            (row) => row.kind === "demo" && row.status === "no_show",
+          ).length,
+          held: weekMeetings.filter((row) => row.status === "completed").length,
+          no_shows: weekMeetings.filter((row) => row.status === "no_show").length,
+          outcomes_missing: weekMeetings.filter(
+            (row) => row.status === "scheduled" && Date.parse(row.starts_at) < Date.now(),
+          ).length,
+        },
+        deals: {
+          created: deals.filter((row) => within(row.created_at)).length,
+          stage_moves: dealStageEvents.filter((event) => event.from_stage_key && within(event.at))
+            .length,
+          won: { count: won.length, mrr: won.reduce((sum, row) => sum + row.mrr_amount, 0) },
+          lost: { count: lost.length, reasons: reasons(lost) },
+        },
+        pipeline: {
+          stages: pipelineStages,
+          open_count: openDeals.length,
+          open_mrr: openDeals.reduce((sum, row) => sum + row.mrr_amount, 0),
+          weighted:
+            Math.round(pipelineStages.reduce((sum, stage) => sum + stage.weighted, 0) * 100) / 100,
+        },
+        forecast: {
+          horizon_days: 30,
+          commit_mrr: inHorizon
+            .filter((row) => (stageOf(row.stage_key)?.win_probability ?? 0) >= 60)
+            .reduce((sum, row) => sum + row.mrr_amount, 0),
+          best_case_mrr: inHorizon.reduce((sum, row) => sum + row.mrr_amount, 0),
+          slipped,
+          slipped_count: slipped.length,
+        },
+        revenue: {
+          currency: "USD",
+          mrr_at_start: money(
+            mrrCents("USD", new Date(start - 86_400_000).toISOString().slice(0, 10)),
+          ),
+          mrr_at_end: money(mrrCents("USD", weekEnd)),
+          movements: byKind,
+        },
+        losses_last_90_days: reasons(
+          deals.filter(
+            (row) =>
+              row.status === "lost" &&
+              row.closed_at &&
+              Date.now() - Date.parse(row.closed_at) <= 90 * 86_400_000,
+          ),
+        ),
+        generated_at: now(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/exports/{kind}",
+    auth: true,
+    capability: "crm:export",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const reason = String(body.reason ?? "").trim();
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say what the export is for" });
+      const tables: Record<string, [string[], unknown[][]]> = {
+        companies: [
+          ["id", "name", "domain", "lifecycle"],
+          companies.map((row) => [row.id, row.name, row.domain, row.lifecycle]),
+        ],
+        people: [
+          ["id", "full_name", "email", "title"],
+          people.map((row) => [row.id, row.full_name, row.email, row.title]),
+        ],
+        leads: [
+          ["id", "received_at", "source", "full_name", "email", "stage"],
+          leads.map((row) => [
+            row.id,
+            row.created_at,
+            row.source_key,
+            row.full_name,
+            row.email,
+            row.stage,
+          ]),
+        ],
+        deals: [
+          ["id", "name", "stage", "status", "mrr"],
+          deals.map((row) => [row.id, row.name, row.stage_key, row.status, row.mrr_amount]),
+        ],
+        contracts: [
+          ["id", "plan", "mrr", "currency", "status"],
+          contracts.map((row) => [
+            row.id,
+            row.plan_name,
+            money(row.mrr_cents),
+            row.currency,
+            row.status,
+          ]),
+        ],
+      };
+      const table = tables[String(params.kind)];
+      if (!table) return refuse(404, "not_found");
+      const [header, rows] = table;
+      const csv =
+        [header.join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\r\n") + "\r\n";
+      audit(
+        "export.created",
+        caller(headers)?.member.id ?? null,
+        "export",
+        String(params.kind),
+        reason,
+      );
+      return ok({ filename: `hq-${params.kind}-mock.csv`, rows: rows.length, csv });
+    },
+  },
+);
+
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
     if (entry.method !== method) continue;
@@ -4223,6 +4993,7 @@ function resetWorld() {
   seedCrm();
   seedMeetings();
   resetCalendar();
+  seedRevenue();
   for (const member of staff) {
     member.enrolled = !member.email.startsWith("newbie");
     member.is_active = true;
