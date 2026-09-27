@@ -226,3 +226,51 @@ export function localInputToIso(value: string | null | undefined): string {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : "";
 }
+
+/**
+ * Money as the CRM shows it: whole units, the currency's own symbol. `1234.5, "USD"` →
+ * "$1,235". Monthly recurring figures are small enough that cents are noise, and the
+ * service rounds to cents anyway, so nothing is hidden by dropping them here.
+ */
+export function formatMoney(value: number | null | undefined, currency = "USD"): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Not available";
+  const code = /^[A-Z]{3}$/.test(currency) ? currency : "USD";
+  return new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: code,
+    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+  }).format(value);
+}
+
+/** Monthly recurring revenue: "$1,235/mo". */
+export function formatMrr(value: number | null | undefined, currency = "USD"): string {
+  const money = formatMoney(value, currency);
+  return money === "Not available" ? money : `${money}/mo`;
+}
+
+/** A wait in minutes as a clock reads: 45 → "45m", 125 → "2h 05m", 3000 → "2d 2h". */
+export function formatWait(minutes: number | null | undefined): string {
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes < 0) return "—";
+  const whole = Math.floor(minutes);
+  if (whole < 60) return `${whole}m`;
+  if (whole < 1_440) {
+    const hours = Math.floor(whole / 60);
+    return `${hours}h ${String(whole % 60).padStart(2, "0")}m`;
+  }
+  const days = Math.floor(whole / 1_440);
+  const hours = Math.floor((whole % 1_440) / 60);
+  return hours ? `${days}d ${hours}h` : `${days}d`;
+}
+
+/** A due date against today (both YYYY-MM-DD): "overdue" | "today" | "upcoming" | "none". */
+export function dueState(
+  dueOn: string | null | undefined,
+  today: string,
+): "overdue" | "today" | "upcoming" | "none" {
+  const day = String(dueOn ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "none";
+  if (day < today) return "overdue";
+  if (day === today) return "today";
+  return "upcoming";
+}

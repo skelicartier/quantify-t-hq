@@ -42,7 +42,7 @@ export function PageHeader({
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1 id={titleId}>{title}</h1>
         {description && <p className="page-header__desc">{description}</p>}
-        {meta && <p className="page-header__meta">{meta}</p>}
+        {meta && <div className="page-header__meta">{meta}</div>}
       </div>
       {actions && <div className="page-header__actions">{actions}</div>}
     </header>

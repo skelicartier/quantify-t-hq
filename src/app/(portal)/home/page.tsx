@@ -1,114 +1,248 @@
 import Link from "next/link";
 
+import { DealFlags, DueChip, FirstReplyClock } from "@/components/crm/pills";
+import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
 import { SlaChip } from "@/components/support/sla-chip";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { requireStaff, hasCapability } from "@/lib/access/core";
-import { HqApiUnavailableError } from "@/lib/api/core";
-import { readQueue, type Queue } from "@/lib/api/tickets";
+import { Stat, StatGrid } from "@/components/ui/stat";
+import { requireStaff } from "@/lib/access/core";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { readHome, type HomeAggregate } from "@/lib/api/home";
+import { isoDay } from "@/lib/crm/dates";
+import { formatMrr } from "@/lib/format";
+import { requestNow } from "@/lib/request-time";
 
 export const metadata = { title: "Today" };
 export const dynamic = "force-dynamic";
 
 /**
- * The attention surface. Each card fills in as its module lands; until then it says
- * honestly what will create its data, because a dashboard of silent zeros teaches
- * people to stop looking at it.
+ * The attention surface: one read, sections by role. A section the role cannot see is
+ * absent, not zero, and a failed read says so rather than showing a calm, empty day.
  */
 export default async function HomePage() {
   const context = await requireStaff("/home");
-  const crm = hasCapability(context, "crm:read");
-  const desk = hasCapability(context, "tickets:read");
+  const now = requestNow();
+  const today = isoDay(now);
 
-  let queue: Queue | null = null;
-  let queueFailed = false;
-  if (desk) {
-    try {
-      queue = await readQueue(context.token);
-    } catch (error) {
-      if (!(error instanceof HqApiUnavailableError)) throw error;
-      queueFailed = true;
-    }
+  let home: HomeAggregate | null = null;
+  try {
+    home = await readHome(context.token);
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
   }
-  const attention = (queue?.tickets ?? []).filter(
-    (ticket) => ticket.sla.status === "breached" || ticket.sla.status === "at-risk",
-  );
 
   return (
     <>
-      <PageHeader eyebrow="Command" title="Today" description="What needs a person, first." />
-      <div className="card-grid">
-        {desk && (
-          <Card
-            title="Tickets breaching"
-            important={attention.length > 0}
-            actions={
-              <Link className="btn btn--small" href="/support">
-                Open the desk
-              </Link>
-            }
-          >
-            {queueFailed ? (
-              <Callout tone="danger" compact>
-                The desk could not be read — not an empty queue.
-              </Callout>
-            ) : attention.length === 0 ? (
-              <EmptyState
-                title="No reply timer is close to breach"
-                description={
-                  queue
-                    ? `${queue.counts.open} waiting on the desk, ${queue.counts.unassigned} unassigned.`
-                    : undefined
+      <PageHeader
+        eyebrow="Command"
+        title="Today"
+        description="What needs a person, most urgent first."
+      />
+      <LiveRefresh intervalSeconds={60} label="Today" />
+      {home === null ? (
+        <Callout tone="danger" role="alert" title="Today could not be read">
+          This is a read failure, not a quiet day. It retries on the next refresh.
+        </Callout>
+      ) : (
+        <>
+          <StatGrid columns={4} label="At a glance">
+            {home.deals && (
+              <Stat
+                label="Open pipeline"
+                value={formatMrr(home.deals.open_mrr)}
+                text
+                hint={`${formatMrr(home.deals.weighted_mrr)} weighted · ${home.deals.open_count} deals`}
+              />
+            )}
+            {home.leads && (
+              <Stat
+                label="First replies owed"
+                value={home.leads.awaiting_first_reply}
+                tone={home.leads.first_reply_overdue > 0 ? "danger" : "default"}
+                hint={`${home.leads.first_reply_overdue} past the hour`}
+              />
+            )}
+            {home.tasks && (
+              <Stat
+                label="Your tasks due"
+                value={home.tasks.overdue + home.tasks.due_today}
+                tone={home.tasks.overdue > 0 ? "danger" : "default"}
+                hint={`${home.tasks.overdue} overdue · ${home.tasks.due_today} today`}
+              />
+            )}
+            {home.desk && (
+              <Stat
+                label="Desk"
+                value={home.desk.open}
+                tone={home.desk.breached > 0 ? "danger" : "default"}
+                hint={`${home.desk.breached} breaching · ${home.desk.unassigned} unassigned`}
+              />
+            )}
+          </StatGrid>
+
+          <div className="home-grid">
+            {home.leads && (
+              <Card
+                title="First replies owed"
+                important={home.leads.first_reply_overdue > 0}
+                actions={
+                  <Link className="btn btn--small" href="/leads">
+                    All leads
+                  </Link>
                 }
+              >
+                {home.leads.leads.length === 0 ? (
+                  <EmptyState
+                    title="Nobody is waiting"
+                    description="Every lead has had a first reply."
+                    compact
+                  />
+                ) : (
+                  <ul className="attention-list">
+                    {home.leads.leads.map((lead) => (
+                      <li key={lead.lead_id}>
+                        <span className="attention-list__main">
+                          <Link href={`/leads/${lead.lead_id}`}>
+                            {lead.full_name || lead.email}
+                          </Link>
+                          <span className="attention-list__sub">
+                            {lead.company_name || lead.email}
+                          </span>
+                        </span>
+                        <FirstReplyClock
+                          firstRepliedAt={lead.first_replied_at}
+                          waitingMinutes={lead.waiting_minutes}
+                          overdue={lead.first_reply_overdue}
+                          targetMinutes={60}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            )}
+
+            {home.deals && (
+              <Card
+                title="Deals needing attention"
+                important={home.deals.deals.length > 0}
+                actions={
+                  <Link className="btn btn--small" href="/deals">
+                    Pipeline
+                  </Link>
+                }
+              >
+                {home.deals.deals.length === 0 ? (
+                  <EmptyState
+                    title="Every deal is moving"
+                    description="Each open deal has a dated next step and recent work."
+                    compact
+                  />
+                ) : (
+                  <ul className="attention-list attention-list--stacked">
+                    {home.deals.deals.map((deal) => (
+                      <li key={deal.deal_id}>
+                        <span className="attention-list__main">
+                          <Link href={`/deals/${deal.deal_id}`}>
+                            {deal.company_name || deal.name}
+                          </Link>
+                          <span className="attention-list__sub">
+                            {deal.stage_label} · {formatMrr(deal.mrr_amount, deal.currency)}
+                          </span>
+                        </span>
+                        <DealFlags
+                          flags={deal.flags}
+                          idleDays={deal.idle_days}
+                          daysInStage={deal.days_in_stage}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            )}
+
+            {home.tasks && (
+              <Card
+                title="Your tasks"
+                important={home.tasks.overdue > 0}
+                actions={
+                  <Link className="btn btn--small" href="/tasks">
+                    All tasks
+                  </Link>
+                }
+              >
+                {home.tasks.tasks.length === 0 ? (
+                  <EmptyState
+                    title="Nothing due"
+                    description={
+                      home.tasks.open > 0
+                        ? `${home.tasks.open} open, none due today or late.`
+                        : "No open tasks."
+                    }
+                    compact
+                  />
+                ) : (
+                  <ul className="attention-list">
+                    {home.tasks.tasks.map((task) => (
+                      <li key={task.task_id}>
+                        <span className="attention-list__main">
+                          <Link href="/tasks">{task.title}</Link>
+                        </span>
+                        <DueChip due={task.due_on} today={today} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            )}
+
+            {home.desk && (
+              <Card
+                title="Tickets near breach"
+                important={home.desk.breached > 0}
+                actions={
+                  <Link className="btn btn--small" href="/support">
+                    The desk
+                  </Link>
+                }
+              >
+                {home.desk.tickets.length === 0 ? (
+                  <EmptyState
+                    title="No reply timer is close"
+                    description={`${home.desk.open} waiting on the desk, ${home.desk.pending} waiting on customers.`}
+                    compact
+                  />
+                ) : (
+                  <ul className="attention-list">
+                    {home.desk.tickets.map((ticket) => (
+                      <li key={ticket.id}>
+                        <span className="attention-list__main">
+                          <Link href={`/support/${ticket.id}`}>{ticket.subject}</Link>
+                          <span className="attention-list__sub">{ticket.contact_email}</span>
+                        </span>
+                        <SlaChip sla={ticket.sla} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            )}
+
+            <Card title="Meetings today">
+              <EmptyState
+                title="Calendar not connected"
+                description="Booked demos and calls will list here once the calendar is connected in Admin."
                 compact
               />
-            ) : (
-              <ul className="attention-list">
-                {attention.slice(0, 5).map((ticket) => (
-                  <li key={ticket.id}>
-                    <Link href={`/support/${ticket.id}`}>{ticket.subject}</Link>
-                    <SlaChip sla={ticket.sla} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        )}
-        <Card title="Meetings today">
-          <EmptyState
-            title="Nothing scheduled"
-            description="Booked demos and calls appear here once the calendar is connected."
-            compact
-          />
-        </Card>
-        {crm && (
-          <Card title="Needs first reply">
-            <EmptyState
-              title="No lead is waiting"
-              description="Early-access requests land here the moment website intake is connected."
-              compact
-            />
-          </Card>
-        )}
-        <Card title="Overdue tasks">
-          <EmptyState title="Nothing overdue" description="Tasks arrive with the CRM." compact />
-        </Card>
-        {crm && (
-          <Card title="Deals needing attention">
-            <EmptyState
-              title="Pipeline is empty"
-              description="Deals appear when the first lead is qualified."
-              compact
-            />
-          </Card>
-        )}
-      </div>
-      <Callout tone="neutral" className="home-first-run">
-        HQ fills module by module — the desk is live; leads, companies and deals come next.{" "}
-        <Link href="/me/security">Review your security</Link>.
-      </Callout>
+            </Card>
+          </div>
+        </>
+      )}
     </>
   );
 }

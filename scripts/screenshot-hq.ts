@@ -35,10 +35,57 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: ".thread",
   },
   { name: "support-replies", path: "/support/replies", ready: "main#main-content" },
+  { name: "leads", path: "/leads", ready: ".data-table" },
+  {
+    name: "lead",
+    path: "/leads/1e000000-0000-4000-8000-000000000001",
+    ready: ".record-layout",
+  },
+  { name: "companies", path: "/companies", ready: ".data-table" },
+  {
+    name: "company",
+    path: "/companies/c0000000-0000-4000-8000-000000000002",
+    ready: ".record-layout",
+  },
+  { name: "people", path: "/people", ready: ".data-table" },
+  {
+    name: "person",
+    path: "/people/p0000000-0000-4000-8000-000000000002",
+    ready: ".record-layout",
+  },
+  { name: "deals-board", path: "/deals", ready: ".board" },
+  { name: "deals-table", path: "/deals?view=table", ready: ".data-table" },
+  {
+    name: "deal",
+    path: "/deals/d0000000-0000-4000-8000-000000000001",
+    ready: ".stage-rail",
+  },
+  {
+    name: "deal-stuck",
+    path: "/deals/d0000000-0000-4000-8000-000000000002",
+    ready: ".stage-rail",
+  },
+  { name: "tasks", path: "/tasks?scope=all", ready: "main#main-content" },
+  { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
+  { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
   { name: "me-security", path: "/me/security", ready: "main#main-content" },
 ];
 
 let failures = 0;
+
+/**
+ * Browser console errors since the last page was captured. React reports hydration
+ * mismatches and invalid nesting (a list inside a paragraph) only here — the page still
+ * renders, so without this the only sign is the dev overlay's badge in a screenshot.
+ */
+const consoleErrors: string[] = [];
+
+function watchConsole(page: Page) {
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text().slice(0, 240));
+  });
+  page.on("pageerror", (error) => consoleErrors.push(`uncaught: ${error.message.slice(0, 240)}`));
+}
 
 function report(page: string, problem: string) {
   failures += 1;
@@ -64,6 +111,7 @@ async function assertAccessible(page: Page, name: string) {
 }
 
 async function capture(page: Page, folder: string, shot: Shot) {
+  consoleErrors.length = 0;
   const response = await page.goto(`${BASE}${shot.path}`, { waitUntil: "networkidle" });
   if (!response || response.status() !== 200) {
     report(shot.name, `status ${response?.status() ?? "none"}`);
@@ -72,14 +120,46 @@ async function capture(page: Page, folder: string, shot: Shot) {
   if (shot.ready) await page.waitForSelector(shot.ready, { timeout: 10_000 });
   await assertNoOverflow(page, `${folder}/${shot.name}`);
   await assertAccessible(page, `${folder}/${shot.name}`);
+  for (const error of consoleErrors) report(`${folder}/${shot.name}`, `console: ${error}`);
   await page.screenshot({ path: `${OUT}/${folder}/${shot.name}.png`, fullPage: true });
   console.log(`  ✓ ${folder}/${shot.name}`);
 }
 
-async function toggleTheme(page: Page) {
-  const toggle = page.locator("[data-theme-toggle], .appbar__tools button").first();
-  await toggle.click();
-  await page.waitForTimeout(400);
+/**
+ * Press the named theme's own button and wait until the shell has switched. (It used
+ * to click the first toggle button — the already-pressed Dark one — so every "light"
+ * screenshot was dark and nothing failed.)
+ */
+async function setTheme(page: Page, theme: "dark" | "light") {
+  const label = theme === "light" ? "Light theme" : "Dark theme";
+  await page.locator(`.theme-toggle button[title="${label}"]`).click();
+  await page.waitForSelector(`.shell[data-theme="${theme}"]`, { timeout: 10_000 });
+}
+
+/** States a static walk never reaches: an open popover, and a key minted after sudo. */
+async function captureInteractions(page: Page, folder: string) {
+  await page.goto(`${BASE}/leads`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Add lead" }).click();
+  await page.waitForSelector(".popover[open] .popover__panel");
+  await assertAccessible(page, `${folder}/leads-add-open`);
+  await page.screenshot({ path: `${OUT}/${folder}/leads-add-open.png` });
+  console.log(`  ✓ ${folder}/leads-add-open`);
+
+  await page.goto(`${BASE}/admin/integrations`, { waitUntil: "networkidle" });
+  // The window lasts ten minutes, so a later pass may find it already open.
+  if ((await page.locator("#sudo-code").count()) > 0) {
+    await page.fill("#sudo-code", "000000");
+    await page.locator(".sudo-gate button[type=submit]").click();
+  }
+  await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  await page.fill("#key-name", "Website contact form");
+  await page.fill("#key-reason", "Screenshot run");
+  await page.locator("button", { hasText: "Mint key" }).click();
+  await page.waitForSelector(".one-time-secret", { timeout: 10_000 });
+  await assertNoOverflow(page, `${folder}/admin-key-minted`);
+  await assertAccessible(page, `${folder}/admin-key-minted`);
+  await page.screenshot({ path: `${OUT}/${folder}/admin-key-minted.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/admin-key-minted`);
 }
 
 async function run(browser: Browser) {
@@ -88,6 +168,7 @@ async function run(browser: Browser) {
       viewport: { width: viewport.width, height: viewport.height },
     });
     const page = await context.newPage();
+    watchConsole(page);
 
     // Signed-out surfaces first.
     mkdirSync(`${OUT}/${viewport.name}/auth`, { recursive: true });
@@ -118,11 +199,14 @@ async function run(browser: Browser) {
     // Signed-in pages, dark then light.
     for (const theme of ["dark", "light"] as const) {
       mkdirSync(`${OUT}/${viewport.name}/${theme}`, { recursive: true });
-      if (theme === "light") await toggleTheme(page);
+      await setTheme(page, theme);
       for (const shot of SIGNED_IN_PAGES) {
         await capture(page, `${viewport.name}/${theme}`, shot);
       }
+      await captureInteractions(page, `${viewport.name}/${theme}`);
     }
+    // Leave the persona's theme where it started, for the next viewport's walk.
+    await setTheme(page, "dark");
 
     // First-run enrollment with the un-enrolled persona, in a fresh context.
     const enrollContext = await browser.newContext({
