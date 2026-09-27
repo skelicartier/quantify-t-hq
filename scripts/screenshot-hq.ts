@@ -28,6 +28,13 @@ type Shot = { name: string; path: string; ready?: string };
 
 const SIGNED_IN_PAGES: Shot[] = [
   { name: "home", path: "/home", ready: "main#main-content" },
+  { name: "support-queue", path: "/support", ready: ".data-table" },
+  {
+    name: "support-ticket",
+    path: "/support/sup_00000000000000000004",
+    ready: ".thread",
+  },
+  { name: "support-replies", path: "/support/replies", ready: "main#main-content" },
   { name: "me-security", path: "/me/security", ready: "main#main-content" },
 ];
 

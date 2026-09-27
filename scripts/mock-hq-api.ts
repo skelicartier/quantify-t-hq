@@ -173,6 +173,37 @@ const staff: Staff[] = [
   },
 ];
 
+type Message = {
+  id: string;
+  author: "customer" | "staff" | "system";
+  author_id: string;
+  author_name: string;
+  visibility: "public" | "internal";
+  body: string;
+  at: string;
+};
+
+type TicketRow = {
+  id: string;
+  account_id: string;
+  contact_email: string;
+  subject: string;
+  status: "open" | "pending" | "resolved";
+  priority: "low" | "normal" | "high" | "urgent";
+  assignee_staff_id: string;
+  assignee_name: string;
+  source: string;
+  app_version: string;
+  platform: string;
+  created_at: string;
+  updated_at: string;
+  staff_last_read_at: string;
+  snoozed_until: string | null;
+  linked_issue_url: string;
+  tags: string[];
+  messages: Message[];
+};
+
 type Pending = { staffId: string; kind: "totp" | "enroll"; expires: number };
 type Session = {
   id: string;
@@ -280,12 +311,308 @@ function caller(headers: Record<string, string | string[] | undefined>) {
   return member ? { member, session } : null;
 }
 
+const SLA_TARGETS: Record<string, { first: number; next: number }> = {
+  urgent: { first: 60, next: 120 },
+  high: { first: 240, next: 480 },
+  normal: { first: 480, next: 960 },
+  low: { first: 1440, next: 2880 },
+};
+
+function hoursAgo(hours: number): string {
+  return new Date(Date.now() - hours * 3600_000).toISOString().replace(/\.\d{3}Z$/, "+00:00");
+}
+
+let ticketCounter = 0;
+function ticketId(): string {
+  ticketCounter += 1;
+  return `sup_${String(ticketCounter).padStart(20, "0")}`;
+}
+let messageCounter = 0;
+function messageId(): string {
+  messageCounter += 1;
+  return `msg_${String(messageCounter).padStart(20, "0")}`;
+}
+
+function makeTicket(
+  input: Partial<TicketRow> & { subject: string; opened: string; body: string },
+): TicketRow {
+  const id = ticketId();
+  return {
+    id,
+    account_id: input.account_id ?? "cc000000-0000-4000-8000-000000000001",
+    contact_email: input.contact_email ?? "analyst@meridianfund.test",
+    subject: input.subject,
+    status: input.status ?? "open",
+    priority: input.priority ?? "normal",
+    assignee_staff_id: input.assignee_staff_id ?? "",
+    assignee_name: input.assignee_name ?? "",
+    source: input.source ?? "desktop",
+    app_version: input.app_version ?? "1.4.2",
+    platform: input.platform ?? "macOS",
+    created_at: input.opened,
+    updated_at: input.updated_at ?? input.opened,
+    staff_last_read_at: input.staff_last_read_at ?? "",
+    snoozed_until: input.snoozed_until ?? null,
+    linked_issue_url: input.linked_issue_url ?? "",
+    tags: input.tags ?? [],
+    messages: [
+      {
+        id: messageId(),
+        author: "customer",
+        author_id: input.account_id ?? "cc000000-0000-4000-8000-000000000001",
+        author_name: input.contact_email ?? "analyst@meridianfund.test",
+        visibility: "public",
+        body: input.body,
+        at: input.opened,
+      },
+      ...(input.messages ?? []),
+    ],
+  };
+}
+
+const tickets: TicketRow[] = [];
+function seedTickets() {
+  tickets.length = 0;
+  ticketCounter = 0;
+  messageCounter = 0;
+  tickets.push(
+    makeTicket({
+      subject: "Export refuses our fiscal calendar",
+      body: "Exports land with calendar quarters; our fiscal year ends in June and every figure shifts a quarter.",
+      opened: hoursAgo(31),
+      priority: "high",
+      contact_email: "ops@halcyoncapital.test",
+      account_id: "cc000000-0000-4000-8000-000000000002",
+      tags: ["exports"],
+    }),
+    makeTicket({
+      subject: "Chart panel blank after wake from sleep",
+      body: "Every chart is blank until a restart. Started with 1.4.2 on two machines here.",
+      opened: hoursAgo(7),
+      priority: "urgent",
+      contact_email: "cto@meridianfund.test",
+      tags: ["charts", "regression"],
+      linked_issue_url: "https://github.com/example/terminal/issues/812",
+    }),
+    makeTicket({
+      subject: "Add a second seat for our new analyst",
+      body: "We hired. What is the process for a second seat on our plan?",
+      opened: hoursAgo(2),
+      contact_email: "founder@bluecrestpartners.test",
+      account_id: "cc000000-0000-4000-8000-000000000003",
+      tags: ["billing"],
+    }),
+    makeTicket({
+      subject: "Thesis health shows unchecked on one holding",
+      body: "One assumption reads unchecked since Tuesday. The field it watches has fresh data.",
+      opened: hoursAgo(26),
+      status: "pending",
+      assignee_name: "Desk Person",
+      assignee_staff_id: "aa000000-0000-4000-8000-00000000000d",
+      staff_last_read_at: hoursAgo(20),
+      updated_at: hoursAgo(20),
+      messages: [
+        {
+          id: messageId(),
+          author: "staff",
+          author_id: "aa000000-0000-4000-8000-00000000000d",
+          author_name: "Desk Person",
+          visibility: "internal",
+          body: "Reproduced. The watched field moved vendors; the rule needs re-pointing.",
+          at: hoursAgo(21),
+        },
+        {
+          id: messageId(),
+          author: "staff",
+          author_id: "aa000000-0000-4000-8000-00000000000d",
+          author_name: "Desk Person",
+          visibility: "public",
+          body: "We can see it — one data field moved and the assumption needs re-pointing. Fix lands tomorrow; we will confirm here.",
+          at: hoursAgo(20),
+        },
+      ],
+    }),
+    makeTicket({
+      subject: "Waiting on their compliance sign-off",
+      body: "Can you hold our export request until compliance signs the data agreement?",
+      opened: hoursAgo(50),
+      snoozed_until: new Date(Date.now() + 3 * 86400_000).toISOString(),
+      contact_email: "legal@halcyoncapital.test",
+      account_id: "cc000000-0000-4000-8000-000000000002",
+      staff_last_read_at: hoursAgo(49),
+    }),
+    makeTicket({
+      subject: "Locked out after phone change",
+      body: "New phone, old authenticator gone. How do I get back in?",
+      opened: hoursAgo(120),
+      status: "resolved",
+      assignee_name: "The Owner",
+      assignee_staff_id: "aa000000-0000-4000-8000-00000000000a",
+      staff_last_read_at: hoursAgo(118),
+      updated_at: hoursAgo(118),
+      messages: [
+        {
+          id: messageId(),
+          author: "staff",
+          author_id: "aa000000-0000-4000-8000-00000000000a",
+          author_name: "The Owner",
+          visibility: "public",
+          body: "Reset done — sign in with your password and re-enrol the authenticator.",
+          at: hoursAgo(119),
+        },
+        {
+          id: messageId(),
+          author: "system",
+          author_id: "",
+          author_name: "The Owner",
+          visibility: "public",
+          body: "Marked resolved",
+          at: hoursAgo(118),
+        },
+      ],
+    }),
+  );
+}
+seedTickets();
+
+const savedReplies: Array<{
+  reply_id: string;
+  title: string;
+  body: string;
+  uses: number;
+  updated_at: string;
+  archived: boolean;
+}> = [];
+function seedSavedReplies() {
+  savedReplies.length = 0;
+  savedReplies.push(
+    {
+      reply_id: randomUUID(),
+      title: "Export steps",
+      body: "Settings, then Data, then Export. The file lands in your downloads folder.",
+      uses: 4,
+      updated_at: now(),
+      archived: false,
+    },
+    {
+      reply_id: randomUUID(),
+      title: "Authenticator reset",
+      body: "We have reset your sign-in. Sign in with your password; it will walk you through enrolling the new device.",
+      uses: 2,
+      updated_at: now(),
+      archived: false,
+    },
+  );
+}
+seedSavedReplies();
+
+function publicMessages(row: TicketRow): Message[] {
+  return row.messages.filter((message) => message.visibility !== "internal");
+}
+
+function slaFor(row: TicketRow): {
+  timer: string;
+  due_at: string | null;
+  status: string;
+  minutes_remaining: number | null;
+} {
+  if (row.status === "resolved")
+    return { timer: "none", due_at: null, status: "none", minutes_remaining: null };
+  if (row.snoozed_until && new Date(row.snoozed_until).getTime() > Date.now())
+    return { timer: "none", due_at: null, status: "paused", minutes_remaining: null };
+  if (row.status === "pending")
+    return { timer: "none", due_at: null, status: "paused", minutes_remaining: null };
+  const targets = SLA_TARGETS[row.priority] ?? SLA_TARGETS.normal!;
+  const firstStaff = publicMessages(row).find((message) => message.author === "staff");
+  const anchorAt = firstStaff
+    ? [...publicMessages(row)].reverse().find((message) => message.author === "customer")?.at
+    : row.created_at;
+  if (!anchorAt) return { timer: "none", due_at: null, status: "none", minutes_remaining: null };
+  const minutes = firstStaff ? targets.next : targets.first;
+  const due = new Date(new Date(anchorAt).getTime() + minutes * 60_000);
+  const remaining = Math.round((due.getTime() - Date.now()) / 60_000);
+  const status = remaining <= 0 ? "breached" : remaining <= minutes * 0.2 ? "at-risk" : "healthy";
+  return {
+    timer: firstStaff ? "next-reply" : "first-reply",
+    due_at: due.toISOString(),
+    status,
+    minutes_remaining: remaining,
+  };
+}
+
+function ticketSummary(row: TicketRow) {
+  const pub = publicMessages(row);
+  const last = pub[pub.length - 1];
+  const snoozed = Boolean(row.snoozed_until && new Date(row.snoozed_until).getTime() > Date.now());
+  const lastCustomer = [...pub].reverse().find((message) => message.author === "customer");
+  return {
+    id: row.id,
+    subject: row.subject,
+    status: row.status,
+    snoozed,
+    snoozed_until: snoozed ? row.snoozed_until : null,
+    priority: row.priority,
+    source: row.source,
+    account_id: row.account_id,
+    contact_email: row.contact_email,
+    assignee_staff_id: row.assignee_staff_id,
+    assignee_name: row.assignee_name,
+    tags: [...row.tags].sort(),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    message_count: pub.length,
+    notes_count: row.messages.length - pub.length,
+    last_author: last?.author ?? "",
+    last_at: last?.at ?? "",
+    unread: Boolean(
+      lastCustomer && (!row.staff_last_read_at || row.staff_last_read_at < lastCustomer.at),
+    ),
+    linked_issue_url: row.linked_issue_url,
+    sla: slaFor(row),
+  };
+}
+
+function ticketView(row: TicketRow) {
+  return {
+    ...ticketSummary(row),
+    app_version: row.app_version,
+    platform: row.platform,
+    messages: row.messages.map((message) => ({
+      id: message.id,
+      author: message.author,
+      author_name: message.author_name,
+      visibility: message.visibility,
+      body: message.body,
+      at: message.at,
+    })),
+  };
+}
+
+const ACCOUNT_PROFILES: Record<string, { email: string; name: string; plan: string }> = {
+  "cc000000-0000-4000-8000-000000000001": {
+    email: "analyst@meridianfund.test",
+    name: "Meridian Fund",
+    plan: "desk",
+  },
+  "cc000000-0000-4000-8000-000000000002": {
+    email: "ops@halcyoncapital.test",
+    name: "Halcyon Capital",
+    plan: "teams",
+  },
+  "cc000000-0000-4000-8000-000000000003": {
+    email: "founder@bluecrestpartners.test",
+    name: "Bluecrest Partners",
+    plan: "pro",
+  },
+};
+
 const RECOVERY_CODES = Array.from({ length: 10 }, (_, index) => `mockr-code${index}`);
 
 type Handler = (context: {
   method: string;
   route: string;
   params: Record<string, string>;
+  query: Record<string, string>;
   body: Record<string, unknown>;
   headers: Record<string, string | string[] | undefined>;
 }) => { status: number; body: unknown };
@@ -641,6 +968,330 @@ const routes: Array<{
   },
   {
     method: "GET",
+    pattern: "hq/tickets",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ query }) => {
+      const summaries = tickets.map(ticketSummary);
+      const visible = summaries.filter((summary) => {
+        if (query.status === "snoozed") {
+          if (!summary.snoozed) return false;
+        } else if (query.status) {
+          if (summary.status !== query.status || summary.snoozed) return false;
+        }
+        if (query.priority && summary.priority !== query.priority) return false;
+        if (query.assignee === "unassigned") {
+          if (summary.assignee_staff_id) return false;
+        } else if (query.assignee && summary.assignee_staff_id !== query.assignee) return false;
+        if (query.tag && !summary.tags.includes(query.tag)) return false;
+        if (query.sla && summary.sla.status !== query.sla) return false;
+        if (query.q) {
+          const haystack =
+            `${summary.subject} ${summary.contact_email} ${summary.id}`.toLowerCase();
+          if (!haystack.includes(query.q.toLowerCase())) return false;
+        }
+        return true;
+      });
+      const slaRank: Record<string, number> = {
+        breached: 0,
+        "at-risk": 1,
+        healthy: 2,
+        paused: 3,
+        none: 4,
+      };
+      const priorityRank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+      visible.sort((left, right) => {
+        const resolved = Number(left.status === "resolved") - Number(right.status === "resolved");
+        if (resolved !== 0) return resolved;
+        const sla = (slaRank[left.sla.status] ?? 5) - (slaRank[right.sla.status] ?? 5);
+        if (sla !== 0) return sla;
+        const priority = (priorityRank[left.priority] ?? 5) - (priorityRank[right.priority] ?? 5);
+        if (priority !== 0) return priority;
+        return left.updated_at.localeCompare(right.updated_at);
+      });
+      return ok({
+        tickets: visible,
+        counts: {
+          open: summaries.filter((s2) => s2.status === "open" && !s2.snoozed).length,
+          pending: summaries.filter((s2) => s2.status === "pending").length,
+          resolved: summaries.filter((s2) => s2.status === "resolved").length,
+          snoozed: summaries.filter((s2) => s2.snoozed).length,
+          unassigned: summaries.filter((s2) => !s2.assignee_staff_id && s2.status !== "resolved")
+            .length,
+          breached: summaries.filter((s2) => s2.sla.status === "breached").length,
+          at_risk: summaries.filter((s2) => s2.sla.status === "at-risk").length,
+          unread: summaries.filter((s2) => s2.unread).length,
+        },
+        statuses: ["open", "pending", "resolved", "snoozed"],
+        priorities: ["low", "normal", "high", "urgent"],
+        sla_states: ["breached", "at-risk", "healthy", "paused"],
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/tickets/open",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const accountId = String(body.account_id ?? "").trim();
+      const subject = String(body.subject ?? "").trim();
+      const text = String(body.body ?? "").trim();
+      if (!accountId || !text) return refuse(400, "malformed_request");
+      const opened = now();
+      const row: TicketRow = {
+        id: ticketId(),
+        account_id: accountId,
+        contact_email: ACCOUNT_PROFILES[accountId]?.email ?? "",
+        subject: subject || text.split("\n")[0]!.slice(0, 200),
+        status: "pending",
+        priority: "normal",
+        assignee_staff_id: found.member.id,
+        assignee_name: found.member.display_name,
+        source: "hq",
+        app_version: "",
+        platform: "",
+        created_at: opened,
+        updated_at: opened,
+        staff_last_read_at: opened,
+        snoozed_until: null,
+        linked_issue_url: "",
+        tags: [],
+        messages: [
+          {
+            id: messageId(),
+            author: "staff",
+            author_id: found.member.id,
+            author_name: found.member.display_name,
+            visibility: "public",
+            body: text,
+            at: opened,
+          },
+        ],
+      };
+      tickets.push(row);
+      audit("ticket.opened", found.member.id, "ticket", row.id);
+      return ok({ ticket: ticketView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/tickets/{ticket_id}",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ params }) => {
+      const row = tickets.find((ticket) => ticket.id === params.ticket_id);
+      if (!row) return refuse(404, "not_found");
+      row.staff_last_read_at = now();
+      return ok({ ticket: ticketView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/tickets/{ticket_id}/context",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ params }) => {
+      const row = tickets.find((ticket) => ticket.id === params.ticket_id);
+      if (!row) return refuse(404, "not_found");
+      const profile = ACCOUNT_PROFILES[row.account_id];
+      return ok({
+        account: profile
+          ? {
+              account_id: row.account_id,
+              email: profile.email,
+              name: profile.name,
+              plan: profile.plan,
+              is_active: true,
+              created_at: "2026-08-01T00:00:00Z",
+              last_login_at: hoursAgo(4),
+            }
+          : null,
+        app_version: row.app_version,
+        platform: row.platform,
+        related_tickets: tickets
+          .filter((ticket) => ticket.account_id === row.account_id && ticket.id !== row.id)
+          .map((ticket) => ({
+            id: ticket.id,
+            subject: ticket.subject,
+            status: ticket.status,
+            updated_at: ticket.updated_at,
+          })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/tickets/{ticket_id}/reply",
+    auth: true,
+    capability: "tickets:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = tickets.find((ticket) => ticket.id === params.ticket_id);
+      if (!row) return refuse(404, "not_found");
+      const text = String(body.body ?? "").trim();
+      if (!text) return refuse(400, "malformed_request");
+      const at = now();
+      row.messages.push({
+        id: messageId(),
+        author: "staff",
+        author_id: found.member.id,
+        author_name: found.member.display_name,
+        visibility: "public",
+        body: text,
+        at,
+      });
+      row.status = "pending";
+      row.updated_at = at;
+      row.staff_last_read_at = at;
+      audit("ticket.replied", found.member.id, "ticket", row.id);
+      return ok({ ticket: ticketView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/tickets/{ticket_id}/note",
+    auth: true,
+    capability: "tickets:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = tickets.find((ticket) => ticket.id === params.ticket_id);
+      if (!row) return refuse(404, "not_found");
+      const text = String(body.body ?? "").trim();
+      if (!text) return refuse(400, "malformed_request");
+      const at = now();
+      row.messages.push({
+        id: messageId(),
+        author: "staff",
+        author_id: found.member.id,
+        author_name: found.member.display_name,
+        visibility: "internal",
+        body: text,
+        at,
+      });
+      row.updated_at = at;
+      audit("ticket.noted", found.member.id, "ticket", row.id);
+      return ok({ ticket: ticketView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/tickets/{ticket_id}/manage",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = tickets.find((ticket) => ticket.id === params.ticket_id);
+      if (!row) return refuse(404, "not_found");
+      if ("assignee_staff_id" in body) {
+        const assignee = String(body.assignee_staff_id ?? "").trim();
+        if (assignee) {
+          const member = staff.find(
+            (candidate) => candidate.id === assignee && candidate.is_active,
+          );
+          if (!member) return refuse(400, "malformed_request");
+          row.assignee_staff_id = member.id;
+          row.assignee_name = member.display_name;
+        } else {
+          row.assignee_staff_id = "";
+          row.assignee_name = "";
+        }
+      }
+      if (body.priority) {
+        const priority = String(body.priority);
+        if (!(priority in SLA_TARGETS)) return refuse(400, "malformed_request");
+        row.priority = priority as TicketRow["priority"];
+      }
+      if (body.status) {
+        const status = String(body.status);
+        if (!["open", "pending", "resolved"].includes(status))
+          return refuse(400, "malformed_request");
+        row.status = status as TicketRow["status"];
+        row.messages.push({
+          id: messageId(),
+          author: "system",
+          author_id: "",
+          author_name: found.member.display_name,
+          visibility: "public",
+          body: `Marked ${status}`,
+          at: now(),
+        });
+      }
+      if ("tags" in body) {
+        if (!Array.isArray(body.tags)) return refuse(400, "malformed_request");
+        row.tags = [
+          ...new Set(body.tags.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean)),
+        ].sort();
+      }
+      if ("snoozed_until" in body) {
+        const raw = String(body.snoozed_until ?? "").trim();
+        if (!raw) row.snoozed_until = null;
+        else {
+          const until = new Date(raw);
+          if (Number.isNaN(until.getTime()) || until.getTime() <= Date.now()) {
+            return refuse(400, "malformed_request");
+          }
+          row.snoozed_until = until.toISOString();
+        }
+      }
+      if ("linked_issue_url" in body) {
+        const raw = String(body.linked_issue_url ?? "").trim();
+        if (raw && !raw.startsWith("http")) return refuse(400, "malformed_request");
+        row.linked_issue_url = raw;
+      }
+      row.updated_at = now();
+      audit("ticket.managed", found.member.id, "ticket", row.id);
+      return ok({ ticket: ticketView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/saved-replies",
+    auth: true,
+    capability: "tickets:read",
+    handler: () =>
+      ok({ replies: [...savedReplies].sort((a, b) => a.title.localeCompare(b.title)) }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/saved-replies/create",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ body }) => {
+      const title = String(body.title ?? "").trim();
+      const text = String(body.body ?? "").trim();
+      if (!title || !text) return refuse(400, "malformed_request");
+      const reply = {
+        reply_id: randomUUID(),
+        title,
+        body: text,
+        uses: 0,
+        updated_at: now(),
+        archived: false,
+      };
+      savedReplies.push(reply);
+      return ok({ reply });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/saved-replies/{reply_id}/update",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ params, body }) => {
+      const reply = savedReplies.find((candidate) => candidate.reply_id === params.reply_id);
+      if (!reply) return refuse(404, "not_found");
+      if ("title" in body) reply.title = String(body.title ?? "").trim() || reply.title;
+      if ("body" in body) reply.body = String(body.body ?? "").trim() || reply.body;
+      if ("archived" in body) reply.archived = Boolean(body.archived);
+      if (body.used) reply.uses += 1;
+      reply.updated_at = now();
+      return ok({ updated: true });
+    },
+  },
+  {
+    method: "GET",
     pattern: "hq/audit",
     auth: true,
     capability: "audit:read",
@@ -693,7 +1344,11 @@ const server = createServer((request, response) => {
     } catch {
       body = {};
     }
-    const answer = respond(request.method ?? "GET", route, body, request.headers);
+    const query: Record<string, string> = {};
+    url.searchParams.forEach((value, name) => {
+      query[name] = value;
+    });
+    const answer = respond(request.method ?? "GET", route, query, body, request.headers);
     response
       .writeHead(answer.status, { "content-type": "application/json" })
       .end(JSON.stringify(answer.body));
@@ -706,6 +1361,8 @@ function resetWorld() {
   sessions.clear();
   invites.clear();
   auditEvents.length = 0;
+  seedTickets();
+  seedSavedReplies();
   for (const member of staff) {
     member.enrolled = !member.email.startsWith("newbie");
     member.is_active = true;
@@ -715,6 +1372,7 @@ function resetWorld() {
 function respond(
   method: string,
   route: string,
+  query: Record<string, string>,
   body: Record<string, unknown>,
   headers: Record<string, string | string[] | undefined>,
 ) {
@@ -742,7 +1400,7 @@ function respond(
       return refuse(400, "idempotency_key_required");
     }
   }
-  return entry.handler({ method, route, params, body, headers });
+  return entry.handler({ method, route, params, query, body, headers });
 }
 
 server.listen(PORT, "127.0.0.1", () => {

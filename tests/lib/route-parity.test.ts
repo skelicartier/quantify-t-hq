@@ -32,24 +32,35 @@ function serviceTable(): ServiceRoute[] | null {
   return entries;
 }
 
+/**
+ * Both sides are compared with parameter segments normalised to `{param}`: the client
+ * writes template literals (`hq/tickets/${ticketId}`), the service writes named
+ * placeholders (`hq/tickets/{ticket_id}`), and the names are not part of the contract.
+ */
+function normalise(route: string): string {
+  return route.replace(/\$\{[A-Za-z0-9_]+\}/g, "{param}").replace(/\{[a-z_]+\}/g, "{param}");
+}
+
 function clientRoutes(): Map<string, Set<string>> {
   const found = new Map<string, Set<string>>();
   const apiDir = resolve(process.cwd(), "src/lib/api");
   for (const name of readdirSync(apiDir)) {
     if (!name.endsWith(".ts")) continue;
     const source = readFileSync(join(apiDir, name), "utf8");
-    const fetchPattern = /fetchHqJson(?:<[^>]*>)?\(\s*[`"]((?:hq|public)\/[^`"$]+)[`"]/g;
-    const postPattern = /postHqJson(?:<[^>]*>)?\(\s*[`"]((?:hq|public)\/[^`"$]+)[`"]/g;
+    const fetchPattern = /fetchHqJson(?:<[^>]*>)?\(\s*[`"]((?:hq|public)\/[^`"]+)[`"]/g;
+    const postPattern = /postHqJson(?:<[^>]*>)?\(\s*[`"]((?:hq|public)\/[^`"]+)[`"]/g;
     let match: RegExpExecArray | null;
     while ((match = fetchPattern.exec(source)) !== null) {
-      const methods = found.get(match[1]!) ?? new Set<string>();
+      const route = normalise(match[1]!);
+      const methods = found.get(route) ?? new Set<string>();
       methods.add("GET");
-      found.set(match[1]!, methods);
+      found.set(route, methods);
     }
     while ((match = postPattern.exec(source)) !== null) {
-      const methods = found.get(match[1]!) ?? new Set<string>();
+      const route = normalise(match[1]!);
+      const methods = found.get(route) ?? new Set<string>();
       methods.add("POST");
-      found.set(match[1]!, methods);
+      found.set(route, methods);
     }
   }
   return found;
@@ -76,7 +87,7 @@ if (table === null) {
 }
 
 maybe("route parity with the service table", () => {
-  const service = new Map((table ?? []).map((entry) => [entry.route, entry.method]));
+  const service = new Map((table ?? []).map((entry) => [normalise(entry.route), entry.method]));
 
   it("the service table was actually parsed", () => {
     expect(service.size).toBeGreaterThanOrEqual(20);
@@ -96,7 +107,7 @@ maybe("route parity with the service table", () => {
 
   it("the mock never serves a route or method the service refuses", () => {
     for (const entry of mockRoutes()) {
-      const upstream = service.get(entry.route);
+      const upstream = service.get(normalise(entry.route));
       expect(
         upstream,
         `mock serves ${entry.route} which the service does not register`,
