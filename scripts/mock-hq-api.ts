@@ -2436,6 +2436,17 @@ routes.push(
           due_today: dueToday.length,
           tasks: [...overdue, ...dueToday].slice(0, 5),
         };
+        const views = meetings.map(meetingView);
+        const todays = views
+          .filter((view) => view.starts_at.slice(0, 10) === today && view.status !== "canceled")
+          .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+        const owed = views.filter((view) => view.needs_outcome);
+        payload.meetings = {
+          today: todays.slice(0, 5),
+          today_count: todays.length,
+          needs_outcome: owed.slice(0, 5),
+          needs_outcome_count: owed.length,
+        };
       }
       if (capabilities.includes("deals:read")) {
         const open = deals
@@ -3250,7 +3261,8 @@ routes.push(
         deal_id: String(body.deal_id ?? ""),
         lead_id: String(body.lead_id ?? ""),
       };
-      if (!Object.values(links).some(Boolean))
+      const meetingId = String(body.meeting_id ?? "");
+      if (!Object.values(links).some(Boolean) && !meetingId)
         return refuse(400, "malformed_request", { reason: "link at least one record" });
       const found = caller(headers);
       recordActivity({
@@ -3260,6 +3272,9 @@ routes.push(
         staff_name: found?.member.display_name ?? "",
         ...links,
       });
+      if (meetingId)
+        (activities[activities.length - 1] as ActivityRow & { meeting_id?: string }).meeting_id =
+          meetingId;
       const deal = deals.find((candidate) => candidate.id === links.deal_id);
       if (deal) deal.last_activity_at = now();
       const lead = leads.find((candidate) => candidate.id === links.lead_id);
@@ -3543,6 +3558,472 @@ routes.push(
   },
 );
 
+// =====================================================================================
+// Meetings, mirroring hq/meetings*: seven-day outcome window, cadence tasks keyed by
+// (meeting, origin), calendar-owned times and guests on synced meetings.
+// =====================================================================================
+
+type MeetingRow = {
+  id: string;
+  google_event_id: string;
+  kind: string;
+  status: string;
+  starts_at: string;
+  ends_at: string | null;
+  title: string;
+  description: string;
+  company_id: string;
+  deal_id: string;
+  prep_notes: string;
+  outcome: string;
+  outcome_notes: string;
+  outcome_recorded_at: string | null;
+  recording_url: string;
+};
+type AttendeeRow = {
+  meeting_id: string;
+  email: string;
+  person_id: string;
+  is_staff: boolean;
+  response: string;
+};
+
+const MEETING_KINDS = ["demo", "intro", "check_in", "other"];
+const MEETING_OUTCOMES = ["advanced", "qualified", "not_a_fit", "other"];
+const OUTCOME_WINDOW_MS = 7 * 86_400_000;
+const meetings: MeetingRow[] = [];
+const meetingAttendees: AttendeeRow[] = [];
+
+function hoursFromNow(hours: number): string {
+  return new Date(Date.now() + hours * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function seedMeetings() {
+  meetings.length = 0;
+  meetingAttendees.length = 0;
+  meetings.push(
+    {
+      id: "ee100000-0000-4000-8000-000000000001",
+      google_event_id: "evt_mock_holloway",
+      kind: "demo",
+      status: "scheduled",
+      starts_at: hoursFromNow(3),
+      ends_at: hoursFromNow(3.5),
+      title: "Quantify Terminal demo — Holloway Capital",
+      description: "Booked from the website. Interested in: morning brief, risk.",
+      company_id: "",
+      deal_id: "",
+      prep_notes: "",
+      outcome: "",
+      outcome_notes: "",
+      outcome_recorded_at: null,
+      recording_url: "",
+    },
+    {
+      id: "ee100000-0000-4000-8000-000000000002",
+      google_event_id: "",
+      kind: "check_in",
+      status: "scheduled",
+      starts_at: hoursFromNow(-20),
+      ends_at: hoursFromNow(-19.5),
+      title: "Northwall pilot check-in",
+      description: "",
+      company_id: "c0000000-0000-4000-8000-000000000002",
+      deal_id: "d0000000-0000-4000-8000-000000000001",
+      prep_notes: "Ask whether the second desk has signed in yet.",
+      outcome: "",
+      outcome_notes: "",
+      outcome_recorded_at: null,
+      recording_url: "",
+    },
+    {
+      id: "ee100000-0000-4000-8000-000000000003",
+      google_event_id: "evt_mock_meridian",
+      kind: "demo",
+      status: "scheduled",
+      starts_at: hoursFromNow(50),
+      ends_at: hoursFromNow(51),
+      title: "Rates desk walkthrough — Meridian Capital",
+      description: "",
+      company_id: "c0000000-0000-4000-8000-000000000001",
+      deal_id: "d0000000-0000-4000-8000-000000000003",
+      prep_notes: "",
+      outcome: "",
+      outcome_notes: "",
+      outcome_recorded_at: null,
+      recording_url: "",
+    },
+  );
+  meetingAttendees.push(
+    {
+      meeting_id: "ee100000-0000-4000-8000-000000000001",
+      email: "tom@hollowaycap.com",
+      person_id: "",
+      is_staff: false,
+      response: "accepted",
+    },
+    {
+      meeting_id: "ee100000-0000-4000-8000-000000000001",
+      email: "owner@hq.test",
+      person_id: "",
+      is_staff: true,
+      response: "accepted",
+    },
+    {
+      meeting_id: "ee100000-0000-4000-8000-000000000002",
+      email: "jonas@northwall.ch",
+      person_id: "p0000000-0000-4000-8000-000000000002",
+      is_staff: false,
+      response: "accepted",
+    },
+    {
+      meeting_id: "ee100000-0000-4000-8000-000000000002",
+      email: "sales@hq.test",
+      person_id: "",
+      is_staff: true,
+      response: "accepted",
+    },
+    {
+      meeting_id: "ee100000-0000-4000-8000-000000000003",
+      email: "elena@meridiancap.com",
+      person_id: "p0000000-0000-4000-8000-000000000001",
+      is_staff: false,
+      response: "tentative",
+    },
+  );
+}
+seedMeetings();
+
+function meetingNeedsOutcome(row: MeetingRow): boolean {
+  const starts = Date.parse(row.starts_at);
+  return (
+    row.status === "scheduled" && starts <= Date.now() && Date.now() - starts <= OUTCOME_WINDOW_MS
+  );
+}
+
+function meetingView(row: MeetingRow) {
+  const starts = Date.parse(row.starts_at);
+  return {
+    meeting_id: row.id,
+    source: row.google_event_id ? "calendar" : "manual",
+    kind: row.kind,
+    status: row.status,
+    starts_at: row.starts_at,
+    ends_at: row.ends_at,
+    title: row.title,
+    description: row.description,
+    company_id: row.company_id,
+    company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
+    deal_id: row.deal_id,
+    deal_name: deals.find((deal) => deal.id === row.deal_id)?.name ?? "",
+    prep_notes: row.prep_notes,
+    outcome: row.outcome,
+    outcome_notes: row.outcome_notes,
+    outcome_recorded_at: row.outcome_recorded_at,
+    recording_url: row.recording_url,
+    needs_outcome: meetingNeedsOutcome(row),
+    outcome_lapsed: row.status === "scheduled" && Date.now() - starts > OUTCOME_WINDOW_MS,
+    attendees: meetingAttendees
+      .filter((attendee) => attendee.meeting_id === row.id)
+      .map((attendee) => {
+        const person = people.find((candidate) => candidate.id === attendee.person_id);
+        return {
+          email: attendee.email,
+          person_id: attendee.person_id,
+          person_name: person ? person.full_name || person.email : "",
+          is_staff: attendee.is_staff,
+          response: attendee.response,
+        };
+      }),
+  };
+}
+
+function matchAttendees(meetingId: string, raw: unknown): AttendeeRow[] | string {
+  const emails = (Array.isArray(raw) ? raw.map(String) : String(raw ?? "").split(/[\s,;]+/))
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+  const rows: AttendeeRow[] = [];
+  for (const email of [...new Set(emails)].slice(0, 25)) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) return `not an address: ${email}`;
+    rows.push({
+      meeting_id: meetingId,
+      email,
+      person_id: people.find((person) => person.email === email)?.id ?? "",
+      is_staff: staff.some((member) => member.email === email),
+      response: "needs_action",
+    });
+  }
+  return rows;
+}
+
+const CADENCE_STEPS: Record<string, Array<[number, string, string]>> = {
+  no_show: [
+    [1, "Call {who}: they missed the {kind}", "high"],
+    [3, "Send {who} a link to rebook", "medium"],
+    [7, "Last nudge to {who} before closing the loop", "medium"],
+  ],
+  completed: [
+    [0, "Send {who} the recap of the {kind}", "high"],
+    [2, "Send {who} the materials promised in the {kind}", "medium"],
+    [7, "Check in with {who}", "medium"],
+  ],
+};
+const KIND_WORDS: Record<string, string> = {
+  demo: "demo",
+  intro: "intro call",
+  check_in: "check-in",
+  other: "meeting",
+};
+
+type MeetingTask = TaskRow & { meeting_id?: string };
+
+function runCadence(row: MeetingRow, cadence: string, who: string, assignee: string): number {
+  const mine = tasks.filter((task) => (task as MeetingTask).meeting_id === row.id);
+  for (const task of mine) {
+    if (
+      task.origin.startsWith("cadence:") &&
+      !task.origin.startsWith(`cadence:${cadence}:`) &&
+      task.status === "open"
+    )
+      task.status = "canceled";
+  }
+  const have = new Set(mine.map((task) => task.origin));
+  let minted = 0;
+  (CADENCE_STEPS[cadence] ?? []).forEach(([days, template, priority], index) => {
+    const origin = `cadence:${cadence}:${index + 1}`;
+    if (have.has(origin)) return;
+    const task: MeetingTask = {
+      id: randomUUID(),
+      title: template.replace("{who}", who).replace("{kind}", KIND_WORDS[row.kind] ?? "meeting"),
+      body: "",
+      status: "open",
+      priority,
+      due_on: new Date(Date.parse(row.starts_at) + days * 86_400_000).toISOString().slice(0, 10),
+      assignee_staff_id: assignee,
+      company_id: row.company_id,
+      person_id: "",
+      deal_id: row.deal_id,
+      lead_id: "",
+      ticket_id: "",
+      origin,
+      completed_at: null,
+      created_at: now(),
+      meeting_id: row.id,
+    };
+    tasks.push(task);
+    minted += 1;
+  });
+  return minted;
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/meetings",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const when = query.when ?? "upcoming";
+      const views = meetings
+        .filter((row) => !query.company_id || row.company_id === query.company_id)
+        .filter((row) => !query.deal_id || row.deal_id === query.deal_id)
+        .map(meetingView)
+        .filter((view) => {
+          const starts = Date.parse(view.starts_at);
+          if (when === "upcoming") return starts >= Date.now() || view.needs_outcome;
+          if (when === "past") return starts < Date.now();
+          if (when === "needs_outcome") return view.needs_outcome;
+          return true;
+        })
+        .sort((a, b) =>
+          when === "past"
+            ? b.starts_at.localeCompare(a.starts_at)
+            : a.starts_at.localeCompare(b.starts_at),
+        );
+      const today = new Date().toISOString().slice(0, 10);
+      return ok({
+        meetings: views,
+        counts: {
+          needs_outcome: meetings.filter(meetingNeedsOutcome).length,
+          today: meetings.filter(
+            (row) => row.starts_at.slice(0, 10) === today && row.status !== "canceled",
+          ).length,
+        },
+        kinds: MEETING_KINDS,
+        outcomes: MEETING_OUTCOMES,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/meetings/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const title = String(body.title ?? "").trim();
+      if (!title) return refuse(400, "malformed_request", { title: "name the meeting" });
+      const kind = String(body.kind ?? "other") || "other";
+      if (!MEETING_KINDS.includes(kind))
+        return refuse(400, "malformed_request", { kind: "unknown kind" });
+      const startsRaw = String(body.starts_at ?? "");
+      if (!/[zZ]|[+-]\d{2}:\d{2}$/.test(startsRaw) || Number.isNaN(Date.parse(startsRaw)))
+        return refuse(400, "malformed_request", { starts_at: "include a time zone offset" });
+      const id = randomUUID();
+      const matched = matchAttendees(id, body.attendees);
+      if (typeof matched === "string")
+        return refuse(400, "malformed_request", { attendees: matched });
+      let companyId = String(body.company_id ?? "");
+      const dealId = String(body.deal_id ?? "");
+      if (dealId && !companyId)
+        companyId = deals.find((deal) => deal.id === dealId)?.company_id ?? "";
+      const row: MeetingRow = {
+        id,
+        google_event_id: "",
+        kind,
+        status: "scheduled",
+        starts_at: new Date(startsRaw).toISOString().replace(/\.\d{3}Z$/, "Z"),
+        ends_at: body.ends_at
+          ? new Date(String(body.ends_at)).toISOString().replace(/\.\d{3}Z$/, "Z")
+          : null,
+        title,
+        description: String(body.description ?? ""),
+        company_id: companyId,
+        deal_id: dealId,
+        prep_notes: String(body.prep_notes ?? ""),
+        outcome: "",
+        outcome_notes: "",
+        outcome_recorded_at: null,
+        recording_url: "",
+      };
+      meetings.push(row);
+      meetingAttendees.push(...matched);
+      audit("meeting.created", caller(headers)?.member.id ?? null, "meeting", id);
+      return ok({ meeting: meetingView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/meetings/{meeting_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params }) => {
+      const row = meetings.find((meeting) => meeting.id === params.meeting_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        meeting: meetingView(row),
+        activities: activities.filter(
+          (activity) => (activity as ActivityRow & { meeting_id?: string }).meeting_id === row.id,
+        ),
+        follow_ups: tasks
+          .filter((task) => (task as MeetingTask).meeting_id === row.id)
+          .map((task) => ({
+            task_id: task.id,
+            title: task.title,
+            status: task.status,
+            due_on: task.due_on,
+            origin: task.origin,
+          }))
+          .sort((a, b) => a.due_on.localeCompare(b.due_on)),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/meetings/{meeting_id}/update",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const row = meetings.find((meeting) => meeting.id === params.meeting_id);
+      if (!row) return refuse(404, "not_found");
+      if ("status" in body || "outcome" in body)
+        return refuse(400, "malformed_request", { reason: "record outcomes via /outcome" });
+      const synced = Boolean(row.google_event_id);
+      if (synced && ("starts_at" in body || "ends_at" in body))
+        return refuse(400, "malformed_request", { starts_at: "move it in the calendar" });
+      if (synced && "attendees" in body)
+        return refuse(400, "malformed_request", { attendees: "the calendar owns the guest list" });
+      if ("title" in body) row.title = String(body.title ?? "").trim() || row.title;
+      if ("kind" in body && MEETING_KINDS.includes(String(body.kind))) row.kind = String(body.kind);
+      if ("prep_notes" in body) row.prep_notes = String(body.prep_notes ?? "");
+      if ("recording_url" in body) {
+        const url = String(body.recording_url ?? "").trim();
+        if (url && !url.startsWith("https://"))
+          return refuse(400, "malformed_request", { recording_url: "an https link" });
+        row.recording_url = url;
+      }
+      if ("company_id" in body) row.company_id = String(body.company_id ?? "");
+      if ("deal_id" in body) row.deal_id = String(body.deal_id ?? "");
+      if ("starts_at" in body)
+        row.starts_at = new Date(String(body.starts_at)).toISOString().replace(/\.\d{3}Z$/, "Z");
+      if ("attendees" in body) {
+        const matched = matchAttendees(row.id, body.attendees);
+        if (typeof matched === "string")
+          return refuse(400, "malformed_request", { attendees: matched });
+        for (let index = meetingAttendees.length - 1; index >= 0; index -= 1)
+          if (meetingAttendees[index]!.meeting_id === row.id) meetingAttendees.splice(index, 1);
+        meetingAttendees.push(...matched);
+      }
+      audit("meeting.updated", caller(headers)?.member.id ?? null, "meeting", row.id);
+      return ok({ meeting: meetingView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/meetings/{meeting_id}/outcome",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const row = meetings.find((meeting) => meeting.id === params.meeting_id);
+      if (!row) return refuse(404, "not_found");
+      const status = String(body.status ?? "");
+      if (!["completed", "no_show", "canceled"].includes(status))
+        return refuse(400, "malformed_request", { status: "completed, no_show or canceled" });
+      if (status !== "canceled" && Date.parse(row.starts_at) > Date.now())
+        return refuse(400, "malformed_request", { status: "it has not happened yet" });
+      let outcome = "";
+      if (status === "completed") {
+        outcome = String(body.outcome ?? "");
+        if (!MEETING_OUTCOMES.includes(outcome))
+          return refuse(400, "malformed_request", { outcome: "pick what happened" });
+      } else if (status === "no_show") outcome = "no_show";
+      const found = caller(headers);
+      row.status = status;
+      row.outcome = outcome;
+      row.outcome_notes = String(body.outcome_notes ?? "");
+      row.outcome_recorded_at = now();
+      const guest = meetingAttendees.find(
+        (attendee) => attendee.meeting_id === row.id && !attendee.is_staff,
+      );
+      const person = people.find((candidate) => candidate.id === guest?.person_id);
+      const who =
+        (person ? person.full_name || person.email : "") ||
+        guest?.email ||
+        companies.find((company) => company.id === row.company_id)?.name ||
+        "them";
+      let minted = 0;
+      if (status === "no_show" || (status === "completed" && outcome !== "not_a_fit"))
+        minted = runCadence(row, status, who, found?.member.id ?? "");
+      else runCadence(row, "none", who, found?.member.id ?? "");
+      activities.push({
+        kind: "meeting",
+        at: now(),
+        staff_id: found?.member.id ?? "",
+        staff_name: found?.member.display_name ?? "",
+        body: `${status === "completed" ? "Held" : status === "no_show" ? "No-show" : "Canceled"}: ${row.title}\n${row.outcome_notes}`.trim(),
+        company_id: row.company_id,
+        person_id: guest?.person_id ?? "",
+        deal_id: row.deal_id,
+        lead_id: "",
+        meeting_id: row.id,
+      } as ActivityRow);
+      const deal = deals.find((candidate) => candidate.id === row.deal_id);
+      if (deal && status === "completed") deal.last_activity_at = now();
+      audit("meeting.outcome_recorded", found?.member.id ?? null, "meeting", row.id);
+      return ok({ meeting: meetingView(row), follow_ups_created: minted });
+    },
+  },
+);
+
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
     if (entry.method !== method) continue;
@@ -3605,6 +4086,7 @@ function resetWorld() {
   seedTickets();
   seedSavedReplies();
   seedCrm();
+  seedMeetings();
   for (const member of staff) {
     member.enrolled = !member.email.startsWith("newbie");
     member.is_active = true;

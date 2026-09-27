@@ -4655,3 +4655,147 @@
     font-size: 12px;
   }
 }
+
+@layer pages {
+  /* --- Meetings ----------------------------------------------------------------------- */
+  .meeting-list {
+    display: flex;
+    flex-direction: column;
+    margin: 18px 0 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .meeting-row {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .meeting-row:last-child {
+    border-bottom: 0;
+  }
+
+  .meeting-row--owed {
+    box-shadow: inset 3px 0 0 var(--attention);
+  }
+
+  .meeting-row__when {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+
+  .meeting-row__main {
+    min-width: 0;
+  }
+
+  .meeting-row__title {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-row__title:hover {
+    color: var(--accent);
+  }
+
+  .meeting-row__sub {
+    margin: 3px 0 0;
+    color: var(--quiet);
+    font-size: 12.5px;
+    overflow-wrap: anywhere;
+  }
+
+  .meeting-row__state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .meeting-row__source {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 760px) {
+    .meeting-row {
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+
+    .meeting-row__state {
+      flex-direction: row;
+      align-items: center;
+    }
+  }
+
+  .guest-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .guest {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .guest__name {
+    font-size: 13.5px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .guest__meta {
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  .follow-up {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .follow-up--closed span:first-child {
+    color: var(--quiet);
+    text-decoration: line-through;
+  }
+
+  .choice-row--1 {
+    grid-template-columns: 1fr;
+  }
+
+  .choice-row--3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@layer pages {
+  /* Forms in the wide column may use it; the 440px cap is for side cards. */
+  .record-layout__main .stack-form {
+    max-width: none;
+  }
+}
+
+@layer pages {
+  .card__body > .stack-form + .kv {
+    margin-top: 16px;
+  }
+}

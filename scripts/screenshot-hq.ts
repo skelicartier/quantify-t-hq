@@ -66,6 +66,17 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: ".stage-rail",
   },
   { name: "tasks", path: "/tasks?scope=all", ready: "main#main-content" },
+  { name: "meetings", path: "/meetings", ready: ".meeting-list" },
+  {
+    name: "meeting-owed",
+    path: "/meetings/ee100000-0000-4000-8000-000000000002",
+    ready: ".record-layout",
+  },
+  {
+    name: "meeting-synced",
+    path: "/meetings/ee100000-0000-4000-8000-000000000001",
+    ready: ".record-layout",
+  },
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
   { name: "admin-staff", path: "/admin/staff", ready: ".data-table" },
@@ -139,7 +150,19 @@ async function capture(page: Page, folder: string, shot: Shot) {
  */
 async function setTheme(page: Page, theme: "dark" | "light") {
   const label = theme === "light" ? "Light theme" : "Dark theme";
-  await page.locator(`.theme-toggle button[title="${label}"]`).click();
+  const button = page.locator(`.theme-toggle button[title="${label}"]`);
+  if ((await button.getAttribute("aria-pressed")) !== "true") {
+    // The switch is optimistic; the cookie lands when the server action returns.
+    // Navigating before that aborts it (and `networkidle` resolves at once on a page
+    // that was already idle), so wait for the action's own response.
+    const saved = page.waitForResponse(
+      (response) => response.request().method() === "POST" && response.ok(),
+      { timeout: 10_000 },
+    );
+    await button.click();
+    await saved;
+  }
+  await page.reload({ waitUntil: "networkidle" });
   await page.waitForSelector(`.shell[data-theme="${theme}"]`, { timeout: 10_000 });
 }
 
@@ -151,6 +174,19 @@ async function captureInteractions(page: Page, folder: string) {
   await assertAccessible(page, `${folder}/leads-add-open`);
   await page.screenshot({ path: `${OUT}/${folder}/leads-add-open.png` });
   console.log(`  ✓ ${folder}/leads-add-open`);
+
+  // Record a held meeting's outcome; the follow-up tasks appear on its page.
+  await page.goto(`${BASE}/meetings/ee100000-0000-4000-8000-000000000002`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("#meeting-notes").count()) > 0) {
+    await page.fill("#meeting-notes", "Second desk signed in twice this week.");
+    await page.locator("button", { hasText: "Record outcome" }).click();
+    await page.waitForSelector(".follow-up", { timeout: 10_000 });
+  }
+  await assertAccessible(page, `${folder}/meeting-recorded`);
+  await page.screenshot({ path: `${OUT}/${folder}/meeting-recorded.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/meeting-recorded`);
 
   await page.goto(`${BASE}/admin/integrations`, { waitUntil: "networkidle" });
   // The window lasts ten minutes, so a later pass may find it already open.

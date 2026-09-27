@@ -7,7 +7,9 @@ import { FormFeedback } from "@/components/ui/form-feedback";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { ACTIVITY_KIND_LABELS, LOGGABLE_KINDS } from "@/lib/crm/vocabulary";
 
-type Links = Partial<Record<"company_id" | "person_id" | "deal_id" | "lead_id", string>>;
+type Links = Partial<
+  Record<"company_id" | "person_id" | "deal_id" | "lead_id" | "meeting_id", string>
+>;
 
 type LogActivityFormProps = {
   action: (previous: ActionState, formData: FormData) => Promise<ActionState>;

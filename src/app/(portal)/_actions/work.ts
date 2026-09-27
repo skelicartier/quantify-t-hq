@@ -10,7 +10,7 @@ import { safeReturnPath } from "@/lib/crm/return-path";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
 
-const LINK_FIELDS = ["company_id", "person_id", "deal_id", "lead_id"] as const;
+const LINK_FIELDS = ["company_id", "person_id", "deal_id", "lead_id", "meeting_id"] as const;
 
 function linksFrom(formData: FormData): Record<string, string> {
   const links: Record<string, string> = {};

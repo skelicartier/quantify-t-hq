@@ -7,6 +7,7 @@ import { SlaChip } from "@/components/support/sla-chip";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { LocalTime } from "@/components/ui/local-time";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
@@ -233,13 +234,59 @@ export default async function HomePage() {
               </Card>
             )}
 
-            <Card title="Meetings today">
-              <EmptyState
-                title="Calendar not connected"
-                description="Booked demos and calls will list here once the calendar is connected in Admin."
-                compact
-              />
-            </Card>
+            {home.meetings && (
+              <Card
+                title="Meetings today"
+                important={home.meetings.needs_outcome_count > 0}
+                actions={
+                  <Link className="btn btn--small" href="/meetings">
+                    All meetings
+                  </Link>
+                }
+              >
+                {home.meetings.today.length === 0 && home.meetings.needs_outcome.length === 0 ? (
+                  <EmptyState
+                    title="Nothing booked today"
+                    description="Every recent meeting has its outcome recorded."
+                    compact
+                  />
+                ) : (
+                  <ul className="attention-list">
+                    {home.meetings.today.map((meeting) => (
+                      <li key={meeting.meeting_id}>
+                        <span className="attention-list__main">
+                          <Link href={`/meetings/${meeting.meeting_id}`}>{meeting.title}</Link>
+                          <span className="attention-list__sub">
+                            <LocalTime value={meeting.starts_at} />
+                          </span>
+                        </span>
+                        {meeting.needs_outcome && (
+                          <span className="clock clock--running">Outcome owed</span>
+                        )}
+                      </li>
+                    ))}
+                    {home.meetings.needs_outcome
+                      .filter(
+                        (meeting) =>
+                          !home.meetings?.today.some(
+                            (todays) => todays.meeting_id === meeting.meeting_id,
+                          ),
+                      )
+                      .map((meeting) => (
+                        <li key={meeting.meeting_id}>
+                          <span className="attention-list__main">
+                            <Link href={`/meetings/${meeting.meeting_id}`}>{meeting.title}</Link>
+                            <span className="attention-list__sub">
+                              <LocalTime value={meeting.starts_at} />
+                            </span>
+                          </span>
+                          <span className="clock clock--running">Outcome owed</span>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </Card>
+            )}
           </div>
         </>
       )}

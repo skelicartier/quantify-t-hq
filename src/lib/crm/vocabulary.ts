@@ -146,3 +146,42 @@ export function stageLabel(key: string, labels?: ReadonlyMap<string, string>): s
   if (!key) return "—";
   return labels?.get(key) ?? formatSentence(key);
 }
+
+export const MEETING_KINDS = ["demo", "intro", "check_in", "other"] as const;
+
+export const MEETING_KIND_LABELS: Record<string, string> = {
+  demo: "Demo",
+  intro: "Intro call",
+  check_in: "Check-in",
+  other: "Meeting",
+};
+
+export const MEETING_STATUS_LABELS: Record<string, string> = {
+  scheduled: "Scheduled",
+  completed: "Held",
+  no_show: "No-show",
+  canceled: "Canceled",
+  rescheduled: "Rescheduled",
+};
+
+export function meetingStatusTone(status: string): PillTone {
+  if (status === "completed") return "live";
+  if (status === "no_show") return "danger";
+  if (status === "scheduled") return "attention";
+  return "neutral";
+}
+
+export const MEETING_OUTCOME_LABELS: Record<string, string> = {
+  advanced: "Moved forward",
+  qualified: "Qualified",
+  not_a_fit: "Not a fit",
+  other: "Something else",
+  no_show: "No-show",
+};
+
+export const RESPONSE_LABELS: Record<string, string> = {
+  accepted: "Accepted",
+  declined: "Declined",
+  tentative: "Maybe",
+  needs_action: "No reply",
+};

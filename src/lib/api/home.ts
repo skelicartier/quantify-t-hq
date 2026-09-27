@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { fetchHqJson } from "@/lib/api/core";
 import { dealSummarySchema, leadSchema, taskSchema } from "@/lib/api/crm";
+import { meetingSchema } from "@/lib/api/meetings";
 import { ticketSummarySchema } from "@/lib/api/tickets";
 
 /**
@@ -38,6 +39,14 @@ const homeSchema = z.object({
       overdue: z.number(),
       due_today: z.number(),
       tasks: z.array(taskSchema),
+    })
+    .optional(),
+  meetings: z
+    .object({
+      today: z.array(meetingSchema),
+      today_count: z.number(),
+      needs_outcome: z.array(meetingSchema),
+      needs_outcome_count: z.number(),
     })
     .optional(),
   deals: z
