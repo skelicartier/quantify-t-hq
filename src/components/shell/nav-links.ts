@@ -1,6 +1,10 @@
 import {
+  Award,
   Building2,
   CalendarClock,
+  CalendarOff,
+  KeyRound,
+  NotebookPen,
   ChartNoAxesCombined,
   ClipboardList,
   Contact,
@@ -85,6 +89,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         capability: "crm:read",
       },
       { href: "/tasks", label: "Tasks", icon: ClipboardList, capability: "crm:read" },
+      // Everyone's: a check-in and time off are about the person, not a capability.
+      { href: "/checkin", label: "Check-in", icon: NotebookPen },
+      { href: "/time-off", label: "Time off", icon: CalendarOff },
     ],
   },
   {
@@ -125,6 +132,19 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: "Team",
         icon: UsersRound,
         activePrefix: "/team/",
+        capability: "hr:read",
+      },
+      {
+        href: "/certificates",
+        label: "Certificates",
+        icon: Award,
+        capability: "certificates:issue",
+      },
+      {
+        href: "/access-review",
+        label: "Access review",
+        icon: KeyRound,
+        activePrefix: "/access-review",
         capability: "hr:read",
       },
     ],

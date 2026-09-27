@@ -2982,11 +2982,19 @@
   .sidebar-nav-groups {
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 14px;
     min-height: 0;
     overflow-y: auto;
     margin-block: 4px;
+    /* When the groups outgrow the screen, the bottom edge fades rather than cutting a
+       group off mid-list; the padding lets the last link scroll clear of the fade. */
+    padding-bottom: 28px;
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
     scrollbar-width: thin;
+  }
+
+  .sidebar-nav-groups .sidebar-nav a {
+    min-height: 32px;
   }
 
   .sidebar-nav-group__label {
@@ -3849,18 +3857,26 @@
     outline-offset: 2px;
   }
 
+  .task__check {
+    position: relative;
+  }
+
   .task__check[aria-pressed="true"] {
     border-color: var(--success);
-    background:
-      linear-gradient(
-          45deg,
-          transparent 44%,
-          var(--success) 44%,
-          var(--success) 56%,
-          transparent 56%
-        )
-        no-repeat,
-      transparent;
+    background: var(--success);
+  }
+
+  /* A drawn tick: the right and bottom borders of a small box, turned 45 degrees. */
+  .task__check[aria-pressed="true"]::after {
+    content: "";
+    position: absolute;
+    left: 4.5px;
+    top: 1px;
+    width: 5px;
+    height: 10px;
+    border: solid var(--bg);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
   }
 
   .task__check--static {
@@ -5119,5 +5135,228 @@
 @layer pages {
   .nowrap {
     white-space: nowrap;
+  }
+}
+
+@layer pages {
+  /* --- Team: documents, access, checklists, check-ins -------------------------------- */
+  .doc-list,
+  .access-list,
+  .checkin-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .doc,
+  .access {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .doc:last-child,
+  .access:last-child {
+    border-bottom: 0;
+  }
+
+  .doc {
+    box-shadow: inset 3px 0 0 var(--line-strong);
+  }
+
+  .doc--signed,
+  .doc--waived {
+    box-shadow: inset 3px 0 0 var(--success);
+  }
+
+  .doc--missing,
+  .doc--requested {
+    box-shadow: inset 3px 0 0 var(--danger);
+  }
+
+  .doc__main,
+  .access__main {
+    display: flex;
+    flex: 1 1 240px;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .doc__kind,
+  .access__system {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .doc__meta,
+  .access__meta {
+    color: var(--muted);
+    font-size: 12.5px;
+    overflow-wrap: anywhere;
+  }
+
+  .access--gone .access__system {
+    color: var(--quiet);
+    text-decoration: line-through;
+  }
+
+  .checkin {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .checkin:last-child {
+    border-bottom: 0;
+  }
+
+  .checkin--compact {
+    padding: 0;
+    border: 0;
+  }
+
+  .checkin__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0 0 6px;
+  }
+
+  .checkin__line {
+    margin: 4px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .checkin__line strong {
+    display: inline-block;
+    min-width: 76px;
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .checkin__line--blocker {
+    color: var(--danger);
+  }
+
+  .mood {
+    padding: 1px 8px;
+    border: 1px solid var(--line);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .mood--1,
+  .mood--2 {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  }
+
+  .mood--4,
+  .mood--5 {
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+  }
+
+  .checkin-form__legend {
+    margin-bottom: 6px;
+    padding: 0;
+  }
+
+  .choice-row--5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    border: 0;
+  }
+
+  .choice-row--5 .choice {
+    border: 1px solid var(--line);
+  }
+
+  .choice-row--5 .choice + .choice {
+    border-left: 0;
+  }
+
+  .checklist + .checklist {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .checklist__head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0 0 6px;
+  }
+
+  .checklist__steps {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .review-finish {
+    margin-top: 16px;
+  }
+
+  /* --- The public certificate check -------------------------------------------------- */
+  .verify .eyebrow {
+    margin-bottom: 8px;
+  }
+
+  .verify__card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 22px 0 0;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--success);
+    background: var(--panel);
+  }
+
+  .verify__card--revoked {
+    border-left-color: var(--danger);
+    opacity: 0.85;
+  }
+
+  .verify__card div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .verify__card dt {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .verify__card dd {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .verify__name {
+    font-family: var(--font-heading);
+    font-size: 20px !important;
+    font-weight: 600;
   }
 }

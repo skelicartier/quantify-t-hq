@@ -85,6 +85,21 @@ const SIGNED_IN_PAGES: Shot[] = [
   },
   { name: "revenue-mrr", path: "/revenue/mrr", ready: ".bridge__svg" },
   { name: "reports", path: "/reports", ready: ".report-grid" },
+  { name: "team", path: "/team", ready: ".data-table" },
+  {
+    name: "team-member",
+    path: "/team/aa000000-0000-4000-8000-00000000000e",
+    ready: ".record-layout",
+  },
+  {
+    name: "team-member-docs-missing",
+    path: "/team/aa000000-0000-4000-8000-00000000000d",
+    ready: ".record-layout",
+  },
+  { name: "checkin", path: "/checkin", ready: ".checkin-form" },
+  { name: "time-off", path: "/time-off", ready: "main#main-content" },
+  { name: "certificates", path: "/certificates", ready: "main#main-content" },
+  { name: "access-review", path: "/access-review", ready: "main#main-content" },
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
   { name: "admin-staff", path: "/admin/staff", ready: ".data-table" },
@@ -256,6 +271,16 @@ async function run(browser: Browser) {
     await capture(page, `${viewport.name}/auth`, {
       name: "reset-password-invalid",
       path: "/reset-password",
+    });
+    // The public certificate check, valid and not found.
+    await capture(page, `${viewport.name}/auth`, {
+      name: "verify-valid",
+      path: "/verify/QT-2026-0001-7KD2QX",
+      ready: ".verify__card",
+    });
+    await capture(page, `${viewport.name}/auth`, {
+      name: "verify-missing",
+      path: "/verify/QT-2026-0001",
     });
 
     // The two-step and the code screen, mid-flow.

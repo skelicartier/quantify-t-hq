@@ -4920,6 +4920,1081 @@ routes.push(
   },
 );
 
+// =====================================================================================
+// The team, mirroring hq/team*, hq/checkins*, hq/time-off*, hq/certificates*,
+// hq/access-reviews* and public/certificates: documents before access, a 24-hour
+// offboarding clock, check-ins that are yours, serials with a check code.
+// =====================================================================================
+
+const INTERN_STAFF = "aa000000-0000-4000-8000-00000000000e";
+const SUPPORT_STAFF = "aa000000-0000-4000-8000-00000000000d";
+const CHECKLIST_TEMPLATES: Record<string, string[]> = {
+  onboarding: [
+    "NDA signed and recorded",
+    "IP assignment signed and recorded",
+    "HQ invite accepted and authenticator enrolled",
+    "System access granted and entered in the register",
+    "Introduced to the team and to their first week's goals",
+    "Check-in rhythm explained",
+  ],
+  offboarding: [
+    "Access removed from every system in the register",
+    "HQ access deactivated",
+    "Devices and materials returned",
+    "Handover notes written",
+    "Exit conversation held",
+    "Certificate issued (interns)",
+  ],
+};
+
+type DocumentRow = {
+  id: string;
+  staff_id: string;
+  kind: string;
+  title: string;
+  status: string;
+  signed_on: string | null;
+  reference: string;
+  updated_at: string;
+};
+type AccessRow = {
+  id: string;
+  staff_id: string;
+  system: string;
+  level: string;
+  granted_on: string;
+  expires_on: string | null;
+  revoked_on: string | null;
+  notes: string;
+};
+type RunRow = {
+  id: string;
+  staff_id: string;
+  kind: string;
+  started_at: string;
+  due_at: string | null;
+  completed_at: string | null;
+};
+type StepRow = {
+  run_id: string;
+  position: number;
+  title: string;
+  done_at: string | null;
+  note: string;
+};
+type CheckinRow = {
+  staff_id: string;
+  week: string;
+  wins: string;
+  priorities: string;
+  blockers: string;
+  mood: number;
+  submitted_at: string;
+};
+type LeaveRow = {
+  id: string;
+  staff_id: string;
+  kind: string;
+  starts_on: string;
+  ends_on: string;
+  note: string;
+  status: string;
+  decided_at: string | null;
+};
+type CertificateRow = {
+  serial: string;
+  staff_id: string;
+  recipient_name: string;
+  title: string;
+  starts_on: string;
+  ends_on: string;
+  summary: string;
+  issued_on: string;
+  revoked_at: string | null;
+  revoke_reason: string;
+};
+type ReviewRow = { id: string; quarter: string; started_at: string; completed_at: string | null };
+type ReviewItemRow = {
+  review_id: string;
+  access_id: string;
+  decision: string;
+  evidence: string;
+  decided_at: string | null;
+};
+
+const staffDocuments: DocumentRow[] = [];
+const systemAccess: AccessRow[] = [];
+const checklistRuns: RunRow[] = [];
+const checklistSteps: StepRow[] = [];
+const checkins: CheckinRow[] = [];
+const leave: LeaveRow[] = [];
+const certificates: CertificateRow[] = [];
+const reviews: ReviewRow[] = [];
+const reviewItems: ReviewItemRow[] = [];
+
+function isoWeek(date: Date): string {
+  const monday = new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate() - ((date.getUTCDay() + 6) % 7),
+    ),
+  );
+  const thursday = new Date(monday.getTime() + 3 * 86_400_000);
+  const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((thursday.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  return `${thursday.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function seedTeam() {
+  for (const list of [
+    staffDocuments,
+    systemAccess,
+    checklistRuns,
+    checklistSteps,
+    checkins,
+    leave,
+    certificates,
+    reviews,
+    reviewItems,
+  ])
+    list.length = 0;
+  staffDocuments.push(
+    {
+      id: "dd000000-0000-4000-8000-000000000001",
+      staff_id: INTERN_STAFF,
+      kind: "nda",
+      title: "Mutual NDA",
+      status: "signed",
+      signed_on: dayOffset(-60),
+      reference: "Signed copy in the HR drive, /Interns/2026",
+      updated_at: agoIso(24 * 60),
+    },
+    {
+      id: "dd000000-0000-4000-8000-000000000002",
+      staff_id: INTERN_STAFF,
+      kind: "ip_assignment",
+      title: "IP assignment",
+      status: "signed",
+      signed_on: dayOffset(-60),
+      reference: "Signed copy in the HR drive, /Interns/2026",
+      updated_at: agoIso(24 * 60),
+    },
+    {
+      id: "dd000000-0000-4000-8000-000000000003",
+      staff_id: SALES_STAFF,
+      kind: "nda",
+      title: "NDA",
+      status: "signed",
+      signed_on: dayOffset(-120),
+      reference: "Employment contract, schedule 2",
+      updated_at: agoIso(24 * 120),
+    },
+    {
+      id: "dd000000-0000-4000-8000-000000000004",
+      staff_id: SUPPORT_STAFF,
+      kind: "nda",
+      title: "NDA",
+      status: "requested",
+      signed_on: null,
+      reference: "",
+      updated_at: agoIso(24 * 3),
+    },
+  );
+  systemAccess.push(
+    {
+      id: "ac000000-0000-4000-8000-000000000001",
+      staff_id: INTERN_STAFF,
+      system: "Source control",
+      level: "Read",
+      granted_on: dayOffset(-58),
+      expires_on: "2026-12-20",
+      revoked_on: null,
+      notes: "",
+    },
+    {
+      id: "ac000000-0000-4000-8000-000000000002",
+      staff_id: INTERN_STAFF,
+      system: "Research data room",
+      level: "Member",
+      granted_on: dayOffset(-58),
+      expires_on: dayOffset(9),
+      revoked_on: null,
+      notes: "Project-scoped",
+    },
+    {
+      id: "ac000000-0000-4000-8000-000000000003",
+      staff_id: SALES_STAFF,
+      system: "Mail",
+      level: "Member",
+      granted_on: dayOffset(-118),
+      expires_on: null,
+      revoked_on: null,
+      notes: "",
+    },
+    {
+      id: "ac000000-0000-4000-8000-000000000004",
+      staff_id: SALES_STAFF,
+      system: "Billing",
+      level: "Viewer",
+      granted_on: dayOffset(-100),
+      expires_on: null,
+      revoked_on: null,
+      notes: "",
+    },
+  );
+  const runId = "cr000000-0000-4000-8000-000000000001";
+  checklistRuns.push({
+    id: runId,
+    staff_id: INTERN_STAFF,
+    kind: "onboarding",
+    started_at: agoIso(24 * 60),
+    due_at: null,
+    completed_at: null,
+  });
+  CHECKLIST_TEMPLATES.onboarding!.forEach((title, index) =>
+    checklistSteps.push({
+      run_id: runId,
+      position: index + 1,
+      title,
+      done_at: index < 4 ? agoIso(24 * (58 - index)) : null,
+      note: "",
+    }),
+  );
+  const thisWeek = isoWeek(new Date());
+  const lastWeek = isoWeek(new Date(Date.now() - 7 * 86_400_000));
+  checkins.push(
+    {
+      staff_id: INTERN_STAFF,
+      week: thisWeek,
+      wins: "Earnings-quality screener reviewed with the desk.",
+      priorities: "Write up the three false positives.",
+      blockers: "",
+      mood: 4,
+      submitted_at: agoIso(20),
+    },
+    {
+      staff_id: SALES_STAFF,
+      week: lastWeek,
+      wins: "Northwall pilot extended to a second desk.",
+      priorities: "Proposal to Holloway.",
+      blockers: "Need a pricing sheet for three seats.",
+      mood: 3,
+      submitted_at: agoIso(24 * 6),
+    },
+  );
+  leave.push(
+    {
+      id: "lv000000-0000-4000-8000-000000000001",
+      staff_id: SALES_STAFF,
+      kind: "vacation",
+      starts_on: dayOffset(12),
+      ends_on: dayOffset(16),
+      note: "Family wedding",
+      status: "requested",
+      decided_at: null,
+    },
+    {
+      id: "lv000000-0000-4000-8000-000000000002",
+      staff_id: INTERN_STAFF,
+      kind: "personal",
+      starts_on: dayOffset(-1),
+      ends_on: dayOffset(0),
+      note: "Exam",
+      status: "approved",
+      decided_at: agoIso(24 * 5),
+    },
+  );
+  certificates.push({
+    serial: "QT-2026-0001-7KD2QX",
+    staff_id: "",
+    recipient_name: "Arjun Mehta",
+    title: "Quantitative Research Intern",
+    starts_on: "2026-05-04",
+    ends_on: "2026-08-14",
+    summary: "Built the factor-attribution notebook the desk now uses weekly.",
+    issued_on: "2026-08-15",
+    revoked_at: null,
+    revoke_reason: "",
+  });
+}
+seedTeam();
+
+function accessView(row: AccessRow) {
+  const todayIso = today();
+  const live = !row.revoked_on && (!row.expires_on || row.expires_on >= todayIso);
+  return {
+    access_id: row.id,
+    staff_id: row.staff_id,
+    system: row.system,
+    level: row.level,
+    granted_on: row.granted_on,
+    expires_on: row.expires_on,
+    revoked_on: row.revoked_on,
+    notes: row.notes,
+    live,
+    expiring_soon:
+      live &&
+      Boolean(row.expires_on) &&
+      Date.parse(row.expires_on!) - Date.parse(todayIso) <= 14 * 86_400_000,
+  };
+}
+
+function documentsState(staffId: string) {
+  const rank: Record<string, number> = { missing: 0, requested: 1, waived: 2, signed: 3 };
+  const state: Record<string, string> = { nda: "missing", ip_assignment: "missing" };
+  for (const row of staffDocuments)
+    if (
+      row.staff_id === staffId &&
+      row.kind in state &&
+      rank[row.status]! > rank[state[row.kind]!]!
+    )
+      state[row.kind] = row.status;
+  return state as { nda: string; ip_assignment: string };
+}
+
+function runView(run: RunRow) {
+  const steps = checklistSteps
+    .filter((step) => step.run_id === run.id)
+    .sort((a, b) => a.position - b.position);
+  return {
+    run_id: run.id,
+    staff_id: run.staff_id,
+    kind: run.kind,
+    started_at: run.started_at,
+    due_at: run.due_at,
+    completed_at: run.completed_at,
+    done: steps.filter((step) => step.done_at).length,
+    total: steps.length,
+    overdue: !run.completed_at && Boolean(run.due_at) && Date.parse(run.due_at!) < Date.now(),
+    steps: steps.map((step) => ({
+      position: step.position,
+      title: step.title,
+      done_at: step.done_at,
+      note: step.note,
+    })),
+  };
+}
+
+function leaveView(row: LeaveRow) {
+  return {
+    request_id: row.id,
+    staff_id: row.staff_id,
+    staff_name: staff.find((member) => member.id === row.staff_id)?.display_name ?? "",
+    kind: row.kind,
+    starts_on: row.starts_on,
+    ends_on: row.ends_on,
+    days: Math.round((Date.parse(row.ends_on) - Date.parse(row.starts_on)) / 86_400_000) + 1,
+    note: row.note,
+    status: row.status,
+    decided_at: row.decided_at,
+  };
+}
+
+function certificateView(row: CertificateRow) {
+  return { ...row, revoked: Boolean(row.revoked_at) };
+}
+
+const quarterOf = (date: Date) =>
+  `${date.getUTCFullYear()}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+
+function reviewView(review: ReviewRow, withItems: boolean) {
+  const items = reviewItems.filter((item) => item.review_id === review.id);
+  const view: Record<string, unknown> = {
+    review_id: review.id,
+    quarter: review.quarter,
+    started_at: review.started_at,
+    completed_at: review.completed_at,
+    total: items.length,
+    decided: items.filter((item) => item.decision !== "pending").length,
+    revoked: items.filter((item) => item.decision === "revoke").length,
+  };
+  if (withItems)
+    view.items = items.map((item) => {
+      const access = systemAccess.find((row) => row.id === item.access_id)!;
+      return {
+        access_id: item.access_id,
+        decision: item.decision,
+        evidence: item.evidence,
+        decided_at: item.decided_at,
+        access: accessView(access),
+        staff_name: staff.find((member) => member.id === access.staff_id)?.display_name ?? "",
+      };
+    });
+  return view;
+}
+
+const hasCap = (headers: Record<string, string | string[] | undefined>, capability: string) =>
+  (CAPABILITIES[caller(headers)?.member.role ?? ""] ?? []).includes(capability);
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/team",
+    auth: true,
+    capability: "hr:read",
+    handler: () => {
+      const thisWeek = isoWeek(new Date());
+      const todayIso = today();
+      return ok({
+        week: thisWeek,
+        people: staff
+          .map((member) => {
+            const state = documentsState(member.id);
+            const grants = systemAccess.filter((row) => row.staff_id === member.id).map(accessView);
+            const weeks = checkins
+              .filter((row) => row.staff_id === member.id)
+              .map((row) => row.week)
+              .sort()
+              .reverse();
+            return {
+              staff_id: member.id,
+              display_name: member.display_name,
+              email: member.email,
+              role: member.role,
+              kind: member.kind,
+              is_active: member.is_active,
+              starts_on: member.starts_on ?? null,
+              ends_on: member.ends_on,
+              ends_in_days: member.ends_on
+                ? Math.round((Date.parse(member.ends_on) - Date.parse(todayIso)) / 86_400_000)
+                : null,
+              documents: state,
+              documents_ok:
+                ["signed", "waived"].includes(state.nda) &&
+                ["signed", "waived"].includes(state.ip_assignment),
+              live_access: grants.filter((grant) => grant.live).length,
+              access_expiring_soon: grants.filter((grant) => grant.expiring_soon).length,
+              open_checklists: checklistRuns
+                .filter((run) => run.staff_id === member.id && !run.completed_at)
+                .map(runView)
+                .map(({ run_id, kind, done, total, overdue, due_at }) => ({
+                  run_id,
+                  kind,
+                  done,
+                  total,
+                  overdue,
+                  due_at,
+                })),
+              checked_in_this_week: weeks.includes(thisWeek),
+              last_checkin_week: weeks[0] ?? "",
+              away_today: leave.some(
+                (row) =>
+                  row.staff_id === member.id &&
+                  row.status === "approved" &&
+                  row.starts_on <= todayIso &&
+                  todayIso <= row.ends_on,
+              ),
+            };
+          })
+          .sort(
+            (a, b) =>
+              Number(b.is_active) - Number(a.is_active) ||
+              a.display_name.localeCompare(b.display_name),
+          ),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/team/{staff_id}",
+    auth: true,
+    capability: "hr:read",
+    handler: ({ params }) => {
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      const state = documentsState(member.id);
+      return ok({
+        person: {
+          staff_id: member.id,
+          display_name: member.display_name,
+          email: member.email,
+          personal_email: member.personal_email ?? "",
+          role: member.role,
+          kind: member.kind,
+          is_active: member.is_active,
+          starts_on: member.starts_on ?? null,
+          ends_on: member.ends_on,
+        },
+        documents: staffDocuments
+          .filter((row) => row.staff_id === member.id)
+          .map((row) => ({
+            document_id: row.id,
+            kind: row.kind,
+            title: row.title,
+            status: row.status,
+            signed_on: row.signed_on,
+            reference: row.reference,
+            updated_at: row.updated_at,
+          })),
+        documents_state: state,
+        documents_ok:
+          ["signed", "waived"].includes(state.nda) &&
+          ["signed", "waived"].includes(state.ip_assignment),
+        access: systemAccess
+          .filter((row) => row.staff_id === member.id)
+          .map(accessView)
+          .sort((a, b) => Number(b.live) - Number(a.live) || a.system.localeCompare(b.system)),
+        checklists: checklistRuns
+          .filter((run) => run.staff_id === member.id)
+          .map(runView)
+          .sort((a, b) => b.started_at.localeCompare(a.started_at)),
+        checkins: checkins
+          .filter((row) => row.staff_id === member.id)
+          .sort((a, b) => b.week.localeCompare(a.week))
+          .slice(0, 8)
+          .map(({ week, wins, priorities, blockers, mood, submitted_at }) => ({
+            week,
+            wins,
+            priorities,
+            blockers,
+            mood,
+            submitted_at,
+          })),
+        time_off: leave.filter((row) => row.staff_id === member.id).map(leaveView),
+        certificates: certificates.filter((row) => row.staff_id === member.id).map(certificateView),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/documents",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      const status = String(body.status ?? "requested");
+      if (!["requested", "signed", "waived"].includes(status))
+        return refuse(400, "malformed_request", { status: "requested, signed or waived" });
+      const signedOn = String(body.signed_on ?? "") || null;
+      if (status === "signed" && !signedOn)
+        return refuse(400, "malformed_request", { signed_on: "a signed document has a date" });
+      const reference = String(body.reference ?? "").trim();
+      if (status === "waived" && reference.length < 8)
+        return refuse(400, "malformed_request", { reference: "a waiver says why" });
+      const documentId = String(body.document_id ?? "");
+      if (documentId) {
+        const row = staffDocuments.find(
+          (doc) => doc.id === documentId && doc.staff_id === member.id,
+        );
+        if (!row) return refuse(404, "not_found");
+        Object.assign(row, { status, signed_on: signedOn, reference, updated_at: now() });
+      } else {
+        const kind = String(body.kind ?? "");
+        if (
+          !["nda", "ip_assignment", "offer_letter", "contractor_agreement", "other"].includes(kind)
+        )
+          return refuse(400, "malformed_request", { kind: "unknown document" });
+        staffDocuments.push({
+          id: randomUUID(),
+          staff_id: member.id,
+          kind,
+          title: String(body.title ?? ""),
+          status,
+          signed_on: signedOn,
+          reference,
+          updated_at: now(),
+        });
+      }
+      audit("team.document_recorded", caller(headers)?.member.id ?? null, "staff", member.id);
+      return ok({
+        document_id: documentId || staffDocuments[staffDocuments.length - 1]!.id,
+        status,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/access/grant",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      const system = String(body.system ?? "").trim();
+      if (!system) return refuse(400, "malformed_request", { system: "name the system" });
+      const state = documentsState(member.id);
+      const missing = Object.entries(state)
+        .filter(([, value]) => !["signed", "waived"].includes(value))
+        .map(([kind]) => kind);
+      const override = String(body.override_reason ?? "").trim();
+      if (missing.length && !override)
+        return refuse(400, "malformed_request", { reason: "documents-missing", missing });
+      const row: AccessRow = {
+        id: randomUUID(),
+        staff_id: member.id,
+        system,
+        level: String(body.level ?? ""),
+        granted_on: String(body.granted_on ?? "") || today(),
+        expires_on: String(body.expires_on ?? "") || null,
+        revoked_on: null,
+        notes: String(body.notes ?? ""),
+      };
+      systemAccess.push(row);
+      audit(
+        "team.access_granted",
+        caller(headers)?.member.id ?? null,
+        "staff",
+        member.id,
+        override,
+      );
+      return ok({ access_id: row.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/access/{access_id}/revoke",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const row = systemAccess.find(
+        (grant) => grant.id === params.access_id && grant.staff_id === params.staff_id,
+      );
+      if (!row) return refuse(404, "not_found");
+      if (row.revoked_on) return refuse(400, "malformed_request", { status: "already revoked" });
+      row.revoked_on = String(body.revoked_on ?? "") || today();
+      audit(
+        "team.access_revoked",
+        caller(headers)?.member.id ?? null,
+        "staff",
+        row.staff_id,
+        String(body.reason ?? ""),
+      );
+      return ok({ revoked: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/checklists/start",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      const kind = String(body.kind ?? "");
+      if (!(kind in CHECKLIST_TEMPLATES))
+        return refuse(400, "malformed_request", { kind: "onboarding or offboarding" });
+      if (
+        checklistRuns.some(
+          (run) => run.staff_id === member.id && run.kind === kind && !run.completed_at,
+        )
+      )
+        return refuse(400, "malformed_request", { kind: `an ${kind} is already open` });
+      const run: RunRow = {
+        id: randomUUID(),
+        staff_id: member.id,
+        kind,
+        started_at: now(),
+        due_at: kind === "offboarding" ? new Date(Date.now() + 86_400_000).toISOString() : null,
+        completed_at: null,
+      };
+      checklistRuns.push(run);
+      CHECKLIST_TEMPLATES[kind]!.forEach((title, index) =>
+        checklistSteps.push({
+          run_id: run.id,
+          position: index + 1,
+          title,
+          done_at: null,
+          note: "",
+        }),
+      );
+      audit(`team.${kind}_started`, caller(headers)?.member.id ?? null, "staff", member.id);
+      return ok({ run_id: run.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/checklists/{run_id}/steps/{position}",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const run = checklistRuns.find((row) => row.id === params.run_id);
+      const step = checklistSteps.find(
+        (row) => row.run_id === params.run_id && row.position === Number(params.position),
+      );
+      if (!run || !step) return refuse(404, "not_found");
+      step.done_at = body.done === false ? null : now();
+      const complete = checklistSteps
+        .filter((row) => row.run_id === run.id)
+        .every((row) => row.done_at);
+      run.completed_at = complete ? now() : null;
+      audit("team.checklist_step", caller(headers)?.member.id ?? null, "staff", run.staff_id);
+      return ok({ complete });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/checkins",
+    auth: true,
+    handler: ({ query, headers }) => {
+      const found = caller(headers)!;
+      const week = String(query.week ?? "") || isoWeek(new Date());
+      const rows = checkins.filter((row) => row.week === week);
+      const view = (row: CheckinRow) => ({
+        staff_id: row.staff_id,
+        week: row.week,
+        wins: row.wins,
+        priorities: row.priorities,
+        blockers: row.blockers,
+        mood: row.mood,
+        submitted_at: row.submitted_at,
+      });
+      const payload: Record<string, unknown> = {
+        week,
+        this_week: isoWeek(new Date()),
+        last_week: isoWeek(new Date(Date.now() - 7 * 86_400_000)),
+        mine: rows.find((row) => row.staff_id === found.member.id)
+          ? view(rows.find((row) => row.staff_id === found.member.id)!)
+          : null,
+      };
+      if (hasCap(headers, "hr:read")) {
+        payload.team = rows.map(view);
+        payload.missing = staff
+          .filter((member) => member.is_active && !rows.some((row) => row.staff_id === member.id))
+          .map((member) => ({ staff_id: member.id, display_name: member.display_name }));
+      }
+      return ok(payload);
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/checkins/submit",
+    auth: true,
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const allowed = [isoWeek(new Date()), isoWeek(new Date(Date.now() - 7 * 86_400_000))];
+      const week = String(body.week ?? "") || allowed[0]!;
+      if (!allowed.includes(week))
+        return refuse(400, "malformed_request", { week: "this week or last" });
+      const mood = Number(body.mood);
+      if (!(mood >= 1 && mood <= 5)) return refuse(400, "malformed_request", { mood: "1 to 5" });
+      const wins = String(body.wins ?? "").trim();
+      const priorities = String(body.priorities ?? "").trim();
+      if (!wins && !priorities)
+        return refuse(400, "malformed_request", { reason: "say what went well or what is next" });
+      const existing = checkins.findIndex(
+        (row) => row.staff_id === found.member.id && row.week === week,
+      );
+      const row: CheckinRow = {
+        staff_id: found.member.id,
+        week,
+        wins,
+        priorities,
+        blockers: String(body.blockers ?? "").trim(),
+        mood,
+        submitted_at: now(),
+      };
+      if (existing >= 0) checkins[existing] = row;
+      else checkins.push(row);
+      audit("team.checkin_submitted", found.member.id, "staff", found.member.id);
+      return ok({ week });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/time-off",
+    auth: true,
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const sorted = [...leave].sort((a, b) => a.starts_on.localeCompare(b.starts_on));
+      const payload: Record<string, unknown> = {
+        mine: sorted.filter((row) => row.staff_id === found.member.id).map(leaveView),
+        kinds: ["vacation", "sick", "personal", "other"],
+      };
+      if (hasCap(headers, "hr:read")) {
+        payload.pending = sorted.filter((row) => row.status === "requested").map(leaveView);
+        payload.upcoming = sorted
+          .filter((row) => row.status === "approved" && row.ends_on >= today())
+          .map(leaveView);
+      }
+      return ok(payload);
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/time-off/request",
+    auth: true,
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const kind = String(body.kind ?? "");
+      if (!["vacation", "sick", "personal", "other"].includes(kind))
+        return refuse(400, "malformed_request", { kind: "unknown kind" });
+      const startsOn = String(body.starts_on ?? "");
+      const endsOn = String(body.ends_on ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startsOn) || !/^\d{4}-\d{2}-\d{2}$/.test(endsOn))
+        return refuse(400, "malformed_request", { starts_on: "expected YYYY-MM-DD" });
+      if (endsOn < startsOn)
+        return refuse(400, "malformed_request", { ends_on: "before it starts" });
+      const row: LeaveRow = {
+        id: randomUUID(),
+        staff_id: found.member.id,
+        kind,
+        starts_on: startsOn,
+        ends_on: endsOn,
+        note: String(body.note ?? ""),
+        status: "requested",
+        decided_at: null,
+      };
+      leave.push(row);
+      audit("team.time_off_requested", found.member.id, "staff", found.member.id);
+      return ok({ request_id: row.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/time-off/{request_id}/decide",
+    auth: true,
+    handler: ({ params, body, headers }) => {
+      const found = caller(headers)!;
+      const row = leave.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      const decision = String(body.decision ?? "");
+      const own = row.staff_id === found.member.id;
+      if (decision === "canceled") {
+        if (!own && !hasCap(headers, "hr:write"))
+          return refuse(403, "forbidden", { required_capability: "hr:write" });
+      } else if (decision === "approved" || decision === "declined") {
+        if (!hasCap(headers, "hr:write"))
+          return refuse(403, "forbidden", { required_capability: "hr:write" });
+        if (own) return refuse(403, "forbidden", { reason: "own-request" });
+      } else
+        return refuse(400, "malformed_request", { decision: "approved, declined or canceled" });
+      if (
+        !["requested", "approved"].includes(row.status) ||
+        (decision !== "canceled" && row.status !== "requested")
+      )
+        return refuse(400, "malformed_request", { status: "already decided" });
+      row.status = decision;
+      row.decided_at = now();
+      audit(`team.time_off_${decision}`, found.member.id, "staff", row.staff_id);
+      return ok({ status: decision });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/certificates",
+    auth: true,
+    capability: "certificates:issue",
+    handler: () =>
+      ok({
+        certificates: [...certificates]
+          .sort((a, b) => b.serial.localeCompare(a.serial))
+          .map(certificateView),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/certificates/issue",
+    auth: true,
+    capability: "certificates:issue",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const name = String(body.recipient_name ?? "").trim();
+      const title = String(body.title ?? "").trim();
+      if (!name || !title)
+        return refuse(400, "malformed_request", {
+          recipient_name: "a name and a title are required",
+        });
+      const startsOn = String(body.starts_on ?? "");
+      const endsOn = String(body.ends_on ?? "");
+      if (!startsOn || !endsOn || endsOn < startsOn)
+        return refuse(400, "malformed_request", { ends_on: "before it starts" });
+      if (endsOn > today())
+        return refuse(400, "malformed_request", {
+          ends_on: "a certificate records time already served",
+        });
+      const year = new Date().getUTCFullYear();
+      const number = certificates.filter((row) => row.serial.startsWith(`QT-${year}-`)).length + 1;
+      const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      const code = Array.from(
+        { length: 6 },
+        () => alphabet[Math.floor(Math.random() * alphabet.length)],
+      ).join("");
+      const serial = `QT-${year}-${String(number).padStart(4, "0")}-${code}`;
+      certificates.push({
+        serial,
+        staff_id: String(body.staff_id ?? ""),
+        recipient_name: name,
+        title,
+        starts_on: startsOn,
+        ends_on: endsOn,
+        summary: String(body.summary ?? ""),
+        issued_on: today(),
+        revoked_at: null,
+        revoke_reason: "",
+      });
+      audit("certificate.issued", caller(headers)?.member.id ?? null, "certificate", serial);
+      return ok({ serial });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/certificates/{serial}/revoke",
+    auth: true,
+    capability: "certificates:issue",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const row = certificates.find((item) => item.serial === params.serial);
+      if (!row) return refuse(404, "not_found");
+      if (row.revoked_at) return refuse(400, "malformed_request", { status: "already revoked" });
+      const reason = String(body.reason ?? "").trim();
+      if (!reason)
+        return refuse(400, "malformed_request", { reason: "a written reason is required" });
+      row.revoked_at = now();
+      row.revoke_reason = reason;
+      audit(
+        "certificate.revoked",
+        caller(headers)?.member.id ?? null,
+        "certificate",
+        row.serial,
+        reason,
+      );
+      return ok({ revoked: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "public/certificates/{serial}",
+    handler: ({ params }) => {
+      const row = certificates.find((item) => item.serial === String(params.serial).toUpperCase());
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        certificate: {
+          serial: row.serial,
+          recipient_name: row.recipient_name,
+          title: row.title,
+          starts_on: row.starts_on,
+          ends_on: row.ends_on,
+          summary: row.summary,
+          issued_on: row.issued_on,
+          valid: !row.revoked_at,
+          revoked_on: row.revoked_at ? row.revoked_at.slice(0, 10) : null,
+        },
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/access-reviews",
+    auth: true,
+    capability: "hr:read",
+    handler: () =>
+      ok({
+        reviews: [...reviews]
+          .sort((a, b) => b.started_at.localeCompare(a.started_at))
+          .map((review) => reviewView(review, false)),
+        quarter: quarterOf(new Date()),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/access-reviews/start",
+    auth: true,
+    capability: "hr:write",
+    sudo: true,
+    handler: ({ headers }) => {
+      if (reviews.some((review) => !review.completed_at))
+        return refuse(400, "malformed_request", { reason: "a review is already open" });
+      const live = systemAccess.filter((row) => accessView(row).live);
+      if (!live.length)
+        return refuse(400, "malformed_request", { reason: "nothing in the register to review" });
+      const review: ReviewRow = {
+        id: randomUUID(),
+        quarter: quarterOf(new Date()),
+        started_at: now(),
+        completed_at: null,
+      };
+      reviews.push(review);
+      for (const row of live)
+        reviewItems.push({
+          review_id: review.id,
+          access_id: row.id,
+          decision: "pending",
+          evidence: "",
+          decided_at: null,
+        });
+      audit(
+        "access_review.started",
+        caller(headers)?.member.id ?? null,
+        "access_review",
+        review.id,
+      );
+      return ok({ review_id: review.id });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/access-reviews/{review_id}",
+    auth: true,
+    capability: "hr:read",
+    handler: ({ params }) => {
+      const review = reviews.find((row) => row.id === params.review_id);
+      if (!review) return refuse(404, "not_found");
+      return ok({ review: reviewView(review, true) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/access-reviews/{review_id}/items/{access_id}",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const review = reviews.find((row) => row.id === params.review_id);
+      if (!review) return refuse(404, "not_found");
+      if (review.completed_at)
+        return refuse(400, "malformed_request", { status: "the review is complete" });
+      const decision = String(body.decision ?? "");
+      if (!["keep", "revoke"].includes(decision))
+        return refuse(400, "malformed_request", { decision: "keep or revoke" });
+      const evidence = String(body.evidence ?? "").trim();
+      if (evidence.length < 4)
+        return refuse(400, "malformed_request", { evidence: "say what the decision rests on" });
+      const item = reviewItems.find(
+        (row) => row.review_id === review.id && row.access_id === params.access_id,
+      );
+      if (!item) return refuse(404, "not_found");
+      Object.assign(item, { decision, evidence, decided_at: now() });
+      if (decision === "revoke") {
+        const access = systemAccess.find((row) => row.id === item.access_id);
+        if (access && !access.revoked_on) access.revoked_on = today();
+      }
+      audit(
+        "access_review.decided",
+        caller(headers)?.member.id ?? null,
+        "access_review",
+        review.id,
+        evidence,
+      );
+      return ok({ decision });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/access-reviews/{review_id}/complete",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, headers }) => {
+      const review = reviews.find((row) => row.id === params.review_id);
+      if (!review) return refuse(404, "not_found");
+      if (review.completed_at)
+        return refuse(400, "malformed_request", { status: "already complete" });
+      const pending = reviewItems.filter(
+        (row) => row.review_id === review.id && row.decision === "pending",
+      ).length;
+      if (pending) return refuse(400, "malformed_request", { reason: `${pending} undecided` });
+      review.completed_at = now();
+      audit(
+        "access_review.completed",
+        caller(headers)?.member.id ?? null,
+        "access_review",
+        review.id,
+      );
+      return ok({ completed: true });
+    },
+  },
+);
+
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
     if (entry.method !== method) continue;
@@ -4994,6 +6069,7 @@ function resetWorld() {
   seedMeetings();
   resetCalendar();
   seedRevenue();
+  seedTeam();
   for (const member of staff) {
     member.enrolled = !member.email.startsWith("newbie");
     member.is_active = true;
