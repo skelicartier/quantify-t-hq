@@ -18,7 +18,7 @@ const SESSION_COLUMNS = [
   { key: "started", label: "Started" },
   { key: "seen", label: "Last seen" },
   { key: "address", label: "Address" },
-  { key: "client", label: "Client" },
+  { key: "client", label: "Browser" },
   { key: "state", label: "State" },
   { key: "actions", label: "", align: "end" as const },
 ];
@@ -61,7 +61,11 @@ export default async function SecurityPage() {
                   <Timestamp value={session.last_seen_at} mode="relative" />
                 </td>
                 <td className="mono">{session.ip || "—"}</td>
-                <td>{session.user_agent ? session.user_agent.slice(0, 80) : "—"}</td>
+                <td title={session.user_agent || undefined}>
+                  {session.user_agent
+                    ? `${session.device.charAt(0).toUpperCase()}${session.device.slice(1)}`
+                    : "—"}
+                </td>
                 <td>
                   {session.current ? (
                     <StatusPill value="active" label="This session" tone="live" />

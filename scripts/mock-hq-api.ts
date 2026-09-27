@@ -277,6 +277,14 @@ function pendingFor(token: string, kind: "totp" | "enroll") {
   return staff.find((row) => row.id === record.staffId) ?? null;
 }
 
+/** As the service records a session: the person the portal reports, else what it saw. */
+function clientAddress(headers: Record<string, string | string[] | undefined>): string {
+  return String(headers["x-qt-client-address"] ?? "") || "203.0.113.9";
+}
+function clientAgent(headers: Record<string, string | string[] | undefined>): string {
+  return String(headers["x-qt-client-agent"] ?? headers["user-agent"] ?? "").slice(0, 400);
+}
+
 function mintSession(member: Staff, ip: string, userAgent: string) {
   const token = `hq_mock_${randomUUID().replace(/-/g, "")}`;
   const session: Session = {
@@ -324,6 +332,32 @@ const SLA_SEED: Record<string, { first: number; next: number }> = {
   low: { first: 1440, next: 2880 },
 };
 const SLA_TARGETS: Record<string, { first: number; next: number }> = {};
+
+/** Mirrors account_api.hq.auth.device_label: browser and system, never the version. */
+const BROWSER_TOKENS: ReadonlyArray<readonly [string, string]> = [
+  ["Edg/", "Edge"],
+  ["OPR/", "Opera"],
+  ["CriOS/", "Chrome"],
+  ["FxiOS/", "Firefox"],
+  ["Firefox/", "Firefox"],
+  ["Chrome/", "Chrome"],
+  ["Safari/", "Safari"],
+];
+const SYSTEM_TOKENS: ReadonlyArray<readonly [string, string]> = [
+  ["iPhone", "iOS"],
+  ["iPad", "iPadOS"],
+  ["Android", "Android"],
+  ["CrOS", "ChromeOS"],
+  ["Windows", "Windows"],
+  ["Mac OS X", "macOS"],
+  ["Linux", "Linux"],
+];
+function deviceLabel(agent: string): string {
+  const browser =
+    BROWSER_TOKENS.find(([token]) => agent.includes(token))?.[1] ?? "an unrecognised browser";
+  const system = SYSTEM_TOKENS.find(([token]) => agent.includes(token))?.[1];
+  return system ? `${browser} on ${system}` : browser;
+}
 /** Most urgent first, the order the service checks and shows them in. */
 const SLA_ORDER = ["urgent", "high", "normal", "low"] as const;
 const SLA_MIN_MINUTES = 15;
@@ -685,7 +719,7 @@ const routes: Array<{
       const member = pendingFor(String(body.pending_token ?? ""), "totp");
       if (!member) return refuse(401, "unauthenticated");
       if (String(body.code ?? "") !== "000000") return refuse(401, "unauthenticated");
-      return ok(mintSession(member, "203.0.113.9", String(headers["user-agent"] ?? "mock")));
+      return ok(mintSession(member, clientAddress(headers), clientAgent(headers)));
     },
   },
   {
@@ -696,7 +730,7 @@ const routes: Array<{
       if (!member) return refuse(401, "unauthenticated");
       if (!RECOVERY_CODES.includes(String(body.recovery_code ?? "")))
         return refuse(401, "unauthenticated");
-      return ok(mintSession(member, "203.0.113.9", String(headers["user-agent"] ?? "mock")));
+      return ok(mintSession(member, clientAddress(headers), clientAgent(headers)));
     },
   },
   {
@@ -722,7 +756,7 @@ const routes: Array<{
       member.enrolled = true;
       audit("auth.totp_enrolled", member.id, "staff", member.id);
       return ok({
-        ...mintSession(member, "203.0.113.9", String(headers["user-agent"] ?? "mock")),
+        ...mintSession(member, clientAddress(headers), clientAgent(headers)),
         recovery_codes: RECOVERY_CODES,
       });
     },
@@ -833,6 +867,7 @@ const routes: Array<{
           last_seen_at: session.last_seen_at,
           ip: session.ip,
           user_agent: session.user_agent,
+          device: deviceLabel(session.user_agent),
           current: session.id === found.session.id,
           revoked_at: session.revoked_at,
         }));

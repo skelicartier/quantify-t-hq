@@ -68,16 +68,23 @@ const failureEnvelope = z.object({
 });
 
 /**
- * The caller's own address, forwarded so the service's per-source throttles key on the
- * person rather than on this server's egress — the console's `X-QT-Client-Address`
- * convention, kept byte-identical.
+ * The person behind the request, as this server saw them. The service is called from
+ * here, so without these it would see only this server: its egress address and its
+ * runtime's user agent. The address keys the service's per-source throttles on the
+ * person (the console's `X-QT-Client-Address` convention, kept byte-identical); the
+ * browser is what a session is listed under, and what makes a sign-in from a browser
+ * the account never used stand out.
  */
-async function clientAddressHeader(): Promise<Record<string, string>> {
+async function clientHeaders(): Promise<Record<string, string>> {
   try {
     const incoming = await headers();
+    const forwarded: Record<string, string> = {};
     const address =
       incoming.get("x-real-ip") ?? incoming.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "";
-    return address ? { "X-QT-Client-Address": address } : {};
+    if (address) forwarded["X-QT-Client-Address"] = address;
+    const agent = incoming.get("user-agent")?.slice(0, 400) ?? "";
+    if (agent) forwarded["X-QT-Client-Agent"] = agent;
+    return forwarded;
   } catch {
     return {};
   }
@@ -98,7 +105,7 @@ async function call(route: string, method: "GET" | "POST", options: CallOptions)
   }
   const requestHeaders: Record<string, string> = {
     accept: "application/json",
-    ...(await clientAddressHeader()),
+    ...(await clientHeaders()),
   };
   if (options.token) requestHeaders.authorization = `Bearer ${options.token}`;
   if (method === "POST") {

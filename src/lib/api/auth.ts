@@ -57,6 +57,8 @@ export const sessionsSchema = okEnvelope.extend({
       last_seen_at: z.string().nullable(),
       ip: z.string(),
       user_agent: z.string(),
+      /** "Chrome on macOS": how the new-sign-in mail names the same session. */
+      device: z.string(),
       current: z.boolean(),
       revoked_at: z.string().nullable(),
     }),
