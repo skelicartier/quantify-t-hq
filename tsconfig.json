@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "types": ["node", "vitest/globals", "@testing-library/jest-dom"],
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    // macOS cloud sync (`fileproviderd`) periodically writes duplicate copies of files it
+    // is syncing, named "<stem> 2.ts", "<stem> 3.ts" and so on. When it does that inside
+    // `.next/types`, every generated declaration is present twice and `tsc --noEmit` fails
+    // with TS6200/TS2300 duplicate-identifier errors that have nothing to do with the code —
+    // so `npm run typecheck` breaks at random and deleting the files by hand only holds
+    // until the daemon runs again. The same daemon is why the Qt plugins have to be staged
+    // outside the synced tree.
+    "**/* 2.ts",
+    "**/* 2.tsx",
+    "**/* 2.d.ts",
+    "**/* 3.ts",
+    "**/* 3.tsx",
+    "**/* 3.d.ts"
+  ]
+}

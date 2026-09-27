@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+playwright/.auth/
+storage-state*.json
+
+# Generated review output
+semantic-review/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Vercel
+.vercel/
+
+# Editors and operating systems
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+*.tsbuildinfo
+npm-debug.log*
+.vercel
+.env*
+supabase/.temp/
+
+# Stale worktrees from other tooling.
+.kilo
+test-results/
+.env.local

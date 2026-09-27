@@ -1,0 +1,33 @@
+name: HQ CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hq-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Placeholders only. Nothing should reach a real host at build time, and the
+      # deployment gate refuses any real secret configured on this app.
+      NEXT_PUBLIC_SITE_URL: https://hq.example.invalid
+      HQ_ACCOUNT_API_BASE_URL: https://hq-api.example.invalid/api/v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Route parity against the service table runs only in the integrated workspace
+      # where the product repo is checked out beside this one; here it skips loudly.
+      - run: npm run validate

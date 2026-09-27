@@ -1,0 +1,55 @@
+{
+  "name": "quantify-terminal-hq",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HQ: the staff-only business-management portal for Quantify Terminal.",
+  "engines": {
+    "node": ">=22.0.0 <26"
+  },
+  "packageManager": "npm@11.9.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "prebuild": "tsx scripts/deployment-gate.ts",
+    "start": "next start",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
+    "mock:hq": "tsx scripts/mock-hq-api.ts",
+    "check:hq-ui": "tsx scripts/screenshot-hq.ts"
+  },
+  "dependencies": {
+    "lucide-react": "1.39.0",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.6",
+    "@types/node": "26.4.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.1",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.4",
+    "eslint-config-prettier": "10.1.8",
+    "jsdom": "29.0.1",
+    "playwright": "1.62.1",
+    "prettier": "3.9.6",
+    "tsx": "4.23.13",
+    "typescript": "6.0.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}
