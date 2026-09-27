@@ -4799,3 +4799,45 @@
     margin-top: 16px;
   }
 }
+
+@layer pages {
+  /* --- Integrations ------------------------------------------------------------------- */
+  .integration-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .integration-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .integration-error {
+    margin-top: 14px;
+  }
+
+  .integration-danger {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .integration-danger > summary {
+    color: var(--muted);
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+
+  .integration-danger > summary:hover {
+    color: var(--danger);
+  }
+
+  .integration-danger[open] > summary {
+    margin-bottom: 12px;
+  }
+}

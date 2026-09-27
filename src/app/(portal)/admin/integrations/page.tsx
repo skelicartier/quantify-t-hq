@@ -1,4 +1,16 @@
-import { confirmSudoAction, mintKeyAction, revokeKeyAction } from "@/app/(portal)/admin/actions";
+import {
+  confirmSudoAction,
+  connectCalendarAction,
+  disconnectCalendarAction,
+  mintKeyAction,
+  revokeKeyAction,
+  syncCalendarAction,
+} from "@/app/(portal)/admin/actions";
+import {
+  CalendarConnectForm,
+  CalendarDisconnectForm,
+  CalendarSyncForm,
+} from "@/components/admin/calendar-forms";
 import { AdminTabs } from "@/components/admin/admin-tabs";
 import { MintKeyForm, RevokeKeyForm } from "@/components/admin/intake-key-forms";
 import { SudoGate } from "@/components/admin/sudo-gate";
@@ -7,14 +19,17 @@ import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
+import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { readCalendarStatus, type CalendarStatus } from "@/lib/api/integrations";
 import { readApiKeys, type ApiKey } from "@/lib/api/keys";
 import { directoryOrEmpty } from "@/lib/api/staff";
-import { formatAbsolute } from "@/lib/format";
+import { formatAbsolute, formatDate } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
+import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Integrations" };
 export const dynamic = "force-dynamic";
@@ -28,8 +43,39 @@ const KEY_COLUMNS = [
   { key: "revoke", label: "Revoke" },
 ];
 
-export default async function IntegrationsPage() {
+/** What the calendar's round trip came back with, in words. */
+const CALENDAR_OUTCOMES: Record<string, { tone: "success" | "danger" | "neutral"; text: string }> =
+  {
+    connected: {
+      tone: "success",
+      text: "Calendar connected. Booked meetings are syncing into Meetings.",
+    },
+    denied: {
+      tone: "neutral",
+      text: "The connection was cancelled on the consent screen. Nothing changed.",
+    },
+    scope: {
+      tone: "danger",
+      text: "Connected without calendar access: the calendar box was unticked on the consent screen. Connect again and leave it ticked.",
+    },
+    expired: {
+      tone: "danger",
+      text: "That connection attempt had expired or was not yours. Start it again.",
+    },
+    forbidden: { tone: "danger", text: "Only HQ admins can connect the calendar." },
+    failed: {
+      tone: "danger",
+      text: "The calendar could not be connected. Nothing was changed; try again.",
+    },
+  };
+
+type IntegrationsPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function IntegrationsPage({ searchParams }: IntegrationsPageProps) {
   const context = await requireStaff("/admin/integrations");
+  const calendarOutcome = CALENDAR_OUTCOMES[firstSearchValue((await searchParams).calendar) ?? ""];
   const now = requestNow();
   if (!hasCapability(context, "hq:admin")) {
     return (
@@ -48,6 +94,13 @@ export default async function IntegrationsPage() {
       throw error;
   }
   const names = await directoryOrEmpty(context.token);
+  let calendar: CalendarStatus | null = null;
+  try {
+    calendar = (await readCalendarStatus(context.token)).calendar;
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
   const fresh = context.me.sudo_fresh;
   const untilLabel = context.me.sudo_until
     ? (formatAbsolute(context.me.sudo_until).split(", ")[1] ?? null)
@@ -62,12 +115,17 @@ export default async function IntegrationsPage() {
         description="The doors into HQ from outside, and the keys that open them."
         actions={<AdminTabs current="/admin/integrations" />}
       />
+      {calendarOutcome && (
+        <Callout tone={calendarOutcome.tone} role="status">
+          {calendarOutcome.text}
+        </Callout>
+      )}
       <SudoGate
         action={confirmSudoAction}
         fresh={fresh}
         untilLabel={untilLabel}
         returnPath="/admin/integrations"
-        purpose="Minting and revoking keys needs a fresh code from your authenticator app."
+        purpose="Keys and the calendar connection need a fresh code from your authenticator app."
       />
       <div className="record-layout">
         <div className="record-layout__main">
@@ -141,11 +199,65 @@ export default async function IntegrationsPage() {
               </DataTable>
             )}
           </Card>
-          <Card title="Calendar" titleAs="h2">
-            <p className="side-quiet">
-              Not connected. Connecting the team calendar will list booked demos under Meetings and
-              on Today.
-            </p>
+          <Card
+            title="Calendar"
+            titleAs="h2"
+            description="Booked demos and calls become meetings, with guests matched to people on file. Only meetings with someone outside the team are brought in."
+          >
+            {calendar === null ? (
+              <Callout tone="danger" compact>
+                The calendar&apos;s state could not be read just now.
+              </Callout>
+            ) : !calendar.configured ? (
+              <p className="side-quiet">
+                Not set up on the service yet. Once its calendar client is in place, it can be
+                connected here.
+              </p>
+            ) : !calendar.connected ? (
+              <div className="integration-row">
+                <p className="side-quiet">Not connected.</p>
+                <CalendarConnectForm action={connectCalendarAction} disabled={!fresh} />
+              </div>
+            ) : (
+              <>
+                <KeyValue columns={2}>
+                  <KeyValueRow label="Account" mono>
+                    {calendar.account_email || "—"}
+                  </KeyValueRow>
+                  <KeyValueRow label="Last synced">
+                    <Timestamp
+                      value={calendar.last_synced_at}
+                      now={now}
+                      mode="relative"
+                      fallback="Not yet"
+                    />
+                  </KeyValueRow>
+                  <KeyValueRow label="Changes">
+                    {calendar.push_active
+                      ? `Arrive within seconds · renews by ${formatDate(calendar.channel_expires_at)}`
+                      : calendar.push_configured
+                        ? "Checked every 15 minutes (live updates are reconnecting)"
+                        : "Checked every 15 minutes"}
+                  </KeyValueRow>
+                  <KeyValueRow label="Connected">
+                    <Timestamp value={calendar.connected_at} mode="date" />
+                  </KeyValueRow>
+                </KeyValue>
+                {calendar.last_error && (
+                  <Callout tone="danger" compact className="integration-error">
+                    Last attempt failed: {calendar.last_error}
+                  </Callout>
+                )}
+                <div className="integration-actions">
+                  <CalendarSyncForm action={syncCalendarAction} />
+                  <CalendarConnectForm action={connectCalendarAction} disabled={!fresh} reconnect />
+                </div>
+                <details className="integration-danger">
+                  <summary>Disconnect</summary>
+                  <CalendarDisconnectForm action={disconnectCalendarAction} disabled={!fresh} />
+                </details>
+              </>
+            )}
           </Card>
         </div>
         <aside className="record-layout__side">

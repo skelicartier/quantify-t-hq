@@ -4024,6 +4024,132 @@ routes.push(
   },
 );
 
+// =====================================================================================
+// The team calendar. The mock's "consent screen" is the portal's own callback: connect
+// returns a URL that lands straight back with a code, so the whole round trip can be
+// walked without leaving the machine.
+// =====================================================================================
+
+type CalendarState = {
+  connected: boolean;
+  account_email: string;
+  connected_at: string | null;
+  last_synced_at: string | null;
+  last_error: string;
+};
+const calendar: CalendarState = {
+  connected: false,
+  account_email: "",
+  connected_at: null,
+  last_synced_at: null,
+  last_error: "",
+};
+const calendarStates = new Set<string>();
+
+function resetCalendar() {
+  calendar.connected = false;
+  calendar.account_email = "";
+  calendar.connected_at = null;
+  calendar.last_synced_at = null;
+  calendar.last_error = "";
+  calendarStates.clear();
+}
+
+function calendarStatus() {
+  return {
+    configured: true,
+    push_configured: true,
+    connected: calendar.connected,
+    account_email: calendar.account_email,
+    connected_at: calendar.connected_at,
+    last_synced_at: calendar.last_synced_at,
+    last_error: calendar.last_error,
+    push_active: calendar.connected,
+    channel_expires_at: calendar.connected ? hoursFromNow(24 * 7) : null,
+  };
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/integrations/calendar",
+    auth: true,
+    capability: "hq:admin",
+    handler: () => ok({ calendar: calendarStatus() }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/integrations/calendar/connect",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const state = `mockstate-${found.member.id}-${randomUUID().slice(0, 8)}`;
+      calendarStates.add(state);
+      audit("calendar.connect_started", found.member.id, "integration", "calendar");
+      // Like the real consent screen, on ANOTHER origin: the portal must leave and be
+      // sent back, not route there internally.
+      return ok({
+        authorization_url: `http://127.0.0.1:${PORT}/api/v1/mock/consent?state=${encodeURIComponent(state)}`,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/integrations/calendar/complete",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const state = String(body.state ?? "");
+      if (!calendarStates.has(state) || !state.includes(found.member.id))
+        return refuse(403, "forbidden", { reason: "state" });
+      calendarStates.delete(state);
+      calendar.connected = true;
+      calendar.account_email = "team@quantifyterminal.test";
+      calendar.connected_at = now();
+      calendar.last_synced_at = now();
+      audit("calendar.connected", found.member.id, "integration", "calendar");
+      return ok({
+        calendar: calendarStatus(),
+        sync: { created: 0, updated: 2, canceled: 0, skipped: 5 },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/integrations/calendar/sync",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers }) => {
+      if (!calendar.connected) return refuse(404, "not_found");
+      calendar.last_synced_at = now();
+      audit("calendar.synced", caller(headers)!.member.id, "integration", "calendar");
+      return ok({
+        calendar: calendarStatus(),
+        sync: { created: 0, updated: 0, canceled: 0, skipped: 0 },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/integrations/calendar/disconnect",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const reason = String(body.reason ?? "").trim();
+      if (!reason)
+        return refuse(400, "malformed_request", { reason: "a written reason is required" });
+      if (!calendar.connected) return refuse(404, "not_found");
+      resetCalendar();
+      audit("calendar.disconnected", caller(headers)!.member.id, "integration", "calendar", reason);
+      return ok({ calendar: calendarStatus() });
+    },
+  },
+);
+
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
     if (entry.method !== method) continue;
@@ -4070,6 +4196,15 @@ const server = createServer((request, response) => {
     url.searchParams.forEach((value, name) => {
       query[name] = value;
     });
+    // The mock consent screen: approve at once and send the browser back to the portal.
+    if (request.method === "GET" && route === "mock/consent") {
+      const back = new URL("http://127.0.0.1:3000/admin/integrations/calendar/callback");
+      back.searchParams.set("code", "mock-code");
+      back.searchParams.set("state", query.state ?? "");
+      response.writeHead(302, { location: back.toString() }).end();
+      console.log(`[mock-hq] GET /${route} -> 302 consent`);
+      return;
+    }
     const answer = respond(request.method ?? "GET", route, query, body, request.headers);
     response
       .writeHead(answer.status, { "content-type": "application/json" })
@@ -4087,6 +4222,7 @@ function resetWorld() {
   seedSavedReplies();
   seedCrm();
   seedMeetings();
+  resetCalendar();
   for (const member of staff) {
     member.enrolled = !member.email.startsWith("newbie");
     member.is_active = true;

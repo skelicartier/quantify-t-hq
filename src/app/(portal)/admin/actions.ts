@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import * as authApi from "@/lib/api/auth";
 import * as crmApi from "@/lib/api/crm";
+import * as integrationsApi from "@/lib/api/integrations";
 import * as keysApi from "@/lib/api/keys";
 import * as staffApi from "@/lib/api/staff";
 import { fieldValue, refusalMessage } from "@/lib/auth/forms";
@@ -318,4 +320,76 @@ export async function reinviteStaffAction(
     }
     return staffRefusal(error);
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// the team calendar
+// ---------------------------------------------------------------------------------------
+
+/** Send the browser to the calendar's consent screen; it returns to the callback. */
+export async function connectCalendarAction(): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/admin/integrations");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  let target: string;
+  try {
+    target = (await integrationsApi.startCalendarConnect(context.token)).authorization_url;
+  } catch (error) {
+    const details =
+      error && typeof error === "object" && "details" in error
+        ? ((error as { details: Record<string, unknown> }).details ?? {})
+        : {};
+    if (details["reason"] === "not-configured") {
+      return {
+        status: "error",
+        message: "The service has no calendar client yet. It must be set up there first.",
+      };
+    }
+    return crmRefusal(error);
+  }
+  redirect(target);
+}
+
+export async function syncCalendarAction(): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/admin/integrations");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  try {
+    const result = await integrationsApi.syncCalendarNow(context.token);
+    revalidatePath("/admin/integrations");
+    revalidatePath("/meetings");
+    const { created, updated, canceled } = result.sync;
+    return {
+      status: "sent",
+      message:
+        created + updated + canceled === 0
+          ? "In step. Nothing changed since the last sync."
+          : `Synced: ${created} new, ${updated} updated, ${canceled} called off.`,
+      sentAt: Date.now(),
+    };
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+export async function disconnectCalendarAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/admin/integrations");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (!reason) return { status: "error", message: "Say why the calendar is being disconnected." };
+  try {
+    await integrationsApi.disconnectCalendar(context.token, reason);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/admin/integrations");
+  return {
+    status: "sent",
+    message: "Disconnected. Meetings already synced stay.",
+    sentAt: Date.now(),
+  };
 }

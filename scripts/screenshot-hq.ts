@@ -195,6 +195,13 @@ async function captureInteractions(page: Page, folder: string) {
     await page.locator(".sudo-gate button[type=submit]").click();
   }
   await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  // The calendar round trip: consent is simulated by the mock, which answers with the
+  // portal's own callback URL, so this walks connect → callback → connected for real.
+  if ((await page.locator("button", { hasText: "Connect calendar" }).count()) > 0) {
+    await page.locator("button", { hasText: "Connect calendar" }).click();
+    await page.waitForURL("**/admin/integrations?calendar=connected", { timeout: 15_000 });
+    await page.waitForSelector(".integration-actions");
+  }
   await page.fill("#key-name", "Website contact form");
   await page.fill("#key-reason", "Screenshot run");
   await page.locator("button", { hasText: "Mint key" }).click();
