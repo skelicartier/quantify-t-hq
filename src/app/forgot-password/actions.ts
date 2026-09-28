@@ -12,7 +12,7 @@ export async function requestReset(
   _previous: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const email = fieldValue(formData, "email", 254).trim().toLowerCase();
   if (!email || !email.includes("@")) {
     return { status: "error", message: "Enter your staff email address." };
@@ -29,7 +29,7 @@ export async function completeReset(
   _previous: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const token = fieldValue(formData, "token", 2_048);
   const password = fieldValue(formData, "password");
   if (password.length < 12) {
@@ -48,7 +48,7 @@ export async function completeInvite(
   _previous: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const token = fieldValue(formData, "token", 2_048);
   const password = fieldValue(formData, "password");
   if (password.length < 12) {

@@ -2,13 +2,14 @@ import Link from "next/link";
 
 import { DealFlags, DueChip } from "@/components/crm/pills";
 import type { BoardColumn } from "@/lib/api/deals";
-import type { DirectoryEntry } from "@/lib/api/staff";
+import { nameFor, type DirectoryEntry } from "@/lib/api/staff";
 import { formatMoneyBy, formatMrr, formatMrrBy } from "@/lib/format";
 
 type DealBoardProps = {
   columns: readonly BoardColumn[];
   today: string;
-  names: ReadonlyMap<string, DirectoryEntry>;
+  /** Null when the directory could not be read: names say so rather than "—". */
+  names: ReadonlyMap<string, DirectoryEntry> | null;
 };
 
 /**
@@ -52,9 +53,7 @@ export function DealBoard({ columns, today, names }: DealBoardProps) {
           ) : (
             <ol className="board__cards">
               {column.deals.map((deal) => {
-                const owner = deal.owner_staff_id
-                  ? (names.get(deal.owner_staff_id)?.display_name ?? "—")
-                  : "Unowned";
+                const owner = deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned";
                 return (
                   <li key={deal.deal_id}>
                     <article

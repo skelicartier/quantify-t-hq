@@ -1,5 +1,7 @@
 import "server-only";
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { headers } from "next/headers";
 import { z } from "zod";
 
@@ -57,6 +59,33 @@ export function resolveHqApiBaseUrl(): string {
   return raw.endsWith("/api/v1") ? raw : `${raw}/api/v1`;
 }
 
+/**
+ * One form submission is one attempt. A server action that received a form opens the
+ * attempt with the id the form carried (see `AttemptField`), and every POST it makes
+ * takes its idempotency key from it: the same attempt sent twice — a double click, a
+ * retry after a lost response — replays the service's stored answer instead of writing
+ * a second contract or a second note. A fresh key per call, which is what this did
+ * before, satisfied the service's gate and protected nothing.
+ */
+type Attempt = { id: string; calls: number };
+const attemptStore = new AsyncLocalStorage<Attempt>();
+const ATTEMPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function beginAttempt(id: string | null | undefined): void {
+  const clean =
+    typeof id === "string" && ATTEMPT_ID.test(id) ? id.toLowerCase() : crypto.randomUUID();
+  attemptStore.enterWith({ id: clean, calls: 0 });
+}
+
+function nextIdempotencyKey(): string {
+  const attempt = attemptStore.getStore();
+  if (!attempt) return `hq-${crypto.randomUUID()}`;
+  attempt.calls += 1;
+  // Two POSTs to one route inside one action stay distinct; the key is scoped per
+  // route on the service, so the counter matters only for that case.
+  return `hq-${attempt.id}-${attempt.calls}`;
+}
+
 const failureEnvelope = z.object({
   ok: z.literal(false),
   correlation_id: z.string().default(""),
@@ -79,6 +108,11 @@ async function clientHeaders(): Promise<Record<string, string>> {
   try {
     const incoming = await headers();
     const forwarded: Record<string, string> = {};
+    // The service believes the two client headers only from a caller that presents
+    // the shared key (QT_HQ_PORTAL_KEY on its side); without it they are dropped there
+    // and every session records this server's egress instead of the person.
+    const portalKey = (process.env.HQ_ACCOUNT_API_PORTAL_KEY ?? "").trim();
+    if (portalKey) forwarded["X-QT-Portal-Key"] = portalKey;
     const address =
       incoming.get("x-real-ip") ?? incoming.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "";
     if (address) forwarded["X-QT-Client-Address"] = address;
@@ -110,7 +144,7 @@ async function call(route: string, method: "GET" | "POST", options: CallOptions)
   if (options.token) requestHeaders.authorization = `Bearer ${options.token}`;
   if (method === "POST") {
     requestHeaders["content-type"] = "application/json";
-    requestHeaders["idempotency-key"] = options.idempotencyKey ?? `hq-${crypto.randomUUID()}`;
+    requestHeaders["idempotency-key"] = options.idempotencyKey ?? nextIdempotencyKey();
   }
 
   let response: Response;

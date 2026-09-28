@@ -14,11 +14,8 @@ import * as staffApi from "@/lib/api/staff";
 import { fieldValue, refusalMessage } from "@/lib/auth/forms";
 import { crmRefusal } from "@/lib/crm/refusal";
 import type { ActionState } from "@/lib/forms/action-state";
+import { sanitizeNextPath } from "@/lib/auth/route-policy";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
-
-/** Pages with a confirm-it's-you panel; only these are refreshed after a code. */
-const ADMIN_PAGE =
-  /^\/(?:admin\/(?:integrations|danger|settings\/pipeline|staff(?:\/[A-Za-z0-9-]{1,64})?)|revenue\/mrr|reports|certificates|access-review)$/;
 
 const NOT_ADMIN: ActionState = { status: "error", message: "Only HQ admins can change this." };
 
@@ -27,8 +24,10 @@ export async function confirmSudoAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
-  const context = await requireStaff("/admin/integrations");
+  await requireSameOriginServerAction(formData);
+  // The gate is mounted on several pages; a lapsed session returns to the one it was on.
+  const path = sanitizeNextPath(fieldValue(formData, "return_path", 120));
+  const context = await requireStaff(path);
   const code = fieldValue(formData, "code", 6).trim();
   if (!/^\d{6}$/.test(code)) {
     return { status: "error", message: "Enter the six digits your authenticator app shows." };
@@ -38,8 +37,7 @@ export async function confirmSudoAction(
   } catch (error) {
     return { status: "error", message: refusalMessage(error) };
   }
-  const path = fieldValue(formData, "return_path", 120);
-  if (ADMIN_PAGE.test(path)) revalidatePath(path);
+  revalidatePath(path);
   return { status: "sent", message: null, sentAt: Date.now() };
 }
 
@@ -47,7 +45,7 @@ export async function mintKeyAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/integrations");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const name = fieldValue(formData, "name", 80).trim();
@@ -68,7 +66,7 @@ export async function revokeKeyAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/integrations");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const reason = fieldValue(formData, "reason", 400).trim();
@@ -86,7 +84,7 @@ export async function updateStageAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/settings/pipeline");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const input: Record<string, unknown> = { key: fieldValue(formData, "key", 32).trim() };
@@ -142,7 +140,7 @@ export async function inviteStaffAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/staff");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const input: Record<string, string> = {};
@@ -181,7 +179,7 @@ export async function changeStaffRoleAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/staff");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -207,7 +205,7 @@ export async function updateStaffDetailsAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/staff");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -234,7 +232,7 @@ export async function deactivateStaffAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/staff");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -257,7 +255,7 @@ export async function reactivateStaffAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/staff");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -276,7 +274,7 @@ export async function resetAuthenticatorAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/staff");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -299,7 +297,7 @@ export async function reinviteStaffAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/staff");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -380,7 +378,7 @@ export async function disconnectCalendarAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/integrations");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const reason = fieldValue(formData, "reason", 400).trim();
@@ -408,7 +406,7 @@ export async function updateSlaAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/settings");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const first = wholeNumber(formData, "first_reply_minutes");
@@ -433,7 +431,7 @@ export async function updateSourceAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/settings");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const input: Record<string, unknown> = { key: fieldValue(formData, "key", 32).trim() };
@@ -482,7 +480,7 @@ export async function updateRetentionAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/danger");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const disqualified = wholeNumber(formData, "disqualified_lead_days");
@@ -511,7 +509,7 @@ export async function runRetentionAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/danger");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const reason = fieldValue(formData, "reason", 400).trim();
@@ -542,7 +540,7 @@ export async function signEveryoneOutAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/admin/danger");
   if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
   const reason = fieldValue(formData, "reason", 400).trim();
@@ -554,6 +552,8 @@ export async function signEveryoneOutAction(
       confirm: fieldValue(formData, "confirm", 60).trim(),
       reason,
     });
+    revalidatePath("/admin/danger");
+    revalidatePath("/me/security");
     return {
       status: "sent",
       message: `Signed out ${revoked} ${revoked === 1 ? "session" : "sessions"}. Yours stays open.`,

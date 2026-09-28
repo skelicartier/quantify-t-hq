@@ -7,7 +7,7 @@ import { HQ_THEME_COOKIE, HQ_THEME_MAX_AGE_SECONDS, parseHqTheme } from "@/lib/t
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
 
 export async function setHqTheme(formData: FormData): Promise<void> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const theme = parseHqTheme(formData.get("theme"));
   const store = await cookies();
   store.set(HQ_THEME_COOKIE, theme, {

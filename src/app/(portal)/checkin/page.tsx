@@ -7,7 +7,7 @@ import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { readCheckins, type CheckinsPage } from "@/lib/api/team";
 
 export const metadata = { title: "Check-in" };
@@ -24,7 +24,7 @@ export default async function CheckinPage() {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = page?.team ? await directoryOrEmpty(context.token) : new Map();
+  const names = page?.team ? await directoryOrNull(context.token) : new Map();
 
   return (
     <>
@@ -62,7 +62,7 @@ export default async function CheckinPage() {
                       <li key={checkin.staff_id} className="checkin checkin--compact">
                         <p className="checkin__head">
                           <Link href={`/team/${checkin.staff_id}`}>
-                            {names.get(checkin.staff_id)?.display_name ?? "A colleague"}
+                            {nameFor(names, checkin.staff_id, "A colleague")}
                           </Link>
                           <span className={`mood mood--${checkin.mood}`}>
                             {MOOD_WORDS[checkin.mood]}

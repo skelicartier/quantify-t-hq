@@ -12,6 +12,12 @@ export type ActionState = {
    * action's response to the person who asked, never into a rendered page.
    */
   secret?: string;
+  /**
+   * The outcome of the last submission is unknown (the response was lost, or the
+   * service said the attempt is still in flight). The form keeps its attempt id so a
+   * retry replays rather than repeats; every other outcome mints a fresh one.
+   */
+  keepAttempt?: boolean;
 };
 
 export const INITIAL_ACTION_STATE: ActionState = { status: "idle", message: null };

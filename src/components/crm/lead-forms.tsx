@@ -5,6 +5,7 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import type { Company, Lead } from "@/lib/api/crm";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { DISQUALIFY_LABELS } from "@/lib/crm/vocabulary";
@@ -22,6 +23,7 @@ export function LeadCreateForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <Field id="lead-name" label="Full name">
         <Input id="lead-name" name="full_name" maxLength={160} disabled={isPending} />
       </Field>
@@ -68,6 +70,7 @@ export function LeadStageForm({ action, lead }: { action: Action; lead: Lead }) 
   const [stage, setStage] = useState(lead.stage === "disqualified" ? "disqualified" : lead.stage);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="lead_id" value={lead.lead_id} />
       <Field id="lead-stage" label="Stage">
         <Select
@@ -134,6 +137,7 @@ export function ConvertLeadForm({
   const [withDeal, setWithDeal] = useState(true);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="lead_id" value={lead.lead_id} />
       {matchedCompany ? (
         <>

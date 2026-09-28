@@ -45,9 +45,19 @@ export const meSchema = okEnvelope.extend({
   capabilities: z.array(z.string()),
   sudo_fresh: z.boolean(),
   sudo_until: z.string().nullable(),
+  /** Unused recovery codes left; absent from an older service. */
+  recovery_codes_remaining: z.number().optional(),
   environment: z.string(),
 });
 export type HqMe = z.infer<typeof meSchema>;
+
+export function regenerateRecoveryCodes(token: string) {
+  return postHqJson(
+    "hq/auth/recovery/regenerate",
+    okEnvelope.extend({ recovery_codes: z.array(z.string()), remaining: z.number() }),
+    { token, body: {} },
+  );
+}
 
 export const sessionsSchema = okEnvelope.extend({
   sessions: z.array(

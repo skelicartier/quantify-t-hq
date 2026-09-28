@@ -4,6 +4,7 @@ import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
 type SudoGateProps = {
@@ -33,6 +34,7 @@ export function SudoGate({ action, fresh, untilLabel, returnPath, purpose }: Sud
   }
   return (
     <form className="sudo-gate" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="return_path" value={returnPath} />
       <div className="sudo-gate__text">
         <strong>Confirm it&apos;s you</strong>

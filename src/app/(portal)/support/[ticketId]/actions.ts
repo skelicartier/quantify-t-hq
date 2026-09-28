@@ -36,7 +36,7 @@ export async function sendMessage(
   _previous: DeskActionState,
   formData: FormData,
 ): Promise<DeskActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/support");
   if (!hasCapability(context, "tickets:write")) {
     return { status: "error", message: "Your role cannot write on the desk." };
@@ -72,7 +72,7 @@ export async function manageTicketAction(
   _previous: DeskActionState,
   formData: FormData,
 ): Promise<DeskActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/support");
   if (!hasCapability(context, "tickets:manage")) {
     return { status: "error", message: "Your role cannot run the queue." };

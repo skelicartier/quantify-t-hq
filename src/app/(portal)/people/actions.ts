@@ -19,7 +19,7 @@ export async function createPersonAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/people");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const fullName = fieldValue(formData, "full_name", 160).trim();
@@ -45,7 +45,7 @@ export async function updatePersonAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/people");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const personId = fieldValue(formData, "person_id", 64);

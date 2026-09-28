@@ -14,7 +14,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLeads, type CrmSettings, type LeadsPage } from "@/lib/api/crm";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LEAD_STAGES, LEAD_STAGE_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
@@ -66,7 +66,7 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
   const sourceNames = sourceNamesFrom(settings);
   const canWrite = hasCapability(context, "crm:write");
 
@@ -226,7 +226,7 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
                 </td>
                 <td>
                   {lead.owner_staff_id ? (
-                    (names.get(lead.owner_staff_id)?.display_name ?? "—")
+                    nameFor(names, lead.owner_staff_id)
                   ) : (
                     <span className="table-sub">Unowned</span>
                   )}

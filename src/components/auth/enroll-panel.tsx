@@ -6,6 +6,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Field, Input, describedBy } from "@/components/ui/field";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ENROLLMENT_STATE, type EnrollmentState } from "@/lib/auth/form-state";
 
 type EnrollPanelProps = {
@@ -54,6 +55,7 @@ export function EnrollPanel({ beginAction, confirmAction, nextPath }: EnrollPane
     return (
       <>
         <form className="auth-form" action={formAction} noValidate>
+          <AttemptField state={state} />
           <input type="hidden" name="next" value={nextPath} />
           <h2>Add HQ to your authenticator</h2>
           <p className="auth__desc">
@@ -100,6 +102,7 @@ export function EnrollPanel({ beginAction, confirmAction, nextPath }: EnrollPane
   return (
     <>
       <form className="auth-form" action={formAction} noValidate>
+        <AttemptField state={state} />
         <input type="hidden" name="next" value={nextPath} />
         <p className="auth__desc">
           Your account needs an authenticator app before it can sign in. You will get a setup key,

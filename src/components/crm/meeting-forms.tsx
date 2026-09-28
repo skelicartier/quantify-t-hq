@@ -5,6 +5,7 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { MEETING_KINDS, MEETING_KIND_LABELS, MEETING_OUTCOME_LABELS } from "@/lib/crm/vocabulary";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { localInputToIso } from "@/lib/format";
@@ -40,6 +41,7 @@ export function MeetingCreateForm({
   const endsIso = startsIso ? new Date(Date.parse(startsIso) + minutes * 60_000).toISOString() : "";
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="starts_at" value={startsIso} />
       <input type="hidden" name="ends_at" value={endsIso} />
       <Field id="meeting-title" label="Title">
@@ -137,6 +139,7 @@ export function PrepNotesForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="meeting_id" value={meetingId} />
       <Field
         id="prep-notes"
@@ -202,6 +205,7 @@ export function MeetingOutcomeForm({
         : "No follow-ups. Any already running are stood down.";
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="meeting_id" value={meetingId} />
       <fieldset className={`choice-row choice-row--${choices.length}`}>
         <legend className="sr-only">What happened</legend>
@@ -266,6 +270,7 @@ export function MeetingLinkForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="meeting_id" value={meetingId} />
       <Field id="meeting-link-company" label="Company">
         <Select id="meeting-link-company" name="company_id" required disabled={isPending}>

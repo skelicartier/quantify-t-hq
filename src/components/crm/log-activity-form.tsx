@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { ACTIVITY_KIND_LABELS, LOGGABLE_KINDS } from "@/lib/crm/vocabulary";
 
@@ -38,6 +39,7 @@ export function LogActivityForm({
   const bodyId = `log-body-${Object.values(links).join("-") || "record"}`;
   return (
     <form className="log-form" action={formAction} key={state.sentAt ?? "log"}>
+      <AttemptField state={state} />
       {Object.entries(links).map(([name, value]) =>
         value ? <input key={name} type="hidden" name={name} value={value} /> : null,
       )}
@@ -80,7 +82,7 @@ export function LogActivityForm({
           {isPending ? "Logging…" : `Log ${ACTIVITY_KIND_LABELS[kind]?.toLowerCase()}`}
         </Button>
       </div>
-      <FormFeedback state={state} />
+      <FormFeedback state={state} sentLabel="Logged." />
     </form>
   );
 }

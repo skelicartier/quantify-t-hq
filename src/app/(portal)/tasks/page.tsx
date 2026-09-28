@@ -12,7 +12,7 @@ import { SegmentedLinks } from "@/components/ui/toolbar";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readTasks, type Task, type TasksPage } from "@/lib/api/crm";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull } from "@/lib/api/staff";
 import { isoDay } from "@/lib/crm/dates";
 import { dueState } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -47,9 +47,9 @@ export default async function TasksIndexPage({ searchParams }: TasksPageProps) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
   const canWrite = hasCapability(context, "crm:write");
-  const assignees = [...names.values()]
+  const assignees = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ staff_id: entry.staff_id, display_name: entry.display_name }));
 

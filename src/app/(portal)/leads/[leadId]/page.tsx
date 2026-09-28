@@ -15,7 +15,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLead, type CrmSettings, type LeadDetail } from "@/lib/api/crm";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDayPlus } from "@/lib/crm/dates";
 import { DISQUALIFY_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { formatDate, formatSentence } from "@/lib/format";
@@ -71,7 +71,7 @@ export default async function LeadPage({ params }: LeadPageProps) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
 
   const { lead, matches, activities } = detail;
   const anonymised = Boolean(lead.anonymised_at);
@@ -109,7 +109,7 @@ export default async function LeadPage({ params }: LeadPageProps) {
                 firstRepliedAt={lead.first_replied_at}
                 waitingMinutes={lead.waiting_minutes}
                 overdue={lead.first_reply_overdue}
-                targetMinutes={60}
+                targetMinutes={detail.first_reply_target_minutes ?? 60}
               />
             )}
           </>
@@ -246,9 +246,7 @@ export default async function LeadPage({ params }: LeadPageProps) {
           <Card title="Details" titleAs="h3">
             <KeyValue>
               <KeyValueRow label="Owner">
-                {lead.owner_staff_id
-                  ? (names.get(lead.owner_staff_id)?.display_name ?? "—")
-                  : "Unowned"}
+                {lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : "Unowned"}
               </KeyValueRow>
               <KeyValueRow label="First reply">
                 <Timestamp

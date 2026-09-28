@@ -149,12 +149,7 @@ export default async function TicketPage({ params }: TicketPageProps) {
             ))}
           </ol>
           {canWrite ? (
-            <Composer
-              ticketId={ticket.id}
-              action={sendMessage}
-              savedReplies={savedReplies}
-              canManage={canManage}
-            />
+            <Composer ticketId={ticket.id} action={sendMessage} savedReplies={savedReplies} />
           ) : (
             <Callout tone="neutral" compact>
               Your role reads the desk without writing to it.
@@ -180,7 +175,7 @@ export default async function TicketPage({ params }: TicketPageProps) {
                   <Timestamp value={firmContext.account.last_login_at} mode="relative" />
                 </KeyValueRow>
                 <KeyValueRow label="Runs" mono>
-                  {`${ticket.app_version || "?"} on ${ticket.platform || "?"}`}
+                  {`${ticket.app_version || "version not reported"} on ${ticket.platform || "platform not reported"}`}
                 </KeyValueRow>
               </KeyValue>
             )}

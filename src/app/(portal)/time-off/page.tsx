@@ -5,6 +5,7 @@ import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { StatusPill } from "@/components/ui/status-pill";
+import { RowAction } from "@/components/ui/row-action";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readTimeOff, type TimeOffPage, type TimeOffRequest } from "@/lib/api/team";
@@ -82,25 +83,26 @@ export default async function TimeOffIndexPage() {
                         <td>{formatLabel(request.kind)}</td>
                         <td>
                           {canDecide && request.staff_id !== context.me.staff.staff_id ? (
-                            <form action={decideTimeOffAction} className="inline-form">
-                              <input type="hidden" name="request_id" value={request.request_id} />
-                              <button
-                                className="btn btn--small btn--primary"
-                                type="submit"
-                                name="decision"
-                                value="approved"
-                              >
-                                Approve
-                              </button>
-                              <button
-                                className="btn btn--small"
-                                type="submit"
-                                name="decision"
-                                value="declined"
-                              >
-                                Decline
-                              </button>
-                            </form>
+                            <RowAction
+                              action={decideTimeOffAction}
+                              className="inline-form"
+                              fields={{ request_id: request.request_id }}
+                              buttons={[
+                                {
+                                  label: "Approve",
+                                  className: "btn btn--small btn--primary",
+                                  name: "decision",
+                                  value: "approved",
+                                },
+                                {
+                                  label: "Decline",
+                                  className: "btn btn--small",
+                                  name: "decision",
+                                  value: "declined",
+                                },
+                              ]}
+                              sentLabel="Decided."
+                            />
                           ) : (
                             <span className="table-sub">Someone else decides</span>
                           )}
@@ -149,17 +151,19 @@ export default async function TimeOffIndexPage() {
                       />
                       {(request.status === "requested" || request.status === "approved") &&
                         (request.ends_on ?? "") >= today && (
-                          <form action={decideTimeOffAction}>
-                            <input type="hidden" name="request_id" value={request.request_id} />
-                            <button
-                              className="btn btn--small btn--ghost"
-                              type="submit"
-                              name="decision"
-                              value="canceled"
-                            >
-                              Withdraw
-                            </button>
-                          </form>
+                          <RowAction
+                            action={decideTimeOffAction}
+                            fields={{ request_id: request.request_id }}
+                            buttons={[
+                              {
+                                label: "Withdraw",
+                                className: "btn btn--small btn--ghost",
+                                name: "decision",
+                                value: "canceled",
+                              },
+                            ]}
+                            sentLabel="Withdrawn."
+                          />
                         )}
                     </li>
                   ))}

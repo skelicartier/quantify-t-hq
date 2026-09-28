@@ -23,7 +23,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompanies, readPerson, type PersonDetail } from "@/lib/api/crm";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull } from "@/lib/api/staff";
 import { isoDay } from "@/lib/crm/dates";
 import { requestNow } from "@/lib/request-time";
 
@@ -53,7 +53,7 @@ export default async function PersonPage({ params }: PersonPageProps) {
     if (error instanceof HqApiRequestError && error.status === 404) notFound();
     throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
   const canWrite = hasCapability(context, "crm:write");
   let companyOptions: { company_id: string; name: string }[] = [];
   if (canWrite) {
@@ -70,7 +70,7 @@ export default async function PersonPage({ params }: PersonPageProps) {
 
   const { person, company, activities, open_tasks: openTasks } = detail;
   const returnPath = `/people/${person.person_id}`;
-  const assignees = [...names.values()]
+  const assignees = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ staff_id: entry.staff_id, display_name: entry.display_name }));
 

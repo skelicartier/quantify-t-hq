@@ -27,7 +27,7 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCalendarStatus, type CalendarStatus } from "@/lib/api/integrations";
 import { readApiKeys, type ApiKey } from "@/lib/api/keys";
 import { readWebhooks, type WebhookEvent } from "@/lib/api/settings";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { formatAbsolute, formatDate } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
@@ -109,7 +109,7 @@ export default async function IntegrationsPage({ searchParams }: IntegrationsPag
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
   let calendar: CalendarStatus | null = null;
   try {
     calendar = (await readCalendarStatus(context.token)).calendar;
@@ -192,9 +192,7 @@ export default async function IntegrationsPage({ searchParams }: IntegrationsPag
                     </td>
                     <td>
                       <Timestamp value={key.created_at} mode="date" />
-                      <span className="table-sub">
-                        {names.get(key.created_by)?.display_name ?? "—"}
-                      </span>
+                      <span className="table-sub">{nameFor(names, key.created_by)}</span>
                     </td>
                     <td>
                       {key.revoked_at ? (

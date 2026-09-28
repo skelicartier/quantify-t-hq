@@ -36,7 +36,7 @@ export async function createCompanyAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/companies");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const fields = companyFields(formData);
@@ -55,7 +55,7 @@ export async function updateCompanyAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/companies");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const companyId = fieldValue(formData, "company_id", 64);

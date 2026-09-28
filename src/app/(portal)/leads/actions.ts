@@ -19,7 +19,7 @@ export async function createLeadAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/leads");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const email = fieldValue(formData, "email", 254).trim();
@@ -46,7 +46,7 @@ export async function updateLeadStageAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/leads");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const leadId = fieldValue(formData, "lead_id", 64);
@@ -71,7 +71,7 @@ export async function convertLeadAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/leads");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const leadId = fieldValue(formData, "lead_id", 64);

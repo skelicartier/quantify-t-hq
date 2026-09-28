@@ -12,7 +12,7 @@ import { SegmentedLinks } from "@/components/ui/toolbar";
 import { requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readDealsBoard, type DealsBoard } from "@/lib/api/deals";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDay } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
 import { formatMoney, formatMrr, formatMrrBy } from "@/lib/format";
@@ -59,7 +59,7 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
 
   const link = (next: { status?: string; view?: string }) => {
     const parameters = new URLSearchParams();
@@ -199,11 +199,7 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
                       <span className="table-sub">—</span>
                     )}
                   </td>
-                  <td>
-                    {deal.owner_staff_id
-                      ? (names.get(deal.owner_staff_id)?.display_name ?? "—")
-                      : "Unowned"}
-                  </td>
+                  <td>{deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned"}</td>
                   <td className="data-table__num">
                     {deal.status === "open" ? `${deal.days_in_stage}d` : "—"}
                   </td>

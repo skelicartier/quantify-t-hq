@@ -33,7 +33,7 @@ export async function createDealAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/deals");
   if (!hasCapability(context, "deals:write")) return READ_ONLY;
   const companyId = fieldValue(formData, "company_id", 64);
@@ -69,7 +69,7 @@ export async function moveDealStageAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/deals");
   if (!hasCapability(context, "deals:write")) return READ_ONLY;
   const dealId = fieldValue(formData, "deal_id", 64);
@@ -95,7 +95,7 @@ export async function updateNextStepAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/deals");
   if (!hasCapability(context, "deals:write")) return READ_ONLY;
   const dealId = fieldValue(formData, "deal_id", 64);
@@ -115,7 +115,7 @@ export async function updateDealAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/deals");
   if (!hasCapability(context, "deals:write")) return READ_ONLY;
   const dealId = fieldValue(formData, "deal_id", 64);
@@ -143,7 +143,7 @@ export async function closeDealAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/deals");
   if (!hasCapability(context, "deals:write")) return READ_ONLY;
   const dealId = fieldValue(formData, "deal_id", 64);

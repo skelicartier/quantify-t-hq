@@ -260,6 +260,7 @@ const leadDetailSchema = okEnvelope.extend({
     company: companySchema.nullable(),
   }),
   activities: z.array(activitySchema),
+  first_reply_target_minutes: z.number().optional(),
 });
 export type LeadDetail = z.infer<typeof leadDetailSchema>;
 

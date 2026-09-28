@@ -6,6 +6,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Field, Input, describedBy } from "@/components/ui/field";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_AUTH_STATE, type AuthFormState } from "@/lib/auth/form-state";
 
 type CredentialFormProps = {
@@ -18,6 +19,7 @@ export function CredentialForm({ action, nextPath }: CredentialFormProps) {
   return (
     <>
       <form className="auth-form" action={formAction} noValidate>
+        <AttemptField state={state} />
         <input type="hidden" name="next" value={nextPath} />
         <Field id="email" label="Email address">
           <Input

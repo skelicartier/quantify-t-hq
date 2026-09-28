@@ -5,6 +5,7 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import type { DealSummary } from "@/lib/api/crm";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
@@ -29,6 +30,7 @@ export function DealCreateForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="company_id" value={companyId} />
       <Field id="deal-name" label="Deal name" hint="Leave empty for “Firm — new business”.">
         <Input id="deal-name" name="name" maxLength={200} disabled={isPending} />
@@ -95,6 +97,7 @@ export function DealCreateForm({
           type="date"
           defaultValue={defaultDue}
           required
+          min={todayIso()}
           disabled={isPending}
         />
       </Field>
@@ -125,6 +128,7 @@ export function DealStageForm({
   const targets = stages.filter((stage) => stage.key !== deal.stage_key);
   return (
     <form className="stack-form stack-form--tight" action={formAction} key={state.sentAt ?? "move"}>
+      <AttemptField state={state} />
       <input type="hidden" name="deal_id" value={deal.deal_id} />
       <Field id="move-stage" label="Move to">
         <Select id="move-stage" name="stage_key" disabled={isPending}>
@@ -152,6 +156,7 @@ export function DealStageForm({
           type="date"
           defaultValue={defaultDue}
           required
+          min={todayIso()}
           disabled={isPending}
         />
       </Field>
@@ -168,6 +173,7 @@ export function NextStepForm({ action, deal }: { action: Action; deal: DealSumma
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="next-step-form" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="deal_id" value={deal.deal_id} />
       <label className="sr-only" htmlFor="next-step-text">
         Next step
@@ -197,7 +203,7 @@ export function NextStepForm({ action, deal }: { action: Action; deal: DealSumma
       <Button type="submit" size="small" disabled={isPending}>
         {isPending ? "Saving…" : "Update"}
       </Button>
-      <FormFeedback state={state} />
+      <FormFeedback state={state} sentLabel="Next step updated." />
     </form>
   );
 }
@@ -212,6 +218,7 @@ export function DealEditForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="deal_id" value={deal.deal_id} />
       <Field id="edit-deal-name" label="Deal name">
         <Input
@@ -284,6 +291,7 @@ export function DealCloseForm({ action, deal }: { action: Action; deal: DealSumm
   const [reason, setReason] = useState("no_decision");
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="deal_id" value={deal.deal_id} />
       <fieldset className="choice-row">
         <legend className="sr-only">Outcome</legend>
@@ -350,4 +358,9 @@ export function DealCloseForm({ action, deal }: { action: Action; deal: DealSumm
       <FormFeedback state={state} />
     </form>
   );
+}
+
+/** Today's date in UTC, the day the service judges "today or later" by. */
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
 }

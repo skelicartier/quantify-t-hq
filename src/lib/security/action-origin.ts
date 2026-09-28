@@ -2,6 +2,8 @@ import "server-only";
 
 import { headers } from "next/headers";
 
+import { beginAttempt } from "@/lib/api/core";
+
 export class SameOriginActionError extends Error {
   constructor() {
     super("Server Action request did not come from the configured portal origin.");
@@ -32,7 +34,11 @@ function requestOrigin(headersList: Headers): string | null {
   return originFromUrl(headersList.get("origin")) ?? originFromUrl(headersList.get("referer"));
 }
 
-export async function requireSameOriginServerAction(): Promise<void> {
+export async function requireSameOriginServerAction(formData?: FormData): Promise<void> {
+  // The form's attempt id (see `AttemptField`) scopes every idempotency key this
+  // action mints; a call without a form gets a fresh attempt of its own.
+  const attempt = formData?.get("attempt");
+  beginAttempt(typeof attempt === "string" ? attempt : null);
   let headersList: Headers;
   try {
     headersList = await headers();

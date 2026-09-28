@@ -10,7 +10,7 @@ import { Stat, StatGrid } from "@/components/ui/stat";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
-import { HqApiUnavailableError } from "@/lib/api/core";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readQueue, type Queue } from "@/lib/api/tickets";
 import { firstSearchValue as firstParam } from "@/lib/search-params";
 
@@ -53,7 +53,10 @@ export default async function SupportPage({ searchParams }: SupportPageProps) {
   try {
     queue = await readQueue(context.token, filters);
   } catch (error) {
-    if (!(error instanceof HqApiUnavailableError)) throw error;
+    // A refusal (a throttle on the 30-second refresh, a capability change) is a
+    // failed read like an outage: the queue says so instead of the error screen.
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
   }
   const canManage = hasCapability(context, "tickets:manage");
 
@@ -154,7 +157,11 @@ export default async function SupportPage({ searchParams }: SupportPageProps) {
               <tr key={ticket.id}>
                 <td>
                   <Link className="table-title" href={`/support/${ticket.id}`}>
-                    {ticket.unread && <span className="unread-dot" aria-label="Unread" />}
+                    {ticket.unread && (
+                      <span className="unread-dot">
+                        <span className="sr-only">Unread. </span>
+                      </span>
+                    )}
                     {ticket.subject}
                   </Link>
                   <span className="table-sub">

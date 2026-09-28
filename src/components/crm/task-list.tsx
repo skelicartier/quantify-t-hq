@@ -1,18 +1,21 @@
 import Link from "next/link";
 
 import { DueChip } from "@/components/crm/pills";
+import { RowAction } from "@/components/ui/row-action";
 import { StatusPill } from "@/components/ui/status-pill";
 import type { Task } from "@/lib/api/crm";
-import type { DirectoryEntry } from "@/lib/api/staff";
+import { nameFor, type DirectoryEntry } from "@/lib/api/staff";
 import { TASK_PRIORITY_LABELS, taskPriorityTone } from "@/lib/crm/vocabulary";
+import type { ActionState } from "@/lib/forms/action-state";
 
 type TaskListProps = {
   tasks: readonly Task[];
   today: string;
-  /** Void server action taking `task_id` + `status` + `return_path`. */
-  setStatus?: ((formData: FormData) => Promise<void>) | undefined;
+  /** Server action taking `task_id` + `status` + `return_path`; reports its outcome. */
+  setStatus?: ((previous: ActionState, formData: FormData) => Promise<ActionState>) | undefined;
   returnPath: string;
-  names: ReadonlyMap<string, DirectoryEntry>;
+  /** Null when the directory could not be read: names say so rather than "—". */
+  names: ReadonlyMap<string, DirectoryEntry> | null;
   /** Show which record each task belongs to (the all-tasks page does; a record page doesn't). */
   showRecord?: boolean;
   emptyLabel?: string;
@@ -44,22 +47,28 @@ export function TaskList({
         const done = task.status === "done";
         const link = showRecord ? recordLink(task) : null;
         const assignee = task.assignee_staff_id
-          ? (names.get(task.assignee_staff_id)?.display_name ?? "A colleague")
+          ? nameFor(names, task.assignee_staff_id, "A colleague")
           : "Anyone";
         return (
           <li key={task.task_id} className={done ? "task task--done" : "task"}>
             {setStatus ? (
-              <form action={setStatus} className="task__check-form">
-                <input type="hidden" name="task_id" value={task.task_id} />
-                <input type="hidden" name="status" value={done ? "open" : "done"} />
-                <input type="hidden" name="return_path" value={returnPath} />
-                <button
-                  type="submit"
-                  className="task__check"
-                  aria-pressed={done}
-                  aria-label={done ? `Reopen: ${task.title}` : `Mark done: ${task.title}`}
-                />
-              </form>
+              <RowAction
+                action={setStatus}
+                className="task__check-form"
+                fields={{
+                  task_id: task.task_id,
+                  status: done ? "open" : "done",
+                  return_path: returnPath,
+                }}
+                buttons={[
+                  {
+                    label: "",
+                    className: "task__check",
+                    ariaPressed: done,
+                    ariaLabel: done ? `Reopen: ${task.title}` : `Mark done: ${task.title}`,
+                  },
+                ]}
+              />
             ) : (
               <span className="task__check task__check--static" aria-hidden="true" />
             )}

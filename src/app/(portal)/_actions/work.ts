@@ -32,7 +32,7 @@ export async function logActivityAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/home");
   if (!hasCapability(context, "crm:write")) {
     return { status: "error", message: "Your role reads the CRM without writing to it." };
@@ -60,7 +60,7 @@ export async function createTaskAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/tasks");
   if (!hasCapability(context, "crm:write")) {
     return { status: "error", message: "Your role cannot add tasks." };
@@ -84,18 +84,24 @@ export async function createTaskAction(
   return { status: "sent", message: null, sentAt: Date.now() };
 }
 
-/** Tick or untick a task. A plain form post; the list re-renders from the service. */
-export async function setTaskStatusAction(formData: FormData): Promise<void> {
-  await requireSameOriginServerAction();
+/** Tick or untick a task. The row says so when the service refuses. */
+export async function setTaskStatusAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/tasks");
-  if (!hasCapability(context, "crm:write")) return;
+  if (!hasCapability(context, "crm:write")) {
+    return { status: "error", message: "Your role cannot change tasks." };
+  }
   const taskId = fieldValue(formData, "task_id", 64);
   const status = fieldValue(formData, "status", 12) === "open" ? "open" : "done";
   try {
     await crmApi.updateTask(context.token, taskId, { status });
-  } catch {
-    // The list re-renders from the service either way; a failed tick stays unticked.
+  } catch (error) {
+    return crmRefusal(error);
   }
   refresh(formData);
   revalidatePath("/tasks");
+  return { status: "sent", message: null, sentAt: Date.now() };
 }

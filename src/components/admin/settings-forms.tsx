@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import type { SlaRow } from "@/lib/api/settings";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
@@ -39,6 +40,7 @@ export function SlaRowForm({
   const id = `sla-${row.priority}`;
   return (
     <form className="sla-row" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="priority" value={row.priority} />
       <p className="sla-row__name">{PRIORITY_LABELS[row.priority] ?? row.priority}</p>
       <Field
@@ -102,6 +104,7 @@ export function SourceRowForm({
   const id = `source-${source.key}`;
   return (
     <form className="source-row" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="key" value={source.key} />
       <label className="sr-only" htmlFor={id}>
         Name of {source.key}
@@ -158,6 +161,7 @@ export function NewSourceForm({ action }: { action: Action }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form" action={formAction} key={state.sentAt ?? "new"}>
+      <AttemptField state={state} />
       <Field id="source-new-label" label="Name" hint="As it reads on a lead: “Podcast”.">
         <Input id="source-new-label" name="label" maxLength={80} required disabled={isPending} />
       </Field>

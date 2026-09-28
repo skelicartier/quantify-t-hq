@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -18,6 +19,7 @@ export function MintKeyForm({ action, disabled }: { action: Action; disabled: bo
   return (
     <>
       <form className="stack-form stack-form--tight" action={formAction}>
+        <AttemptField state={state} />
         <Field id="key-name" label="What will hold it" hint="e.g. Website early-access form.">
           <Input
             id="key-name"
@@ -69,6 +71,7 @@ export function RevokeKeyForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="inline-form" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="key_id" value={keyId} />
       <label className="sr-only" htmlFor={`revoke-reason-${keyId}`}>
         Reason for revoking {keyName}

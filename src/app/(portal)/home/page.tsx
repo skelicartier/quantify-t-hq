@@ -68,7 +68,7 @@ export default async function HomePage() {
                 label="First replies owed"
                 value={home.leads.awaiting_first_reply}
                 tone={home.leads.first_reply_overdue > 0 ? "danger" : "default"}
-                hint={`${home.leads.first_reply_overdue} past the hour`}
+                hint={`${home.leads.first_reply_overdue} past the target`}
               />
             )}
             {home.tasks && (
@@ -122,7 +122,7 @@ export default async function HomePage() {
                           firstRepliedAt={lead.first_replied_at}
                           waitingMinutes={lead.waiting_minutes}
                           overdue={lead.first_reply_overdue}
-                          targetMinutes={60}
+                          targetMinutes={home.leads?.first_reply_target_minutes ?? 60}
                         />
                       </li>
                     ))}

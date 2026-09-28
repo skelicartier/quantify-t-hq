@@ -26,7 +26,7 @@ export async function saveDocumentAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/team");
   if (!hasCapability(context, "hr:write")) return NOT_HR;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -54,7 +54,7 @@ export async function grantAccessAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/team");
   if (!hasCapability(context, "hr:write")) return NOT_HR;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -86,7 +86,7 @@ export async function revokeAccessAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/team");
   if (!hasCapability(context, "hr:write")) return NOT_HR;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -109,7 +109,7 @@ export async function startChecklistAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/team");
   if (!hasCapability(context, "hr:write")) return NOT_HR;
   const staffId = fieldValue(formData, "staff_id", 64);
@@ -122,11 +122,16 @@ export async function startChecklistAction(
   return { status: "sent", message: "Started.", sentAt: Date.now() };
 }
 
-/** Tick or untick a checklist step; a plain form, the list re-renders from the service. */
-export async function checklistStepAction(formData: FormData): Promise<void> {
-  await requireSameOriginServerAction();
+/** Tick or untick a checklist step. The row says so when the service refuses. */
+export async function checklistStepAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/team");
-  if (!hasCapability(context, "hr:write")) return;
+  if (!hasCapability(context, "hr:write")) {
+    return { status: "error", message: "Your role cannot change checklists." };
+  }
   const staffId = fieldValue(formData, "staff_id", 64);
   try {
     await teamApi.markChecklistStep(
@@ -135,17 +140,18 @@ export async function checklistStepAction(formData: FormData): Promise<void> {
       Number(fieldValue(formData, "position", 4)),
       fieldValue(formData, "done", 5) === "true",
     );
-  } catch {
-    // The step re-renders as it stands on the service.
+  } catch (error) {
+    return crmRefusal(error);
   }
   refreshPerson(staffId);
+  return { status: "sent", message: null, sentAt: Date.now() };
 }
 
 export async function issueCertificateAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/certificates");
   if (!hasCapability(context, "certificates:issue")) {
     return { status: "error", message: "Certificates are issued by HQ admins." };
@@ -178,7 +184,7 @@ export async function revokeCertificateAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/certificates");
   if (!hasCapability(context, "certificates:issue")) {
     return { status: "error", message: "Certificates are revoked by HQ admins." };
@@ -211,7 +217,7 @@ export async function decideReviewItemAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/access-review");
   if (!hasCapability(context, "hr:write")) return NOT_HR;
   try {
@@ -236,7 +242,7 @@ export async function completeReviewAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/access-review");
   if (!hasCapability(context, "hr:write")) return NOT_HR;
   try {
@@ -256,7 +262,7 @@ export async function submitCheckinAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/checkin");
   try {
     await teamApi.submitCheckin(context.token, {
@@ -278,7 +284,7 @@ export async function requestTimeOffAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/time-off");
   try {
     await teamApi.requestTimeOff(context.token, {
@@ -298,19 +304,23 @@ export async function requestTimeOffAction(
   };
 }
 
-/** Approve, decline or withdraw; a plain form per row. */
-export async function decideTimeOffAction(formData: FormData): Promise<void> {
-  await requireSameOriginServerAction();
+/** Approve, decline or withdraw. Withdrawing one's own request needs no HR right. */
+export async function decideTimeOffAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/time-off");
+  const decision = fieldValue(formData, "decision", 10);
+  if (decision !== "canceled" && !hasCapability(context, "hr:write")) {
+    return { status: "error", message: "Only HR decides requests." };
+  }
   try {
-    await teamApi.decideTimeOff(
-      context.token,
-      fieldValue(formData, "request_id", 64),
-      fieldValue(formData, "decision", 10),
-    );
-  } catch {
-    // The list re-renders from the service; an undecided request stays undecided.
+    await teamApi.decideTimeOff(context.token, fieldValue(formData, "request_id", 64), decision);
+  } catch (error) {
+    return crmRefusal(error);
   }
   revalidatePath("/time-off");
   revalidatePath("/team");
+  return { status: "sent", message: null, sentAt: Date.now() };
 }

@@ -171,14 +171,17 @@ export async function directoryOrNull(token: string): Promise<Map<string, Direct
   }
 }
 
-/** The directory, or an empty map when it cannot be read — names degrade to "—". */
-export async function directoryOrEmpty(token: string): Promise<Map<string, DirectoryEntry>> {
-  try {
-    return await readDirectory(token);
-  } catch (error) {
-    if (error instanceof HqApiRequestError || error instanceof HqApiUnavailableError) {
-      return new Map();
-    }
-    throw error;
-  }
+/**
+ * A colleague's name for a page. `null` for the directory means the read failed, and
+ * the page says so ("Name unavailable") rather than showing a dash that reads as
+ * "nobody"; an id the directory does not know falls back to `unknown`.
+ */
+export function nameFor(
+  directory: ReadonlyMap<string, DirectoryEntry> | null,
+  staffId: string | null | undefined,
+  unknown = "—",
+): string {
+  if (!staffId) return unknown;
+  if (directory === null) return "Name unavailable";
+  return directory.get(staffId)?.display_name ?? unknown;
 }

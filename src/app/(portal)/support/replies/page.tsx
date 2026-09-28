@@ -6,8 +6,9 @@ import { Card, Section } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Timestamp } from "@/components/ui/timestamp";
+import { RowAction } from "@/components/ui/row-action";
 import { hasCapability, requireStaff } from "@/lib/access/core";
-import { HqApiUnavailableError } from "@/lib/api/core";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { listSavedReplies, type SavedReply } from "@/lib/api/tickets";
 
 export const metadata = { title: "Saved replies" };
@@ -18,7 +19,7 @@ const COLUMNS = [
   { key: "body", label: "Body" },
   { key: "uses", label: "Uses", align: "end" as const },
   { key: "updated", label: "Updated" },
-  { key: "actions", label: "", align: "end" as const },
+  { key: "actions", label: "Actions", align: "end" as const },
 ];
 
 export default async function SavedRepliesPage() {
@@ -28,7 +29,8 @@ export default async function SavedRepliesPage() {
   try {
     replies = (await listSavedReplies(context.token)).replies;
   } catch (error) {
-    if (!(error instanceof HqApiUnavailableError)) throw error;
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
   }
   return (
     <>
@@ -59,7 +61,10 @@ export default async function SavedRepliesPage() {
               <tr key={reply.reply_id} className={reply.archived ? "row--muted" : undefined}>
                 <td>{reply.title}</td>
                 <td>
-                  <span className="table-sub">{reply.body.slice(0, 120)}</span>
+                  {/* The one prose column: it may elide, with the whole text a hover away. */}
+                  <span className="table-sub table-sub--prose" title={reply.body}>
+                    {reply.body}
+                  </span>
                 </td>
                 <td className="data-table__num">{reply.uses}</td>
                 <td>
@@ -67,17 +72,19 @@ export default async function SavedRepliesPage() {
                 </td>
                 <td className="data-table__num">
                   {canManage && (
-                    <form action={archiveReplyAction}>
-                      <input type="hidden" name="reply_id" value={reply.reply_id} />
-                      <input
-                        type="hidden"
-                        name="archived"
-                        value={reply.archived ? "false" : "true"}
-                      />
-                      <button className="btn btn--small btn--ghost" type="submit">
-                        {reply.archived ? "Restore" : "Archive"}
-                      </button>
-                    </form>
+                    <RowAction
+                      action={archiveReplyAction}
+                      fields={{
+                        reply_id: reply.reply_id,
+                        archived: reply.archived ? "false" : "true",
+                      }}
+                      buttons={[
+                        {
+                          label: reply.archived ? "Restore" : "Archive",
+                          className: "btn btn--small btn--ghost",
+                        },
+                      ]}
+                    />
                   )}
                 </td>
               </tr>

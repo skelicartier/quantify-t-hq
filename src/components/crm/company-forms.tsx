@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import type { Company } from "@/lib/api/crm";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { FIRM_TYPES, LIFECYCLES, LIFECYCLE_LABELS, TEAM_SIZE_BANDS } from "@/lib/crm/vocabulary";
@@ -41,6 +42,7 @@ export function CompanyCreateForm({ action }: { action: Action }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <Field id="company-name" label="Firm name">
         <Input id="company-name" name="name" maxLength={200} required disabled={isPending} />
       </Field>
@@ -86,6 +88,7 @@ export function CompanyEditForm({ action, company }: { action: Action; company: 
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="company_id" value={company.company_id} />
       <Field id="edit-company-name" label="Firm name">
         <Input

@@ -23,9 +23,9 @@ const SERIAL = /^QT-\d{4}-\d{4}-[A-Z2-9]{6}$/;
  * and a serial without its check code finds nothing.
  */
 export default async function VerifyPage({ params }: VerifyPageProps) {
-  const serial = decodeURIComponent((await params).serial)
-    .trim()
-    .toUpperCase();
+  // The router has already decoded the segment; decoding again turned a literal
+  // percent sign into a thrown URIError and the public page into an error screen.
+  const serial = (await params).serial.trim().toUpperCase();
   let certificate: PublicCertificate | null = null;
   let problem: "not-found" | "busy" | "unavailable" | null = null;
   if (!SERIAL.test(serial)) {

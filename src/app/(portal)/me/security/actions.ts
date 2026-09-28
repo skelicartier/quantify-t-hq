@@ -3,27 +3,64 @@
 import { revalidatePath } from "next/cache";
 
 import * as authApi from "@/lib/api/auth";
+import { HqApiRequestError } from "@/lib/api/core";
 import { requireStaff } from "@/lib/access/core";
+import type { ActionState } from "@/lib/forms/action-state";
 import { fieldValue, refusalMessage, type AuthFormState } from "@/lib/auth/forms";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
 
-export async function revokeSessionAction(formData: FormData): Promise<void> {
-  await requireSameOriginServerAction();
+export async function revokeSessionAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
   const { token } = await requireStaff("/me/security");
   const sessionId = fieldValue(formData, "session_id", 64);
   try {
     await authApi.revokeSession(token, sessionId);
-  } catch {
-    // The list re-renders from the service either way; a failed revoke stays visible.
+  } catch (error) {
+    return { status: "error", message: refusalMessage(error) };
   }
   revalidatePath("/me/security");
+  return { status: "sent", message: "Signed out.", sentAt: Date.now() };
+}
+
+/** Ten fresh recovery codes, shown once; the service asks for a fresh code first. */
+export async function regenerateRecoveryCodesAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const { token } = await requireStaff("/me/security");
+  try {
+    const outcome = await authApi.regenerateRecoveryCodes(token);
+    revalidatePath("/me/security");
+    return {
+      status: "sent",
+      message: "New recovery codes. Copy them now; they will not be shown again.",
+      sentAt: Date.now(),
+      secret: outcome.recovery_codes.join(" "),
+    };
+  } catch (error) {
+    if (
+      error instanceof HqApiRequestError &&
+      error.status === 403 &&
+      error.details["sudo_required"] === true
+    ) {
+      return {
+        status: "error",
+        message: "Confirm it's you first: enter a code from your authenticator app above.",
+      };
+    }
+    return { status: "error", message: refusalMessage(error) };
+  }
 }
 
 export async function changePasswordAction(
   _previous: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const { token } = await requireStaff("/me/security");
   const current = fieldValue(formData, "current_password");
   const next = fieldValue(formData, "new_password");

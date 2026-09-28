@@ -27,7 +27,7 @@ export async function createContractAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/revenue/contracts");
   if (!hasCapability(context, "revenue:write")) return READ_ONLY;
   const companyId = fieldValue(formData, "company_id", 64);
@@ -57,7 +57,7 @@ export async function changePriceAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/revenue/contracts");
   if (!hasCapability(context, "revenue:write")) return READ_ONLY;
   const contractId = fieldValue(formData, "contract_id", 64);
@@ -82,7 +82,7 @@ export async function cancelContractAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/revenue/contracts");
   if (!hasCapability(context, "revenue:write")) return READ_ONLY;
   const contractId = fieldValue(formData, "contract_id", 64);
@@ -103,7 +103,7 @@ export async function adjustMrrAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/revenue/mrr");
   if (!hasCapability(context, "revenue:write")) return READ_ONLY;
   const reason = fieldValue(formData, "reason", 400).trim();

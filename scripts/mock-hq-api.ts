@@ -84,6 +84,7 @@ type Staff = {
   ends_on: string | null;
   starts_on?: string | null;
   personal_email?: string;
+  recovery_codes_remaining?: number;
 };
 
 const STAFF_KINDS = ["founder", "employee", "intern", "contractor"];
@@ -252,6 +253,13 @@ function ok(payload: Record<string, unknown>) {
     status: 200,
     body: { ok: true, correlation_id: `mock-${randomUUID().slice(0, 12)}`, ...payload },
   };
+}
+
+/** The service's rule for every id: GUID-shaped or "not an id" (a SQL conversion error otherwise). */
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function badId(value: unknown): boolean {
+  const text = String(value ?? "").trim();
+  return text !== "" && !GUID.test(text);
 }
 
 function refuse(status: number, code: string, details?: Record<string, unknown>) {
@@ -849,6 +857,7 @@ const routes: Array<{
         capabilities: CAPABILITIES[found.member.role] ?? [],
         sudo_fresh: sudoFresh,
         sudo_until: found.session.sudo_until,
+        recovery_codes_remaining: found.member.recovery_codes_remaining ?? 10,
         environment: "mock",
       });
     },
@@ -863,6 +872,21 @@ const routes: Array<{
       found.session.sudo_until = new Date(Date.now() + 10 * 60_000).toISOString();
       audit("auth.sudo", found.member.id, "staff", found.member.id);
       return ok({ sudo_until: found.session.sudo_until });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/auth/recovery/regenerate",
+    auth: true,
+    sudo: true,
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const codes = Array.from({ length: 10 }, () =>
+        `${randomUUID().slice(0, 5)}-${randomUUID().slice(0, 5)}`.toUpperCase(),
+      );
+      found.member.recovery_codes_remaining = 10;
+      audit("auth.recovery_codes_regenerated", found.member.id, "staff", found.member.id);
+      return ok({ recovery_codes: codes, remaining: 10, shown_once: ["recovery_codes"] });
     },
   },
   {
@@ -1041,6 +1065,24 @@ const routes: Array<{
       const found = caller(headers)!;
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
+      if (
+        member.id === found.member.id &&
+        ["starts_on", "ends_on", "kind"].some((name) => name in body)
+      )
+        return refuse(403, "forbidden", { reason: "own-engagement" });
+      if (
+        ["owner", "admin"].includes(member.role) &&
+        found.member.role !== "owner" &&
+        member.id !== found.member.id
+      )
+        return refuse(403, "forbidden", { required_role: "owner" });
+      const endsPast =
+        "ends_on" in body &&
+        String(body.ends_on ?? "") !== "" &&
+        String(body.ends_on) < new Date().toISOString().slice(0, 10);
+      const demotesOwner = member.role === "owner" && Boolean(body.role) && body.role !== "owner";
+      if ((endsPast || demotesOwner) && lastActiveOwner(member))
+        return refuse(409, "last_owner_protected");
       let changed = false;
       const role = String(body.role ?? "");
       if (role && role !== member.role) {
@@ -1098,6 +1140,7 @@ const routes: Array<{
         return refuse(403, "forbidden", { required_role: "owner" });
       if (!String(body.reason ?? "").trim())
         return refuse(400, "malformed_request", { reason: "a reason is required" });
+      if (lastActiveOwner(member)) return refuse(409, "last_owner_protected");
       member.is_active = false;
       audit("staff.deactivated", found.member.id, "staff", member.id, String(body.reason));
       return ok({ deactivated: true, sessions_revoked: 0 });
@@ -1238,6 +1281,7 @@ const routes: Array<{
       const accountId = String(body.account_id ?? "").trim();
       const subject = String(body.subject ?? "").trim();
       const text = String(body.body ?? "").trim();
+      if (badId(accountId)) return refuse(400, "malformed_request", { account_id: "not an id" });
       if (!accountId || !text) return refuse(400, "malformed_request");
       const opened = now();
       const row: TicketRow = {
@@ -1498,6 +1542,7 @@ const routes: Array<{
     handler: ({ query }) => {
       const limit = Math.min(Math.max(Number(query.limit ?? 50) || 50, 1), 200);
       const offset = Math.max(Number(query.offset ?? 0) || 0, 0);
+      if (badId(query.staff_id)) return refuse(400, "malformed_request", { staff_id: "not an id" });
       const filters = (["staff_id", "action", "entity_type", "entity_id"] as const).filter(
         (name) => query[name],
       );
@@ -2638,8 +2683,37 @@ function recordActivity(partial: Partial<ActivityRow> & { kind: string; body: st
 }
 
 function domainOf(email: string): string {
-  const domain = email.toLowerCase().split("@")[1] ?? "";
+  const domain = normaliseDomain(email.toLowerCase().split("@")[1] ?? "");
   return FREE_MAIL.has(domain) ? "" : domain;
+}
+
+/** The service's rule: lower-case host only — no scheme, path, www. or trailing dot. */
+function normaliseDomain(value: unknown): string {
+  let text = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  text = text.replace(/^https?:\/\//, "").split(/[/?#]/)[0] ?? "";
+  if (text.includes("@")) text = text.split("@").pop() ?? "";
+  text = text
+    .replace(/^\.+|\.+$/g, "")
+    .replace(/^www\./, "")
+    .replace(/^\.+|\.+$/g, "");
+  return text.slice(0, 255);
+}
+
+/** Whether `member` is the only Owner who can sign in: active, enrolled, inside the engagement. */
+function lastActiveOwner(member: Staff): boolean {
+  if (member.role !== "owner") return false;
+  const today = new Date().toISOString().slice(0, 10);
+  const others = staff.filter(
+    (row) =>
+      row.id !== member.id &&
+      row.role === "owner" &&
+      row.is_active &&
+      row.enrolled &&
+      (!row.ends_on || row.ends_on >= today),
+  );
+  return others.length === 0;
 }
 
 function companyDetailPayload(row: CompanyRow, money = true) {
@@ -2706,20 +2780,22 @@ routes.push(
         staff: { display_name: found.member.display_name, role: found.member.role },
       };
       if (capabilities.includes("tickets:read")) {
-        const open = tickets.filter((row) => row.status === "open");
-        const pending = tickets.filter((row) => row.status === "pending");
-        const troubled = tickets
-          .map(ticketSummary)
-          .filter((summary) => ["breached", "at-risk"].includes(summary.sla.status))
-          .slice(0, 5);
+        // As the service counts: open-like and not snoozed; totals over the whole
+        // list, the top five only for the card's rows.
+        const summaries = tickets.map(ticketSummary);
+        const openLike = summaries.filter(
+          (summary) => ["open", "pending"].includes(summary.status) && !summary.snoozed,
+        );
+        const troubled = openLike.filter((summary) =>
+          ["breached", "at-risk"].includes(summary.sla.status),
+        );
         payload.desk = {
-          open: open.length,
-          pending: pending.length,
-          unassigned: tickets.filter((row) => !row.assignee_staff_id && row.status !== "resolved")
-            .length,
+          open: openLike.filter((summary) => summary.status === "open").length,
+          pending: openLike.filter((summary) => summary.status === "pending").length,
+          unassigned: openLike.filter((summary) => !summary.assignee_staff_id).length,
           breached: troubled.filter((summary) => summary.sla.status === "breached").length,
           at_risk: troubled.filter((summary) => summary.sla.status === "at-risk").length,
-          tickets: troubled,
+          tickets: troubled.slice(0, 5),
         };
       }
       if (capabilities.includes("crm:read")) {
@@ -2897,7 +2973,14 @@ routes.push(
       ] as const) {
         if (name in body) row[name] = String(body[name] ?? "");
       }
-      if ("lifecycle" in body) row.lifecycle = String(body.lifecycle ?? row.lifecycle);
+      if ("lifecycle" in body) {
+        const lifecycle = String(body.lifecycle ?? "");
+        if (!["prospect", "early_access", "customer", "former_customer"].includes(lifecycle))
+          return refuse(400, "malformed_request", { lifecycle: "not a lifecycle" });
+        row.lifecycle = lifecycle;
+      }
+      if (badId(body.owner_staff_id))
+        return refuse(400, "malformed_request", { owner_staff_id: "not an id" });
       if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
       if ("archived" in body) row.archived = Boolean(body.archived);
       row.updated_at = now();
@@ -3117,6 +3200,7 @@ routes.push(
           company: company ? companyView(company) : null,
         },
         activities: activityViews({ lead_id: row.id }),
+        first_reply_target_minutes: 60,
       });
     },
   },
@@ -3133,6 +3217,11 @@ routes.push(
       if (stage) {
         if (!["new", "attempting", "connected", "disqualified"].includes(stage))
           return refuse(400, "malformed_request", { stage: "qualify by converting" });
+        if (row.stage === "qualified")
+          return refuse(400, "malformed_request", { stage: "already converted; work the deal" });
+        if (row.stage === "disqualified" && stage !== "disqualified") row.disqualify_reason = "";
+        if (badId(body.owner_staff_id))
+          return refuse(400, "malformed_request", { owner_staff_id: "not an id" });
         if (stage === "disqualified") {
           const reason = String(body.disqualify_reason ?? "");
           if (!DISQUALIFY_REASONS.includes(reason))
@@ -3158,12 +3247,39 @@ routes.push(
       if (row.anonymised_at) return refuse(400, "malformed_request", ANONYMISED);
       if (row.stage === "qualified" || row.stage === "disqualified")
         return refuse(400, "malformed_request", { stage: "already closed" });
+      if (row.converted_company_id || row.converted_deal_id)
+        return refuse(400, "malformed_request", { stage: "already converted" });
       const found = caller(headers);
       const companyInput = (body.company ?? {}) as Record<string, unknown>;
-      const domain = String(companyInput.domain ?? "").toLowerCase() || domainOf(row.email);
+      // Everything is decided before anything is written, as the service does it.
+      if (body.deal && typeof body.deal === "object") {
+        const dealInput = body.deal as Record<string, unknown>;
+        if (
+          !String(dealInput.next_step ?? "").trim() ||
+          !String(dealInput.next_step_due ?? "").trim()
+        )
+          return refuse(400, "malformed_request", {
+            next_step: "an open deal names its next step",
+          });
+        if (String(dealInput.next_step_due) < new Date().toISOString().slice(0, 10))
+          return refuse(400, "malformed_request", { next_step_due: "today or later" });
+        const mrr = Number(dealInput.mrr_amount ?? 0);
+        if (!Number.isFinite(mrr) || mrr < 0)
+          return refuse(400, "malformed_request", { mrr_amount: "a number" });
+        if (mrr > 10_000_000)
+          return refuse(400, "malformed_request", { mrr_amount: "at most 10,000,000" });
+      }
+      const typed = normaliseDomain(companyInput.domain);
+      if (typed && FREE_MAIL.has(typed))
+        return refuse(400, "malformed_request", {
+          domain: "a personal mail domain cannot anchor a company",
+        });
+      const domain = typed || domainOf(row.email);
       let company =
         companies.find((candidate) => candidate.id === String(companyInput.company_id ?? "")) ??
-        (domain ? companies.find((candidate) => candidate.domain === domain) : undefined);
+        (domain
+          ? companies.find((candidate) => candidate.domain === domain && !candidate.archived)
+          : undefined);
       if (!company) {
         const name =
           String(companyInput.name ?? "").trim() ||
@@ -3562,6 +3678,7 @@ routes.push(
       const filter: Partial<Record<"company_id" | "person_id" | "deal_id" | "lead_id", string>> =
         {};
       for (const name of ["company_id", "person_id", "deal_id", "lead_id"] as const) {
+        if (badId(query[name])) return refuse(400, "malformed_request", { [name]: "not an id" });
         if (query[name]) filter[name] = query[name];
       }
       if (Object.keys(filter).length === 0)
@@ -4513,7 +4630,13 @@ routes.push(
       if (synced && "attendees" in body)
         return refuse(400, "malformed_request", { attendees: "the calendar owns the guest list" });
       if ("title" in body) row.title = String(body.title ?? "").trim() || row.title;
-      if ("kind" in body && MEETING_KINDS.includes(String(body.kind))) row.kind = String(body.kind);
+      if ("kind" in body) {
+        if (!MEETING_KINDS.includes(String(body.kind)))
+          return refuse(400, "malformed_request", { kind: `one of ${MEETING_KINDS.join(", ")}` });
+        row.kind = String(body.kind);
+      }
+      if (badId(body.company_id) || badId(body.deal_id))
+        return refuse(400, "malformed_request", { company_id: "not an id" });
       if ("prep_notes" in body) row.prep_notes = String(body.prep_notes ?? "");
       if ("recording_url" in body) {
         const url = String(body.recording_url ?? "").trim();
@@ -6029,6 +6152,7 @@ routes.push(
     pattern: "hq/team/{staff_id}/documents",
     auth: true,
     capability: "hr:write",
+    sudo: true,
     handler: ({ params, body, headers }) => {
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
@@ -6077,6 +6201,7 @@ routes.push(
     pattern: "hq/team/{staff_id}/access/grant",
     auth: true,
     capability: "hr:write",
+    sudo: true,
     handler: ({ params, body, headers }) => {
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");

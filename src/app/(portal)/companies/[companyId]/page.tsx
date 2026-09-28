@@ -29,7 +29,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompany, readCrmSettings, type CompanyDetail, type CrmSettings } from "@/lib/api/crm";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { formatDate, formatMrr, formatMrrBy, sumMoneyByCurrency } from "@/lib/format";
@@ -71,7 +71,7 @@ export default async function CompanyPage({ params }: CompanyPageProps) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
 
   const { company, people, deals, accounts, open_tasks: openTasks, activities } = detail;
   const canWrite = hasCapability(context, "crm:write");
@@ -85,7 +85,7 @@ export default async function CompanyPage({ params }: CompanyPageProps) {
   const pipelineMrr = sumMoneyByCurrency(
     openDeals.map((deal) => ({ amount: deal.mrr_amount, currency: deal.currency })),
   );
-  const assignees = [...names.values()]
+  const assignees = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ staff_id: entry.staff_id, display_name: entry.display_name }));
   const returnPath = `/companies/${company.company_id}`;
@@ -255,9 +255,7 @@ export default async function CompanyPage({ params }: CompanyPageProps) {
           <Card title="Account" titleAs="h3">
             <KeyValue>
               <KeyValueRow label="Owner">
-                {company.owner_staff_id
-                  ? (names.get(company.owner_staff_id)?.display_name ?? "—")
-                  : "Unowned"}
+                {company.owner_staff_id ? nameFor(names, company.owner_staff_id) : "Unowned"}
               </KeyValueRow>
               <KeyValueRow label="Source">
                 {sourceLabel(company.source_key, sourceNames)}

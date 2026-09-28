@@ -3,8 +3,9 @@
 import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Callout } from "@/components/ui/callout";
+import { FormFeedback } from "@/components/ui/form-feedback";
 import { Field, Input, Select } from "@/components/ui/field";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_DESK_STATE, type DeskActionState } from "@/lib/support/desk-state";
 import type { Ticket } from "@/lib/api/tickets";
 
@@ -23,6 +24,7 @@ export function TicketControls({ ticket, action, teammates, self }: TicketContro
   const options = teammates.length > 0 ? teammates : [self];
   return (
     <form className="stack-form" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="ticket_id" value={ticket.id} />
       <Field id="ticket-status" label="Status">
         <Select id="ticket-status" name="status" defaultValue={ticket.status} disabled={isPending}>
@@ -102,11 +104,7 @@ export function TicketControls({ ticket, action, teammates, self }: TicketContro
       <Button type="submit" disabled={isPending}>
         {isPending ? "Applying…" : "Apply changes"}
       </Button>
-      {state.status === "error" && state.message && (
-        <Callout tone="danger" role="alert" compact>
-          {state.message}
-        </Callout>
-      )}
+      <FormFeedback state={state} sentLabel="Changes applied." />
     </form>
   );
 }

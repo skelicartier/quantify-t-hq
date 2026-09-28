@@ -5,6 +5,7 @@ import { useActionState, useEffect, useRef, useState, type ReactNode } from "rea
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -26,6 +27,7 @@ export function RetentionRulesForm({
   const off = isPending || disabled;
   return (
     <form className="stack-form" action={formAction}>
+      <AttemptField state={state} />
       <div className="stage-form__grid">
         <Field
           id="retention-disqualified"
@@ -137,6 +139,7 @@ function TypedConfirmForm({
   }
   return (
     <form className="stack-form" action={formAction} key={state.sentAt ?? "ready"}>
+      <AttemptField state={state} />
       {lead}
       <Field id={`${idPrefix}-reason`} label={reasonLabel} hint="Kept in the audit log.">
         <Input

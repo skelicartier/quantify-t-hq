@@ -4,6 +4,7 @@ import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { TASK_PRIORITIES, TASK_PRIORITY_LABELS } from "@/lib/crm/vocabulary";
 
@@ -31,6 +32,7 @@ export function TaskQuickAdd({
   const others = assignees.filter((person) => person.staff_id !== selfId);
   return (
     <form className="task-add" action={formAction} key={state.sentAt ?? "task"}>
+      <AttemptField state={state} />
       {Object.entries(links).map(([name, value]) =>
         value ? <input key={name} type="hidden" name={name} value={value} /> : null,
       )}
@@ -82,7 +84,7 @@ export function TaskQuickAdd({
           {isPending ? "Adding…" : "Add task"}
         </Button>
       </div>
-      <FormFeedback state={state} />
+      <FormFeedback state={state} sentLabel="Task added." />
     </form>
   );
 }

@@ -13,7 +13,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompanies, type CompanyRow } from "@/lib/api/crm";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LIFECYCLES, LIFECYCLE_LABELS } from "@/lib/crm/vocabulary";
 import { formatMrrBy, sumMoneyByCurrency } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -51,7 +51,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
   const visible = (companies ?? []).filter((row) => !lifecycle || row.lifecycle === lifecycle);
   const customers = (companies ?? []).filter((row) => row.lifecycle === "customer");
   // The service totals each company from the ledger; across companies we may only add
@@ -158,7 +158,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
                 <td className="data-table__num">{formatMrrBy(row.mrr)}</td>
                 <td>
                   {row.owner_staff_id ? (
-                    (names.get(row.owner_staff_id)?.display_name ?? "—")
+                    nameFor(names, row.owner_staff_id)
                   ) : (
                     <span className="table-sub">Unowned</span>
                   )}

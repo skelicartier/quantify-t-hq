@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Field, Input, describedBy } from "@/components/ui/field";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_AUTH_STATE, type AuthFormState } from "@/lib/auth/form-state";
 
 type SingleFieldFormProps = {
@@ -32,6 +33,7 @@ export function SingleFieldForm({
   return (
     <>
       <form className="auth-form" action={formAction} noValidate>
+        <AttemptField state={state} />
         {token !== undefined && <input type="hidden" name="token" value={token} />}
         <Field id={id} label={isEmail ? "Email address" : "New password"} hint={hint ?? null}>
           <Input

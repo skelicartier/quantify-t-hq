@@ -6,6 +6,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Field, Input, describedBy } from "@/components/ui/field";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_AUTH_STATE, type AuthFormState } from "@/lib/auth/form-state";
 
 const TOTP_CODE_LENGTH = 6;
@@ -24,6 +25,7 @@ export function CodeForm({ action, nextPath, mode }: CodeFormProps) {
   return (
     <>
       <form className="auth-form" action={formAction} noValidate>
+        <AttemptField state={state} />
         <input type="hidden" name="next" value={nextPath} />
         <Field
           id={id}

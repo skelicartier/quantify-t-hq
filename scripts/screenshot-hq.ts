@@ -287,7 +287,31 @@ async function captureInteractions(page: Page, folder: string) {
   console.log(`  ✓ ${folder}/lead-anonymised`);
 }
 
+/**
+ * Compile the sign-in routes before any timed step reaches them. On a freshly started
+ * dev server the enrolment page took eighteen seconds to compile on first hit — past
+ * the fifteen-second wait after the sign-in click — and the harness failed a step the
+ * product had passed. A warm route is the product; a cold compile is the tool.
+ */
+async function warmRoutes(browser: Browser) {
+  const context = await browser.newContext();
+  try {
+    for (const path of [
+      "/login",
+      "/login/verify",
+      "/login/enroll",
+      "/forgot-password",
+      "/reset-password",
+    ]) {
+      await context.request.get(`${BASE}${path}`, { timeout: 120_000 }).catch(() => undefined);
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 async function run(browser: Browser) {
+  await warmRoutes(browser);
   for (const viewport of WIDTHS) {
     const context = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },

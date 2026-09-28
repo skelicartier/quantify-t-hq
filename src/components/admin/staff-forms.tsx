@@ -5,6 +5,7 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { STAFF_KINDS, kindLabel, roleDescription, roleLabel } from "@/lib/access/role-labels";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
@@ -33,6 +34,7 @@ export function InviteStaffForm({ action, grantable, disabled }: InviteFormProps
         action={formAction}
         key={state.sentAt ?? "invite"}
       >
+        <AttemptField state={state} />
         <Field id="invite-email" label="Work email">
           <Input
             id="invite-email"
@@ -152,6 +154,7 @@ export function StaffRoleForm({
   const off = isPending || disabled;
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="staff_id" value={staffId} />
       <Field id="staff-role" label="Role">
         <Select id="staff-role" name="role" defaultValue={current} disabled={off}>
@@ -197,6 +200,7 @@ export function StaffDetailsForm({
   const off = isPending || disabled;
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="staff_id" value={staff.staff_id} />
       <Field id="staff-name" label="Name">
         <Input
@@ -279,6 +283,7 @@ export function StaffReasonForm({
   const off = isPending || disabled;
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="staff_id" value={staffId} />
       <Field id={id} label="Reason" hint={hint}>
         <Input id={id} name="reason" maxLength={400} required disabled={off} />
@@ -305,6 +310,7 @@ export function ReinviteForm({
   return (
     <>
       <form className="stack-form stack-form--tight" action={formAction}>
+        <AttemptField state={state} />
         <input type="hidden" name="staff_id" value={staffId} />
         <Button type="submit" variant="primary" disabled={isPending || disabled}>
           {isPending ? "Issuing…" : "Issue a new invite"}

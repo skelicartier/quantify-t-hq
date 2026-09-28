@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Field, Input, describedBy } from "@/components/ui/field";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_AUTH_STATE, type AuthFormState } from "@/lib/auth/form-state";
 
 export function PasswordForm({
@@ -15,6 +16,7 @@ export function PasswordForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_AUTH_STATE);
   return (
     <form className="stack-form" action={formAction} noValidate>
+      <AttemptField state={state} />
       <Field id="current_password" label="Current password">
         <Input
           id="current_password"

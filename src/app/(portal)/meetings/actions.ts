@@ -26,7 +26,7 @@ export async function createMeetingAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/meetings");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const title = fieldValue(formData, "title", 200).trim();
@@ -60,7 +60,7 @@ export async function updatePrepAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/meetings");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const meetingId = fieldValue(formData, "meeting_id", 64);
@@ -80,7 +80,7 @@ export async function recordOutcomeAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/meetings");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const meetingId = fieldValue(formData, "meeting_id", 64);
@@ -109,7 +109,7 @@ export async function linkMeetingAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const context = await requireStaff("/meetings");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const meetingId = fieldValue(formData, "meeting_id", 64);

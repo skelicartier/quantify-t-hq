@@ -3,7 +3,8 @@
 import { useActionState, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Callout } from "@/components/ui/callout";
+import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_DESK_STATE, type DeskActionState } from "@/lib/support/desk-state";
 import type { SavedReply } from "@/lib/api/tickets";
 
@@ -11,7 +12,6 @@ type ComposerProps = {
   ticketId: string;
   action: (previous: DeskActionState, formData: FormData) => Promise<DeskActionState>;
   savedReplies: readonly SavedReply[];
-  canManage: boolean;
 };
 
 /**
@@ -19,7 +19,7 @@ type ComposerProps = {
  * never leaves the desk. The toggle changes the send, the border colour and the
  * button wording together, so what is about to happen is never ambiguous.
  */
-export function Composer({ ticketId, action, savedReplies, canManage }: ComposerProps) {
+export function Composer({ ticketId, action, savedReplies }: ComposerProps) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_DESK_STATE);
   const [mode, setMode] = useState<"reply" | "note">("reply");
   const [usedReplyId, setUsedReplyId] = useState("");
@@ -41,6 +41,7 @@ export function Composer({ ticketId, action, savedReplies, canManage }: Composer
       action={formAction}
       key={state.sentAt ?? "composer"}
     >
+      <AttemptField state={state} />
       <input type="hidden" name="ticket_id" value={ticketId} />
       <input type="hidden" name="mode" value={mode} />
       <input type="hidden" name="used_reply_id" value={usedReplyId} />
@@ -108,12 +109,7 @@ export function Composer({ ticketId, action, savedReplies, canManage }: Composer
           {isPending ? "Sending…" : isNote ? "Add note" : "Send reply"}
         </Button>
       </div>
-      {state.status === "error" && state.message && (
-        <Callout tone="danger" role="alert" compact>
-          {state.message}
-        </Callout>
-      )}
-      {canManage ? null : null}
+      <FormFeedback state={state} sentLabel={isNote ? "Note added." : "Reply sent."} />
     </form>
   );
 }

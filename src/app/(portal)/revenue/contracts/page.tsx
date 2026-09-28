@@ -116,12 +116,17 @@ export default async function ContractsIndexPage({ searchParams }: ContractsPage
       ) : (
         <>
           <StatGrid columns={4} label="Recurring revenue in US dollars">
-            <Stat label="MRR" value={formatMrr(usd?.mrr ?? 0, "USD")} text />
-            <Stat label="ARR" value={formatMoney(usd?.arr ?? 0, "USD")} text hint="MRR × 12" />
-            <Stat label="Paying customers" value={usd?.customers ?? 0} />
+            <Stat label="MRR" value={usd ? formatMrr(usd.mrr, "USD") : "—"} text />
+            <Stat
+              label="ARR"
+              value={usd ? formatMoney(usd.arr, "USD") : "—"}
+              text
+              hint="MRR × 12"
+            />
+            <Stat label="Paying customers" value={usd ? usd.customers : "—"} />
             <Stat
               label="Per customer"
-              value={formatMrr(usd?.arpa ?? 0, "USD")}
+              value={usd ? formatMrr(usd.arpa, "USD") : "—"}
               text
               hint="Average"
             />
@@ -206,7 +211,11 @@ export default async function ContractsIndexPage({ searchParams }: ContractsPage
                               : "due"
                           }
                         >
-                          {contract.renews_in_days === 0 ? "Today" : `${contract.renews_in_days}d`}
+                          {contract.renews_in_days === null
+                            ? "—"
+                            : contract.renews_in_days === 0
+                              ? "Today"
+                              : `${contract.renews_in_days}d`}
                         </span>
                       </li>
                     ))}

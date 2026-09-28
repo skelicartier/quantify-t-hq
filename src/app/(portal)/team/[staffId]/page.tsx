@@ -8,6 +8,8 @@ import {
   saveDocumentAction,
   startChecklistAction,
 } from "@/app/(portal)/team/actions";
+import { confirmSudoAction } from "@/app/(portal)/admin/actions";
+import { SudoGate } from "@/components/admin/sudo-gate";
 import { PageHeader } from "@/components/shell/page-header";
 import {
   DocumentForm,
@@ -19,13 +21,14 @@ import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
 import { Popover } from "@/components/ui/popover";
+import { RowAction } from "@/components/ui/row-action";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { kindLabel, roleLabel } from "@/lib/access/role-labels";
 import { HqApiRequestError } from "@/lib/api/core";
 import { readTeamMember, type TeamMember } from "@/lib/api/team";
-import { formatDate } from "@/lib/format";
+import { formatAbsolute, formatDate } from "@/lib/format";
 import { DOCUMENT_LABELS } from "@/lib/team/vocabulary";
 import { requestNow } from "@/lib/request-time";
 
@@ -92,6 +95,19 @@ export default async function TeamMemberPage({ params }: TeamMemberPageProps) {
           Their NDA and IP assignment must both be signed or waived before any system access is
           recorded. Record them below.
         </Callout>
+      )}
+      {canWrite && (
+        <SudoGate
+          action={confirmSudoAction}
+          fresh={context.me.sudo_fresh}
+          untilLabel={
+            context.me.sudo_until
+              ? (formatAbsolute(context.me.sudo_until).split(", ")[1] ?? null)
+              : null
+          }
+          returnPath={`/team/${person.staff_id}`}
+          purpose="Recording documents and system access needs a fresh code from your authenticator app."
+        />
       )}
       <div className="record-layout">
         <div className="record-layout__main">
@@ -267,24 +283,26 @@ export default async function TeamMemberPage({ params }: TeamMemberPageProps) {
                   {run.steps.map((step) => (
                     <li key={step.position} className={step.done_at ? "task task--done" : "task"}>
                       {canWrite && !run.completed_at ? (
-                        <form action={checklistStepAction} className="task__check-form">
-                          <input type="hidden" name="staff_id" value={person.staff_id} />
-                          <input type="hidden" name="run_id" value={run.run_id} />
-                          <input type="hidden" name="position" value={step.position} />
-                          <input
-                            type="hidden"
-                            name="done"
-                            value={step.done_at ? "false" : "true"}
-                          />
-                          <button
-                            type="submit"
-                            className="task__check"
-                            aria-pressed={Boolean(step.done_at)}
-                            aria-label={
-                              step.done_at ? `Undo: ${step.title}` : `Done: ${step.title}`
-                            }
-                          />
-                        </form>
+                        <RowAction
+                          action={checklistStepAction}
+                          className="task__check-form"
+                          fields={{
+                            staff_id: person.staff_id,
+                            run_id: run.run_id,
+                            position: String(step.position),
+                            done: step.done_at ? "false" : "true",
+                          }}
+                          buttons={[
+                            {
+                              label: "",
+                              className: "task__check",
+                              ariaPressed: Boolean(step.done_at),
+                              ariaLabel: step.done_at
+                                ? `Undo: ${step.title}`
+                                : `Done: ${step.title}`,
+                            },
+                          ]}
+                        />
                       ) : (
                         <span className="task__check task__check--static" aria-hidden="true" />
                       )}

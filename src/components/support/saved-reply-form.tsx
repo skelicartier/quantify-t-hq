@@ -3,8 +3,9 @@
 import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Callout } from "@/components/ui/callout";
+import { FormFeedback } from "@/components/ui/form-feedback";
 import { Field, Input, Textarea } from "@/components/ui/field";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_DESK_STATE, type DeskActionState } from "@/lib/support/desk-state";
 
 export function SavedReplyForm({
@@ -15,6 +16,7 @@ export function SavedReplyForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_DESK_STATE);
   return (
     <form className="stack-form" action={formAction} key={state.sentAt ?? "form"}>
+      <AttemptField state={state} />
       <Field id="reply-title" label="Title" hint="What the desk picks from the list.">
         <Input id="reply-title" name="title" maxLength={120} required disabled={isPending} />
       </Field>
@@ -31,11 +33,7 @@ export function SavedReplyForm({
       <Button variant="primary" type="submit" disabled={isPending}>
         {isPending ? "Saving…" : "Save reply"}
       </Button>
-      {state.status === "error" && state.message && (
-        <Callout tone="danger" role="alert" compact>
-          {state.message}
-        </Callout>
-      )}
+      <FormFeedback state={state} sentLabel="Reply saved." />
     </form>
   );
 }

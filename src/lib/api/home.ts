@@ -31,6 +31,7 @@ const homeSchema = z.object({
     .object({
       awaiting_first_reply: z.number(),
       first_reply_overdue: z.number(),
+      first_reply_target_minutes: z.number().optional(),
       leads: z.array(leadSchema),
     })
     .optional(),

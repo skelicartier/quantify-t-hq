@@ -21,7 +21,7 @@ import { requireSameOriginServerAction } from "@/lib/security/action-origin";
  * kind names.
  */
 export async function login(_previous: AuthFormState, formData: FormData): Promise<AuthFormState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const email = fieldValue(formData, "email", 254).trim().toLowerCase();
   const password = fieldValue(formData, "password");
   const next = sanitizeNextPath(fieldValue(formData, "next", 512));
@@ -47,7 +47,7 @@ export async function verifyCode(
   _previous: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const pending = await readPendingCookie();
   if (!pending || pending.kind !== "totp") {
     redirect("/login?notice=step-expired");
@@ -70,7 +70,7 @@ export async function verifyRecoveryCode(
   _previous: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const pending = await readPendingCookie();
   if (!pending || pending.kind !== "totp") {
     redirect("/login?notice=step-expired");
@@ -98,7 +98,7 @@ export async function beginEnrollment(
 ): Promise<EnrollmentState> {
   void _previous;
   void _formData;
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(_formData);
   const pending = await readPendingCookie();
   if (!pending || pending.kind !== "enroll") {
     redirect("/login?notice=step-expired");
@@ -124,7 +124,7 @@ export async function confirmEnrollment(
   previous: EnrollmentState,
   formData: FormData,
 ): Promise<EnrollmentState> {
-  await requireSameOriginServerAction();
+  await requireSameOriginServerAction(formData);
   const pending = await readPendingCookie();
   if (!pending || pending.kind !== "enroll") {
     redirect("/login?notice=step-expired");

@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { CANCEL_REASON_LABELS } from "@/lib/crm/vocabulary";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
@@ -34,6 +35,7 @@ export function ContractCreateForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       {prefill.deal_id && <input type="hidden" name="deal_id" value={prefill.deal_id} />}
       <Field id="contract-company" label="Company">
         <Select
@@ -161,6 +163,7 @@ export function ContractPriceForm({
       action={formAction}
       key={state.sentAt ?? "price"}
     >
+      <AttemptField state={state} />
       <input type="hidden" name="contract_id" value={contractId} />
       <div className="form-row">
         <Field id="price-mrr" label={`New monthly value (${currency})`}>
@@ -229,6 +232,7 @@ export function ContractCancelForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="contract_id" value={contractId} />
       <Field
         id="cancel-ends"
@@ -286,6 +290,7 @@ export function MrrAdjustForm({
       action={formAction}
       key={state.sentAt ?? "adjust"}
     >
+      <AttemptField state={state} />
       <input type="hidden" name="currency" value={currency} />
       <Field id="adjust-company" label="Company">
         <Select id="adjust-company" name="company_id" required disabled={off}>

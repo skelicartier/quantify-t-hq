@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import type { PipelineStage } from "@/lib/api/crm";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
@@ -16,6 +17,7 @@ export function PipelineStageForm({ action, stage }: { action: Action; stage?: P
   const id = stage?.key ?? "new";
   return (
     <form className="stage-form" action={formAction} key={stage ? "edit" : (state.sentAt ?? "new")}>
+      <AttemptField state={state} />
       {stage ? (
         <input type="hidden" name="key" value={stage.key} />
       ) : (

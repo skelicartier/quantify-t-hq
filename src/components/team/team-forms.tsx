@@ -5,6 +5,7 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { DOCUMENT_LABELS } from "@/lib/team/vocabulary";
 
@@ -37,6 +38,7 @@ export function DocumentForm({
       action={formAction}
       key={existing ? id : (state.sentAt ?? "new")}
     >
+      <AttemptField state={state} />
       <input type="hidden" name="staff_id" value={staffId} />
       {existing ? (
         <input type="hidden" name="document_id" value={existing.document_id} />
@@ -118,6 +120,7 @@ export function GrantAccessForm({
       action={formAction}
       key={state.sentAt ?? "grant"}
     >
+      <AttemptField state={state} />
       <input type="hidden" name="staff_id" value={staffId} />
       <div className="form-row">
         <Field id="grant-system" label="System">
@@ -181,6 +184,7 @@ export function RevokeAccessForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="inline-form" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="staff_id" value={staffId} />
       <input type="hidden" name="access_id" value={accessId} />
       <label className="sr-only" htmlFor={`revoke-${accessId}`}>
@@ -195,7 +199,7 @@ export function RevokeAccessForm({
         disabled={isPending}
       />
       <Button type="submit" size="small" variant="danger" disabled={isPending}>
-        {isPending ? "…" : "Revoke"}
+        {isPending ? "Revoking…" : "Revoke"}
       </Button>
       <FormFeedback state={state} />
     </form>
@@ -215,6 +219,7 @@ export function StartChecklistForm({
   if (kinds.length === 0) return null;
   return (
     <form className="inline-form" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="staff_id" value={staffId} />
       {kinds.map((kind) => (
         <Button
@@ -255,6 +260,7 @@ export function CheckinForm({
   const [mood, setMood] = useState(initial?.mood ?? 3);
   return (
     <form className="stack-form checkin-form" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="mood" value={mood} />
       <Field id="checkin-week" label="Week">
         <Select id="checkin-week" name="week" defaultValue={weeks[0]?.value} disabled={isPending}>
@@ -331,6 +337,7 @@ export function TimeOffRequestForm({ action, today }: { action: Action; today: s
       action={formAction}
       key={state.sentAt ?? "leave"}
     >
+      <AttemptField state={state} />
       <Field id="leave-kind" label="Kind">
         <Select id="leave-kind" name="kind" defaultValue="vacation" disabled={isPending}>
           <option value="vacation">Vacation</option>
@@ -394,6 +401,7 @@ export function IssueCertificateForm({
         action={formAction}
         key={`${state.sentAt ?? "cert"}-${personId}`}
       >
+        <AttemptField state={state} />
         <Field
           id="cert-person"
           label="For"
@@ -494,6 +502,7 @@ export function RevokeCertificateForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="inline-form" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="serial" value={serial} />
       <label className="sr-only" htmlFor={`cert-revoke-${serial}`}>
         Reason for revoking {serial}
@@ -508,7 +517,7 @@ export function RevokeCertificateForm({
         disabled={isPending || disabled}
       />
       <Button type="submit" size="small" variant="danger" disabled={isPending || disabled}>
-        {isPending ? "…" : "Revoke"}
+        {isPending ? "Revoking…" : "Revoke"}
       </Button>
       <FormFeedback state={state} />
     </form>
@@ -529,6 +538,7 @@ export function ReviewItemForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="inline-form review-item-form" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="review_id" value={reviewId} />
       <input type="hidden" name="access_id" value={accessId} />
       <label className="sr-only" htmlFor={`evidence-${accessId}`}>
@@ -572,6 +582,7 @@ export function StartReviewForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="inline-form" action={formAction}>
+      <AttemptField state={state} />
       <Button type="submit" variant="primary" size="small" disabled={isPending || disabled}>
         {isPending ? "Starting…" : "Start this quarter's review"}
       </Button>
@@ -592,6 +603,7 @@ export function CompleteReviewForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="review_id" value={reviewId} />
       <Field id="review-notes" label="Notes for the record">
         <Textarea

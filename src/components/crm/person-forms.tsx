@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { AttemptField } from "@/components/ui/attempt-field";
 import type { Person } from "@/lib/api/crm";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
@@ -34,6 +35,7 @@ export function PersonCreateForm({
   const suffix = companyId ?? "new";
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <Field id={`person-name-${suffix}`} label="Full name">
         <Input id={`person-name-${suffix}`} name="full_name" maxLength={160} disabled={isPending} />
       </Field>
@@ -89,6 +91,7 @@ export function PersonEditForm({
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
       <input type="hidden" name="person_id" value={person.person_id} />
       <Field id="edit-person-name" label="Full name">
         <Input

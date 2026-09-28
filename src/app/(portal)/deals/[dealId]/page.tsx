@@ -34,7 +34,7 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readDeal, type DealDetail } from "@/lib/api/deals";
 import { readContracts } from "@/lib/api/revenue";
-import { directoryOrEmpty } from "@/lib/api/staff";
+import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS, sourceLabel, stageLabel } from "@/lib/crm/vocabulary";
 import { formatDate, formatMoney, formatMrr } from "@/lib/format";
@@ -58,7 +58,7 @@ export default async function DealPage({ params }: DealPageProps) {
     if (error instanceof HqApiRequestError && error.status === 404) notFound();
     throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const names = await directoryOrNull(context.token);
   // A won deal points at its contract; offer to record one until it exists.
   let contractId: string | null = null;
   let contractChecked = false;
@@ -98,7 +98,7 @@ export default async function DealPage({ params }: DealPageProps) {
       : deal.next_step_due < today
         ? "overdue"
         : "live";
-  const assignees = [...names.values()]
+  const assignees = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ staff_id: entry.staff_id, display_name: entry.display_name }));
 
@@ -248,9 +248,7 @@ export default async function DealPage({ params }: DealPageProps) {
                 )}
               </KeyValueRow>
               <KeyValueRow label="Owner">
-                {deal.owner_staff_id
-                  ? (names.get(deal.owner_staff_id)?.display_name ?? "—")
-                  : "Unowned"}
+                {deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned"}
               </KeyValueRow>
               <KeyValueRow label="Expected close">
                 {deal.expected_close_date ? formatDate(deal.expected_close_date) : "—"}
@@ -275,7 +273,7 @@ export default async function DealPage({ params }: DealPageProps) {
                   </span>
                   <span className="side-quiet">
                     <Timestamp value={event.at} now={now} mode="relative" />
-                    {event.staff_id && ` · ${names.get(event.staff_id)?.display_name ?? "—"}`}
+                    {event.staff_id && ` · ${nameFor(names, event.staff_id)}`}
                   </span>
                 </li>
               ))}

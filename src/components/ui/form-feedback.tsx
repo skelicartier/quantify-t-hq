@@ -2,7 +2,13 @@ import { Callout } from "@/components/ui/callout";
 import type { ActionState } from "@/lib/forms/action-state";
 
 /** The one line under a form that says what happened. Errors are announced. */
-export function FormFeedback({ state, sentLabel }: { state: ActionState; sentLabel?: string }) {
+export function FormFeedback({
+  state,
+  sentLabel,
+}: {
+  state: ActionState;
+  sentLabel?: string | undefined;
+}) {
   if (state.status === "error" && state.message) {
     return (
       <Callout tone="danger" role="alert" compact>
