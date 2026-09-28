@@ -322,8 +322,36 @@ function seesMoney(headers: Record<string, string | string[] | undefined>): bool
   const found = caller(headers);
   return Boolean(found && (CAPABILITIES[found.member.role] ?? []).includes("revenue:read"));
 }
-function moneyOrNull(value: number, money: boolean): number | null {
-  return money ? value : null;
+/** Mirrors deal_routes.money_total: summed per currency, never across, null when unseen. */
+function moneyByCurrency<T extends { currency: string }>(
+  views: T[],
+  pick: (view: T) => number,
+  money = true,
+): Record<string, number> | null {
+  if (!money) return null;
+  const totals: Record<string, number> = {};
+  for (const view of views) totals[view.currency] = (totals[view.currency] ?? 0) + pick(view);
+  return Object.fromEntries(
+    Object.entries(totals)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([currency, amount]) => [currency, Math.round(amount * 100) / 100]),
+  );
+}
+/** Mirrors revenue_routes.ledger_by_company: what a company pays today, per currency. */
+function ledgerMrr(companyId: string, money: boolean): Record<string, number> | null {
+  if (!money) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const totals: Record<string, number> = {};
+  for (const row of movements) {
+    if (row.company_id !== companyId || row.effective_on > today) continue;
+    totals[row.currency] = (totals[row.currency] ?? 0) + row.cents;
+  }
+  return Object.fromEntries(
+    Object.entries(totals)
+      .filter(([, cents]) => cents !== 0)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([currency, cents]) => [currency, cents / 100]),
+  );
 }
 function withoutMoney<T extends { mrr_amount: number | null; weighted_mrr: number | null }>(
   view: T,
@@ -2614,12 +2642,12 @@ function domainOf(email: string): string {
   return FREE_MAIL.has(domain) ? "" : domain;
 }
 
-function companyDetailPayload(row: CompanyRow) {
+function companyDetailPayload(row: CompanyRow, money = true) {
   const linkedPeople = people.filter((person) => person.company_id === row.id).map(personView);
   const companyDeals = deals
     .filter((deal) => deal.company_id === row.id)
     .map((deal) => ({
-      ...dealSummary(deal),
+      ...withoutMoney(dealSummary(deal), money),
       company_name: row.name,
     }));
   const accounts = people
@@ -2642,6 +2670,7 @@ function companyDetailPayload(row: CompanyRow) {
     company: companyView(row),
     people: linkedPeople,
     deals: companyDeals,
+    mrr: ledgerMrr(row.id, money),
     accounts,
     open_tasks: openTasks,
     activities: activityViews({ company_id: row.id }),
@@ -2747,14 +2776,8 @@ routes.push(
         const money = seesMoney(headers);
         payload.deals = {
           open_count: open.length,
-          open_mrr: moneyOrNull(
-            Math.round(open.reduce((sum, view) => sum + view.mrr_amount, 0) * 100) / 100,
-            money,
-          ),
-          weighted_mrr: moneyOrNull(
-            Math.round(open.reduce((sum, view) => sum + view.weighted_mrr, 0) * 100) / 100,
-            money,
-          ),
+          open_mrr: moneyByCurrency(open, (view) => view.mrr_amount, money),
+          weighted_mrr: moneyByCurrency(open, (view) => view.weighted_mrr, money),
           neglected: open.filter((view) => view.flags.includes("neglected")).length,
           rotting: open.filter((view) => view.flags.includes("rotting")).length,
           no_next_step: open.filter(
@@ -2782,12 +2805,7 @@ routes.push(
           people_count: people.filter((person) => person.company_id === row.id).length,
           open_deals: deals.filter((deal) => deal.company_id === row.id && deal.status === "open")
             .length,
-          won_mrr: moneyOrNull(
-            deals
-              .filter((deal) => deal.company_id === row.id && deal.status === "won")
-              .reduce((sum, deal) => sum + deal.mrr_amount, 0),
-            seesMoney(headers),
-          ),
+          mrr: ledgerMrr(row.id, seesMoney(headers)),
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
       return ok({ companies: views });
@@ -2841,10 +2859,10 @@ routes.push(
     pattern: "hq/companies/{company_id}",
     auth: true,
     capability: "crm:read",
-    handler: ({ params }) => {
+    handler: ({ params, headers }) => {
       const row = companies.find((company) => company.id === params.company_id);
       if (!row) return refuse(404, "not_found");
-      return ok(companyDetailPayload(row));
+      return ok(companyDetailPayload(row, seesMoney(headers)));
     },
   },
   {
@@ -3285,14 +3303,8 @@ routes.push(
             outcome: stage.outcome,
             exit_criteria: stage.exit_criteria,
             deals: stageDeals.map((view) => withoutMoney(view, money)),
-            mrr_total: moneyOrNull(
-              Math.round(stageDeals.reduce((sum, view) => sum + view.mrr_amount, 0) * 100) / 100,
-              money,
-            ),
-            weighted_total: moneyOrNull(
-              Math.round(stageDeals.reduce((sum, view) => sum + view.weighted_mrr, 0) * 100) / 100,
-              money,
-            ),
+            mrr_total: moneyByCurrency(stageDeals, (view) => view.mrr_amount, money),
+            weighted_total: moneyByCurrency(stageDeals, (view) => view.weighted_mrr, money),
           };
         });
       const open = views.filter((view) => view.status === "open");
@@ -3300,14 +3312,8 @@ routes.push(
         columns,
         totals: {
           open_count: open.length,
-          open_mrr: moneyOrNull(
-            Math.round(open.reduce((sum, view) => sum + view.mrr_amount, 0) * 100) / 100,
-            money,
-          ),
-          weighted_mrr: moneyOrNull(
-            Math.round(open.reduce((sum, view) => sum + view.weighted_mrr, 0) * 100) / 100,
-            money,
-          ),
+          open_mrr: moneyByCurrency(open, (view) => view.mrr_amount, money),
+          weighted_mrr: moneyByCurrency(open, (view) => view.weighted_mrr, money),
         },
         attention: {
           neglected: open.filter((view) => view.flags.includes("neglected")).length,
@@ -5286,13 +5292,14 @@ routes.push(
         .sort((a, b) => a.position - b.position)
         .map((stage) => {
           const inStage = openDeals.filter((row) => row.stage_key === stage.key);
-          const mrr = inStage.reduce((sum, row) => sum + row.mrr_amount, 0);
           return {
             key: stage.key,
             label: stage.label,
             count: inStage.length,
-            mrr,
-            weighted: Math.round(mrr * stage.win_probability) / 100,
+            mrr: moneyByCurrency(inStage, (row) => row.mrr_amount) ?? {},
+            weighted:
+              moneyByCurrency(inStage, (row) => (row.mrr_amount * stage.win_probability) / 100) ??
+              {},
           };
         });
       const won = deals.filter((row) => row.status === "won" && within(row.closed_at));
@@ -5375,22 +5382,27 @@ routes.push(
           created: deals.filter((row) => within(row.created_at)).length,
           stage_moves: dealStageEvents.filter((event) => event.from_stage_key && within(event.at))
             .length,
-          won: { count: won.length, mrr: won.reduce((sum, row) => sum + row.mrr_amount, 0) },
+          won: { count: won.length, mrr: moneyByCurrency(won, (row) => row.mrr_amount) ?? {} },
           lost: { count: lost.length, reasons: reasons(lost) },
         },
         pipeline: {
           stages: pipelineStages,
           open_count: openDeals.length,
-          open_mrr: openDeals.reduce((sum, row) => sum + row.mrr_amount, 0),
+          open_mrr: moneyByCurrency(openDeals, (row) => row.mrr_amount) ?? {},
           weighted:
-            Math.round(pipelineStages.reduce((sum, stage) => sum + stage.weighted, 0) * 100) / 100,
+            moneyByCurrency(
+              openDeals,
+              (row) => (row.mrr_amount * (stageOf(row.stage_key)?.win_probability ?? 0)) / 100,
+            ) ?? {},
         },
         forecast: {
           horizon_days: 30,
-          commit_mrr: inHorizon
-            .filter((row) => (stageOf(row.stage_key)?.win_probability ?? 0) >= 60)
-            .reduce((sum, row) => sum + row.mrr_amount, 0),
-          best_case_mrr: inHorizon.reduce((sum, row) => sum + row.mrr_amount, 0),
+          commit_mrr:
+            moneyByCurrency(
+              inHorizon.filter((row) => (stageOf(row.stage_key)?.win_probability ?? 0) >= 60),
+              (row) => row.mrr_amount,
+            ) ?? {},
+          best_case_mrr: moneyByCurrency(inHorizon, (row) => row.mrr_amount) ?? {},
           slipped,
           slipped_count: slipped.length,
         },

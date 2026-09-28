@@ -76,7 +76,7 @@ export function TicketControls({ ticket, action, teammates, self }: TicketContro
       <Field
         id="ticket-snooze"
         label="Snooze until (UTC)"
-        hint="Pauses the reply timer. Clear the field to wake it."
+        hint="Pauses the reply timer; when the snooze ends it starts again from then. A customer reply ends it early. Clear the field to wake it."
       >
         <Input
           id="ticket-snooze"

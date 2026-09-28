@@ -3,7 +3,7 @@ import Link from "next/link";
 import { DealFlags, DueChip } from "@/components/crm/pills";
 import type { BoardColumn } from "@/lib/api/deals";
 import type { DirectoryEntry } from "@/lib/api/staff";
-import { formatMoney, formatMrr } from "@/lib/format";
+import { formatMoneyBy, formatMrr, formatMrrBy } from "@/lib/format";
 
 type DealBoardProps = {
   columns: readonly BoardColumn[];
@@ -37,12 +37,12 @@ export function DealBoard({ columns, today, names }: DealBoardProps) {
               </span>
             </div>
             <p className="board__sums">
-              <span className="board__mrr">{formatMrr(column.mrr_total)}</span>
+              <span className="board__mrr">{formatMrrBy(column.mrr_total)}</span>
               {!column.outcome && (
                 <span className="board__weighted">
                   {column.win_probability}%
                   {column.weighted_total !== null &&
-                    ` · ${formatMoney(column.weighted_total)} weighted`}
+                    ` · ${formatMoneyBy(column.weighted_total)} weighted`}
                 </span>
               )}
             </p>

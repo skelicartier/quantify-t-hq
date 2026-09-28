@@ -15,7 +15,7 @@ import { readDealsBoard, type DealsBoard } from "@/lib/api/deals";
 import { directoryOrEmpty } from "@/lib/api/staff";
 import { isoDay } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
-import { formatMoney, formatMrr } from "@/lib/format";
+import { formatMoney, formatMrr, formatMrrBy } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -98,13 +98,13 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
           <StatGrid columns={4} label="Pipeline">
             <Stat
               label="Open pipeline"
-              value={formatMrr(board.totals.open_mrr)}
+              value={formatMrrBy(board.totals.open_mrr)}
               text
               hint={`${board.totals.open_count} open ${board.totals.open_count === 1 ? "deal" : "deals"}`}
             />
             <Stat
               label="Weighted"
-              value={formatMrr(board.totals.weighted_mrr)}
+              value={formatMrrBy(board.totals.weighted_mrr)}
               text
               hint="Value × stage probability"
             />

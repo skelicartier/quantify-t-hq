@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
+import { moneyByCurrencySchema } from "@/lib/api/crm";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
 
@@ -36,7 +37,7 @@ const weeklySchema = okEnvelope.extend({
   deals: z.object({
     created: z.number(),
     stage_moves: z.number(),
-    won: z.object({ count: z.number(), mrr: z.number() }),
+    won: z.object({ count: z.number(), mrr: moneyByCurrencySchema }),
     lost: z.object({ count: z.number(), reasons: z.array(countSchema) }),
   }),
   pipeline: z.object({
@@ -45,18 +46,18 @@ const weeklySchema = okEnvelope.extend({
         key: z.string(),
         label: z.string(),
         count: z.number(),
-        mrr: z.number(),
-        weighted: z.number(),
+        mrr: moneyByCurrencySchema,
+        weighted: moneyByCurrencySchema,
       }),
     ),
     open_count: z.number(),
-    open_mrr: z.number(),
-    weighted: z.number(),
+    open_mrr: moneyByCurrencySchema,
+    weighted: moneyByCurrencySchema,
   }),
   forecast: z.object({
     horizon_days: z.number(),
-    commit_mrr: z.number(),
-    best_case_mrr: z.number(),
+    commit_mrr: moneyByCurrencySchema,
+    best_case_mrr: moneyByCurrencySchema,
     slipped: z.array(
       z.object({
         deal_id: z.string(),

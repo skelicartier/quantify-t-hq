@@ -17,7 +17,14 @@ import {
   sourceLabel,
   sourceNamesFrom,
 } from "@/lib/crm/vocabulary";
-import { formatAbsolute, formatDate, formatMoney, formatMrr, formatWait } from "@/lib/format";
+import {
+  formatAbsolute,
+  formatDate,
+  formatMoney,
+  formatMoneyBy,
+  formatMrrBy,
+  formatWait,
+} from "@/lib/format";
 import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Weekly report" };
@@ -151,7 +158,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
             />
             <Stat
               label="Won"
-              value={formatMrr(report.deals.won.mrr)}
+              value={formatMrrBy(report.deals.won.mrr)}
               text
               hint={`${report.deals.won.count} ${report.deals.won.count === 1 ? "deal" : "deals"} · ${report.deals.lost.count} lost`}
             />
@@ -259,7 +266,8 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
           <section className="record-section report-section" aria-labelledby="report-pipeline">
             <h2 className="record-section__title" id="report-pipeline">
               Pipeline now · {report.pipeline.open_count} open ·{" "}
-              {formatMrr(report.pipeline.open_mrr)} · {formatMrr(report.pipeline.weighted)} weighted
+              {formatMrrBy(report.pipeline.open_mrr)} · {formatMrrBy(report.pipeline.weighted)}{" "}
+              weighted
             </h2>
             <DataTable
               caption="Pipeline by stage"
@@ -275,8 +283,8 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                 <tr key={stage.key}>
                   <td>{stage.label}</td>
                   <td className="data-table__num">{stage.count}</td>
-                  <td className="data-table__num">{formatMrr(stage.mrr)}</td>
-                  <td className="data-table__num">{formatMoney(stage.weighted)}</td>
+                  <td className="data-table__num">{formatMrrBy(stage.mrr)}</td>
+                  <td className="data-table__num">{formatMoneyBy(stage.weighted)}</td>
                 </tr>
               ))}
             </DataTable>
@@ -292,11 +300,11 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                 <ul className="report-facts">
                   <li>
                     <span>Commit</span>
-                    <strong>{formatMrr(report.forecast.commit_mrr)}</strong>
+                    <strong>{formatMrrBy(report.forecast.commit_mrr)}</strong>
                   </li>
                   <li>
                     <span>Best case</span>
-                    <strong>{formatMrr(report.forecast.best_case_mrr)}</strong>
+                    <strong>{formatMrrBy(report.forecast.best_case_mrr)}</strong>
                   </li>
                 </ul>
                 {report.forecast.slipped_count > 0 && (

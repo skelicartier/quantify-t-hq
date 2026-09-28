@@ -13,7 +13,7 @@ import { requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readHome, type HomeAggregate } from "@/lib/api/home";
 import { isoDay } from "@/lib/crm/dates";
-import { formatMrr } from "@/lib/format";
+import { formatMrr, formatMrrBy } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 
 export const metadata = { title: "Today" };
@@ -54,12 +54,12 @@ export default async function HomePage() {
             {home.deals && (
               <Stat
                 label="Open pipeline"
-                value={formatMrr(home.deals.open_mrr)}
+                value={formatMrrBy(home.deals.open_mrr)}
                 text
                 hint={
                   home.deals.weighted_mrr === null
                     ? `${home.deals.open_count} deals`
-                    : `${formatMrr(home.deals.weighted_mrr)} weighted · ${home.deals.open_count} deals`
+                    : `${formatMrrBy(home.deals.weighted_mrr)} weighted · ${home.deals.open_count} deals`
                 }
               />
             )}
@@ -242,7 +242,7 @@ export default async function HomePage() {
 
             {home.meetings && (
               <Card
-                title="Meetings today"
+                title="Meetings today (UTC)"
                 important={home.meetings.needs_outcome_count > 0}
                 actions={
                   <Link className="btn btn--small" href="/meetings">

@@ -6,6 +6,13 @@ import { fetchHqJson, postHqJson } from "@/lib/api/core";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
 
+/**
+ * Money the service totals for us, per currency and never added across: a deal in euros
+ * and one in dollars are two figures, and `{}` is "nothing to total".
+ */
+export const moneyByCurrencySchema = z.record(z.string(), z.number());
+export type MoneyByCurrency = z.infer<typeof moneyByCurrencySchema>;
+
 // ---------------------------------------------------------------------------------------
 // companies
 // ---------------------------------------------------------------------------------------
@@ -31,8 +38,8 @@ export type Company = z.infer<typeof companySchema>;
 const companyRowSchema = companySchema.extend({
   people_count: z.number(),
   open_deals: z.number(),
-  /** Null for a role that cannot read revenue. */
-  won_mrr: z.number().nullable(),
+  /** What the ledger says the company pays today, per currency; null for a role that cannot read revenue. */
+  mrr: moneyByCurrencySchema.nullable(),
 });
 export type CompanyRow = z.infer<typeof companyRowSchema>;
 
@@ -127,6 +134,7 @@ const companyDetailSchema = okEnvelope.extend({
   company: companySchema,
   people: z.array(personSchema),
   deals: z.array(dealSummarySchema),
+  mrr: moneyByCurrencySchema.nullable(),
   accounts: z.array(
     z.object({
       account_user_id: z.string(),

@@ -250,16 +250,41 @@ export function formatMoney(value: number | null | undefined, currency = "USD"):
 
 /** Monthly recurring revenue: "$1,235/mo". */
 /**
- * A sum of figures a role may not see: null the moment any term is null, never a
- * partial total that reads as the whole.
+ * Money per currency, as the service totals it. Drawn one figure per currency, joined —
+ * never added, since $1,000 + €1,000 is a number true at no exchange rate. Null is a
+ * figure the role may not see; an empty map is nothing to total. Both draw a dash.
  */
-export function sumMoney(values: ReadonlyArray<number | null>): number | null {
-  let total = 0;
-  for (const value of values) {
-    if (value === null) return null;
-    total += value;
+export function formatMoneyBy(
+  values: Readonly<Record<string, number>> | null | undefined,
+  mrr = false,
+): string {
+  if (!values) return "—";
+  const parts = Object.entries(values)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, amount]) =>
+      mrr ? formatMrr(amount, currency) : formatMoney(amount, currency),
+    );
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+export function formatMrrBy(values: Readonly<Record<string, number>> | null | undefined): string {
+  return formatMoneyBy(values, true);
+}
+
+/**
+ * Deal money grouped by its currency: what a page may total client-side, and the only
+ * way it may. Null the moment any amount is null — a role that may not see one figure
+ * may not see their sum either.
+ */
+export function sumMoneyByCurrency(
+  items: ReadonlyArray<{ amount: number | null; currency: string }>,
+): Record<string, number> | null {
+  const totals: Record<string, number> = {};
+  for (const item of items) {
+    if (item.amount === null) return null;
+    totals[item.currency] = (totals[item.currency] ?? 0) + item.amount;
   }
-  return total;
+  return totals;
 }
 
 export function formatMrr(value: number | null | undefined, currency = "USD"): string {

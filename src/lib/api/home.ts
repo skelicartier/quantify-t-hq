@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { fetchHqJson } from "@/lib/api/core";
+import { moneyByCurrencySchema } from "@/lib/api/crm";
 import { dealSummarySchema, leadSchema, taskSchema } from "@/lib/api/crm";
 import { meetingSchema } from "@/lib/api/meetings";
 import { ticketSummarySchema } from "@/lib/api/tickets";
@@ -52,8 +53,8 @@ const homeSchema = z.object({
   deals: z
     .object({
       open_count: z.number(),
-      open_mrr: z.number().nullable(),
-      weighted_mrr: z.number().nullable(),
+      open_mrr: moneyByCurrencySchema.nullable(),
+      weighted_mrr: moneyByCurrencySchema.nullable(),
       neglected: z.number(),
       rotting: z.number(),
       no_next_step: z.number(),

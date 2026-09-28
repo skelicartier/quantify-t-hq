@@ -7,6 +7,7 @@ import {
   activitySchema,
   companySchema,
   dealSummarySchema,
+  moneyByCurrencySchema,
   personSchema,
   taskSchema,
 } from "@/lib/api/crm";
@@ -21,8 +22,8 @@ const boardColumnSchema = z.object({
   outcome: z.string(),
   exit_criteria: z.string(),
   deals: z.array(dealSummarySchema.extend({ company_name: z.string() })),
-  mrr_total: z.number().nullable(),
-  weighted_total: z.number().nullable(),
+  mrr_total: moneyByCurrencySchema.nullable(),
+  weighted_total: moneyByCurrencySchema.nullable(),
 });
 export type BoardColumn = z.infer<typeof boardColumnSchema>;
 
@@ -30,8 +31,8 @@ const boardSchema = okEnvelope.extend({
   columns: z.array(boardColumnSchema),
   totals: z.object({
     open_count: z.number(),
-    open_mrr: z.number().nullable(),
-    weighted_mrr: z.number().nullable(),
+    open_mrr: moneyByCurrencySchema.nullable(),
+    weighted_mrr: moneyByCurrencySchema.nullable(),
   }),
   attention: z.object({
     neglected: z.number(),

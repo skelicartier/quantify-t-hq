@@ -364,6 +364,11 @@ async function run(browser: Browser) {
       { name: "deals", path: "/deals", ready: ".board" },
       { name: "deal", path: "/deals/d0000000-0000-4000-8000-000000000001", ready: ".stage-rail" },
       { name: "companies", path: "/companies", ready: ".data-table" },
+      {
+        name: "company",
+        path: "/companies/c0000000-0000-4000-8000-000000000002",
+        ready: ".record-layout",
+      },
     ]) {
       await capture(intern, `${viewport.name}/intern`, shot);
       const text = await intern.locator("main").innerText();

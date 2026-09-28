@@ -86,7 +86,7 @@ export default async function MeetingsIndexPage({ searchParams }: MeetingsIndexP
       ) : (
         <>
           <StatGrid columns={2} label="Meetings">
-            <Stat label="Today" value={page.counts.today} />
+            <Stat label="Today (UTC)" value={page.counts.today} />
             <Stat
               label="Outcomes owed"
               value={page.counts.needs_outcome}
