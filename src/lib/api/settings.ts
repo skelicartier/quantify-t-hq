@@ -52,7 +52,12 @@ export type WebhookEvent = z.infer<typeof webhookEventSchema>;
 export function readWebhooks(token: string) {
   return fetchHqJson(
     "hq/webhooks",
-    okEnvelope.extend({ events: z.array(webhookEventSchema), kept_days: z.number() }),
+    okEnvelope.extend({
+      events: z.array(webhookEventSchema),
+      kept_days: z.number(),
+      /** How many rows the log shows; the ledger itself keeps `kept_days`. */
+      limit: z.number(),
+    }),
     { token },
   );
 }

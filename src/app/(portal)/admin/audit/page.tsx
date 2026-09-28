@@ -9,7 +9,7 @@ import { ShortId } from "@/components/ui/short-id";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { directoryOrEmpty, searchAudit, type AuditPage } from "@/lib/api/staff";
+import { directoryOrNull, searchAudit, type AuditPage } from "@/lib/api/staff";
 import { formatSentence } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
@@ -99,7 +99,8 @@ export default async function AuditIndexPage({ searchParams }: AuditPageProps) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  const names = await directoryOrEmpty(context.token);
+  const directory = await directoryOrNull(context.token);
+  const names = directory ?? new Map();
 
   const pageLink = (nextOffset: number) => {
     const query = new URLSearchParams();
@@ -180,6 +181,12 @@ export default async function AuditIndexPage({ searchParams }: AuditPageProps) {
         </Callout>
       ) : (
         <>
+          {directory === null && (
+            <Callout tone="danger" compact>
+              Names could not be read just now, so each row shows who acted as unavailable rather
+              than by name.
+            </Callout>
+          )}
           <DataTable
             caption="Audit events"
             columns={COLUMNS}
@@ -198,7 +205,7 @@ export default async function AuditIndexPage({ searchParams }: AuditPageProps) {
             {page.events.map((event, index) => {
               const recordPage = RECORD_PAGES[event.entity_type];
               const who = event.staff_id
-                ? (names.get(event.staff_id)?.display_name ?? "A former colleague")
+                ? (names.get(event.staff_id)?.display_name ?? "Name unavailable")
                 : formatSentence(event.actor_label || "system");
               const detail = describeDetail(event.detail);
               return (

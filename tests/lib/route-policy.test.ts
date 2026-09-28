@@ -34,6 +34,12 @@ describe("default-deny route policy", () => {
     expect(sanitizeNextPath("/deals/abc")).toBe("/deals/abc");
     expect(sanitizeNextPath("https://evil.example")).toBe("/home");
     expect(sanitizeNextPath("//evil.example")).toBe("/home");
+    // What a URL parser makes of these is another origin, whatever they look like.
+    expect(sanitizeNextPath("/\\evil.example")).toBe("/home");
+    expect(sanitizeNextPath("/\t//evil.example")).toBe("/home");
+    expect(sanitizeNextPath("/\n/\\evil.example")).toBe("/home");
+    expect(sanitizeNextPath("/%09/evil.example")).toBe("/%09/evil.example");
+    expect(sanitizeNextPath("/deals?view=table#x")).toBe("/deals?view=table");
     expect(sanitizeNextPath("/login")).toBe("/home");
     expect(sanitizeNextPath("/login/verify?x=1")).toBe("/home");
     expect(sanitizeNextPath("")).toBe("/home");

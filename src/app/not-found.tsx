@@ -18,13 +18,13 @@ export default function NotFound() {
             We couldn&apos;t find that page
           </h1>
           <p className="auth__desc">
-            The link may be out of date, or the page may have moved. Your account and admin pages
-            are still where they were.
+            The link may be out of date, or the page may have moved. Home and the admin pages are
+            still where they were.
           </p>
         </div>
         <div className="auth-form">
-          <ButtonLink href="/account" variant="primary" block>
-            Go to your account
+          <ButtonLink href="/home" variant="primary" block>
+            Go to Home
           </ButtonLink>
           <ButtonLink href="/login" block>
             Sign in

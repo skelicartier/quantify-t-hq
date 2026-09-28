@@ -103,7 +103,7 @@ export default async function HomePage() {
                 {home.leads.leads.length === 0 ? (
                   <EmptyState
                     title="Nobody is waiting"
-                    description="Every lead has had a first reply."
+                    description="No new or attempting lead is waiting for a first reply."
                     compact
                   />
                 ) : (

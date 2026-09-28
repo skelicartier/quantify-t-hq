@@ -888,6 +888,8 @@ const routes: Array<{
           device: deviceLabel(session.user_agent),
           current: session.id === found.session.id,
           revoked_at: session.revoked_at,
+          live: !session.revoked_at,
+          ended: session.revoked_at ? "revoked" : "",
         }));
       return ok({ sessions: rows });
     },
@@ -3879,6 +3881,7 @@ routes.push(
           .slice(0, 50)
           .map((row) => ({ ...row })),
         kept_days: 30,
+        limit: 50,
       }),
   },
   {

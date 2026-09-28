@@ -77,7 +77,7 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
       <PageHeader
         eyebrow="CRM"
         title="Deals"
-        description="Every open deal names its next step and a date. Deals quiet for 14 days, or past their stage's limit, are flagged."
+        description="Every open deal names its next step and a date. Deals quiet for 14 days, or past their stage's limit with no step on the calendar, are flagged."
         actions={
           <SegmentedLinks
             label="View"

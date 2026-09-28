@@ -63,7 +63,7 @@ export default async function DangerZonePage() {
       <PageHeader
         eyebrow="Admin"
         title="Danger zone"
-        description="Acts that cannot be taken back. Each needs a fresh confirm-it's-you, a written reason, and its phrase typed out."
+        description="Acts that cannot be taken back. Each needs a fresh confirm-it's-you and a written reason; the two that cannot be undone also need their phrase typed out."
         actions={<AdminTabs current="/admin/danger" />}
       />
       <SudoGate

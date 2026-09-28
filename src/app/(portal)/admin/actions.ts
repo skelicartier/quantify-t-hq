@@ -18,7 +18,7 @@ import { requireSameOriginServerAction } from "@/lib/security/action-origin";
 
 /** Pages with a confirm-it's-you panel; only these are refreshed after a code. */
 const ADMIN_PAGE =
-  /^\/(?:admin\/(?:integrations|danger|settings\/pipeline|staff(?:\/[A-Za-z0-9-]{1,64})?)|revenue\/mrr|reports)$/;
+  /^\/(?:admin\/(?:integrations|danger|settings\/pipeline|staff(?:\/[A-Za-z0-9-]{1,64})?)|revenue\/mrr|reports|certificates|access-review)$/;
 
 const NOT_ADMIN: ActionState = { status: "error", message: "Only HQ admins can change this." };
 

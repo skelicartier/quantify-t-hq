@@ -31,13 +31,13 @@ export default async function SecurityPage() {
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError)) throw error;
   }
-  const live = (sessions ?? []).filter((session) => !session.revoked_at);
+  const live = (sessions ?? []).filter((session) => session.live);
   return (
     <>
       <PageHeader
         eyebrow="My account"
         title="My security"
-        description="Your sessions and your password. Sessions end on their own after 12 hours."
+        description="Your sessions and your password. A session ends after 30 minutes without activity, and after 12 hours regardless."
       />
       <Section id="sessions" title="Where you are signed in">
         {sessions === null ? (

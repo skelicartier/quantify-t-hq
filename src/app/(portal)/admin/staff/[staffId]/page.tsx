@@ -69,7 +69,8 @@ export default async function StaffMemberPage({ params }: StaffMemberPageProps) 
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  let history: AuditEvent[] = [];
+  // Null is a read failure, told apart from a person nobody has changed yet.
+  let history: AuditEvent[] | null = hasCapability(context, "audit:read") ? null : [];
   if (hasCapability(context, "audit:read")) {
     try {
       history = (
@@ -165,7 +166,12 @@ export default async function StaffMemberPage({ params }: StaffMemberPageProps) 
                   Full audit
                 </Link>
               </div>
-              {history.length === 0 ? (
+              {history === null ? (
+                <Callout tone="danger" compact>
+                  Changes to this person could not be read just now — a read failure, not an empty
+                  history.
+                </Callout>
+              ) : history.length === 0 ? (
                 <p className="timeline-empty">No recorded changes.</p>
               ) : (
                 <ol className="timeline" aria-label="Changes">

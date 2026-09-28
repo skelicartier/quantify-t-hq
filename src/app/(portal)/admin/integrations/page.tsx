@@ -117,7 +117,7 @@ export default async function IntegrationsPage({ searchParams }: IntegrationsPag
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
-  let webhooks: { events: WebhookEvent[]; kept_days: number } | null = null;
+  let webhooks: { events: WebhookEvent[]; kept_days: number; limit: number } | null = null;
   try {
     webhooks = await readWebhooks(context.token);
   } catch (error) {
@@ -285,7 +285,7 @@ export default async function IntegrationsPage({ searchParams }: IntegrationsPag
           <Card
             title="Notifications received"
             titleAs="h2"
-            description={`Each push from an outside service, recorded once: a repeat delivery is counted, not acted on again. The last ${webhooks?.kept_days ?? 30} days.`}
+            description={`Each push from an outside service, recorded once: a repeat delivery is counted, not acted on again. The newest ${webhooks?.limit ?? 50}; the log itself keeps ${webhooks?.kept_days ?? 30} days.`}
           >
             {webhooks === null ? (
               <Callout tone="danger" compact>

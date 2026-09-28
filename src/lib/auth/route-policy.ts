@@ -24,12 +24,30 @@ export function isPublicPath(pathname: string): boolean {
  * Where sign-in returns to. Only in-portal absolute paths survive; anything else —
  * another origin, a protocol-relative `//`, the sign-in pages themselves — falls back
  * to home.
+ *
+ * Judged by resolving it the way the browser will, not by looking at its first two
+ * characters: a URL parser reads `/\evil.com` as `https://evil.com/` (a backslash is a
+ * slash in web URLs) and strips a tab or newline before it looks, so `/\t//evil.com`
+ * leaves the site too. Sign-in is the one moment a person has just typed their
+ * password and a code, and where they land next must be here.
  */
+const PORTAL_STAND_IN = "https://portal.invalid";
+
 export function sanitizeNextPath(raw: string | null | undefined): string {
   const value = (raw ?? "").trim();
   if (!value.startsWith("/") || value.startsWith("//")) return "/home";
-  if (value === "/" || isPublicPath(value) || value.startsWith("/login")) return "/home";
-  return value;
+  let resolved: URL;
+  try {
+    resolved = new URL(value, PORTAL_STAND_IN);
+  } catch {
+    return "/home";
+  }
+  if (resolved.origin !== PORTAL_STAND_IN) return "/home";
+  const path = `${resolved.pathname}${resolved.search}`;
+  if (path === "/" || isPublicPath(resolved.pathname) || resolved.pathname.startsWith("/login")) {
+    return "/home";
+  }
+  return path;
 }
 
 export function buildLoginRedirectUrl(current: URL): URL {

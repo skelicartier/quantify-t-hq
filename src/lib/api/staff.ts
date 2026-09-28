@@ -155,6 +155,22 @@ export const readDirectory = cache(async (token: string): Promise<Map<string, Di
   return new Map(payload.staff.map((entry) => [entry.staff_id, entry]));
 });
 
+/**
+ * The directory, or null when it cannot be read. Staff are never deleted, so a name
+ * missing from a directory that WAS read is not a former colleague; it is a read
+ * failure, and the page should say so rather than invent a departure.
+ */
+export async function directoryOrNull(token: string): Promise<Map<string, DirectoryEntry> | null> {
+  try {
+    return await readDirectory(token);
+  } catch (error) {
+    if (error instanceof HqApiRequestError || error instanceof HqApiUnavailableError) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 /** The directory, or an empty map when it cannot be read — names degrade to "—". */
 export async function directoryOrEmpty(token: string): Promise<Map<string, DirectoryEntry>> {
   try {

@@ -258,7 +258,7 @@ export default async function StaffPage() {
                 titleAs="h3"
                 description={
                   isOwner
-                    ? "Their account stays inactive until they accept and enrol an authenticator."
+                    ? "Their account stays inactive until they accept the invite and set a password; they enrol an authenticator at their first sign-in."
                     : "Admins invite Sales, Support and Intern roles. Owner and Admin come from an Owner."
                 }
               >

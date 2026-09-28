@@ -61,6 +61,9 @@ export const sessionsSchema = okEnvelope.extend({
       device: z.string(),
       current: z.boolean(),
       revoked_at: z.string().nullable(),
+      /** False once idle or old enough to be refused, though never revoked in the table. */
+      live: z.boolean(),
+      ended: z.string(),
     }),
   ),
 });
