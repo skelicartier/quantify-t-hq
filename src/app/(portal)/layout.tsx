@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 
 import { signOutAction } from "@/app/login/actions";
 import { setHqTheme } from "@/app/(portal)/actions";
-import { HqNav } from "@/components/shell/hq-nav";
 import { HqShell } from "@/components/shell/hq-shell";
 import { requireStaff } from "@/lib/access/core";
 import { readHqTheme } from "@/lib/dal/theme";
@@ -29,7 +28,7 @@ export default async function PortalLayout({ children }: Readonly<{ children: Re
         role: me.role,
         environment: me.environment,
       }}
-      nav={<HqNav capabilities={me.capabilities} />}
+      capabilities={me.capabilities}
       signOutAction={signOutAction}
       theme={theme}
       themeAction={setHqTheme}

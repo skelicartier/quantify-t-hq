@@ -28,6 +28,8 @@ export type NavLink = {
   activePrefix?: string;
   /** Shown only when the signed-in staff member holds this capability. */
   capability?: string;
+  /** The letter after `g` that jumps here from anywhere; printed in the palette. */
+  key?: string;
 };
 
 export type NavGroup = {
@@ -43,7 +45,7 @@ export type NavGroup = {
 export const NAV_GROUPS: readonly NavGroup[] = [
   {
     label: "Command",
-    links: [{ href: "/home", label: "Home", icon: LayoutDashboard }],
+    links: [{ href: "/home", label: "Home", icon: LayoutDashboard, key: "h" }],
   },
   {
     label: "CRM",
@@ -54,6 +56,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Inbox,
         activePrefix: "/leads/",
         capability: "crm:read",
+        key: "l",
       },
       {
         href: "/companies",
@@ -61,6 +64,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Building2,
         activePrefix: "/companies/",
         capability: "crm:read",
+        key: "c",
       },
       {
         href: "/people",
@@ -68,6 +72,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Contact,
         activePrefix: "/people/",
         capability: "crm:read",
+        key: "p",
       },
       {
         href: "/deals",
@@ -75,6 +80,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Handshake,
         activePrefix: "/deals/",
         capability: "deals:read",
+        key: "d",
       },
     ],
   },
@@ -87,8 +93,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: CalendarClock,
         activePrefix: "/meetings/",
         capability: "crm:read",
+        key: "m",
       },
-      { href: "/tasks", label: "Tasks", icon: ClipboardList, capability: "crm:read" },
+      { href: "/tasks", label: "Tasks", icon: ClipboardList, capability: "crm:read", key: "t" },
       // Everyone's: a check-in and time off are about the person, not a capability.
       { href: "/checkin", label: "Check-in", icon: NotebookPen },
       { href: "/time-off", label: "Time off", icon: CalendarOff },
@@ -103,6 +110,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: LifeBuoy,
         activePrefix: "/support/",
         capability: "tickets:read",
+        key: "s",
       },
     ],
   },
@@ -115,12 +123,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: ChartNoAxesCombined,
         activePrefix: "/revenue/",
         capability: "revenue:read",
+        key: "r",
       },
       {
         href: "/reports",
         label: "Reports",
         icon: FileSpreadsheet,
         capability: "revenue:read",
+        key: "w",
       },
     ],
   },
@@ -133,6 +143,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: UsersRound,
         activePrefix: "/team/",
         capability: "hr:read",
+        key: "e",
       },
       {
         href: "/certificates",
@@ -172,4 +183,9 @@ export function visibleNavGroups(capabilities: readonly string[]): NavGroup[] {
     label: group.label,
     links: group.links.filter((link) => !link.capability || held.has(link.capability)),
   })).filter((group) => group.links.length > 0);
+}
+
+/** Every link a set of capabilities may reach, flattened, for the palette and `g` keys. */
+export function visibleNavLinks(capabilities: readonly string[]): NavLink[] {
+  return visibleNavGroups(capabilities).flatMap((group) => group.links);
 }

@@ -9,6 +9,8 @@ type LocalTimeProps = {
   /** Shown when the instant is missing or unparseable. */
   fallback?: string | undefined;
   prefix?: string | undefined;
+  /** "time" draws only the clock, for a list that is already about one day. */
+  mode?: "datetime" | "time" | undefined;
 };
 
 // Nothing to subscribe to: the store exists only to distinguish "rendered on the server
@@ -30,19 +32,28 @@ const onServer = () => false;
  * UTC form stays as the tooltip either way, so a support conversation can still quote
  * one shared instant.
  */
-export function LocalTime({ value, fallback = "Not available", prefix }: LocalTimeProps) {
+export function LocalTime({
+  value,
+  fallback = "Not available",
+  prefix,
+  mode = "datetime",
+}: LocalTimeProps) {
   const hydrated = useSyncExternalStore(subscribe, onClient, onServer);
   const formatted = formatDateTime(value);
   if (!formatted.valid) return <span className="quiet">{fallback}</span>;
 
-  let local = formatted.absolute;
+  let local =
+    mode === "time"
+      ? (formatted.absolute.split(", ")[1] ?? formatted.absolute)
+      : formatted.absolute;
   if (hydrated) {
     try {
-      local = new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-        timeZoneName: "short",
-      }).format(new Date(formatted.iso));
+      local = new Intl.DateTimeFormat(
+        undefined,
+        mode === "time"
+          ? { timeStyle: "short", timeZoneName: "short" }
+          : { dateStyle: "medium", timeStyle: "short", timeZoneName: "short" },
+      ).format(new Date(formatted.iso));
     } catch {
       local = formatted.absolute;
     }
