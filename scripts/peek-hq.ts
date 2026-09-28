@@ -37,6 +37,10 @@ for (const path of paths.length ? paths : ["/home"]) {
   await page.screenshot({ path: `${outDir}/${name}.png`, fullPage: true });
   console.log(`  ✓ ${name}`);
   if (process.env.HQ_PEEK_AXE) {
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    if (overflow > 1) console.log(`    overflow: ${overflow}px`);
     const results = await new AxeBuilder({ page }).analyze();
     for (const violation of results.violations) {
       if (violation.impact !== "serious" && violation.impact !== "critical") continue;

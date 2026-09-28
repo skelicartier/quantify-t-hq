@@ -10,7 +10,6 @@ import {
   resetAuthenticatorAction,
   updateStaffDetailsAction,
 } from "@/app/(portal)/admin/actions";
-import { AdminTabs } from "@/components/admin/admin-tabs";
 import {
   ReinviteForm,
   StaffDetailsForm,
@@ -127,7 +126,6 @@ export default async function StaffMemberPage({ params }: StaffMemberPageProps) 
             ),
           },
         ]}
-        actions={<AdminTabs current="/admin/staff" />}
       />
       <SudoGate
         action={confirmSudoAction}

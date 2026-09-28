@@ -51,7 +51,7 @@ export function LocalTime({
       local = new Intl.DateTimeFormat(
         undefined,
         mode === "time"
-          ? { timeStyle: "short", timeZoneName: "short" }
+          ? { hour: "2-digit", minute: "2-digit" }
           : { dateStyle: "medium", timeStyle: "short", timeZoneName: "short" },
       ).format(new Date(formatted.iso));
     } catch {

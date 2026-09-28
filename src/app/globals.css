@@ -566,7 +566,7 @@
     flex-direction: column;
     gap: 14px;
     min-height: 0;
-    padding-bottom: 8px;
+    padding-bottom: 12px;
   }
 
   .rail__group-label {
@@ -1052,45 +1052,16 @@
     gap: 6px;
   }
 
-  /* A section switcher (Admin, Revenue) is a tab bar under the title, not a button
-     group beside it. */
   .pagebar__actions:has(.segmented) {
-    flex-basis: 100%;
+    display: contents;
+  }
+
+  .pagebar .segmented {
     order: 3;
-    margin-top: -2px;
-  }
-
-  .pagebar__actions:has(.segmented) .segmented {
-    display: flex;
-    gap: 2px;
-    width: 100%;
-    border: 0;
+    flex-basis: 100%;
+    margin-top: 2px;
+    margin-bottom: -10px;
     border-bottom: 0;
-  }
-
-  .pagebar__actions .segmented a,
-  .pagebar__actions .segmented a + a {
-    height: 32px;
-    padding: 0 12px;
-    margin-bottom: -11px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    color: var(--muted);
-    font-size: var(--fs-ui);
-    font-weight: 500;
-    letter-spacing: 0;
-    text-transform: none;
-  }
-
-  .pagebar__actions .segmented a:hover {
-    color: var(--text);
-    background: transparent;
-  }
-
-  .pagebar__actions .segmented a[aria-current="page"] {
-    color: var(--text);
-    background: transparent;
-    border-bottom-color: var(--accent);
   }
 
   /* Legacy names some pages still render; they now read as inline meta. */
@@ -1782,9 +1753,9 @@
   .card {
     position: relative;
     min-width: 0;
-    padding: 20px;
-    border: 1px solid var(--line);
-    background: var(--panel);
+    padding: 0;
+    border: 0;
+    background: transparent;
   }
 
   .card--important {
@@ -1823,21 +1794,26 @@
   }
 
   .card__title {
-    font-size: 16px;
+    margin: 0;
+    font-size: 13px;
     font-weight: 600;
-    letter-spacing: -0.012em;
-    overflow-wrap: anywhere;
+    letter-spacing: -0.005em;
+  }
+
+  .card__eyebrow {
+    margin-bottom: 4px;
   }
 
   .card__desc {
-    margin-top: 6px;
-    color: var(--muted);
-    font-size: 13px;
-    line-height: 1.55;
+    margin-top: 4px;
+    color: var(--quiet);
+    font-size: 12.5px;
   }
 
   .card__body {
-    margin-top: 16px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line-soft);
   }
 
   .card__actions {
@@ -1863,7 +1839,7 @@
   .card-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 12px;
+    gap: 24px 20px;
   }
 
   .card-grid--2 {
@@ -2628,53 +2604,45 @@
     gap: 8px;
   }
 
+  /* A section switcher is a row of underline tabs — the same tabs a record has. */
   .segmented {
-    display: inline-flex;
-    border: 1px solid var(--line-strong);
+    display: flex;
+    gap: 2px;
+    width: 100%;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line-soft);
+    scrollbar-width: none;
   }
 
   .segmented a {
-    padding: 8px 12px;
-    color: var(--quiet);
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    transition:
-      color var(--t-control) var(--ease),
-      background var(--t-control) var(--ease);
-  }
-
-  .segmented a + a {
-    border-left: 1px solid var(--line-strong);
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 12px;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+    font-weight: 500;
+    white-space: nowrap;
+    transition: color var(--t-control) var(--ease);
   }
 
   .segmented a:hover {
     color: var(--text);
-    background: var(--panel-raised);
   }
 
   .segmented a[aria-current="page"] {
-    color: var(--accent-ink);
-    background: var(--accent);
+    color: var(--text);
+    border-bottom-color: var(--accent);
   }
 
-  /* Too wide for a phone, the strip wraps instead of pushing the page sideways. Each
-     item then draws its own border, collapsed onto its neighbours', so two rows still
-     read as one control. */
-  @media (max-width: 720px) {
-    .segmented {
-      flex-wrap: wrap;
-      max-width: 100%;
-      padding: 0 1px 1px 0;
-      border: 0;
-    }
-
-    .segmented a,
-    .segmented a + a {
-      margin: 0 -1px -1px 0;
-      border: 1px solid var(--line-strong);
-    }
+  /* Inside a toolbar the tabs share the row with whatever sits beside them. */
+  .toolbar .segmented,
+  .toolbar__group .segmented {
+    width: auto;
+    flex: 0 1 auto;
+    border-bottom: 0;
   }
 
   .pagination {
@@ -3263,7 +3231,7 @@
     }
 
     .card {
-      padding: 18px 16px;
+      padding: 0;
     }
 
     .btn--block-mobile {
@@ -4454,6 +4422,8 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .rtabs {
@@ -6041,7 +6011,7 @@
 
   .agenda__row {
     display: grid;
-    grid-template-columns: 96px minmax(0, 1fr);
+    grid-template-columns: 76px minmax(0, 1fr);
     gap: 12px;
     align-items: center;
     min-height: var(--row);
