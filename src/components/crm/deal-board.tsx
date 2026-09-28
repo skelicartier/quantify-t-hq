@@ -40,7 +40,9 @@ export function DealBoard({ columns, today, names }: DealBoardProps) {
               <span className="board__mrr">{formatMrr(column.mrr_total)}</span>
               {!column.outcome && (
                 <span className="board__weighted">
-                  {column.win_probability}% · {formatMoney(column.weighted_total)} weighted
+                  {column.win_probability}%
+                  {column.weighted_total !== null &&
+                    ` · ${formatMoney(column.weighted_total)} weighted`}
                 </span>
               )}
             </p>
@@ -64,7 +66,7 @@ export function DealBoard({ columns, today, names }: DealBoardProps) {
                         {deal.company_name || deal.name}
                       </Link>
                       <p className="deal-card__money">
-                        {formatMrr(deal.mrr_amount, deal.currency)}
+                        {deal.mrr_amount !== null && formatMrr(deal.mrr_amount, deal.currency)}
                         <span className="deal-card__seats">
                           {deal.seats} {deal.seats === 1 ? "seat" : "seats"}
                         </span>

@@ -343,6 +343,36 @@ async function run(browser: Browser) {
     // Leave the persona's theme where it started, for the next viewport's walk.
     await setTheme(page, "dark");
 
+    // The intern reads the pipeline with every money figure blanked: the four pages
+    // that carry deal money must render the dash, not a crash or a zero.
+    const internContext = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+    });
+    const intern = await internContext.newPage();
+    watchConsole(intern);
+    await intern.goto(`${BASE}/login`, { waitUntil: "networkidle" });
+    await intern.fill("#email", "intern@hq.test");
+    await intern.fill("#password", "password-123");
+    await intern.click("button[type=submit]");
+    await intern.waitForURL("**/login/verify**", { timeout: 15_000 });
+    await intern.fill("#totp-code", "000000");
+    await intern.click("button[type=submit]");
+    await intern.waitForURL("**/home", { timeout: 15_000 });
+    mkdirSync(`${OUT}/${viewport.name}/intern`, { recursive: true });
+    for (const shot of [
+      { name: "home", path: "/home", ready: "main#main-content" },
+      { name: "deals", path: "/deals", ready: ".board" },
+      { name: "deal", path: "/deals/d0000000-0000-4000-8000-000000000001", ready: ".stage-rail" },
+      { name: "companies", path: "/companies", ready: ".data-table" },
+    ]) {
+      await capture(intern, `${viewport.name}/intern`, shot);
+      const text = await intern.locator("main").innerText();
+      if (/\$\d|\/mo/.test(text)) {
+        report(`${viewport.name}/intern/${shot.name}`, "a money figure is visible to the intern");
+      }
+    }
+    await internContext.close();
+
     // First-run enrollment with the un-enrolled persona, in a fresh context.
     const enrollContext = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },

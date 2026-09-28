@@ -11,7 +11,9 @@ describe("money", () => {
 
   it("never invents a figure", () => {
     expect(formatMoney(Number.NaN)).toBe("Not available");
-    expect(formatMrr(null)).toBe("Not available");
+    // Null is a figure the role may not see, drawn as the tables draw one.
+    expect(formatMrr(null)).toBe("—");
+    expect(formatMoney(undefined)).toBe("—");
   });
 
   it("falls back to dollars for a code that is not one", () => {

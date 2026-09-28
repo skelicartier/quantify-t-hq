@@ -31,7 +31,8 @@ export type Company = z.infer<typeof companySchema>;
 const companyRowSchema = companySchema.extend({
   people_count: z.number(),
   open_deals: z.number(),
-  won_mrr: z.number(),
+  /** Null for a role that cannot read revenue. */
+  won_mrr: z.number().nullable(),
 });
 export type CompanyRow = z.infer<typeof companyRowSchema>;
 
@@ -100,11 +101,12 @@ export const dealSummarySchema = z.object({
   stage_key: z.string(),
   stage_label: z.string(),
   status: z.string(),
-  mrr_amount: z.number(),
+  /** Money is null for a role that cannot read revenue; the pipeline itself is not. */
+  mrr_amount: z.number().nullable(),
   currency: z.string(),
   seats: z.number(),
   win_probability: z.number(),
-  weighted_mrr: z.number(),
+  weighted_mrr: z.number().nullable(),
   expected_close_date: z.string(),
   next_step: z.string(),
   next_step_due: z.string(),

@@ -32,7 +32,7 @@ import { readCompany, readCrmSettings, type CompanyDetail, type CrmSettings } fr
 import { directoryOrEmpty } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
-import { formatDate, formatMrr } from "@/lib/format";
+import { formatDate, formatMrr, sumMoney } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 
 export const metadata = { title: "Company" };
@@ -82,10 +82,10 @@ export default async function CompanyPage({ params }: CompanyPageProps) {
     .filter((stage) => !stage.outcome)
     .map((stage) => ({ key: stage.key, label: stage.label }));
   const openDeals = deals.filter((deal) => deal.status === "open");
-  const wonMrr = deals
-    .filter((deal) => deal.status === "won")
-    .reduce((sum, deal) => sum + deal.mrr_amount, 0);
-  const pipelineMrr = openDeals.reduce((sum, deal) => sum + deal.mrr_amount, 0);
+  const wonMrr = sumMoney(
+    deals.filter((deal) => deal.status === "won").map((deal) => deal.mrr_amount),
+  );
+  const pipelineMrr = sumMoney(openDeals.map((deal) => deal.mrr_amount));
   const assignees = [...names.values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ staff_id: entry.staff_id, display_name: entry.display_name }));
@@ -118,10 +118,14 @@ export default async function CompanyPage({ params }: CompanyPageProps) {
         }
       />
       <StatGrid columns={4} label="This account">
-        <Stat label="Won MRR" value={wonMrr > 0 ? formatMrr(wonMrr) : "—"} text />
+        <Stat
+          label="Won MRR"
+          value={wonMrr !== null && wonMrr > 0 ? formatMrr(wonMrr) : "—"}
+          text
+        />
         <Stat
           label="Open pipeline"
-          value={pipelineMrr > 0 ? formatMrr(pipelineMrr) : "—"}
+          value={pipelineMrr !== null && pipelineMrr > 0 ? formatMrr(pipelineMrr) : "—"}
           text
           hint={`${openDeals.length} open ${openDeals.length === 1 ? "deal" : "deals"}`}
         />

@@ -113,12 +113,14 @@ export default async function DealPage({ params }: DealPageProps) {
         ]}
         description={
           <>
-            {formatMrr(deal.mrr_amount, deal.currency)} · {deal.seats}{" "}
-            {deal.seats === 1 ? "seat" : "seats"}
+            {deal.mrr_amount !== null && `${formatMrr(deal.mrr_amount, deal.currency)} · `}
+            {deal.seats} {deal.seats === 1 ? "seat" : "seats"}
             {open && (
               <>
                 {" "}
-                · {deal.win_probability}% · {formatMoney(deal.weighted_mrr, deal.currency)} weighted
+                · {deal.win_probability}%
+                {deal.weighted_mrr !== null &&
+                  ` · ${formatMoney(deal.weighted_mrr, deal.currency)} weighted`}
               </>
             )}
           </>
@@ -172,7 +174,7 @@ export default async function DealPage({ params }: DealPageProps) {
             <>
               Record the contract so revenue counts it.{" "}
               <Link
-                href={`/revenue/contracts?company_id=${deal.company_id}&deal_id=${deal.deal_id}&mrr_amount=${deal.mrr_amount}&seats=${deal.seats}`}
+                href={`/revenue/contracts?company_id=${deal.company_id}&deal_id=${deal.deal_id}&mrr_amount=${deal.mrr_amount ?? ""}&seats=${deal.seats}`}
               >
                 Record the contract
               </Link>

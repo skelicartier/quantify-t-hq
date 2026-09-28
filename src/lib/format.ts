@@ -232,7 +232,12 @@ export function localInputToIso(value: string | null | undefined): string {
  * "$1,235". Monthly recurring figures are small enough that cents are noise, and the
  * service rounds to cents anyway, so nothing is hidden by dropping them here.
  */
+/**
+ * Null is a figure the reader's role may not see — a dash, as the tables draw one. A
+ * number that is not finite is a fault, and says so.
+ */
 export function formatMoney(value: number | null | undefined, currency = "USD"): string {
+  if (value === null || value === undefined) return "—";
   if (typeof value !== "number" || !Number.isFinite(value)) return "Not available";
   const code = /^[A-Z]{3}$/.test(currency) ? currency : "USD";
   return new Intl.NumberFormat("en", {
@@ -244,9 +249,22 @@ export function formatMoney(value: number | null | undefined, currency = "USD"):
 }
 
 /** Monthly recurring revenue: "$1,235/mo". */
+/**
+ * A sum of figures a role may not see: null the moment any term is null, never a
+ * partial total that reads as the whole.
+ */
+export function sumMoney(values: ReadonlyArray<number | null>): number | null {
+  let total = 0;
+  for (const value of values) {
+    if (value === null) return null;
+    total += value;
+  }
+  return total;
+}
+
 export function formatMrr(value: number | null | undefined, currency = "USD"): string {
   const money = formatMoney(value, currency);
-  return money === "Not available" ? money : `${money}/mo`;
+  return money === "Not available" || money === "—" ? money : `${money}/mo`;
 }
 
 /** A wait in minutes as a clock reads: 45 → "45m", 125 → "2h 05m", 3000 → "2d 2h". */

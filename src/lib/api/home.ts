@@ -52,8 +52,8 @@ const homeSchema = z.object({
   deals: z
     .object({
       open_count: z.number(),
-      open_mrr: z.number(),
-      weighted_mrr: z.number(),
+      open_mrr: z.number().nullable(),
+      weighted_mrr: z.number().nullable(),
       neglected: z.number(),
       rotting: z.number(),
       no_next_step: z.number(),

@@ -56,7 +56,11 @@ export default async function HomePage() {
                 label="Open pipeline"
                 value={formatMrr(home.deals.open_mrr)}
                 text
-                hint={`${formatMrr(home.deals.weighted_mrr)} weighted · ${home.deals.open_count} deals`}
+                hint={
+                  home.deals.weighted_mrr === null
+                    ? `${home.deals.open_count} deals`
+                    : `${formatMrr(home.deals.weighted_mrr)} weighted · ${home.deals.open_count} deals`
+                }
               />
             )}
             {home.leads && (
@@ -152,7 +156,9 @@ export default async function HomePage() {
                             {deal.company_name || deal.name}
                           </Link>
                           <span className="attention-list__sub">
-                            {deal.stage_label} · {formatMrr(deal.mrr_amount, deal.currency)}
+                            {deal.stage_label}
+                            {deal.mrr_amount !== null &&
+                              ` · ${formatMrr(deal.mrr_amount, deal.currency)}`}
                           </span>
                         </span>
                         <DealFlags

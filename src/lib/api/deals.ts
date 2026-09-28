@@ -21,8 +21,8 @@ const boardColumnSchema = z.object({
   outcome: z.string(),
   exit_criteria: z.string(),
   deals: z.array(dealSummarySchema.extend({ company_name: z.string() })),
-  mrr_total: z.number(),
-  weighted_total: z.number(),
+  mrr_total: z.number().nullable(),
+  weighted_total: z.number().nullable(),
 });
 export type BoardColumn = z.infer<typeof boardColumnSchema>;
 
@@ -30,8 +30,8 @@ const boardSchema = okEnvelope.extend({
   columns: z.array(boardColumnSchema),
   totals: z.object({
     open_count: z.number(),
-    open_mrr: z.number(),
-    weighted_mrr: z.number(),
+    open_mrr: z.number().nullable(),
+    weighted_mrr: z.number().nullable(),
   }),
   attention: z.object({
     neglected: z.number(),

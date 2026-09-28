@@ -231,7 +231,7 @@ export function DealEditForm({
             type="number"
             min={0}
             step={1}
-            defaultValue={deal.mrr_amount}
+            defaultValue={deal.mrr_amount ?? undefined}
             disabled={isPending}
           />
         </Field>

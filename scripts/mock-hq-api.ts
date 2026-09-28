@@ -314,6 +314,24 @@ function mintSession(member: Staff, ip: string, userAgent: string) {
   };
 }
 
+/**
+ * Mirrors deal_routes.sees_money / without_money: a role without revenue:read reads the
+ * pipeline with every money figure null. The board's sort still uses the figures.
+ */
+function seesMoney(headers: Record<string, string | string[] | undefined>): boolean {
+  const found = caller(headers);
+  return Boolean(found && (CAPABILITIES[found.member.role] ?? []).includes("revenue:read"));
+}
+function moneyOrNull(value: number, money: boolean): number | null {
+  return money ? value : null;
+}
+function withoutMoney<T extends { mrr_amount: number | null; weighted_mrr: number | null }>(
+  view: T,
+  money: boolean,
+): T {
+  return money ? view : { ...view, mrr_amount: null, weighted_mrr: null };
+}
+
 function caller(headers: Record<string, string | string[] | undefined>) {
   const auth = String(headers.authorization ?? "");
   if (!auth.toLowerCase().startsWith("bearer hq_")) return null;
@@ -2724,18 +2742,24 @@ routes.push(
         const flagged = open
           .filter((view) => view.flags.length > 0)
           .sort((a, b) => b.flags.length - a.flags.length);
+        const money = seesMoney(headers);
         payload.deals = {
           open_count: open.length,
-          open_mrr: Math.round(open.reduce((sum, view) => sum + view.mrr_amount, 0) * 100) / 100,
-          weighted_mrr:
+          open_mrr: moneyOrNull(
+            Math.round(open.reduce((sum, view) => sum + view.mrr_amount, 0) * 100) / 100,
+            money,
+          ),
+          weighted_mrr: moneyOrNull(
             Math.round(open.reduce((sum, view) => sum + view.weighted_mrr, 0) * 100) / 100,
+            money,
+          ),
           neglected: open.filter((view) => view.flags.includes("neglected")).length,
           rotting: open.filter((view) => view.flags.includes("rotting")).length,
           no_next_step: open.filter(
             (view) =>
               view.flags.includes("no_next_step") || view.flags.includes("next_step_overdue"),
           ).length,
-          deals: flagged.slice(0, 5),
+          deals: flagged.slice(0, 5).map((view) => withoutMoney(view, money)),
         };
       }
       return ok(payload);
@@ -2746,7 +2770,7 @@ routes.push(
     pattern: "hq/companies",
     auth: true,
     capability: "crm:read",
-    handler: ({ query }) => {
+    handler: ({ query, headers }) => {
       const needle = (query.q ?? "").toLowerCase();
       const views = companies
         .filter((row) => !row.archived)
@@ -2756,9 +2780,12 @@ routes.push(
           people_count: people.filter((person) => person.company_id === row.id).length,
           open_deals: deals.filter((deal) => deal.company_id === row.id && deal.status === "open")
             .length,
-          won_mrr: deals
-            .filter((deal) => deal.company_id === row.id && deal.status === "won")
-            .reduce((sum, deal) => sum + deal.mrr_amount, 0),
+          won_mrr: moneyOrNull(
+            deals
+              .filter((deal) => deal.company_id === row.id && deal.status === "won")
+              .reduce((sum, deal) => sum + deal.mrr_amount, 0),
+            seesMoney(headers),
+          ),
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
       return ok({ companies: views });
@@ -3231,8 +3258,9 @@ routes.push(
     pattern: "hq/deals",
     auth: true,
     capability: "deals:read",
-    handler: ({ query }) => {
+    handler: ({ query, headers }) => {
       const statusFilter = query.status ?? "open";
+      const money = seesMoney(headers);
       const views = deals
         .map((row) => ({
           ...dealSummary(row),
@@ -3254,11 +3282,15 @@ routes.push(
             stale_after_days: stage.stale_after_days,
             outcome: stage.outcome,
             exit_criteria: stage.exit_criteria,
-            deals: stageDeals,
-            mrr_total:
+            deals: stageDeals.map((view) => withoutMoney(view, money)),
+            mrr_total: moneyOrNull(
               Math.round(stageDeals.reduce((sum, view) => sum + view.mrr_amount, 0) * 100) / 100,
-            weighted_total:
+              money,
+            ),
+            weighted_total: moneyOrNull(
               Math.round(stageDeals.reduce((sum, view) => sum + view.weighted_mrr, 0) * 100) / 100,
+              money,
+            ),
           };
         });
       const open = views.filter((view) => view.status === "open");
@@ -3266,9 +3298,14 @@ routes.push(
         columns,
         totals: {
           open_count: open.length,
-          open_mrr: Math.round(open.reduce((sum, view) => sum + view.mrr_amount, 0) * 100) / 100,
-          weighted_mrr:
+          open_mrr: moneyOrNull(
+            Math.round(open.reduce((sum, view) => sum + view.mrr_amount, 0) * 100) / 100,
+            money,
+          ),
+          weighted_mrr: moneyOrNull(
             Math.round(open.reduce((sum, view) => sum + view.weighted_mrr, 0) * 100) / 100,
+            money,
+          ),
         },
         attention: {
           neglected: open.filter((view) => view.flags.includes("neglected")).length,
@@ -3331,7 +3368,7 @@ routes.push(
         staff_id: found?.member.id ?? "",
       });
       audit("deal.created", found?.member.id ?? null, "deal", row.id);
-      return ok({ deal: dealSummary(row) });
+      return ok({ deal: withoutMoney(dealSummary(row), seesMoney(headers)) });
     },
   },
   {
@@ -3339,13 +3376,13 @@ routes.push(
     pattern: "hq/deals/{deal_id}",
     auth: true,
     capability: "deals:read",
-    handler: ({ params }) => {
+    handler: ({ params, headers }) => {
       const row = deals.find((deal) => deal.id === params.deal_id);
       if (!row) return refuse(404, "not_found");
       const company = companies.find((candidate) => candidate.id === row.company_id);
       const person = people.find((candidate) => candidate.id === row.primary_person_id);
       return ok({
-        deal: { ...dealSummary(row), notes: row.notes },
+        deal: { ...withoutMoney(dealSummary(row), seesMoney(headers)), notes: row.notes },
         company: company ? companyView(company) : null,
         primary_person: person ? personView(person) : null,
         stage_history: dealStageEvents
@@ -3404,7 +3441,7 @@ routes.push(
       if ("primary_person_id" in body) row.primary_person_id = String(body.primary_person_id ?? "");
       if ("notes" in body) row.notes = String(body.notes ?? "");
       audit("deal.updated", caller(headers)?.member.id ?? null, "deal", row.id);
-      return ok({ deal: dealSummary(row) });
+      return ok({ deal: withoutMoney(dealSummary(row), seesMoney(headers)) });
     },
   },
   {
@@ -3449,7 +3486,7 @@ routes.push(
       row.next_step = nextStep;
       row.next_step_due = nextStepDue;
       audit("deal.stage_moved", found?.member.id ?? null, "deal", row.id);
-      return ok({ deal: dealSummary(row) });
+      return ok({ deal: withoutMoney(dealSummary(row), seesMoney(headers)) });
     },
   },
   {
@@ -3505,7 +3542,7 @@ routes.push(
         deal_id: row.id,
       });
       audit("deal.closed", found?.member.id ?? null, "deal", row.id);
-      return ok({ deal: dealSummary(row) });
+      return ok({ deal: withoutMoney(dealSummary(row), seesMoney(headers)) });
     },
   },
   {

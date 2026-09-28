@@ -15,7 +15,7 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompanies, type CompanyRow } from "@/lib/api/crm";
 import { directoryOrEmpty } from "@/lib/api/staff";
 import { LIFECYCLES, LIFECYCLE_LABELS } from "@/lib/crm/vocabulary";
-import { formatMrr } from "@/lib/format";
+import { formatMrr, sumMoney } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -54,7 +54,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
   const names = await directoryOrEmpty(context.token);
   const visible = (companies ?? []).filter((row) => !lifecycle || row.lifecycle === lifecycle);
   const customers = (companies ?? []).filter((row) => row.lifecycle === "customer");
-  const wonMrr = (companies ?? []).reduce((sum, row) => sum + row.won_mrr, 0);
+  const wonMrr = sumMoney((companies ?? []).map((row) => row.won_mrr));
   const openDeals = (companies ?? []).reduce((sum, row) => sum + row.open_deals, 0);
 
   const lifecycleLink = (value: string) => {
@@ -149,7 +149,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
                 <td className="data-table__num">{row.people_count}</td>
                 <td className="data-table__num">{row.open_deals}</td>
                 <td className="data-table__num">
-                  {row.won_mrr > 0 ? formatMrr(row.won_mrr) : "—"}
+                  {row.won_mrr === null ? "—" : row.won_mrr > 0 ? formatMrr(row.won_mrr) : "—"}
                 </td>
                 <td>
                   {row.owner_staff_id ? (
