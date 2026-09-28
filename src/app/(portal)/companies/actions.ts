@@ -25,6 +25,7 @@ function companyFields(formData: FormData): Record<string, string> {
     ["country", 60],
     ["notes", 2_000],
     ["lifecycle", 20],
+    ["owner_staff_id", 64],
   ] as const) {
     if (formData.has(name)) fields[name] = fieldValue(formData, name, limit).trim();
   }

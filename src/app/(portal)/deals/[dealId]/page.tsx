@@ -13,22 +13,24 @@ import {
   updateNextStepAction,
 } from "@/app/(portal)/deals/actions";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
-import {
-  DealCloseForm,
-  DealEditForm,
-  DealStageForm,
-  NextStepForm,
-} from "@/components/crm/deal-forms";
+import { DealCloseForm, DealStageForm, NextStepForm } from "@/components/crm/deal-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { StageRail } from "@/components/crm/stage-rail";
 import { TaskList } from "@/components/crm/task-list";
 import { TaskQuickAdd } from "@/components/crm/task-quick-add";
-import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
-import { Card } from "@/components/ui/card";
-import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
+import { InlineField } from "@/components/ui/inline-field";
 import { Popover } from "@/components/ui/popover";
+import {
+  Properties,
+  Property,
+  RecordGrid,
+  RecordHeader,
+  RecordSection,
+  RecordTabs,
+  currentTab,
+} from "@/components/ui/record-shell";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
@@ -37,16 +39,27 @@ import { readContracts } from "@/lib/api/revenue";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS, sourceLabel, stageLabel } from "@/lib/crm/vocabulary";
-import { formatDate, formatMoney, formatMrr } from "@/lib/format";
+import { formatMoney, formatMrr } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
+import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Deal" };
 export const dynamic = "force-dynamic";
 
-type DealPageProps = { params: Promise<{ dealId: string }> };
+const TABS = [
+  { key: "activity", label: "Activity" },
+  { key: "history", label: "Stage history" },
+  { key: "tasks", label: "Tasks" },
+];
 
-export default async function DealPage({ params }: DealPageProps) {
+type DealPageProps = {
+  params: Promise<{ dealId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function DealPage({ params, searchParams }: DealPageProps) {
   const { dealId } = await params;
+  const tab = currentTab(firstSearchValue((await searchParams).tab), TABS);
   const context = await requireStaff(`/deals/${dealId}`);
   const now = requestNow();
   const today = isoDay(now);
@@ -91,44 +104,59 @@ export default async function DealPage({ params }: DealPageProps) {
   const openStages = stages
     .filter((stage) => !stage.outcome)
     .map((stage) => ({ key: stage.key, label: stage.label }));
-  const returnPath = `/deals/${deal.deal_id}`;
+  const base = `/deals/${deal.deal_id}`;
   const stepState =
     !deal.next_step || !deal.next_step_due
       ? "missing"
       : deal.next_step_due < today
         ? "overdue"
         : "live";
-  const assignees = [...(names ?? new Map()).values()]
-    .filter((entry) => entry.is_active)
-    .map((entry) => ({ staff_id: entry.staff_id, display_name: entry.display_name }));
+  const staff = [...(names ?? new Map()).values()].filter((entry) => entry.is_active);
+  const assignees = staff.map((entry) => ({
+    staff_id: entry.staff_id,
+    display_name: entry.display_name,
+  }));
+  const inline = {
+    action: updateDealAction,
+    idName: "deal_id",
+    id: deal.deal_id,
+    readOnly: !canDeal,
+  };
+
+  const tasks = (
+    <RecordSection id="deal-tasks" title="Open tasks">
+      <TaskList
+        tasks={openTasks}
+        today={today}
+        setStatus={canWrite ? setTaskStatusAction : undefined}
+        returnPath={base}
+        names={names}
+        emptyLabel="Nothing promised on this deal."
+      />
+      {canWrite && (
+        <TaskQuickAdd
+          action={createTaskAction}
+          links={{ deal_id: deal.deal_id }}
+          returnPath={base}
+          assignees={assignees}
+          selfId={context.me.staff.staff_id}
+        />
+      )}
+    </RecordSection>
+  );
 
   return (
     <>
-      <PageHeader
-        eyebrow="Deal"
-        title={deal.name}
-        breadcrumbs={[
-          { label: "Deals", href: "/deals" },
-          ...(company ? [{ label: company.name, href: `/companies/${company.company_id}` }] : []),
+      <RecordHeader
+        crumbs={[
+          { href: "/deals", label: "Deals" },
+          ...(company ? [{ href: `/companies/${company.company_id}`, label: company.name }] : []),
         ]}
-        description={
-          <>
-            {deal.mrr_amount !== null && `${formatMrr(deal.mrr_amount, deal.currency)} · `}
-            {deal.seats} {deal.seats === 1 ? "seat" : "seats"}
-            {open && (
-              <>
-                {" "}
-                · {deal.win_probability}%
-                {deal.weighted_mrr !== null &&
-                  ` · ${formatMoney(deal.weighted_mrr, deal.currency)} weighted`}
-              </>
-            )}
-          </>
-        }
-        meta={
+        title={deal.name}
+        status={
           <>
             {open ? (
-              <span className="meta-note">{deal.stage_label}</span>
+              <span className="pill pill--neutral">{deal.stage_label}</span>
             ) : (
               <DealStatusPill status={deal.status} />
             )}
@@ -139,11 +167,41 @@ export default async function DealPage({ params }: DealPageProps) {
             />
           </>
         }
+        readouts={[
+          {
+            label: "Monthly",
+            value: deal.mrr_amount === null ? "—" : formatMrr(deal.mrr_amount, deal.currency),
+          },
+          {
+            label: "Weighted",
+            value:
+              deal.weighted_mrr === null
+                ? "—"
+                : `${formatMoney(deal.weighted_mrr, deal.currency)} · ${deal.win_probability}%`,
+          },
+          { label: "Seats", value: deal.seats },
+          ...(open
+            ? [{ label: "In stage", value: `${deal.days_in_stage}d · quiet ${deal.idle_days}d` }]
+            : []),
+        ]}
         actions={
-          canDeal ? (
-            <Popover label="Edit deal" width="wide">
-              <DealEditForm action={updateDealAction} deal={deal} />
-            </Popover>
+          open && canDeal ? (
+            <>
+              <Popover label="Move stage" variant="primary" width="wide">
+                <DealStageForm
+                  action={moveDealStageAction}
+                  deal={deal}
+                  stages={openStages}
+                  defaultDue={isoDayPlus(now, 3)}
+                />
+              </Popover>
+              <Popover label="Close" width="wide">
+                <p className="muted" style={{ marginBottom: 10 }}>
+                  Final. A loss records its reason.
+                </p>
+                <DealCloseForm action={closeDealAction} deal={deal} />
+              </Popover>
+            </>
           ) : undefined
         }
       />
@@ -194,51 +252,29 @@ export default async function DealPage({ params }: DealPageProps) {
         </Callout>
       )}
 
-      <div className="record-layout">
-        <div className="record-layout__main">
-          <section className="record-section" aria-labelledby="deal-activity">
-            <h2 className="record-section__title" id="deal-activity">
-              Activity
-            </h2>
-            {canWrite && (
-              <LogActivityForm
-                action={logActivityAction}
-                links={{
-                  deal_id: deal.deal_id,
-                  ...(deal.company_id ? { company_id: deal.company_id } : {}),
-                }}
-                returnPath={returnPath}
-              />
-            )}
-            <ActivityTimeline activities={activities} now={now} stageLabels={stageNames} />
-          </section>
-          {deal.notes && (
-            <Card title="Notes" titleAs="h2">
-              <p className="prose-block">{deal.notes}</p>
-            </Card>
-          )}
-        </div>
-        <aside className="record-layout__side">
-          {open && canDeal && (
-            <Card title="Move stage" titleAs="h3">
-              <DealStageForm
-                action={moveDealStageAction}
-                deal={deal}
-                stages={openStages}
-                defaultDue={isoDayPlus(now, 3)}
-              />
-            </Card>
-          )}
-          <Card title="Deal" titleAs="h3">
-            <KeyValue>
-              <KeyValueRow label="Company">
+      <RecordTabs
+        base={base}
+        tabs={[
+          { ...TABS[0]!, count: activities.length },
+          { ...TABS[1]!, count: history.length },
+          { ...TABS[2]!, count: openTasks.length },
+        ]}
+        current={tab}
+        label="Deal sections"
+      />
+      <RecordGrid
+        side={
+          <>
+            <Properties title="Deal">
+              <InlineField {...inline} name="name" label="Name" value={deal.name} />
+              <Property label="Company">
                 {company ? (
                   <Link href={`/companies/${company.company_id}`}>{company.name}</Link>
                 ) : (
                   "—"
                 )}
-              </KeyValueRow>
-              <KeyValueRow label="Main contact">
+              </Property>
+              <Property label="Main contact">
                 {person ? (
                   <Link href={`/people/${person.person_id}`}>
                     {person.full_name || person.email}
@@ -246,25 +282,91 @@ export default async function DealPage({ params }: DealPageProps) {
                 ) : (
                   "Nobody yet"
                 )}
-              </KeyValueRow>
-              <KeyValueRow label="Owner">
-                {deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned"}
-              </KeyValueRow>
-              <KeyValueRow label="Expected close">
-                {deal.expected_close_date ? formatDate(deal.expected_close_date) : "—"}
-              </KeyValueRow>
-              <KeyValueRow label="Source">{sourceLabel(deal.source_key)}</KeyValueRow>
-              {open && (
-                <KeyValueRow label="In this stage">
-                  {deal.days_in_stage}d · quiet {deal.idle_days}d
-                </KeyValueRow>
-              )}
-              <KeyValueRow label="Opened">
+              </Property>
+              <InlineField
+                {...inline}
+                name="owner_staff_id"
+                label="Owner"
+                type="select"
+                value={deal.owner_staff_id}
+                options={[
+                  { value: "", label: "Unowned" },
+                  ...staff.map((entry) => ({ value: entry.staff_id, label: entry.display_name })),
+                ]}
+                display={deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned"}
+                readOnly={!canDeal || names === null}
+              />
+              <InlineField
+                {...inline}
+                name="mrr_amount"
+                label="Monthly value"
+                type="number"
+                value={deal.mrr_amount === null ? "" : String(deal.mrr_amount)}
+                display={deal.mrr_amount === null ? "—" : formatMrr(deal.mrr_amount, deal.currency)}
+                readOnly={!canDeal || deal.mrr_amount === null}
+              />
+              <InlineField
+                {...inline}
+                name="currency"
+                label="Currency"
+                value={deal.currency}
+                placeholder="USD"
+              />
+              <InlineField
+                {...inline}
+                name="seats"
+                label="Seats"
+                type="number"
+                value={String(deal.seats)}
+              />
+              <InlineField
+                {...inline}
+                name="expected_close_date"
+                label="Expected close"
+                type="date"
+                value={deal.expected_close_date}
+                display={
+                  deal.expected_close_date ? (
+                    <DueChip due={deal.expected_close_date} today={today} />
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <Property label="Source">{sourceLabel(deal.source_key)}</Property>
+              <Property label="Opened">
                 <Timestamp value={deal.created_at} mode="date" />
-              </KeyValueRow>
-            </KeyValue>
-          </Card>
-          <Card title="Stage history" titleAs="h3">
+              </Property>
+              <InlineField
+                {...inline}
+                name="notes"
+                label="Notes"
+                type="textarea"
+                value={deal.notes}
+                placeholder="What the next person to open this should know"
+              />
+            </Properties>
+            {tab !== "tasks" && tasks}
+          </>
+        }
+      >
+        {tab === "activity" && (
+          <RecordSection id="deal-activity" title="Activity">
+            {canWrite && (
+              <LogActivityForm
+                action={logActivityAction}
+                links={{
+                  deal_id: deal.deal_id,
+                  ...(deal.company_id ? { company_id: deal.company_id } : {}),
+                }}
+                returnPath={base}
+              />
+            )}
+            <ActivityTimeline activities={activities} now={now} stageLabels={stageNames} />
+          </RecordSection>
+        )}
+        {tab === "history" && (
+          <RecordSection id="deal-history" title="Stage history">
             <ol className="stage-history">
               {history.map((event, index) => (
                 <li key={`${event.at}-${index}`}>
@@ -278,37 +380,10 @@ export default async function DealPage({ params }: DealPageProps) {
                 </li>
               ))}
             </ol>
-          </Card>
-          <Card title="Open tasks" titleAs="h3">
-            <TaskList
-              tasks={openTasks}
-              today={today}
-              setStatus={canWrite ? setTaskStatusAction : undefined}
-              returnPath={returnPath}
-              names={names}
-              emptyLabel="Nothing promised on this deal."
-            />
-            {canWrite && (
-              <TaskQuickAdd
-                action={createTaskAction}
-                links={{ deal_id: deal.deal_id }}
-                returnPath={returnPath}
-                assignees={assignees}
-                selfId={context.me.staff.staff_id}
-              />
-            )}
-          </Card>
-          {open && canDeal && (
-            <Card
-              title="Close the deal"
-              titleAs="h3"
-              description="Final. A loss records its reason."
-            >
-              <DealCloseForm action={closeDealAction} deal={deal} />
-            </Card>
-          )}
-        </aside>
-      </div>
+          </RecordSection>
+        )}
+        {tab === "tasks" && tasks}
+      </RecordGrid>
     </>
   );
 }

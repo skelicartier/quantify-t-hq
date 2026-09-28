@@ -42,6 +42,29 @@ export async function createLeadAction(
   redirect(`/leads/${leadId}`);
 }
 
+/** One field at a time from the properties panel: today, the owner. */
+export async function updateLeadAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const leadId = fieldValue(formData, "lead_id", 64);
+  const input: Record<string, unknown> = {};
+  if (formData.has("owner_staff_id"))
+    input.owner_staff_id = fieldValue(formData, "owner_staff_id", 64);
+  if (Object.keys(input).length === 0) return { status: "error", message: "Nothing to change." };
+  try {
+    await crmApi.updateLead(context.token, leadId, input);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
+
 export async function updateLeadStageAction(
   _previous: ActionState,
   formData: FormData,

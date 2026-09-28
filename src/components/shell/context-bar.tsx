@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { BrandMark } from "@/components/brand/brand-mark";
+import { DensityToggle } from "@/components/shell/density-toggle";
 import { MobileNavToggle } from "@/components/shell/mobile-nav-toggle";
 import { NAV_GROUPS } from "@/components/shell/nav-links";
 import { openShortcuts } from "@/components/shell/palette-bus";
@@ -81,6 +82,7 @@ export function ContextBar() {
           <span className="cbar__dot" aria-hidden="true" />
           <SidebarClock />
         </span>
+        <DensityToggle />
         <ThemeToggle />
         <button
           type="button"

@@ -49,9 +49,14 @@ export async function updatePersonAction(
   const context = await requireStaff("/people");
   if (!hasCapability(context, "crm:write")) return READ_ONLY;
   const personId = fieldValue(formData, "person_id", 64);
-  const input: Record<string, unknown> = {
-    do_not_contact: formData.get("do_not_contact") === "on",
-  };
+  const input: Record<string, unknown> = {};
+  // The full form carries the checkbox (absent means unticked); a single-field edit
+  // from the properties panel says so explicitly, so it can never untick it by accident.
+  if (formData.has("do_not_contact_choice")) {
+    input.do_not_contact = fieldValue(formData, "do_not_contact_choice", 3) === "yes";
+  } else if (formData.has("full_form")) {
+    input.do_not_contact = formData.get("do_not_contact") === "on";
+  }
   for (const [name, limit] of [
     ["full_name", 160],
     ["title", 120],

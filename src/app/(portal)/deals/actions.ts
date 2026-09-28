@@ -130,6 +130,12 @@ export async function updateDealAction(
     input.expected_close_date = fieldValue(formData, "expected_close_date", 10);
   }
   if (formData.has("notes")) input.notes = fieldValue(formData, "notes", 8_000);
+  if (formData.has("owner_staff_id"))
+    input.owner_staff_id = fieldValue(formData, "owner_staff_id", 64);
+  if (formData.has("primary_person_id")) {
+    input.primary_person_id = fieldValue(formData, "primary_person_id", 64);
+  }
+  if (formData.has("currency")) input.currency = fieldValue(formData, "currency", 3).toUpperCase();
   try {
     await dealsApi.updateDeal(context.token, dealId, input);
   } catch (error) {

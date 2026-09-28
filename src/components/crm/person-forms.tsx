@@ -93,6 +93,7 @@ export function PersonEditForm({
     <form className="stack-form stack-form--tight" action={formAction}>
       <AttemptField state={state} />
       <input type="hidden" name="person_id" value={person.person_id} />
+      <input type="hidden" name="full_form" value="1" />
       <Field id="edit-person-name" label="Full name">
         <Input
           id="edit-person-name"

@@ -9,15 +9,20 @@ import {
 import { updatePersonAction } from "@/app/(portal)/people/actions";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
-import { PersonEditForm } from "@/components/crm/person-forms";
 import { LifecyclePill } from "@/components/crm/pills";
 import { TaskList } from "@/components/crm/task-list";
 import { TaskQuickAdd } from "@/components/crm/task-quick-add";
-import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
-import { Card } from "@/components/ui/card";
-import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
-import { Popover } from "@/components/ui/popover";
+import { InlineField } from "@/components/ui/inline-field";
+import {
+  Properties,
+  Property,
+  RecordGrid,
+  RecordHeader,
+  RecordSection,
+  RecordTabs,
+  currentTab,
+} from "@/components/ui/record-shell";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
@@ -26,6 +31,7 @@ import { readCompanies, readPerson, type PersonDetail } from "@/lib/api/crm";
 import { directoryOrNull } from "@/lib/api/staff";
 import { isoDay } from "@/lib/crm/dates";
 import { requestNow } from "@/lib/request-time";
+import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Person" };
 export const dynamic = "force-dynamic";
@@ -38,10 +44,19 @@ const ROLE_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-type PersonPageProps = { params: Promise<{ personId: string }> };
+const TABS = [
+  { key: "activity", label: "Activity" },
+  { key: "tasks", label: "Tasks" },
+];
 
-export default async function PersonPage({ params }: PersonPageProps) {
+type PersonPageProps = {
+  params: Promise<{ personId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function PersonPage({ params, searchParams }: PersonPageProps) {
   const { personId } = await params;
+  const tab = currentTab(firstSearchValue((await searchParams).tab), TABS);
   const context = await requireStaff(`/people/${personId}`);
   const now = requestNow();
   const today = isoDay(now);
@@ -58,9 +73,9 @@ export default async function PersonPage({ params }: PersonPageProps) {
   let companyOptions: { company_id: string; name: string }[] = [];
   if (canWrite) {
     try {
-      companyOptions = (await readCompanies(context.token)).companies.map((company) => ({
-        company_id: company.company_id,
-        name: company.name,
+      companyOptions = (await readCompanies(context.token)).companies.map((row) => ({
+        company_id: row.company_id,
+        name: row.name,
       }));
     } catch (error) {
       if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
@@ -69,39 +84,76 @@ export default async function PersonPage({ params }: PersonPageProps) {
   }
 
   const { person, company, activities, open_tasks: openTasks } = detail;
-  const returnPath = `/people/${person.person_id}`;
+  const base = `/people/${person.person_id}`;
   const assignees = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ staff_id: entry.staff_id, display_name: entry.display_name }));
+  const inline = {
+    action: updatePersonAction,
+    idName: "person_id",
+    id: person.person_id,
+    readOnly: !canWrite,
+  };
+
+  const tasks = (
+    <RecordSection id="person-tasks" title="Open tasks">
+      <TaskList
+        tasks={openTasks}
+        today={today}
+        setStatus={canWrite ? setTaskStatusAction : undefined}
+        returnPath={base}
+        names={names}
+        emptyLabel="Nothing promised to this person."
+      />
+      {canWrite && (
+        <TaskQuickAdd
+          action={createTaskAction}
+          links={{ person_id: person.person_id }}
+          returnPath={base}
+          assignees={assignees}
+          selfId={context.me.staff.staff_id}
+        />
+      )}
+    </RecordSection>
+  );
 
   return (
     <>
-      <PageHeader
-        eyebrow="Person"
+      <RecordHeader
+        crumbs={[
+          { href: "/people", label: "People" },
+          ...(company ? [{ href: `/companies/${company.company_id}`, label: company.name }] : []),
+        ]}
         title={person.full_name || person.email}
-        breadcrumbs={[{ label: "People", href: "/people" }]}
-        description={
+        status={
           <>
-            {[person.title, company?.name].filter(Boolean).join(" at ") || "No title or firm yet"}
-          </>
-        }
-        meta={
-          <>
+            {person.title && <span className="quiet">{person.title}</span>}
             {person.do_not_contact && (
               <StatusPill value="blocked" label="Do not contact" tone="danger" />
             )}
             {person.account_user_id && <StatusPill value="active" label="Has a product account" />}
           </>
         }
-        actions={
-          canWrite ? (
-            <Popover label="Edit person" width="wide">
-              <PersonEditForm
-                action={updatePersonAction}
-                person={person}
-                companies={companyOptions}
+        readouts={[
+          {
+            label: "Last contact",
+            value: (
+              <Timestamp
+                value={person.last_contacted_at}
+                now={now}
+                mode="relative"
+                fallback="Never"
               />
-            </Popover>
+            ),
+          },
+          { label: "Open tasks", value: openTasks.length },
+          { label: "Activity", value: activities.length },
+        ]}
+        actions={
+          person.email && !person.do_not_contact ? (
+            <a className="btn btn--small" href={`mailto:${person.email}`}>
+              Email
+            </a>
           ) : undefined
         }
       />
@@ -110,12 +162,95 @@ export default async function PersonPage({ params }: PersonPageProps) {
           This person asked not to be contacted. Log what you learn, but do not reach out.
         </Callout>
       )}
-      <div className="record-layout">
-        <div className="record-layout__main">
-          <section className="record-section" aria-labelledby="person-activity">
-            <h2 className="record-section__title" id="person-activity">
-              Activity
-            </h2>
+      <RecordTabs
+        base={base}
+        tabs={[
+          { ...TABS[0]!, count: activities.length },
+          { ...TABS[1]!, count: openTasks.length },
+        ]}
+        current={tab}
+        label="Person sections"
+      />
+      <RecordGrid
+        side={
+          <>
+            <Properties title="Contact">
+              <InlineField {...inline} name="full_name" label="Name" value={person.full_name} />
+              <Property label="Email" mono>
+                {person.email ? <a href={`mailto:${person.email}`}>{person.email}</a> : "—"}
+              </Property>
+              <InlineField
+                {...inline}
+                name="phone"
+                label="Phone"
+                value={person.phone}
+                placeholder="+41 …"
+              />
+              <InlineField {...inline} name="title" label="Title" value={person.title} />
+              <InlineField
+                {...inline}
+                name="role_category"
+                label="Part in the decision"
+                type="select"
+                value={person.role_category}
+                options={[
+                  { value: "", label: "Not known yet" },
+                  ...Object.entries(ROLE_LABELS).map(([value, label]) => ({ value, label })),
+                ]}
+              />
+              <InlineField
+                {...inline}
+                name="do_not_contact_choice"
+                label="Contact"
+                type="select"
+                value={person.do_not_contact ? "yes" : "no"}
+                options={[
+                  { value: "no", label: "May be contacted" },
+                  { value: "yes", label: "Do not contact" },
+                ]}
+              />
+              <InlineField
+                {...inline}
+                name="company_id"
+                label="Company"
+                type="select"
+                value={person.company_id}
+                options={[
+                  { value: "", label: "No company" },
+                  ...companyOptions.map((row) => ({ value: row.company_id, label: row.name })),
+                ]}
+                display={
+                  company ? (
+                    <Link href={`/companies/${company.company_id}`}>{company.name}</Link>
+                  ) : (
+                    "Not attached to a company"
+                  )
+                }
+                readOnly={!canWrite || companyOptions.length === 0}
+              />
+              {company && (
+                <Property label="Lifecycle">
+                  <LifecyclePill lifecycle={company.lifecycle} />
+                </Property>
+              )}
+              <Property label="Added">
+                <Timestamp value={person.created_at} mode="date" />
+              </Property>
+              <InlineField
+                {...inline}
+                name="notes"
+                label="Notes"
+                type="textarea"
+                value={person.notes}
+                placeholder="What the next person to open this should know"
+              />
+            </Properties>
+            {tab !== "tasks" && tasks}
+          </>
+        }
+      >
+        {tab === "activity" && (
+          <RecordSection id="person-activity" title="Activity">
             {canWrite && (
               <LogActivityForm
                 action={logActivityAction}
@@ -123,70 +258,14 @@ export default async function PersonPage({ params }: PersonPageProps) {
                   person_id: person.person_id,
                   ...(person.company_id ? { company_id: person.company_id } : {}),
                 }}
-                returnPath={returnPath}
+                returnPath={base}
               />
             )}
             <ActivityTimeline activities={activities} now={now} />
-          </section>
-        </div>
-        <aside className="record-layout__side">
-          <Card title="Contact" titleAs="h3">
-            <KeyValue>
-              <KeyValueRow label="Email" mono>
-                {person.email ? <a href={`mailto:${person.email}`}>{person.email}</a> : "—"}
-              </KeyValueRow>
-              <KeyValueRow label="Phone" mono>
-                {person.phone || "—"}
-              </KeyValueRow>
-              <KeyValueRow label="Part in the decision">
-                {ROLE_LABELS[person.role_category] ?? "Not known yet"}
-              </KeyValueRow>
-              <KeyValueRow label="Last contacted">
-                <Timestamp
-                  value={person.last_contacted_at}
-                  now={now}
-                  mode="relative"
-                  fallback="Never"
-                />
-              </KeyValueRow>
-            </KeyValue>
-            {person.notes && <p className="prose-block prose-block--side">{person.notes}</p>}
-          </Card>
-          <Card title="Company" titleAs="h3">
-            {company ? (
-              <KeyValue>
-                <KeyValueRow label="Firm">
-                  <Link href={`/companies/${company.company_id}`}>{company.name}</Link>
-                </KeyValueRow>
-                <KeyValueRow label="Lifecycle">
-                  <LifecyclePill lifecycle={company.lifecycle} />
-                </KeyValueRow>
-              </KeyValue>
-            ) : (
-              <p className="side-quiet">Not attached to a company.</p>
-            )}
-          </Card>
-          <Card title="Open tasks" titleAs="h3">
-            <TaskList
-              tasks={openTasks}
-              today={today}
-              setStatus={canWrite ? setTaskStatusAction : undefined}
-              returnPath={returnPath}
-              names={names}
-              emptyLabel="Nothing promised to this person."
-            />
-            {canWrite && (
-              <TaskQuickAdd
-                action={createTaskAction}
-                links={{ person_id: person.person_id }}
-                returnPath={returnPath}
-                assignees={assignees}
-                selfId={context.me.staff.staff_id}
-              />
-            )}
-          </Card>
-        </aside>
-      </div>
+          </RecordSection>
+        )}
+        {tab === "tasks" && tasks}
+      </RecordGrid>
     </>
   );
 }

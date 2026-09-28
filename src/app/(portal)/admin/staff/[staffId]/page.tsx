@@ -19,6 +19,7 @@ import {
 } from "@/components/admin/staff-forms";
 import { SudoGate } from "@/components/admin/sudo-gate";
 import { PageHeader } from "@/components/shell/page-header";
+import { RecordHeader } from "@/components/ui/record-shell";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
@@ -101,12 +102,10 @@ export default async function StaffMemberPage({ params }: StaffMemberPageProps) 
 
   return (
     <>
-      <PageHeader
-        eyebrow="Staff"
+      <RecordHeader
+        crumbs={[{ href: "/admin/staff", label: "Staff" }]}
         title={member.display_name || member.email}
-        breadcrumbs={[{ label: "Staff", href: "/admin/staff" }]}
-        description={`${roleLabel(member.role)} · ${kindLabel(member.kind)} · ${member.email}`}
-        meta={
+        status={
           <>
             <StatusPill
               value={member.is_active ? "active" : "inactive"}
@@ -115,8 +114,19 @@ export default async function StaffMemberPage({ params }: StaffMemberPageProps) 
             {member.totp_enrolled === false && (
               <StatusPill value="attention" label="No authenticator yet" tone="attention" />
             )}
+            <span className="mono quiet">{member.email}</span>
           </>
         }
+        readouts={[
+          { label: "Role", value: roleLabel(member.role) },
+          { label: "Engagement", value: kindLabel(member.kind) },
+          {
+            label: "Last sign-in",
+            value: (
+              <Timestamp value={member.last_login_at} now={now} mode="relative" fallback="Never" />
+            ),
+          },
+        ]}
         actions={<AdminTabs current="/admin/staff" />}
       />
       <SudoGate

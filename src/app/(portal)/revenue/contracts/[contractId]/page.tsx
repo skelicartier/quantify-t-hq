@@ -3,8 +3,8 @@ import { notFound } from "next/navigation";
 
 import { cancelContractAction, changePriceAction } from "@/app/(portal)/revenue/actions";
 import { PageHeader } from "@/components/shell/page-header";
+import { RecordHeader } from "@/components/ui/record-shell";
 import { ContractCancelForm, ContractPriceForm } from "@/components/revenue/contract-forms";
-import { RevenueTabs } from "@/components/revenue/revenue-tabs";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
@@ -68,19 +68,25 @@ export default async function ContractPage({ params }: ContractPageProps) {
 
   return (
     <>
-      <PageHeader
-        eyebrow="Contract"
+      <RecordHeader
+        crumbs={[{ href: "/revenue/contracts", label: "Contracts" }]}
         title={contract.company_name || "Contract"}
-        breadcrumbs={[{ label: "Revenue", href: "/revenue/contracts" }]}
-        description={`${contract.plan_name || "Plan"} · ${contract.seats} ${contract.seats === 1 ? "seat" : "seats"} · ${formatMrr(contract.mrr_amount, contract.currency)}`}
-        meta={
+        status={
           <StatusPill
             value={contract.state}
             label={CONTRACT_STATE_LABELS[contract.state] ?? contract.state}
             tone={contractStateTone(contract.state)}
           />
         }
-        actions={<RevenueTabs current="/revenue/contracts" />}
+        readouts={[
+          { label: "Monthly", value: formatMrr(contract.mrr_amount, contract.currency) },
+          { label: "Plan", value: contract.plan_name || "—" },
+          { label: "Seats", value: contract.seats },
+          {
+            label: "Billed",
+            value: contract.billing_cadence === "annual" ? "Annually" : "Monthly",
+          },
+        ]}
       />
       {contract.state === "ending" && (
         <Callout tone="attention" title={`Ends ${formatDate(contract.ends_on)}`}>

@@ -5,6 +5,7 @@
  *     npx tsx scripts/peek-hq.ts <outDir> <email> <path> [path...]
  */
 import { mkdirSync } from "node:fs";
+import AxeBuilder from "@axe-core/playwright";
 import { chromium } from "playwright";
 
 const BASE = process.env.HQ_UI_BASE ?? "http://127.0.0.1:3000";
@@ -35,5 +36,16 @@ for (const path of paths.length ? paths : ["/home"]) {
   const name = path.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "home";
   await page.screenshot({ path: `${outDir}/${name}.png`, fullPage: true });
   console.log(`  ✓ ${name}`);
+  if (process.env.HQ_PEEK_AXE) {
+    const results = await new AxeBuilder({ page }).analyze();
+    for (const violation of results.violations) {
+      if (violation.impact !== "serious" && violation.impact !== "critical") continue;
+      for (const node of violation.nodes) {
+        console.log(`    axe ${violation.id}: ${node.target.join(" ")}`);
+        console.log(`      ${node.html.slice(0, 200)}`);
+        console.log(`      ${node.failureSummary?.split("\n").slice(0, 3).join(" | ") ?? ""}`);
+      }
+    }
+  }
 }
 await browser.close();

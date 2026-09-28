@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { moveDealStageAction } from "@/app/(portal)/deals/actions";
 import { DealBoard } from "@/components/crm/deal-board";
 import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -9,11 +10,11 @@ import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { SegmentedLinks } from "@/components/ui/toolbar";
-import { requireStaff } from "@/lib/access/core";
+import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readDealsBoard, type DealsBoard } from "@/lib/api/deals";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
-import { isoDay } from "@/lib/crm/dates";
+import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
 import { formatMoney, formatMrr, formatMrrBy } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -144,7 +145,19 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
                 description="Qualify a lead, or open a deal from a company page."
               />
             ) : (
-              <DealBoard columns={board.columns} today={today} names={names} />
+              <DealBoard
+                columns={board.columns}
+                today={today}
+                defaultDue={isoDayPlus(now, 3)}
+                names={
+                  names === null
+                    ? null
+                    : Object.fromEntries(
+                        [...names.values()].map((entry) => [entry.staff_id, entry.display_name]),
+                      )
+                }
+                moveAction={hasCapability(context, "deals:write") ? moveDealStageAction : undefined}
+              />
             )
           ) : (
             <DataTable

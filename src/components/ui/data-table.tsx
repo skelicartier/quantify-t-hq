@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { TableKeys } from "@/components/ui/table-keys";
+
 export type DataTableColumn = {
   key: string;
   label: ReactNode;
@@ -45,6 +47,7 @@ export function DataTable({
       aria-label={caption}
       tabIndex={0}
     >
+      <TableKeys />
       <table className="data-table" style={minWidth ? { minWidth } : undefined}>
         <caption className="sr-only">{caption}</caption>
         <thead>

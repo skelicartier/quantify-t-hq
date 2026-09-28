@@ -45,6 +45,8 @@ const securityHeaders = [
 const noStore = [{ key: "Cache-Control", value: "private, no-store, max-age=0" }];
 
 const nextConfig: NextConfig = {
+  // The dev badge landed in every review screenshot; the harness is the indicator.
+  devIndicators: false,
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   poweredByHeader: false,
   reactStrictMode: true,

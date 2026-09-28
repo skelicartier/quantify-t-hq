@@ -11,7 +11,7 @@ import { ActivityTimeline } from "@/components/crm/activity-timeline";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { MeetingLinkForm, MeetingOutcomeForm, PrepNotesForm } from "@/components/crm/meeting-forms";
 import { DueChip } from "@/components/crm/pills";
-import { PageHeader } from "@/components/shell/page-header";
+import { RecordHeader } from "@/components/ui/record-shell";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
@@ -73,17 +73,10 @@ export default async function MeetingPage({ params }: MeetingPageProps) {
 
   return (
     <>
-      <PageHeader
-        eyebrow={MEETING_KIND_LABELS[meeting.kind] ?? "Meeting"}
+      <RecordHeader
+        crumbs={[{ href: "/meetings", label: "Meetings" }]}
         title={meeting.title}
-        breadcrumbs={[{ label: "Meetings", href: "/meetings" }]}
-        description={
-          <>
-            <LocalTime value={meeting.starts_at} />
-            {meeting.company_name && <> · {meeting.company_name}</>}
-          </>
-        }
-        meta={
+        status={
           <>
             {meeting.needs_outcome ? (
               <span className="clock clock--running">Outcome owed</span>
@@ -95,11 +88,16 @@ export default async function MeetingPage({ params }: MeetingPageProps) {
               />
             )}
             {meeting.outcome && meeting.outcome !== "no_show" && (
-              <span className="meta-note">{MEETING_OUTCOME_LABELS[meeting.outcome]}</span>
+              <span className="quiet">{MEETING_OUTCOME_LABELS[meeting.outcome]}</span>
             )}
-            {meeting.source === "calendar" && <span className="meta-note">From the calendar</span>}
+            {meeting.source === "calendar" && <span className="quiet">From the calendar</span>}
           </>
         }
+        readouts={[
+          { label: "When", value: <LocalTime value={meeting.starts_at} /> },
+          { label: "Kind", value: MEETING_KIND_LABELS[meeting.kind] ?? meeting.kind },
+          ...(meeting.company_name ? [{ label: "Company", value: meeting.company_name }] : []),
+        ]}
       />
       {meeting.needs_outcome && (
         <Callout tone="attention" title="What happened?">

@@ -11,6 +11,7 @@ import {
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
 import { PageHeader } from "@/components/shell/page-header";
+import { RecordHeader } from "@/components/ui/record-shell";
 import {
   DocumentForm,
   GrantAccessForm,
@@ -67,12 +68,10 @@ export default async function TeamMemberPage({ params }: TeamMemberPageProps) {
 
   return (
     <>
-      <PageHeader
-        eyebrow="Team"
+      <RecordHeader
+        crumbs={[{ href: "/team", label: "Team" }]}
         title={person.display_name || person.email}
-        breadcrumbs={[{ label: "Team", href: "/team" }]}
-        description={`${roleLabel(person.role)} · ${kindLabel(person.kind)}${person.starts_on ? ` · since ${formatDate(person.starts_on)}` : ""}${person.ends_on ? ` · until ${formatDate(person.ends_on)}` : ""}`}
-        meta={
+        status={
           <>
             {!person.is_active && <StatusPill value="inactive" label="Not active" />}
             {record.documents_ok ? (
@@ -82,6 +81,12 @@ export default async function TeamMemberPage({ params }: TeamMemberPageProps) {
             )}
           </>
         }
+        readouts={[
+          { label: "Role", value: roleLabel(person.role) },
+          { label: "Engagement", value: kindLabel(person.kind) },
+          { label: "Since", value: person.starts_on ? formatDate(person.starts_on) : "—" },
+          { label: "Until", value: person.ends_on ? formatDate(person.ends_on) : "Open-ended" },
+        ]}
         actions={
           hasCapability(context, "hq:admin") ? (
             <Link className="btn btn--small" href={`/admin/staff/${person.staff_id}`}>

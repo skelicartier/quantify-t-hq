@@ -2,15 +2,26 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { logActivityAction } from "@/app/(portal)/_actions/work";
-import { convertLeadAction, updateLeadStageAction } from "@/app/(portal)/leads/actions";
+import {
+  convertLeadAction,
+  updateLeadAction,
+  updateLeadStageAction,
+} from "@/app/(portal)/leads/actions";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
 import { ConvertLeadForm, LeadStageForm } from "@/components/crm/lead-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { FirstReplyClock, LeadStagePill, LifecyclePill } from "@/components/crm/pills";
-import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
+import { InlineField } from "@/components/ui/inline-field";
 import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
+import {
+  Properties,
+  Property,
+  RecordGrid,
+  RecordHeader,
+  RecordSection,
+} from "@/components/ui/record-shell";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
@@ -89,19 +100,10 @@ export default async function LeadPage({ params }: LeadPageProps) {
 
   return (
     <>
-      <PageHeader
-        eyebrow="Lead"
+      <RecordHeader
+        crumbs={[{ href: "/leads", label: "Leads" }]}
         title={anonymised ? "Anonymised lead" : lead.full_name || lead.email || "Unnamed lead"}
-        breadcrumbs={[{ label: "Leads", href: "/leads" }]}
-        description={
-          <>
-            {[lead.email, lead.company_name].filter(Boolean).join(" · ")}
-            {lead.email || lead.company_name ? " · " : ""}
-            via {sourceLabel(lead.source_key, sourceNames)},{" "}
-            <Timestamp value={lead.created_at} now={now} mode="relative" />
-          </>
-        }
-        meta={
+        status={
           <>
             <LeadStagePill stage={lead.stage} />
             {!closed && (
@@ -112,7 +114,33 @@ export default async function LeadPage({ params }: LeadPageProps) {
                 targetMinutes={detail.first_reply_target_minutes ?? 60}
               />
             )}
+            {lead.company_name && <span className="quiet">{lead.company_name}</span>}
           </>
+        }
+        readouts={[
+          { label: "Source", value: sourceLabel(lead.source_key, sourceNames) },
+          {
+            label: "Received",
+            value: <Timestamp value={lead.created_at} now={now} mode="relative" />,
+          },
+          {
+            label: "First reply",
+            value: (
+              <Timestamp
+                value={lead.first_replied_at}
+                now={now}
+                mode="relative"
+                fallback="Not yet"
+              />
+            ),
+          },
+        ]}
+        actions={
+          lead.email && !anonymised ? (
+            <a className="btn btn--small" href={`mailto:${lead.email}`}>
+              Email
+            </a>
+          ) : undefined
         }
       />
       {anonymised && (
@@ -128,8 +156,125 @@ export default async function LeadPage({ params }: LeadPageProps) {
           is what stops the clock.
         </Callout>
       )}
-      <div className="record-layout">
-        <div className="record-layout__main">
+      <RecordGrid
+        side={
+          <>
+            <Properties title="Details">
+              <InlineField
+                action={updateLeadAction}
+                idName="lead_id"
+                id={lead.lead_id}
+                name="owner_staff_id"
+                label="Owner"
+                type="select"
+                value={lead.owner_staff_id}
+                options={[
+                  { value: "", label: "Unowned" },
+                  ...[...(names ?? new Map()).values()]
+                    .filter((entry) => entry.is_active)
+                    .map((entry) => ({ value: entry.staff_id, label: entry.display_name })),
+                ]}
+                display={lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : "Unowned"}
+                readOnly={!canWrite || names === null}
+              />
+              <Property label="Email" mono>
+                {lead.email || "—"}
+              </Property>
+              <Property label="Firm">{lead.company_name || "—"}</Property>
+              <Property label="Received">
+                <Timestamp value={lead.created_at} mode="absolute" />
+              </Property>
+            </Properties>
+            {lead.stage === "qualified" && (
+              <Card title="Converted" titleAs="h3" important>
+                <ul className="side-list">
+                  {lead.converted_company_id && (
+                    <li>
+                      <Link href={`/companies/${lead.converted_company_id}`}>Open the company</Link>
+                    </li>
+                  )}
+                  {lead.converted_person_id && (
+                    <li>
+                      <Link href={`/people/${lead.converted_person_id}`}>Open the person</Link>
+                    </li>
+                  )}
+                  {lead.converted_deal_id && (
+                    <li>
+                      <Link href={`/deals/${lead.converted_deal_id}`}>Open the deal</Link>
+                    </li>
+                  )}
+                </ul>
+              </Card>
+            )}
+            {lead.stage === "disqualified" && (
+              <Card title="Disqualified" titleAs="h3">
+                <p className="side-quiet">
+                  {DISQUALIFY_LABELS[lead.disqualify_reason] ?? "No reason recorded"}.
+                </p>
+              </Card>
+            )}
+            {!anonymised && (
+              <Card title="Already known" titleAs="h3">
+                {matches.person === null && matches.company === null ? (
+                  <p className="side-quiet">
+                    Nobody at HQ matches this address or its domain. Converting creates both.
+                  </p>
+                ) : (
+                  <KeyValue>
+                    {matches.person && (
+                      <KeyValueRow label="Person">
+                        <Link href={`/people/${matches.person.person_id}`}>
+                          {matches.person.full_name || matches.person.email}
+                        </Link>
+                      </KeyValueRow>
+                    )}
+                    {matches.company && (
+                      <KeyValueRow label="Company">
+                        <Link href={`/companies/${matches.company.company_id}`}>
+                          {matches.company.name}
+                        </Link>{" "}
+                        <LifecyclePill lifecycle={matches.company.lifecycle} />
+                      </KeyValueRow>
+                    )}
+                  </KeyValue>
+                )}
+              </Card>
+            )}
+            {canWrite && !closed && (
+              <Card
+                title="Qualify"
+                titleAs="h3"
+                description="Makes the person, the company and, if you want, the deal."
+              >
+                {settings === null ? (
+                  <Callout tone="danger" compact>
+                    The pipeline could not be read, so conversion is paused. Nothing is lost.
+                  </Callout>
+                ) : (
+                  <ConvertLeadForm
+                    action={convertLeadAction}
+                    lead={lead}
+                    matchedCompany={matches.company}
+                    suggestedDomain={companyDomain(lead.email)}
+                    stages={openStages}
+                    defaultDue={isoDayPlus(now, 3)}
+                  />
+                )}
+              </Card>
+            )}
+            {canWrite && lead.stage !== "qualified" && (
+              <Card
+                title="Stage"
+                titleAs="h3"
+                description="Logged work moves the stage by itself; this is for corrections."
+              >
+                <LeadStageForm action={updateLeadStageAction} lead={lead} />
+              </Card>
+            )}
+          </>
+        }
+      >
+        <>
           <Card title="What they sent" titleAs="h2">
             {lead.message ? (
               <p className="prose-block">{lead.message}</p>
@@ -150,10 +295,7 @@ export default async function LeadPage({ params }: LeadPageProps) {
               </KeyValue>
             )}
           </Card>
-          <section className="record-section" aria-labelledby="lead-activity">
-            <h2 className="record-section__title" id="lead-activity">
-              Activity
-            </h2>
+          <RecordSection id="lead-activity" title="Activity">
             {canWrite && !closed && (
               <LogActivityForm
                 action={logActivityAction}
@@ -163,115 +305,9 @@ export default async function LeadPage({ params }: LeadPageProps) {
               />
             )}
             <ActivityTimeline activities={activities} now={now} stageLabels={stageNames} />
-          </section>
-        </div>
-        <aside className="record-layout__side">
-          {lead.stage === "qualified" && (
-            <Card title="Converted" titleAs="h3" important>
-              <ul className="side-list">
-                {lead.converted_company_id && (
-                  <li>
-                    <Link href={`/companies/${lead.converted_company_id}`}>Open the company</Link>
-                  </li>
-                )}
-                {lead.converted_person_id && (
-                  <li>
-                    <Link href={`/people/${lead.converted_person_id}`}>Open the person</Link>
-                  </li>
-                )}
-                {lead.converted_deal_id && (
-                  <li>
-                    <Link href={`/deals/${lead.converted_deal_id}`}>Open the deal</Link>
-                  </li>
-                )}
-              </ul>
-            </Card>
-          )}
-          {lead.stage === "disqualified" && (
-            <Card title="Disqualified" titleAs="h3">
-              <p className="side-quiet">
-                {DISQUALIFY_LABELS[lead.disqualify_reason] ?? "No reason recorded"}.
-              </p>
-            </Card>
-          )}
-          {!anonymised && (
-            <Card title="Already known" titleAs="h3">
-              {matches.person === null && matches.company === null ? (
-                <p className="side-quiet">
-                  Nobody at HQ matches this address or its domain. Converting creates both.
-                </p>
-              ) : (
-                <KeyValue>
-                  {matches.person && (
-                    <KeyValueRow label="Person">
-                      <Link href={`/people/${matches.person.person_id}`}>
-                        {matches.person.full_name || matches.person.email}
-                      </Link>
-                    </KeyValueRow>
-                  )}
-                  {matches.company && (
-                    <KeyValueRow label="Company">
-                      <Link href={`/companies/${matches.company.company_id}`}>
-                        {matches.company.name}
-                      </Link>{" "}
-                      <LifecyclePill lifecycle={matches.company.lifecycle} />
-                    </KeyValueRow>
-                  )}
-                </KeyValue>
-              )}
-            </Card>
-          )}
-          {canWrite && !closed && (
-            <Card
-              title="Qualify"
-              titleAs="h3"
-              description="Makes the person, the company and, if you want, the deal."
-            >
-              {settings === null ? (
-                <Callout tone="danger" compact>
-                  The pipeline could not be read, so conversion is paused. Nothing is lost.
-                </Callout>
-              ) : (
-                <ConvertLeadForm
-                  action={convertLeadAction}
-                  lead={lead}
-                  matchedCompany={matches.company}
-                  suggestedDomain={companyDomain(lead.email)}
-                  stages={openStages}
-                  defaultDue={isoDayPlus(now, 3)}
-                />
-              )}
-            </Card>
-          )}
-          <Card title="Details" titleAs="h3">
-            <KeyValue>
-              <KeyValueRow label="Owner">
-                {lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : "Unowned"}
-              </KeyValueRow>
-              <KeyValueRow label="First reply">
-                <Timestamp
-                  value={lead.first_replied_at}
-                  now={now}
-                  mode="relative"
-                  fallback="Not yet"
-                />
-              </KeyValueRow>
-              <KeyValueRow label="Received">
-                <Timestamp value={lead.created_at} mode="absolute" />
-              </KeyValueRow>
-            </KeyValue>
-          </Card>
-          {canWrite && lead.stage !== "qualified" && (
-            <Card
-              title="Stage"
-              titleAs="h3"
-              description="Logged work moves the stage by itself; this is for corrections."
-            >
-              <LeadStageForm action={updateLeadStageAction} lead={lead} />
-            </Card>
-          )}
-        </aside>
-      </div>
+          </RecordSection>
+        </>
+      </RecordGrid>
     </>
   );
 }
