@@ -738,6 +738,23 @@
     display: contents;
   }
 
+  .rail__menu-label {
+    margin: 6px 0 2px;
+    padding: 6px 8px 0;
+    border-top: 1px solid var(--line-soft);
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .rail__menu a[aria-current="true"] {
+    color: var(--text);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
   .rail__menu button,
   .rail__menu a {
     display: flex;

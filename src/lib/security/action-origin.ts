@@ -49,7 +49,24 @@ export async function requireSameOriginServerAction(formData?: FormData): Promis
 
   const expectedOrigin = configuredPortalOrigin();
   const actualOrigin = requestOrigin(headersList);
-  if (!expectedOrigin || !actualOrigin || actualOrigin !== expectedOrigin) {
-    throw new SameOriginActionError();
+  if (!expectedOrigin || !actualOrigin) throw new SameOriginActionError();
+  if (actualOrigin === expectedOrigin) return;
+  // Development only: the browser may say localhost where the config says 127.0.0.1.
+  if (
+    process.env.NODE_ENV !== "production" &&
+    isLoopback(actualOrigin) &&
+    isLoopback(expectedOrigin)
+  ) {
+    return;
+  }
+  throw new SameOriginActionError();
+}
+
+function isLoopback(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  } catch {
+    return false;
   }
 }

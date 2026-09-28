@@ -1,6 +1,6 @@
 "use client";
 
-import { LogOut, Moon, ShieldCheck, Sun } from "lucide-react";
+import { LogOut, Moon, ShieldCheck, Sun, UserRound } from "lucide-react";
 import Link from "next/link";
 
 import type { ShellIdentity } from "@/components/shell/shell-types";
@@ -59,6 +59,22 @@ export function RailIdentity({ identity, signOutAction, collapsed }: RailIdentit
             Sign out
           </button>
         </form>
+        {identity.devPersonas && identity.devPersonas.length > 0 && (
+          <>
+            <p className="rail__menu-label">Test as</p>
+            {identity.devPersonas.map((persona) => (
+              <a
+                key={persona.email}
+                role="menuitem"
+                href={`/dev/signin?as=${encodeURIComponent(persona.email)}&next=%2Fhome`}
+                aria-current={persona.email === identity.email ? "true" : undefined}
+              >
+                <UserRound size={14} strokeWidth={1.8} aria-hidden="true" />
+                {persona.label}
+              </a>
+            ))}
+          </>
+        )}
       </div>
     </details>
   );
