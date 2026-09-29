@@ -1,6 +1,7 @@
 import {
   updateDeskRulesAction,
   updatePlanAction,
+  updatePolicyAction,
   updateSlaAction,
   updateSourceAction,
 } from "@/app/(portal)/admin/actions";
@@ -8,8 +9,10 @@ import { AdminTabs } from "@/components/admin/admin-tabs";
 import {
   DeskRulesForm,
   NewPlanForm,
+  NewPolicyForm,
   NewSourceForm,
   PlanRowForm,
+  PolicyRowForm,
   SlaRowForm,
   SourceRowForm,
 } from "@/components/admin/settings-forms";
@@ -21,6 +24,7 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, type CrmSettings } from "@/lib/api/crm";
 import { readSupportSettings, type SupportSettings } from "@/lib/api/settings";
 import { listStaff } from "@/lib/api/staff";
+import { readPolicies, type PoliciesPage } from "@/lib/api/team";
 import { Timestamp } from "@/components/ui/timestamp";
 import { requestNow } from "@/lib/request-time";
 
@@ -46,14 +50,16 @@ export default async function SettingsPage() {
       </>
     );
   }
-  const [support, crm, staff]: [
+  const [support, crm, staff, policies]: [
     SupportSettings | null,
     CrmSettings | null,
     Awaited<ReturnType<typeof listStaff>> | null,
+    PoliciesPage | null,
   ] = await Promise.all([
     orNull(() => readSupportSettings(context.token)),
     orNull(() => readCrmSettings(context.token)),
     orNull(() => listStaff(context.token)),
+    orNull(() => readPolicies(context.token)),
   ]);
   const fixed = new Set(crm?.protected_sources ?? []);
   const now = requestNow();
@@ -71,7 +77,7 @@ export default async function SettingsPage() {
       <PageHeader
         eyebrow="Admin"
         title="Settings"
-        description="The price list, the reply times the desk is held to, the desk's standing rules, and the sources a lead can come from."
+        description="The price list, the reply times the desk is held to, the desk's standing rules, the company's policies, and the sources a lead can come from."
         actions={<AdminTabs current="/admin/settings" />}
       />
       <div className="record-layout">
@@ -184,6 +190,27 @@ export default async function SettingsPage() {
               />
             )}
           </section>
+          <section className="record-section" aria-labelledby="settings-policies">
+            <h2 className="record-section__title" id="settings-policies">
+              Company policies
+            </h2>
+            <p className="page-note">
+              Each policy carries a version. Everyone acknowledges the current version under My
+              security; publishing a new version asks everyone again, and the Team page shows who is
+              behind.
+            </p>
+            {policies === null ? (
+              <Callout tone="danger" role="alert">
+                The policies could not be read just now. Nothing was changed.
+              </Callout>
+            ) : (
+              <div className="plan-rows">
+                {policies.policies.map((policy) => (
+                  <PolicyRowForm key={policy.key} action={updatePolicyAction} policy={policy} />
+                ))}
+              </div>
+            )}
+          </section>
           <section className="record-section" aria-labelledby="settings-sources">
             <h2 className="record-section__title" id="settings-sources">
               Lead sources
@@ -228,6 +255,9 @@ export default async function SettingsPage() {
         <aside className="record-layout__side">
           <Card title="Add a plan" titleAs="h3">
             <NewPlanForm action={updatePlanAction} />
+          </Card>
+          <Card title="Add a policy" titleAs="h3">
+            <NewPolicyForm action={updatePolicyAction} />
           </Card>
           <Card title="Add a source" titleAs="h3">
             <NewSourceForm action={updateSourceAction} />

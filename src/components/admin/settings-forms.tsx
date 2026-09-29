@@ -465,3 +465,91 @@ export function DeskRulesForm({
     </form>
   );
 }
+
+/** One company policy: rename, relink, or publish a new version everyone must acknowledge. */
+export function PolicyRowForm({
+  action,
+  policy,
+}: {
+  action: Action;
+  policy: { key: string; title: string; version: number; url: string };
+}) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  const id = `policy-${policy.key}`;
+  return (
+    <form className="plan-row" action={formAction}>
+      <AttemptField state={state} />
+      <input type="hidden" name="key" value={policy.key} />
+      <Field id={`${id}-title`} label="Policy" hint={`Version ${policy.version} · ${policy.key}`}>
+        <Input
+          id={`${id}-title`}
+          name="title"
+          defaultValue={policy.title}
+          maxLength={120}
+          required
+          disabled={isPending}
+        />
+      </Field>
+      <Field id={`${id}-url`} label="Where it is" hint="A link to the document, if there is one.">
+        <Input
+          id={`${id}-url`}
+          name="url"
+          type="url"
+          defaultValue={policy.url}
+          maxLength={400}
+          placeholder="https://…"
+          disabled={isPending}
+        />
+      </Field>
+      <Checkbox
+        id={`${id}-publish`}
+        name="publish"
+        label="Publish as a new version"
+        description="Everyone is asked to acknowledge it again."
+        disabled={isPending}
+      />
+      <div className="sla-row__foot">
+        <Button type="submit" size="small" disabled={isPending}>
+          {isPending ? "Saving…" : "Save"}
+        </Button>
+        <FormFeedback state={state} />
+      </div>
+    </form>
+  );
+}
+
+export function NewPolicyForm({ action }: { action: Action }) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  return (
+    <form className="stack-form" action={formAction} key={state.sentAt ?? "new"}>
+      <AttemptField state={state} />
+      <Field id="policy-new-title" label="Name">
+        <Input id="policy-new-title" name="title" maxLength={120} required disabled={isPending} />
+      </Field>
+      <Field id="policy-new-key" label="Key" hint="Lowercase, e.g. expenses. Fixed once added.">
+        <Input
+          id="policy-new-key"
+          name="key"
+          maxLength={40}
+          pattern="[a-z][a-z0-9_]{1,39}"
+          required
+          disabled={isPending}
+        />
+      </Field>
+      <Field id="policy-new-url" label="Where it is">
+        <Input
+          id="policy-new-url"
+          name="url"
+          type="url"
+          maxLength={400}
+          placeholder="https://…"
+          disabled={isPending}
+        />
+      </Field>
+      <Button type="submit" variant="primary" disabled={isPending}>
+        {isPending ? "Adding…" : "Add policy"}
+      </Button>
+      <FormFeedback state={state} />
+    </form>
+  );
+}

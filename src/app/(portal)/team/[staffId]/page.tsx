@@ -2,11 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import {
+  addOneOnOneAction,
+  addTrainingAction,
   checklistStepAction,
   grantAccessAction,
   revokeAccessAction,
+  saveAssetAction,
   saveDocumentAction,
   startChecklistAction,
+  toggleActionItemAction,
+  updateProfileAction,
 } from "@/app/(portal)/team/actions";
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
@@ -23,8 +28,13 @@ import {
 import {
   DocumentForm,
   GrantAccessForm,
+  IssueAssetForm,
+  OneOnOneForm,
+  ProfileForm,
+  ReturnAssetForm,
   RevokeAccessForm,
   StartChecklistForm,
+  TrainingForm,
 } from "@/components/team/team-forms";
 import { Callout } from "@/components/ui/callout";
 import { Popover } from "@/components/ui/popover";
@@ -33,8 +43,8 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { kindLabel, roleLabel } from "@/lib/access/role-labels";
-import { HqApiRequestError } from "@/lib/api/core";
-import { readTeamMember, type TeamMember } from "@/lib/api/team";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { readTeam, readTeamMember, type TeamMember } from "@/lib/api/team";
 import { formatAbsolute, formatDate } from "@/lib/format";
 import { DOCUMENT_LABELS } from "@/lib/team/vocabulary";
 import { requestNow } from "@/lib/request-time";
@@ -47,9 +57,16 @@ const MOOD_WORDS = ["", "Rough", "Meh", "Steady", "Good", "Great"];
 
 const TABS = [
   { key: "overview", label: "Overview" },
+  { key: "growth", label: "One-to-ones" },
   { key: "checkins", label: "Check-ins" },
   { key: "time-off", label: "Time off" },
 ] as const;
+
+function daysWord(days: number): string {
+  if (days === 0) return "today";
+  if (days < 0) return `${Math.abs(days)} ${Math.abs(days) === 1 ? "day" : "days"} ago`;
+  return `in ${days} ${days === 1 ? "day" : "days"}`;
+}
 
 type TeamMemberPageProps = {
   params: Promise<{ staffId: string }>;
@@ -75,8 +92,40 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
     if (error instanceof HqApiRequestError && error.status === 404) notFound();
     throw error;
   }
-  const { person, documents, access, checklists, checkins, time_off: leave, certificates } = record;
+  const {
+    person,
+    documents,
+    access,
+    checklists,
+    checkins,
+    time_off: leave,
+    certificates,
+    assets,
+    training,
+    one_on_ones: oneOnOnes,
+    policies,
+    reminders,
+    reports,
+  } = record;
   const canWrite = hasCapability(context, "hr:write");
+  const isManager = person.manager_id === context.me.staff.staff_id;
+  // Colleagues who could be the manager: the directory, minus the person.
+  let colleagues: { staff_id: string; display_name: string }[] = [];
+  if (canWrite) {
+    try {
+      colleagues = (await readTeam(context.token)).people
+        .filter((member) => member.is_active && member.staff_id !== person.staff_id)
+        .map((member) => ({
+          staff_id: member.staff_id,
+          display_name: member.display_name || member.email,
+        }));
+    } catch (error) {
+      if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+        throw error;
+    }
+  }
+  const today = new Date(now).toISOString().slice(0, 10);
+  const outstandingPolicies = policies.filter((policy) => policy.outstanding);
   const openKinds = ["onboarding", "offboarding"].filter(
     (kind) => !checklists.some((run) => run.kind === kind && !run.completed_at),
   );
@@ -84,8 +133,9 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
   const liveAccess = access.filter((grant) => grant.live).length;
   const tabs = [
     TABS[0],
-    { ...TABS[1], count: checkins.length },
-    { ...TABS[2], count: leave.length },
+    { ...TABS[1], count: oneOnOnes.length },
+    { ...TABS[2], count: checkins.length },
+    { ...TABS[3], count: leave.length },
   ];
   const tab = currentTab(firstSearchValue((await searchParams).tab), tabs);
   const base = `/team/${person.staff_id}`;
@@ -204,6 +254,167 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
     </RecordSection>
   );
 
+  const assetsSection = (
+    <RecordSection
+      id="team-assets"
+      title="Issued to them"
+      actions={
+        canWrite &&
+        person.is_active && (
+          <Popover label="Issue something" width="wide">
+            <IssueAssetForm action={saveAssetAction} staffId={person.staff_id} today={today} />
+          </Popover>
+        )
+      }
+    >
+      {assets.length === 0 ? (
+        <p className="timeline-empty">Nothing issued.</p>
+      ) : (
+        <ul className="access-list">
+          {assets.map((asset) => (
+            <li key={asset.asset_id} className={asset.out ? "access" : "access access--gone"}>
+              <div className="access__main">
+                <span className="access__system">{asset.label}</span>
+                <span className="access__meta">
+                  {asset.kind}
+                  {asset.serial && ` · ${asset.serial}`} · issued {formatDate(asset.issued_on)}
+                  {asset.returned_on
+                    ? ` · returned ${formatDate(asset.returned_on)}`
+                    : " · still out"}
+                  {asset.notes && ` · ${asset.notes}`}
+                </span>
+              </div>
+              {canWrite && asset.out && (
+                <ReturnAssetForm
+                  action={saveAssetAction}
+                  staffId={person.staff_id}
+                  asset={asset}
+                  today={today}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </RecordSection>
+  );
+
+  const trainingSection = (
+    <RecordSection
+      id="team-training"
+      title="Training"
+      actions={
+        canWrite && (
+          <Popover label="Record training" width="wide">
+            <TrainingForm action={addTrainingAction} staffId={person.staff_id} />
+          </Popover>
+        )
+      }
+    >
+      {training.length === 0 ? (
+        <p className="timeline-empty">No training recorded.</p>
+      ) : (
+        <ul className="access-list">
+          {training.map((row) => (
+            <li key={row.training_id} className={row.expired ? "access access--gone" : "access"}>
+              <div className="access__main">
+                <span className="access__system">{row.title}</span>
+                <span className="access__meta">
+                  {row.provider && `${row.provider} · `}completed {formatDate(row.completed_on)}
+                  {row.expires_on
+                    ? row.expired
+                      ? ` · expired ${formatDate(row.expires_on)}`
+                      : ` · valid until ${formatDate(row.expires_on)}`
+                    : " · does not expire"}
+                  {row.reference && ` · ${row.reference}`}
+                </span>
+              </div>
+              {row.expiring_soon && <span className="due due--today">Expiring</span>}
+              {row.expired && <span className="due due--overdue">Expired</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </RecordSection>
+  );
+
+  const oneOnOnesSection = (
+    <RecordSection
+      id="team-one-on-ones"
+      title="One-to-ones"
+      actions={
+        (canWrite || isManager) && (
+          <Popover label="Record a one-to-one" width="wide">
+            <OneOnOneForm
+              action={addOneOnOneAction}
+              staffId={person.staff_id}
+              personName={person.display_name.split(" ")[0] ?? ""}
+              today={today}
+            />
+          </Popover>
+        )
+      }
+    >
+      {oneOnOnes.length === 0 ? (
+        <p className="timeline-empty">None recorded yet.</p>
+      ) : (
+        <ol className="checkin-list">
+          {oneOnOnes.map((meeting) => (
+            <li key={meeting.one_on_one_id} className="checkin">
+              <p className="checkin__head">
+                <span>{formatDate(meeting.held_on)}</span>
+                <span className="side-quiet">with {meeting.held_by_name || "a colleague"}</span>
+              </p>
+              {meeting.notes && <p className="checkin__line">{meeting.notes}</p>}
+              {meeting.actions.length > 0 && (
+                <ul className="checklist__steps">
+                  {meeting.actions.map((item) => (
+                    <li key={item.action_id} className={item.done_at ? "task task--done" : "task"}>
+                      {canWrite ||
+                      isManager ||
+                      item.owner_id === context.me.staff.staff_id ||
+                      person.staff_id === context.me.staff.staff_id ? (
+                        <RowAction
+                          action={toggleActionItemAction}
+                          className="task__check-form"
+                          fields={{
+                            staff_id: person.staff_id,
+                            action_id: item.action_id,
+                            done: item.done_at ? "false" : "true",
+                          }}
+                          buttons={[
+                            {
+                              label: "",
+                              className: "task__check",
+                              ariaPressed: Boolean(item.done_at),
+                              ariaLabel: item.done_at
+                                ? `Undo: ${item.title}`
+                                : `Done: ${item.title}`,
+                            },
+                          ]}
+                        />
+                      ) : (
+                        <span className="task__check task__check--static" aria-hidden="true" />
+                      )}
+                      <div className="task__main">
+                        <p className="task__title">{item.title}</p>
+                        <p className="task__meta">
+                          {item.owner_name}
+                          {item.due_on && ` · due ${formatDate(item.due_on)}`}
+                          {item.overdue && " · overdue"}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </RecordSection>
+  );
+
   const checkinsSection = (
     <RecordSection id="team-checkins" title="Check-ins">
       {checkins.length === 0 ? (
@@ -278,6 +489,7 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
           { label: "Engagement", value: kindLabel(person.kind) },
           { label: "Since", value: person.starts_on ? formatDate(person.starts_on) : "—" },
           { label: "Live access", value: liveAccess },
+          { label: "Issued items out", value: assets.filter((asset) => asset.out).length },
         ]}
         actions={
           hasCapability(context, "hq:admin") ? (
@@ -326,6 +538,33 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
                 {person.ends_on ? formatDate(person.ends_on) : "Open-ended"}
               </Property>
               <Property label="Status">{person.is_active ? "Active" : "Not active"}</Property>
+              <Property label="Reports to">
+                {person.manager_id ? (
+                  <Link href={`/team/${person.manager_id}`}>
+                    {person.manager_name || "A colleague"}
+                  </Link>
+                ) : (
+                  "—"
+                )}
+              </Property>
+              {reports.length > 0 && (
+                <Property label="Manages">
+                  {reports.map((report, index) => (
+                    <span key={report.staff_id}>
+                      {index > 0 && ", "}
+                      <Link href={`/team/${report.staff_id}`}>{report.display_name}</Link>
+                    </span>
+                  ))}
+                </Property>
+              )}
+              <Property label="Probation ends">
+                {person.probation_ends_on ? formatDate(person.probation_ends_on) : "—"}
+              </Property>
+              <Property label="Emergency contact">
+                {person.emergency_contact.name
+                  ? `${person.emergency_contact.name}${person.emergency_contact.relation ? ` (${person.emergency_contact.relation})` : ""}${person.emergency_contact.phone ? ` · ${person.emergency_contact.phone}` : ""}`
+                  : "—"}
+              </Property>
               <Property label="Certificates">
                 {certificates.length === 0
                   ? "None"
@@ -340,6 +579,59 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
                     ))}
               </Property>
             </Properties>
+            {canWrite && (
+              <RecordSection id="team-profile" title="Reporting line and contact">
+                <ProfileForm
+                  action={updateProfileAction}
+                  staffId={person.staff_id}
+                  person={person}
+                  colleagues={colleagues}
+                />
+              </RecordSection>
+            )}
+            {reminders.length > 0 && (
+              <RecordSection id="team-reminders" title="Coming up">
+                <ul className="side-list">
+                  {reminders.map((item) => (
+                    <li key={`${item.kind}-${item.on}-${item.label}`} className="renewal">
+                      <span>
+                        {item.label} · {formatDate(item.on)}
+                      </span>
+                      <span className={item.days <= 7 ? "due due--today" : "side-quiet"}>
+                        {daysWord(item.days)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </RecordSection>
+            )}
+            <RecordSection id="team-policies" title="Policies">
+              {policies.length === 0 ? (
+                <p className="side-quiet">No policies published.</p>
+              ) : (
+                <ul className="side-list">
+                  {policies.map((policy) => (
+                    <li key={policy.key} className="renewal">
+                      <span>
+                        {policy.title} <span className="side-quiet">v{policy.version}</span>
+                      </span>
+                      {policy.outstanding ? (
+                        <StatusPill value="outstanding" label="Not acknowledged" tone="attention" />
+                      ) : (
+                        <StatusPill value="acknowledged" label="Acknowledged" tone="live" />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {outstandingPolicies.length > 0 && (
+                <p className="side-quiet">
+                  {outstandingPolicies.length === 1
+                    ? "One policy awaits their acknowledgement; they do it under My security."
+                    : `${outstandingPolicies.length} policies await their acknowledgement; they do it under My security.`}
+                </p>
+              )}
+            </RecordSection>
             <RecordSection id="team-checklists" title="Checklists">
               {checklists.length === 0 && (
                 <p className="side-quiet">No onboarding or offboarding started.</p>
@@ -356,6 +648,13 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
                   {run.due_at && !run.completed_at && (
                     <p className={run.overdue ? "due due--overdue" : "due due--today"}>
                       Access removal due <Timestamp value={run.due_at} now={now} mode="relative" />
+                    </p>
+                  )}
+                  {run.blocked_by_assets > 0 && (
+                    <p className="due due--today">
+                      {run.blocked_by_assets === 1
+                        ? "1 issued item is still out; the return step waits for it."
+                        : `${run.blocked_by_assets} issued items are still out; the return step waits for them.`}
                     </p>
                   )}
                   <ul className="checklist__steps">
@@ -408,8 +707,11 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
           <>
             {documentsSection}
             {accessSection}
+            {assetsSection}
+            {trainingSection}
           </>
         )}
+        {tab === "growth" && oneOnOnesSection}
         {tab === "checkins" && checkinsSection}
         {tab === "time-off" && timeOffSection}
       </RecordGrid>

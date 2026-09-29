@@ -3981,6 +3981,64 @@
     margin-bottom: 4px;
   }
 
+  .policy-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 10px;
+  }
+
+  .policy {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .policy:last-child {
+    border-bottom: 0;
+  }
+
+  .policy__main {
+    display: grid;
+    gap: 2px;
+    min-inline-size: 0;
+  }
+
+  .policy__meta {
+    color: var(--quiet);
+    font-size: 12.5px;
+  }
+
+  .policy form {
+    display: contents;
+  }
+
+  .team-reminders {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .oo-action-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 6px;
+  }
+
+  @media (max-width: 640px) {
+    .oo-action-row {
+      grid-template-columns: 1fr;
+    }
+  }
+
   .review-findings {
     margin: 8px 0 0;
     padding-left: 18px;

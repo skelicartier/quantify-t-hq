@@ -324,3 +324,188 @@ export async function decideTimeOffAction(
   revalidatePath("/team");
   return { status: "sent", message: null, sentAt: Date.now() };
 }
+
+// --- people ops -----------------------------------------------------------------------
+
+/** Manager, probation end and emergency contact, one field or several at once. */
+export async function updateProfileAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/team");
+  if (!hasCapability(context, "hr:write")) return NOT_HR;
+  const staffId = fieldValue(formData, "staff_id", 64);
+  const input: Record<string, unknown> = {};
+  for (const [name, limit] of [
+    ["manager_id", 64],
+    ["probation_ends_on", 10],
+    ["emergency_contact_name", 120],
+    ["emergency_contact_phone", 40],
+    ["emergency_contact_relation", 60],
+  ] as const) {
+    if (formData.has(name)) input[name] = fieldValue(formData, name, limit).trim();
+  }
+  if (Object.keys(input).length === 0) return { status: "error", message: "Nothing to change." };
+  try {
+    await teamApi.updateProfile(context.token, staffId, input);
+  } catch (error) {
+    const details = detailsOf(error);
+    if ("manager_id" in details) {
+      return { status: "error", message: `Manager: ${String(details.manager_id)}.` };
+    }
+    return crmRefusal(error);
+  }
+  refreshPerson(staffId);
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
+
+/** Issue something (no asset id) or record it back (asset id + returned on). */
+export async function saveAssetAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/team");
+  if (!hasCapability(context, "hr:write")) return NOT_HR;
+  const staffId = fieldValue(formData, "staff_id", 64);
+  const assetId = fieldValue(formData, "asset_id", 64);
+  const input: Record<string, unknown> = {};
+  if (assetId) {
+    input.asset_id = assetId;
+    if (formData.has("returned_on")) input.returned_on = fieldValue(formData, "returned_on", 10);
+    if (formData.has("notes")) input.notes = fieldValue(formData, "notes", 400).trim();
+  } else {
+    input.kind = fieldValue(formData, "kind", 16);
+    input.label = fieldValue(formData, "label", 120).trim();
+    input.serial = fieldValue(formData, "serial", 80).trim();
+    input.issued_on = fieldValue(formData, "issued_on", 10);
+    input.notes = fieldValue(formData, "notes", 400).trim();
+    if (!input.label) return { status: "error", message: "Say what was issued." };
+  }
+  try {
+    await teamApi.saveAsset(context.token, staffId, input);
+  } catch (error) {
+    const details = detailsOf(error);
+    if ("returned_on" in details) {
+      return { status: "error", message: "The return date cannot be before it was issued." };
+    }
+    return crmRefusal(error);
+  }
+  refreshPerson(staffId);
+  return {
+    status: "sent",
+    message: assetId ? "Recorded as returned." : "Issued.",
+    sentAt: Date.now(),
+  };
+}
+
+export async function addTrainingAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/team");
+  if (!hasCapability(context, "hr:write")) return NOT_HR;
+  const staffId = fieldValue(formData, "staff_id", 64);
+  const input = {
+    title: fieldValue(formData, "title", 160).trim(),
+    provider: fieldValue(formData, "provider", 120).trim(),
+    completed_on: fieldValue(formData, "completed_on", 10),
+    expires_on: fieldValue(formData, "expires_on", 10),
+    reference: fieldValue(formData, "reference", 400).trim(),
+  };
+  if (!input.title || !input.completed_on) {
+    return { status: "error", message: "Name the training and say when it was completed." };
+  }
+  try {
+    await teamApi.addTraining(context.token, staffId, input);
+  } catch (error) {
+    const details = detailsOf(error);
+    if ("expires_on" in details) {
+      return { status: "error", message: "The expiry must come after the completion date." };
+    }
+    return crmRefusal(error);
+  }
+  refreshPerson(staffId);
+  return { status: "sent", message: "Recorded.", sentAt: Date.now() };
+}
+
+/** A one-to-one with up to four actions; the service decides who may write it. */
+export async function addOneOnOneAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/team");
+  const staffId = fieldValue(formData, "staff_id", 64);
+  const actions: { title: string; due_on: string; owner: string }[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    const title = fieldValue(formData, `action_title_${index}`, 200).trim();
+    if (!title) continue;
+    actions.push({
+      title,
+      due_on: fieldValue(formData, `action_due_${index}`, 10),
+      owner: fieldValue(formData, `action_owner_${index}`, 4) === "me" ? "me" : "them",
+    });
+  }
+  const input = {
+    held_on: fieldValue(formData, "held_on", 10),
+    notes: fieldValue(formData, "notes", 2000).trim(),
+    actions,
+  };
+  if (!input.held_on) return { status: "error", message: "Say when it was held." };
+  try {
+    await teamApi.addOneOnOne(context.token, staffId, input);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "status" in error &&
+      (error as { status: number }).status === 403
+    ) {
+      return {
+        status: "error",
+        message: "Only HQ admins or the person's manager record a one-to-one.",
+      };
+    }
+    return crmRefusal(error);
+  }
+  refreshPerson(staffId);
+  return { status: "sent", message: "Recorded.", sentAt: Date.now() };
+}
+
+export async function toggleActionItemAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/team");
+  const staffId = fieldValue(formData, "staff_id", 64);
+  const actionId = fieldValue(formData, "action_id", 64);
+  const done = fieldValue(formData, "done", 5) === "true";
+  try {
+    await teamApi.toggleAction(context.token, actionId, done);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refreshPerson(staffId);
+  return { status: "sent", message: null, sentAt: Date.now() };
+}
+
+/** The signed-in person acknowledges the current version of a policy. */
+export async function acknowledgePolicyAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/me/security");
+  const key = fieldValue(formData, "policy_key", 40);
+  try {
+    await teamApi.acknowledgePolicy(context.token, key);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/me/security");
+  revalidatePath("/home");
+  return { status: "sent", message: "Acknowledged.", sentAt: Date.now() };
+}

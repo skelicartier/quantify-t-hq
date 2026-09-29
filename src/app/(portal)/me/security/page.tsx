@@ -15,7 +15,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { RowAction } from "@/components/ui/row-action";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
+import { acknowledgePolicyAction } from "@/app/(portal)/team/actions";
 import { listSessions } from "@/lib/api/auth";
+import { readPolicies, type PolicyState } from "@/lib/api/team";
+import { formatDate } from "@/lib/format";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { requireStaff } from "@/lib/access/core";
 import { formatAbsolute } from "@/lib/format";
@@ -46,6 +49,14 @@ export default async function SecurityPage() {
     ? (formatAbsolute(context.me.sudo_until).split(", ")[1] ?? null)
     : null;
   const live = (sessions ?? []).filter((session) => session.live);
+  let policies: PolicyState[] | null = null;
+  try {
+    policies = (await readPolicies(context.token)).policies;
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
+
   return (
     <>
       <PageHeader
@@ -130,6 +141,63 @@ export default async function SecurityPage() {
             action={regenerateRecoveryCodesAction}
             disabled={!context.me.sudo_fresh}
           />
+        </Card>
+      </Section>
+      <Section
+        id="policies"
+        title="Company policies"
+        description="Each carries a version. When one is re-published, it asks to be acknowledged again."
+      >
+        <Card>
+          {policies === null ? (
+            <Callout tone="danger" compact>
+              Policies could not be read just now. This is a read failure, not an empty list.
+            </Callout>
+          ) : policies.length === 0 ? (
+            <p className="muted">No policies have been published.</p>
+          ) : (
+            <ul className="policy-list">
+              {policies.map((policy) => (
+                <li key={policy.key} className="policy">
+                  <div className="policy__main">
+                    <span className="policy__title">
+                      {policy.url ? (
+                        <a href={policy.url} rel="noreferrer noopener" target="_blank">
+                          {policy.title}
+                        </a>
+                      ) : (
+                        policy.title
+                      )}{" "}
+                      <span className="side-quiet">v{policy.version}</span>
+                    </span>
+                    <span className="policy__meta">
+                      {policy.outstanding
+                        ? policy.acknowledged_version
+                          ? `You acknowledged version ${policy.acknowledged_version}; version ${policy.version} is new.`
+                          : "Not yet acknowledged."
+                        : `Acknowledged ${formatDate(policy.acknowledged_at)}.`}
+                    </span>
+                  </div>
+                  {policy.outstanding ? (
+                    <RowAction
+                      action={acknowledgePolicyAction}
+                      fields={{ policy_key: policy.key }}
+                      buttons={[
+                        {
+                          label: "I have read it",
+                          className: "btn btn--small btn--primary",
+                          pendingLabel: "Recording…",
+                        },
+                      ]}
+                      sentLabel="Acknowledged."
+                    />
+                  ) : (
+                    <StatusPill value="acknowledged" label="Acknowledged" tone="live" />
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </Section>
     </>

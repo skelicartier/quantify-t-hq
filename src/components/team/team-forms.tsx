@@ -621,3 +621,307 @@ export function CompleteReviewForm({
     </form>
   );
 }
+
+// --- people ops -----------------------------------------------------------------------
+
+/** Manager, probation end and emergency contact: HR fields on the person's record. */
+export function ProfileForm({
+  action,
+  staffId,
+  person,
+  colleagues,
+}: {
+  action: Action;
+  staffId: string;
+  person: {
+    manager_id: string;
+    probation_ends_on: string | null;
+    emergency_contact: { name: string; phone: string; relation: string };
+  };
+  /** Active colleagues who could be the manager (the person themself excluded). */
+  colleagues: readonly { staff_id: string; display_name: string }[];
+}) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  return (
+    <form className="stack-form stack-form--tight" action={formAction}>
+      <AttemptField state={state} />
+      <input type="hidden" name="staff_id" value={staffId} />
+      <Field id="profile-manager" label="Reports to">
+        <Select
+          id="profile-manager"
+          name="manager_id"
+          defaultValue={person.manager_id}
+          disabled={isPending}
+        >
+          <option value="">Nobody recorded</option>
+          {colleagues.map((member) => (
+            <option key={member.staff_id} value={member.staff_id}>
+              {member.display_name}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <Field
+        id="profile-probation"
+        label="Probation ends"
+        hint="A reminder appears sixty days before. Clear it once confirmed."
+      >
+        <Input
+          id="profile-probation"
+          name="probation_ends_on"
+          type="date"
+          defaultValue={person.probation_ends_on?.slice(0, 10) ?? ""}
+          disabled={isPending}
+        />
+      </Field>
+      <Field id="profile-ec-name" label="Emergency contact">
+        <Input
+          id="profile-ec-name"
+          name="emergency_contact_name"
+          placeholder="Name"
+          maxLength={120}
+          defaultValue={person.emergency_contact.name}
+          disabled={isPending}
+        />
+      </Field>
+      <div className="form-row">
+        <Field id="profile-ec-phone" label="Phone">
+          <Input
+            id="profile-ec-phone"
+            name="emergency_contact_phone"
+            type="tel"
+            maxLength={40}
+            defaultValue={person.emergency_contact.phone}
+            disabled={isPending}
+          />
+        </Field>
+        <Field id="profile-ec-relation" label="Relation">
+          <Input
+            id="profile-ec-relation"
+            name="emergency_contact_relation"
+            maxLength={60}
+            placeholder="e.g. Parent"
+            defaultValue={person.emergency_contact.relation}
+            disabled={isPending}
+          />
+        </Field>
+      </div>
+      <Button type="submit" size="small" disabled={isPending}>
+        {isPending ? "Saving…" : "Save"}
+      </Button>
+      <FormFeedback state={state} />
+    </form>
+  );
+}
+
+const ASSET_KIND_LABELS: Record<string, string> = {
+  laptop: "Laptop",
+  phone: "Phone",
+  monitor: "Monitor",
+  badge: "Badge",
+  key: "Key",
+  token: "Security token",
+  other: "Other",
+};
+
+/** Issue something to a person. Returns are recorded per row (ReturnAssetForm). */
+export function IssueAssetForm({
+  action,
+  staffId,
+  today,
+}: {
+  action: Action;
+  staffId: string;
+  today: string;
+}) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  return (
+    <form className="stack-form stack-form--tight" action={formAction} key={state.sentAt ?? "new"}>
+      <AttemptField state={state} />
+      <input type="hidden" name="staff_id" value={staffId} />
+      <Field id="asset-kind" label="What">
+        <Select id="asset-kind" name="kind" defaultValue="laptop" disabled={isPending}>
+          {Object.entries(ASSET_KIND_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <Field id="asset-label" label="Label" hint="As it is known: model, or what it opens.">
+        <Input id="asset-label" name="label" maxLength={120} required disabled={isPending} />
+      </Field>
+      <Field id="asset-serial" label="Serial or tag">
+        <Input id="asset-serial" name="serial" maxLength={80} disabled={isPending} />
+      </Field>
+      <Field id="asset-issued" label="Issued on">
+        <Input
+          id="asset-issued"
+          name="issued_on"
+          type="date"
+          defaultValue={today}
+          required
+          disabled={isPending}
+        />
+      </Field>
+      <Button type="submit" size="small" disabled={isPending}>
+        {isPending ? "Recording…" : "Record as issued"}
+      </Button>
+      <FormFeedback state={state} />
+    </form>
+  );
+}
+
+/** The return of one issued thing: a date, and where it is now. */
+export function ReturnAssetForm({
+  action,
+  staffId,
+  asset,
+  today,
+}: {
+  action: Action;
+  staffId: string;
+  asset: { asset_id: string; label: string };
+  today: string;
+}) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  return (
+    <form className="inline-form" action={formAction}>
+      <AttemptField state={state} />
+      <input type="hidden" name="staff_id" value={staffId} />
+      <input type="hidden" name="asset_id" value={asset.asset_id} />
+      <label className="sr-only" htmlFor={`return-on-${asset.asset_id}`}>
+        Returned on, {asset.label}
+      </label>
+      <input
+        id={`return-on-${asset.asset_id}`}
+        className="input input--small"
+        name="returned_on"
+        type="date"
+        defaultValue={today}
+        max={today}
+        required
+        disabled={isPending}
+      />
+      <Button type="submit" size="small" variant="ghost" disabled={isPending}>
+        {isPending ? "Recording…" : "Returned"}
+      </Button>
+      <FormFeedback state={state} />
+    </form>
+  );
+}
+
+export function TrainingForm({ action, staffId }: { action: Action; staffId: string }) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  return (
+    <form className="stack-form stack-form--tight" action={formAction} key={state.sentAt ?? "new"}>
+      <AttemptField state={state} />
+      <input type="hidden" name="staff_id" value={staffId} />
+      <Field id="training-title" label="Training">
+        <Input id="training-title" name="title" maxLength={160} required disabled={isPending} />
+      </Field>
+      <Field id="training-provider" label="Provider">
+        <Input id="training-provider" name="provider" maxLength={120} disabled={isPending} />
+      </Field>
+      <div className="form-row">
+        <Field id="training-completed" label="Completed on">
+          <Input
+            id="training-completed"
+            name="completed_on"
+            type="date"
+            required
+            disabled={isPending}
+          />
+        </Field>
+        <Field id="training-expires" label="Expires" hint="Leave empty if it does not.">
+          <Input id="training-expires" name="expires_on" type="date" disabled={isPending} />
+        </Field>
+      </div>
+      <Field id="training-ref" label="Certificate or reference">
+        <Input id="training-ref" name="reference" maxLength={400} disabled={isPending} />
+      </Field>
+      <Button type="submit" size="small" disabled={isPending}>
+        {isPending ? "Recording…" : "Record training"}
+      </Button>
+      <FormFeedback state={state} />
+    </form>
+  );
+}
+
+/** A one-to-one and up to four actions, each owned by the person or by the writer. */
+export function OneOnOneForm({
+  action,
+  staffId,
+  personName,
+  today,
+}: {
+  action: Action;
+  staffId: string;
+  personName: string;
+  today: string;
+}) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  return (
+    <form className="stack-form stack-form--tight" action={formAction} key={state.sentAt ?? "new"}>
+      <AttemptField state={state} />
+      <input type="hidden" name="staff_id" value={staffId} />
+      <Field id="oo-held" label="Held on">
+        <Input
+          id="oo-held"
+          name="held_on"
+          type="date"
+          defaultValue={today}
+          max={today}
+          required
+          disabled={isPending}
+        />
+      </Field>
+      <Field id="oo-notes" label="Notes" hint="What was said; the person can read this.">
+        <Textarea id="oo-notes" name="notes" rows={4} maxLength={2000} disabled={isPending} />
+      </Field>
+      <fieldset className="checkbox-group" disabled={isPending}>
+        <legend className="field__label">Actions</legend>
+        {[0, 1, 2, 3].map((index) => (
+          <div key={index} className="oo-action-row">
+            <label className="sr-only" htmlFor={`oo-action-${index}`}>
+              Action {index + 1}
+            </label>
+            <input
+              id={`oo-action-${index}`}
+              className="input input--small"
+              name={`action_title_${index}`}
+              maxLength={200}
+              placeholder={index === 0 ? "What was agreed" : ""}
+            />
+            <label className="sr-only" htmlFor={`oo-owner-${index}`}>
+              Owner
+            </label>
+            <select
+              id={`oo-owner-${index}`}
+              className="select select--small"
+              name={`action_owner_${index}`}
+              defaultValue="them"
+            >
+              <option value="them">{personName || "Them"}</option>
+              <option value="me">Me</option>
+            </select>
+            <label className="sr-only" htmlFor={`oo-due-${index}`}>
+              Due
+            </label>
+            <input
+              id={`oo-due-${index}`}
+              className="input input--small"
+              name={`action_due_${index}`}
+              type="date"
+              min={today}
+            />
+          </div>
+        ))}
+      </fieldset>
+      <Button type="submit" size="small" disabled={isPending}>
+        {isPending ? "Recording…" : "Record one-to-one"}
+      </Button>
+      <FormFeedback state={state} />
+    </form>
+  );
+}

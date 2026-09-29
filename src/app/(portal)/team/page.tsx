@@ -8,7 +8,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { kindLabel, roleLabel } from "@/lib/access/role-labels";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { readTeam, type DirectoryPerson } from "@/lib/api/team";
+import { readTeam, type DirectoryPerson, type TeamReminder } from "@/lib/api/team";
 import { formatDate } from "@/lib/format";
 
 export const metadata = { title: "Team" };
@@ -17,12 +17,20 @@ export const dynamic = "force-dynamic";
 const COLUMNS = [
   { key: "person", label: "Person" },
   { key: "engagement", label: "Engagement" },
+  { key: "manager", label: "Reports to" },
   { key: "documents", label: "NDA · IP" },
   { key: "access", label: "Systems" },
+  { key: "issued", label: "Issued" },
   { key: "checklist", label: "Checklist" },
   { key: "checkin", label: "This week" },
   { key: "ends", label: "Ends" },
 ];
+
+function daysWord(days: number): string {
+  if (days === 0) return "today";
+  if (days < 0) return `${Math.abs(days)} ${Math.abs(days) === 1 ? "day" : "days"} ago`;
+  return `in ${days} ${days === 1 ? "day" : "days"}`;
+}
 
 function documentsPill(person: DirectoryPerson) {
   if (person.documents_ok) return <StatusPill value="signed" label="Both in" tone="live" />;
@@ -46,8 +54,11 @@ export default async function TeamPage() {
     );
   }
   let people: DirectoryPerson[] | null = null;
+  let reminders: TeamReminder[] = [];
   try {
-    people = (await readTeam(context.token)).people;
+    const team = await readTeam(context.token);
+    people = team.people;
+    reminders = team.reminders;
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
@@ -82,8 +93,28 @@ export default async function TeamPage() {
               hint="NDA or IP assignment"
             />
             <Stat label="Ending in 30 days" value={endingSoon.length} />
-            <Stat label="No check-in this week" value={noCheckin.length} />
+            <Stat
+              label="Policies outstanding"
+              value={active.reduce((sum, person) => sum + person.policies_outstanding, 0)}
+              hint={`${noCheckin.length} without a check-in`}
+            />
           </StatGrid>
+          {reminders.length > 0 && (
+            <section className="props" aria-label="Coming up">
+              <h2 className="props__title">Coming up</h2>
+              <ul className="team-reminders">
+                {reminders.map((item) => (
+                  <li key={`${item.staff_id}-${item.kind}-${item.on}`}>
+                    <Link href={`/team/${item.staff_id}`}>{item.display_name}</Link> · {item.label}{" "}
+                    {formatDate(item.on)}{" "}
+                    <span className={item.days <= 7 ? "due due--today" : "side-quiet"}>
+                      {daysWord(item.days)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <DataTable caption="Team" columns={COLUMNS} scroll={false}>
             {people.map((person) => (
               <tr key={person.staff_id} className={person.is_active ? undefined : "row--muted"}>
@@ -97,11 +128,30 @@ export default async function TeamPage() {
                   </span>
                 </td>
                 <td>{kindLabel(person.kind)}</td>
+                <td>
+                  {person.manager_id ? (
+                    <Link href={`/team/${person.manager_id}`}>{person.manager_name || "—"}</Link>
+                  ) : (
+                    <span className="table-sub">—</span>
+                  )}
+                </td>
                 <td>{documentsPill(person)}</td>
                 <td>
                   {person.live_access}
                   {person.access_expiring_soon > 0 && (
                     <span className="table-sub">{person.access_expiring_soon} expiring soon</span>
+                  )}
+                </td>
+                <td>
+                  {person.unreturned_assets === 0 ? (
+                    <span className="table-sub">—</span>
+                  ) : (
+                    <>
+                      {person.unreturned_assets}
+                      <span className="table-sub">
+                        {person.unreturned_assets === 1 ? "item out" : "items out"}
+                      </span>
+                    </>
                   )}
                 </td>
                 <td>

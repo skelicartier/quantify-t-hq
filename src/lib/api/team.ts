@@ -11,6 +11,72 @@ const documentsStateSchema = z.object({
   ip_assignment: z.string(),
 });
 
+/** A dated thing about a person: probation end, engagement end, training expiry. */
+export const reminderSchema = z.object({
+  kind: z.string(),
+  on: z.string(),
+  /** Days from today; negative once past. */
+  days: z.number(),
+  label: z.string(),
+});
+export type Reminder = z.infer<typeof reminderSchema>;
+
+export const assetSchema = z.object({
+  asset_id: z.string(),
+  staff_id: z.string(),
+  kind: z.string(),
+  label: z.string(),
+  serial: z.string(),
+  issued_on: z.string().nullable(),
+  returned_on: z.string().nullable(),
+  notes: z.string(),
+  out: z.boolean(),
+});
+export type Asset = z.infer<typeof assetSchema>;
+
+export const trainingSchema = z.object({
+  training_id: z.string(),
+  title: z.string(),
+  provider: z.string(),
+  completed_on: z.string().nullable(),
+  expires_on: z.string().nullable(),
+  reference: z.string(),
+  expired: z.boolean(),
+  expiring_soon: z.boolean(),
+});
+export type TrainingRecord = z.infer<typeof trainingSchema>;
+
+export const oneOnOneSchema = z.object({
+  one_on_one_id: z.string(),
+  held_on: z.string().nullable(),
+  held_by: z.string(),
+  held_by_name: z.string(),
+  notes: z.string(),
+  actions: z.array(
+    z.object({
+      action_id: z.string(),
+      title: z.string(),
+      owner_id: z.string(),
+      owner_name: z.string(),
+      due_on: z.string().nullable(),
+      done_at: z.string().nullable(),
+      overdue: z.boolean(),
+    }),
+  ),
+});
+export type OneOnOne = z.infer<typeof oneOnOneSchema>;
+
+export const policyStateSchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  version: z.number(),
+  url: z.string(),
+  acknowledged_version: z.number().nullable(),
+  acknowledged_at: z.string().nullable(),
+  outstanding: z.boolean(),
+});
+export type PolicyState = z.infer<typeof policyStateSchema>;
+
 const directoryPersonSchema = z.object({
   staff_id: z.string(),
   display_name: z.string(),
@@ -38,10 +104,23 @@ const directoryPersonSchema = z.object({
   checked_in_this_week: z.boolean(),
   last_checkin_week: z.string(),
   away_today: z.boolean(),
+  manager_id: z.string().default(""),
+  manager_name: z.string().default(""),
+  unreturned_assets: z.number().default(0),
+  policies_outstanding: z.number().default(0),
+  reminders: z.array(reminderSchema).default([]),
 });
 export type DirectoryPerson = z.infer<typeof directoryPersonSchema>;
 
-const teamSchema = okEnvelope.extend({ people: z.array(directoryPersonSchema), week: z.string() });
+const teamSchema = okEnvelope.extend({
+  people: z.array(directoryPersonSchema),
+  week: z.string(),
+  /** Dated things across the team within sixty days, soonest first. */
+  reminders: z
+    .array(reminderSchema.extend({ staff_id: z.string(), display_name: z.string() }))
+    .default([]),
+});
+export type TeamReminder = z.infer<typeof teamSchema>["reminders"][number];
 
 export function readTeam(token: string) {
   return fetchHqJson("hq/team", teamSchema, { token });
@@ -71,6 +150,8 @@ const checklistSchema = z.object({
   done: z.number(),
   total: z.number(),
   overdue: z.boolean(),
+  /** For an open offboarding: how many issued things are still out. Zero when none. */
+  blocked_by_assets: z.number().default(0),
   steps: z.array(
     z.object({
       position: z.number(),
@@ -131,7 +212,19 @@ const memberSchema = okEnvelope.extend({
     is_active: z.boolean(),
     starts_on: z.string().nullable(),
     ends_on: z.string().nullable(),
+    manager_id: z.string().default(""),
+    manager_name: z.string().default(""),
+    probation_ends_on: z.string().nullable().default(null),
+    emergency_contact: z
+      .object({ name: z.string(), phone: z.string(), relation: z.string() })
+      .default({ name: "", phone: "", relation: "" }),
   }),
+  reports: z.array(z.object({ staff_id: z.string(), display_name: z.string() })).default([]),
+  assets: z.array(assetSchema).default([]),
+  training: z.array(trainingSchema).default([]),
+  one_on_ones: z.array(oneOnOneSchema).default([]),
+  policies: z.array(policyStateSchema).default([]),
+  reminders: z.array(reminderSchema).default([]),
   documents: z.array(
     z.object({
       document_id: z.string(),
@@ -375,5 +468,72 @@ export function completeAccessReview(token: string, reviewId: string, notes: str
     `hq/access-reviews/${reviewId}/complete`,
     okEnvelope.extend({ completed: z.boolean() }),
     { token, body: { notes } },
+  );
+}
+
+// --- people ops -----------------------------------------------------------------------
+
+export function updateProfile(token: string, staffId: string, input: Record<string, unknown>) {
+  return postHqJson(`hq/team/${staffId}/profile`, okEnvelope.extend({ updated: z.boolean() }), {
+    token,
+    body: input,
+  });
+}
+
+export function saveAsset(token: string, staffId: string, input: Record<string, unknown>) {
+  return postHqJson(`hq/team/${staffId}/assets`, okEnvelope.extend({ asset_id: z.string() }), {
+    token,
+    body: input,
+  });
+}
+
+export function addTraining(token: string, staffId: string, input: Record<string, unknown>) {
+  return postHqJson(`hq/team/${staffId}/training`, okEnvelope.extend({ training_id: z.string() }), {
+    token,
+    body: input,
+  });
+}
+
+export function addOneOnOne(token: string, staffId: string, input: Record<string, unknown>) {
+  return postHqJson(
+    `hq/team/${staffId}/one-on-ones`,
+    okEnvelope.extend({ one_on_one_id: z.string(), actions: z.number() }),
+    { token, body: input },
+  );
+}
+
+export function toggleAction(token: string, actionId: string, done: boolean) {
+  return postHqJson(
+    `hq/one-on-ones/actions/${actionId}`,
+    okEnvelope.extend({ done: z.boolean() }),
+    { token, body: { done } },
+  );
+}
+
+const policiesSchema = okEnvelope.extend({
+  policies: z.array(policyStateSchema),
+  outstanding: z.number(),
+});
+export type PoliciesPage = z.infer<typeof policiesSchema>;
+
+/** The company's policies and which versions the signed-in person has acknowledged. */
+export function readPolicies(token: string) {
+  return fetchHqJson("hq/policies", policiesSchema, { token });
+}
+
+export function acknowledgePolicy(token: string, key: string) {
+  return postHqJson(
+    `hq/policies/${key}/acknowledge`,
+    okEnvelope.extend({ acknowledged: z.boolean(), version: z.number() }),
+    { token, body: {} },
+  );
+}
+
+/** Rename or relink a policy, or publish a new version (which asks everyone again). */
+export function updatePolicy(token: string, input: Record<string, unknown>) {
+  return postHqJson(
+    "hq/settings/policies/update",
+    okEnvelope.extend({ updated: z.boolean(), key: z.string(), version: z.number() }),
+    { token, body: input },
   );
 }

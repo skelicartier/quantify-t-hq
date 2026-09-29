@@ -11,6 +11,7 @@ import * as integrationsApi from "@/lib/api/integrations";
 import * as keysApi from "@/lib/api/keys";
 import * as settingsApi from "@/lib/api/settings";
 import * as staffApi from "@/lib/api/staff";
+import * as teamApi from "@/lib/api/team";
 import { fieldValue, refusalMessage } from "@/lib/auth/forms";
 import { crmRefusal } from "@/lib/crm/refusal";
 import type { ActionState } from "@/lib/forms/action-state";
@@ -433,6 +434,40 @@ export async function updateSlaAction(
   }
   revalidatePath("/admin/settings");
   return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
+
+/** Rename or relink a policy, or publish a new version that everyone must acknowledge again. */
+export async function updatePolicyAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/settings");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const input: Record<string, unknown> = { key: fieldValue(formData, "key", 40).trim() };
+  if (formData.has("title")) input.title = fieldValue(formData, "title", 120).trim();
+  if (formData.has("url")) input.url = fieldValue(formData, "url", 400).trim();
+  if (formData.get("publish") === "on") input.publish = true;
+  try {
+    await teamApi.updatePolicy(context.token, input);
+  } catch (error) {
+    if (error instanceof HqApiRequestError && error.code === "malformed_request") {
+      const details = error.details ?? {};
+      if ("reason" in details) return { status: "error", message: "Nothing changed." };
+      if ("url" in details) return { status: "error", message: "The link must be an http(s) URL." };
+      if ("key" in details) {
+        return { status: "error", message: "A key is lowercase letters, digits and underscores." };
+      }
+    }
+    return crmRefusal(error);
+  }
+  revalidatePath("/admin/settings");
+  revalidatePath("/me/security");
+  return {
+    status: "sent",
+    message: input.publish ? "Published; everyone is asked again." : "Saved.",
+    sentAt: Date.now(),
+  };
 }
 
 export async function updateDeskRulesAction(

@@ -85,6 +85,11 @@ type Staff = {
   starts_on?: string | null;
   personal_email?: string;
   recovery_codes_remaining?: number;
+  manager_id?: string | null;
+  probation_ends_on?: string | null;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
+  emergency_contact_relation?: string;
 };
 
 const STAFF_KINDS = ["founder", "employee", "intern", "contractor"];
@@ -8349,6 +8354,251 @@ const certificates: CertificateRow[] = [];
 const reviews: ReviewRow[] = [];
 const reviewItems: ReviewItemRow[] = [];
 
+type AssetRow = {
+  id: string;
+  staff_id: string;
+  kind: string;
+  label: string;
+  serial: string;
+  issued_on: string;
+  returned_on: string | null;
+  notes: string;
+};
+type PolicyRow = { key: string; title: string; version: number; url: string };
+type AckRow = { staff_id: string; policy_key: string; version: number; acknowledged_at: string };
+type TrainingRow = {
+  id: string;
+  staff_id: string;
+  title: string;
+  provider: string;
+  completed_on: string;
+  expires_on: string | null;
+  reference: string;
+};
+type OneOnOneRow = {
+  id: string;
+  staff_id: string;
+  held_by: string;
+  held_on: string;
+  notes: string;
+};
+type ActionRow = {
+  id: string;
+  one_on_one_id: string;
+  staff_id: string;
+  title: string;
+  due_on: string | null;
+  done_at: string | null;
+  created_at: string;
+};
+
+const ASSET_KINDS = ["laptop", "phone", "monitor", "badge", "key", "token", "other"];
+const REMINDER_HORIZON_DAYS = 60;
+const assets: AssetRow[] = [];
+const policies: PolicyRow[] = [];
+const policyAcks: AckRow[] = [];
+const training: TrainingRow[] = [];
+const oneOnOnes: OneOnOneRow[] = [];
+const oneOnOneActions: ActionRow[] = [];
+
+function seedPeopleOps() {
+  for (const list of [assets, policies, policyAcks, training, oneOnOnes, oneOnOneActions])
+    list.length = 0;
+  policies.push(
+    { key: "acceptable_use", title: "Acceptable use of systems", version: 1, url: "" },
+    { key: "data_handling", title: "Client data handling", version: 2, url: "" },
+    { key: "security_basics", title: "Security basics", version: 1, url: "" },
+  );
+  // Everyone active has acknowledged the current versions, except the intern, who is
+  // behind on data handling since it was re-published.
+  for (const member of staff) {
+    if (!member.is_active) continue;
+    for (const policy of policies) {
+      const behind = member.id === INTERN_STAFF && policy.key === "data_handling";
+      policyAcks.push({
+        staff_id: member.id,
+        policy_key: policy.key,
+        version: behind ? 1 : policy.version,
+        acknowledged_at: agoIso(24 * 20),
+      });
+    }
+  }
+  assets.push(
+    {
+      id: "as000000-0000-4000-8000-000000000001",
+      staff_id: INTERN_STAFF,
+      kind: "laptop",
+      label: "MacBook Air 13 (M4)",
+      serial: "C02ZQ1X7",
+      issued_on: dayOffset(-58),
+      returned_on: null,
+      notes: "",
+    },
+    {
+      id: "as000000-0000-4000-8000-000000000002",
+      staff_id: INTERN_STAFF,
+      kind: "badge",
+      label: "Office badge 0417",
+      serial: "",
+      issued_on: dayOffset(-58),
+      returned_on: null,
+      notes: "",
+    },
+    {
+      id: "as000000-0000-4000-8000-000000000003",
+      staff_id: SALES_STAFF,
+      kind: "phone",
+      label: "iPhone 15 (work line)",
+      serial: "F2LXQ9",
+      issued_on: dayOffset(-120),
+      returned_on: null,
+      notes: "Number kept on the sales line",
+    },
+  );
+  training.push(
+    {
+      id: "tr000000-0000-4000-8000-000000000001",
+      staff_id: INTERN_STAFF,
+      title: "Client data handling induction",
+      provider: "In-house",
+      completed_on: dayOffset(-57),
+      expires_on: dayOffset(308),
+      reference: "",
+    },
+    {
+      id: "tr000000-0000-4000-8000-000000000002",
+      staff_id: SALES_STAFF,
+      title: "Anti-money-laundering awareness",
+      provider: "External (online)",
+      completed_on: dayOffset(-330),
+      expires_on: dayOffset(35),
+      reference: "AML-2025-0912",
+    },
+  );
+  oneOnOnes.push({
+    id: "oo000000-0000-4000-8000-000000000001",
+    staff_id: INTERN_STAFF,
+    held_by: OWNER_STAFF,
+    held_on: dayOffset(-6),
+    notes:
+      "Settling in well. Wants more time on the research side; agreed a sector note as a stretch piece.",
+  });
+  oneOnOneActions.push(
+    {
+      id: "oa000000-0000-4000-8000-000000000001",
+      one_on_one_id: "oo000000-0000-4000-8000-000000000001",
+      staff_id: INTERN_STAFF,
+      title: "Draft the sector note on European asset managers",
+      due_on: dayOffset(8),
+      done_at: null,
+      created_at: agoIso(24 * 6),
+    },
+    {
+      id: "oa000000-0000-4000-8000-000000000002",
+      one_on_one_id: "oo000000-0000-4000-8000-000000000001",
+      staff_id: OWNER_STAFF,
+      title: "Share the research reading list",
+      due_on: dayOffset(-3),
+      done_at: agoIso(24 * 4),
+      created_at: agoIso(24 * 6),
+    },
+  );
+  const intern = staff.find((member) => member.id === INTERN_STAFF);
+  if (intern) {
+    intern.manager_id = OWNER_STAFF;
+    intern.probation_ends_on = dayOffset(12);
+    intern.emergency_contact_name = "Rohan Mehta";
+    intern.emergency_contact_phone = "+44 7700 900123";
+    intern.emergency_contact_relation = "Parent";
+  }
+  const sales = staff.find((member) => member.id === SALES_STAFF);
+  if (sales) sales.manager_id = OWNER_STAFF;
+}
+
+function assetView(row: AssetRow) {
+  return { asset_id: row.id, ...row, out: row.returned_on === null };
+}
+
+function trainingView(row: TrainingRow) {
+  const todayIso = today();
+  const horizon = dayOffset(REMINDER_HORIZON_DAYS);
+  return {
+    training_id: row.id,
+    title: row.title,
+    provider: row.provider,
+    completed_on: row.completed_on,
+    expires_on: row.expires_on,
+    reference: row.reference,
+    expired: Boolean(row.expires_on && row.expires_on < todayIso),
+    expiring_soon: Boolean(
+      row.expires_on && row.expires_on >= todayIso && row.expires_on <= horizon,
+    ),
+  };
+}
+
+function policyStates(staffId: string) {
+  return policies
+    .slice()
+    .sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()))
+    .map((policy) => {
+      const mine = policyAcks.filter(
+        (row) => row.staff_id === staffId && row.policy_key === policy.key,
+      );
+      const best = Math.max(0, ...mine.map((row) => row.version));
+      const when = mine.find((row) => row.version === best)?.acknowledged_at ?? null;
+      return {
+        key: policy.key,
+        title: policy.title,
+        version: policy.version,
+        url: policy.url,
+        acknowledged_version: best || null,
+        acknowledged_at: best ? when : null,
+        outstanding: best < policy.version,
+      };
+    });
+}
+
+const daysBetween = (fromIso: string, toIso: string) =>
+  Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 86_400_000);
+
+function remindersFor(member: Staff) {
+  const todayIso = today();
+  const horizon = dayOffset(REMINDER_HORIZON_DAYS);
+  const out: { kind: string; on: string; days: number; label: string }[] = [];
+  if (member.probation_ends_on && member.probation_ends_on <= horizon)
+    out.push({
+      kind: "probation_end",
+      on: member.probation_ends_on,
+      days: daysBetween(todayIso, member.probation_ends_on),
+      label: "Probation ends",
+    });
+  if (member.ends_on && member.ends_on <= horizon && member.is_active)
+    out.push({
+      kind: "engagement_end",
+      on: member.ends_on,
+      days: daysBetween(todayIso, member.ends_on),
+      label: "Engagement ends",
+    });
+  for (const row of training.filter((candidate) => candidate.staff_id === member.id)) {
+    if (row.expires_on && row.expires_on <= horizon)
+      out.push({
+        kind: "training_expiry",
+        on: row.expires_on,
+        days: daysBetween(todayIso, row.expires_on),
+        label: `${row.title} expires`,
+      });
+  }
+  return out.sort((a, b) => a.on.localeCompare(b.on));
+}
+
+function unreturnedFor(staffId: string) {
+  return assets.filter((row) => row.staff_id === staffId && row.returned_on === null).length;
+}
+
+function mayWriteOneOnOne(callerId: string, role: string, subject: Staff) {
+  return (CAPABILITIES[role] ?? []).includes("hr:write") || subject.manager_id === callerId;
+}
+
 /** This quarter's review, started two days ago with one grant already kept. */
 function seedOpenReview() {
   reviews.length = 0;
@@ -8572,6 +8822,7 @@ function seedTeam() {
 }
 seedTeam();
 seedOpenReview();
+seedPeopleOps();
 
 function accessView(row: AccessRow) {
   const todayIso = today();
@@ -8620,6 +8871,8 @@ function runView(run: RunRow) {
     done: steps.filter((step) => step.done_at).length,
     total: steps.length,
     overdue: !run.completed_at && Boolean(run.due_at) && Date.parse(run.due_at!) < Date.now(),
+    blocked_by_assets:
+      run.kind === "offboarding" && !run.completed_at ? unreturnedFor(run.staff_id) : 0,
     steps: steps.map((step) => ({
       position: step.position,
       title: step.title,
@@ -8775,8 +9028,19 @@ routes.push(
     handler: () => {
       const thisWeek = isoWeek(new Date());
       const todayIso = today();
+      const teamReminders = staff
+        .filter((member) => member.is_active)
+        .flatMap((member) =>
+          remindersFor(member).map((item) => ({
+            ...item,
+            staff_id: member.id,
+            display_name: member.display_name,
+          })),
+        )
+        .sort((a, b) => a.on.localeCompare(b.on) || a.display_name.localeCompare(b.display_name));
       return ok({
         week: thisWeek,
+        reminders: teamReminders,
         people: staff
           .map((member) => {
             const state = documentsState(member.id);
@@ -8824,6 +9088,14 @@ routes.push(
                   row.starts_on <= todayIso &&
                   todayIso <= row.ends_on,
               ),
+              manager_id: member.manager_id ?? "",
+              manager_name:
+                staff.find((candidate) => candidate.id === member.manager_id)?.display_name ?? "",
+              unreturned_assets: unreturnedFor(member.id),
+              policies_outstanding: member.is_active
+                ? policyStates(member.id).filter((row) => row.outstanding).length
+                : 0,
+              reminders: member.is_active ? remindersFor(member) : [],
             };
           })
           .sort(
@@ -8854,7 +9126,59 @@ routes.push(
           is_active: member.is_active,
           starts_on: member.starts_on ?? null,
           ends_on: member.ends_on,
+          manager_id: member.manager_id ?? "",
+          manager_name:
+            staff.find((candidate) => candidate.id === member.manager_id)?.display_name ?? "",
+          probation_ends_on: member.probation_ends_on ?? null,
+          emergency_contact: {
+            name: member.emergency_contact_name ?? "",
+            phone: member.emergency_contact_phone ?? "",
+            relation: member.emergency_contact_relation ?? "",
+          },
         },
+        reports: staff
+          .filter((candidate) => candidate.manager_id === member.id && candidate.is_active)
+          .map((candidate) => ({ staff_id: candidate.id, display_name: candidate.display_name }))
+          .sort((a, b) => a.display_name.localeCompare(b.display_name)),
+        assets: assets
+          .filter((row) => row.staff_id === member.id)
+          .sort(
+            (a, b) =>
+              Number(a.returned_on !== null) - Number(b.returned_on !== null) ||
+              a.issued_on.localeCompare(b.issued_on),
+          )
+          .map(assetView),
+        training: training
+          .filter((row) => row.staff_id === member.id)
+          .sort((a, b) => b.completed_on.localeCompare(a.completed_on))
+          .map(trainingView),
+        one_on_ones: oneOnOnes
+          .filter((row) => row.staff_id === member.id)
+          .sort((a, b) => b.held_on.localeCompare(a.held_on))
+          .slice(0, 12)
+          .map((row) => ({
+            one_on_one_id: row.id,
+            held_on: row.held_on,
+            held_by: row.held_by,
+            held_by_name:
+              staff.find((candidate) => candidate.id === row.held_by)?.display_name ?? "",
+            notes: row.notes,
+            actions: oneOnOneActions
+              .filter((action) => action.one_on_one_id === row.id)
+              .sort((a, b) => a.created_at.localeCompare(b.created_at))
+              .map((action) => ({
+                action_id: action.id,
+                title: action.title,
+                owner_id: action.staff_id,
+                owner_name:
+                  staff.find((candidate) => candidate.id === action.staff_id)?.display_name ?? "",
+                due_on: action.due_on,
+                done_at: action.done_at,
+                overdue: !action.done_at && Boolean(action.due_on) && action.due_on! < today(),
+              })),
+          })),
+        policies: policyStates(member.id),
+        reminders: remindersFor(member),
         documents: staffDocuments
           .filter((row) => row.staff_id === member.id)
           .map((row) => ({
@@ -9055,6 +9379,20 @@ routes.push(
         (row) => row.run_id === params.run_id && row.position === Number(params.position),
       );
       if (!run || !step) return refuse(404, "not_found");
+      if (
+        body.done !== false &&
+        run.kind === "offboarding" &&
+        step.title.startsWith("Devices and materials returned")
+      ) {
+        const out = assets.filter(
+          (row) => row.staff_id === run.staff_id && row.returned_on === null,
+        );
+        if (out.length)
+          return refuse(400, "malformed_request", {
+            reason: `${out.length} ${out.length === 1 ? "asset is" : "assets are"} not yet returned`,
+            assets: out.map((row) => row.label),
+          });
+      }
       step.done_at = body.done === false ? null : now();
       const complete = checklistSteps
         .filter((row) => row.run_id === run.id)
@@ -9316,6 +9654,340 @@ routes.push(
     },
   },
   {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/profile",
+    auth: true,
+    capability: "hr:write",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      const before = { ...member };
+      const fields: string[] = [];
+      if ("manager_id" in body) {
+        const managerId = String(body.manager_id ?? "").trim();
+        if (managerId) {
+          if (managerId === member.id)
+            return refuse(400, "malformed_request", { manager_id: "nobody manages themself" });
+          const manager = staff.find((row) => row.id === managerId && row.is_active);
+          if (!manager)
+            return refuse(400, "malformed_request", { manager_id: "not an active colleague" });
+          const seen = new Set([member.id]);
+          let cursor: string | null | undefined = managerId;
+          while (cursor) {
+            if (seen.has(cursor))
+              return refuse(400, "malformed_request", {
+                manager_id: "that would make the reporting line a loop",
+              });
+            seen.add(cursor);
+            cursor = staff.find((row) => row.id === cursor)?.manager_id;
+          }
+        }
+        member.manager_id = managerId || null;
+        fields.push("manager_id");
+      }
+      if ("probation_ends_on" in body) {
+        const raw = String(body.probation_ends_on ?? "").trim();
+        if (raw && !/^\d{4}-\d{2}-\d{2}$/.test(raw))
+          return refuse(400, "malformed_request", { probation_ends_on: "a date, YYYY-MM-DD" });
+        member.probation_ends_on = raw || null;
+        fields.push("probation_ends_on");
+      }
+      for (const name of [
+        "emergency_contact_name",
+        "emergency_contact_phone",
+        "emergency_contact_relation",
+      ] as const) {
+        if (name in body) {
+          member[name] = String(body[name] ?? "").trim();
+          fields.push(name);
+        }
+      }
+      if (!fields.length) return refuse(400, "malformed_request", { body: "nothing to change" });
+      audit("team.profile_updated", caller(headers)?.member.id ?? null, "staff", member.id, "", {
+        changes: changesBetween(before, member),
+      });
+      return ok({ updated: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/assets",
+    auth: true,
+    capability: "hr:write",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      const actor = caller(headers)?.member.id ?? null;
+      const assetId = String(body.asset_id ?? "").trim();
+      if (assetId) {
+        const asset = assets.find((row) => row.id === assetId && row.staff_id === member.id);
+        if (!asset) return refuse(404, "not_found");
+        let returnedNow = false;
+        if ("returned_on" in body) {
+          const raw = String(body.returned_on ?? "").trim();
+          if (raw) {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(raw))
+              return refuse(400, "malformed_request", { returned_on: "a date, YYYY-MM-DD" });
+            if (raw < asset.issued_on)
+              return refuse(400, "malformed_request", { returned_on: "before it was issued" });
+            asset.returned_on = raw;
+            returnedNow = true;
+          } else asset.returned_on = null;
+        }
+        if ("notes" in body)
+          asset.notes = String(body.notes ?? "")
+            .trim()
+            .slice(0, 400);
+        audit(
+          returnedNow ? "team.asset_returned" : "team.asset_updated",
+          actor,
+          "staff",
+          member.id,
+          "",
+          { asset_id: assetId, label: asset.label },
+        );
+        return ok({ asset_id: assetId });
+      }
+      const kind = String(body.kind ?? "").trim();
+      if (!ASSET_KINDS.includes(kind))
+        return refuse(400, "malformed_request", { kind: `one of ${ASSET_KINDS.join(", ")}` });
+      const label = String(body.label ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!label) return refuse(400, "malformed_request", { label: "say what it is" });
+      const issued = String(body.issued_on ?? "").trim() || today();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(issued))
+        return refuse(400, "malformed_request", { issued_on: "a date, YYYY-MM-DD" });
+      const row: AssetRow = {
+        id: randomUUID(),
+        staff_id: member.id,
+        kind,
+        label,
+        serial: String(body.serial ?? "")
+          .trim()
+          .slice(0, 80),
+        issued_on: issued,
+        returned_on: null,
+        notes: String(body.notes ?? "")
+          .trim()
+          .slice(0, 400),
+      };
+      assets.push(row);
+      audit("team.asset_issued", actor, "staff", member.id, "", { asset_id: row.id, kind, label });
+      return ok({ asset_id: row.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/training",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!title) return refuse(400, "malformed_request", { title: "name the training" });
+      const completed = String(body.completed_on ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(completed))
+        return refuse(400, "malformed_request", { completed_on: "a date, YYYY-MM-DD" });
+      const expires = String(body.expires_on ?? "").trim() || null;
+      if (expires && !/^\d{4}-\d{2}-\d{2}$/.test(expires))
+        return refuse(400, "malformed_request", { expires_on: "a date, YYYY-MM-DD" });
+      if (expires && expires <= completed)
+        return refuse(400, "malformed_request", { expires_on: "after it was completed" });
+      const row: TrainingRow = {
+        id: randomUUID(),
+        staff_id: member.id,
+        title,
+        provider: String(body.provider ?? "")
+          .trim()
+          .slice(0, 120),
+        completed_on: completed,
+        expires_on: expires,
+        reference: String(body.reference ?? "")
+          .trim()
+          .slice(0, 400),
+      };
+      training.push(row);
+      audit("team.training_recorded", caller(headers)?.member.id ?? null, "staff", member.id, "", {
+        training_id: row.id,
+        title,
+      });
+      return ok({ training_id: row.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/one-on-ones",
+    auth: true,
+    handler: ({ params, body, headers }) => {
+      const found = caller(headers)!;
+      const member = staff.find((row) => row.id === params.staff_id);
+      if (!member) return refuse(404, "not_found");
+      if (!mayWriteOneOnOne(found.member.id, found.member.role, member))
+        return refuse(403, "forbidden", {
+          reason: "only HR or the person's manager records a one-to-one",
+        });
+      const heldOn = String(body.held_on ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(heldOn))
+        return refuse(400, "malformed_request", { held_on: "a date, YYYY-MM-DD" });
+      const rawActions = body.actions;
+      if (rawActions !== undefined && !Array.isArray(rawActions))
+        return refuse(400, "malformed_request", { actions: "a list" });
+      const meetingId = randomUUID();
+      const created: ActionRow[] = [];
+      for (const item of ((rawActions ?? []) as Record<string, unknown>[]).slice(0, 8)) {
+        const title = String(item?.title ?? "")
+          .trim()
+          .slice(0, 200);
+        if (!title) continue;
+        const due = String(item?.due_on ?? "").trim() || null;
+        if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due))
+          return refuse(400, "malformed_request", { actions: "a due date is YYYY-MM-DD" });
+        created.push({
+          id: randomUUID(),
+          one_on_one_id: meetingId,
+          staff_id: String(item?.owner ?? "them") === "me" ? found.member.id : member.id,
+          title,
+          due_on: due,
+          done_at: null,
+          created_at: now(),
+        });
+      }
+      oneOnOnes.push({
+        id: meetingId,
+        staff_id: member.id,
+        held_by: found.member.id,
+        held_on: heldOn,
+        notes: String(body.notes ?? "")
+          .trim()
+          .slice(0, 2000),
+      });
+      oneOnOneActions.push(...created);
+      audit("team.one_on_one_held", found.member.id, "staff", member.id, "", {
+        one_on_one_id: meetingId,
+        actions: created.length,
+      });
+      return ok({ one_on_one_id: meetingId, actions: created.length });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/one-on-ones/actions/{action_id}",
+    auth: true,
+    handler: ({ params, body, headers }) => {
+      const found = caller(headers)!;
+      const action = oneOnOneActions.find((row) => row.id === params.action_id);
+      if (!action) return refuse(404, "not_found");
+      const meeting = oneOnOnes.find((row) => row.id === action.one_on_one_id);
+      const subject = staff.find((row) => row.id === meeting?.staff_id);
+      const allowed =
+        found.member.id === action.staff_id ||
+        found.member.id === meeting?.staff_id ||
+        (subject ? mayWriteOneOnOne(found.member.id, found.member.role, subject) : false);
+      if (!allowed) return refuse(403, "forbidden", { reason: "not your action" });
+      const done = body.done === undefined ? true : Boolean(body.done);
+      action.done_at = done ? now() : null;
+      audit(
+        done ? "team.action_done" : "team.action_reopened",
+        found.member.id,
+        "staff",
+        meeting?.staff_id ?? "",
+        "",
+        { action_id: action.id },
+      );
+      return ok({ done });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/policies",
+    auth: true,
+    handler: ({ headers }) => {
+      const states = policyStates(caller(headers)!.member.id);
+      return ok({ policies: states, outstanding: states.filter((row) => row.outstanding).length });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/policies/{policy_key}/acknowledge",
+    auth: true,
+    handler: ({ params, headers }) => {
+      const found = caller(headers)!;
+      const policy = policies.find((row) => row.key === params.policy_key);
+      if (!policy) return refuse(404, "not_found");
+      if (
+        !policyAcks.some(
+          (row) =>
+            row.staff_id === found.member.id &&
+            row.policy_key === policy.key &&
+            row.version === policy.version,
+        )
+      )
+        policyAcks.push({
+          staff_id: found.member.id,
+          policy_key: policy.key,
+          version: policy.version,
+          acknowledged_at: now(),
+        });
+      audit("policy.acknowledged", found.member.id, "policy", policy.key, "", {
+        version: policy.version,
+      });
+      return ok({ acknowledged: true, version: policy.version });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/policies/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const key = String(body.key ?? "")
+        .trim()
+        .toLowerCase();
+      if (!/^[a-z][a-z0-9_]{1,39}$/.test(key))
+        return refuse(400, "malformed_request", {
+          key: "lowercase letters, digits and underscores",
+        });
+      const existing = policies.find((row) => row.key === key);
+      const title =
+        String(body.title ?? "")
+          .trim()
+          .slice(0, 120) ||
+        existing?.title ||
+        "";
+      if (!title) return refuse(400, "malformed_request", { title: "name the policy" });
+      const url =
+        "url" in body
+          ? String(body.url ?? "")
+              .trim()
+              .slice(0, 400)
+          : (existing?.url ?? "");
+      if (url && !/^https?:\/\//.test(url))
+        return refuse(400, "malformed_request", { url: "expected an http(s) URL" });
+      const bump = body.publish === true || !existing;
+      let version = existing?.version ?? 0;
+      if (bump) version += 1;
+      if (existing && !bump && title === existing.title && url === existing.url)
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
+      if (existing) Object.assign(existing, { title, url, version });
+      else policies.push({ key, title, version, url });
+      audit(
+        bump ? "settings.policy_published" : "settings.policy_updated",
+        caller(headers)?.member.id ?? null,
+        "policy",
+        key,
+        "",
+        { version, title },
+      );
+      return ok({ updated: true, key, version });
+    },
+  },
+  {
     method: "GET",
     pattern: "hq/access-reviews",
     auth: true,
@@ -9512,6 +10184,7 @@ function resetWorld() {
   seedRevenue();
   seedTeam();
   seedOpenReview();
+  seedPeopleOps();
   seedSla();
   resetDeskRules();
   seedSources();

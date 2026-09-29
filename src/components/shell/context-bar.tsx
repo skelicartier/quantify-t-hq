@@ -43,6 +43,8 @@ function crumbsFor(pathname: string): Crumb[] {
             LEAF_LABELS[leaf] ?? leaf.replace(/-/g, " ").replace(/^\w/, (c) => c.toUpperCase()),
         });
       }
+      // "Team › Team" says nothing twice: a group named after its only link is one crumb.
+      if (group.label === link.label) return crumbs;
       return [{ href: "/home", label: group.label }, ...crumbs];
     }
   }
