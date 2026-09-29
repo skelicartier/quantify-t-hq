@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { ColumnMenu } from "@/components/ui/column-menu";
 import { TableKeys } from "@/components/ui/table-keys";
 
 export type DataTableColumn = {
@@ -22,8 +23,20 @@ type DataTableProps = {
    * clips the last row.
    */
   scroll?: boolean;
+  /**
+   * Offer a column menu above the table (on by default for four columns or more). The
+   * choice is kept per device under the table's caption, so the caption must be stable.
+   */
+  columnMenu?: boolean;
   children: ReactNode;
 };
+
+function slug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
 
 /**
  * Bounded, scrollable table with a sticky header. Rows are plain `<tr>` children so
@@ -37,36 +50,52 @@ export function DataTable({
   empty,
   minWidth,
   scroll = true,
+  columnMenu,
   children,
 }: DataTableProps) {
   if (isEmpty) return <>{empty ?? null}</>;
+  const tableId = `table-${slug(caption)}`;
+  const menu =
+    (columnMenu ?? columns.length >= 4)
+      ? columns.map((column) => ({
+          key: column.key,
+          label: typeof column.label === "string" ? column.label : column.key,
+        }))
+      : null;
   return (
-    <div
-      className={scroll ? "table-frame" : "table-frame table-frame--full"}
-      role="region"
-      aria-label={caption}
-      tabIndex={0}
-    >
-      <TableKeys />
-      <table className="data-table" style={minWidth ? { minWidth } : undefined}>
-        <caption className="sr-only">{caption}</caption>
-        <thead>
-          <tr>
-            {columns.map((column) => (
-              <th
-                key={column.key}
-                scope="col"
-                className={column.align === "end" ? "data-table__num" : undefined}
-                style={column.width ? { width: column.width } : undefined}
-              >
-                {column.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
-    </div>
+    <>
+      {menu && (
+        <div className="table-tools">
+          <ColumnMenu tableId={tableId} columns={menu} />
+        </div>
+      )}
+      <div
+        className={scroll ? "table-frame" : "table-frame table-frame--full"}
+        role="region"
+        aria-label={caption}
+        tabIndex={0}
+      >
+        <TableKeys />
+        <table id={tableId} className="data-table" style={minWidth ? { minWidth } : undefined}>
+          <caption className="sr-only">{caption}</caption>
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th
+                  key={column.key}
+                  scope="col"
+                  className={column.align === "end" ? "data-table__num" : undefined}
+                  style={column.width ? { width: column.width } : undefined}
+                >
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>{children}</tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
