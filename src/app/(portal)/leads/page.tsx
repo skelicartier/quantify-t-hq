@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Fragment } from "react";
 
 import { createLeadAction } from "@/app/(portal)/leads/actions";
 import { LeadCreateForm } from "@/components/crm/lead-forms";
@@ -7,8 +8,9 @@ import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
-import { DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
+import { CategoryRow, DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
 import { FilterChips } from "@/components/ui/filter-chips";
+import { FilterBuilder } from "@/components/lists/filter-builder";
 import { SelectionBar } from "@/components/ui/selection-bar";
 import { ViewTabs } from "@/components/ui/view-tabs";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -17,10 +19,23 @@ import { Stat, StatGrid } from "@/components/ui/stat";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { readCrmSettings, readLeads, type CrmSettings, type LeadsPage } from "@/lib/api/crm";
+import {
+  readCrmSettings,
+  readLeads,
+  type CrmSettings,
+  type Lead,
+  type LeadsPage,
+} from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LEAD_STAGES, LEAD_STAGE_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { requestNow } from "@/lib/request-time";
+import {
+  applyFilters,
+  describeFilter,
+  parseFilters,
+  serializeFilter,
+  type FilterField,
+} from "@/lib/lists/filters";
 import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -35,6 +50,12 @@ const COLUMNS = [
   { key: "owner", sortable: true, label: "Owner" },
   { key: "received", sortable: true, label: "Received" },
 ];
+
+const GROUPS: Record<string, string> = {
+  stage: "Stage",
+  source: "Source",
+  owner: "Owner",
+};
 
 /** The reply target as prose: 60 → "an hour", 120 → "2 hours", 45 → "45 minutes". */
 function replyTarget(minutes: number): string {
@@ -79,18 +100,75 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
   const sourceNames = sourceNamesFrom(settings);
   const canWrite = hasCapability(context, "crm:write");
 
-  const query = { ...filters, sort: serializeSort(sort) };
-  const filterLink = (name: keyof typeof filters, value: string) => {
+  const group = GROUPS[firstSearchValue(parameters.group) ?? ""]
+    ? (firstSearchValue(parameters.group) ?? "")
+    : "";
+  const query = { ...filters, sort: serializeSort(sort), group };
+  const filterParams = parameters.f;
+  const rawFilters =
+    filterParams === undefined ? [] : Array.isArray(filterParams) ? filterParams : [filterParams];
+  const listHref = (over: Partial<typeof query>, conditions?: readonly string[]) => {
     const next = new URLSearchParams();
-    for (const [key, current] of Object.entries(query)) {
-      const chosen = key === name ? value : current;
-      if (chosen) next.set(key, chosen);
-    }
+    for (const [key, value] of Object.entries({ ...query, ...over }))
+      if (value) next.set(key, value);
+    for (const condition of conditions ?? rawFilters) next.append("f", condition);
     const rendered = next.toString();
     return rendered ? `/leads?${rendered}` : "/leads";
   };
-  const currentQuery = filterLink("q", filters.q).split("?")[1] ?? "";
-  const leads = sortRows(page?.leads ?? [], sort, {
+  const filterLink = (name: keyof typeof filters, value: string) => listHref({ [name]: value });
+  const currentQuery = listHref({}).split("?")[1] ?? "";
+  const filterFields: FilterField[] = [
+    {
+      key: "stage",
+      label: "Stage",
+      kind: "choice",
+      choices: LEAD_STAGES.map((value) => ({ value, label: LEAD_STAGE_LABELS[value] ?? value })),
+    },
+    {
+      key: "source",
+      label: "Source",
+      kind: "choice",
+      choices: [...(settings?.sources ?? []), ...(settings?.archived_sources ?? [])].map(
+        (source) => ({ value: source.key, label: source.label }),
+      ),
+    },
+    { key: "owner", label: "Owner", kind: "text" },
+    { key: "company", label: "Company", kind: "text" },
+    { key: "email", label: "Email", kind: "text" },
+    { key: "waiting", label: "Waiting (minutes)", kind: "number" },
+    {
+      key: "overdue",
+      label: "First reply overdue",
+      kind: "choice",
+      choices: [
+        { value: "yes", label: "Yes" },
+        { value: "no", label: "No" },
+      ],
+    },
+  ];
+  const conditions = parseFilters(filterParams, filterFields);
+  const readField = (lead: Lead, field: string): string | number | null => {
+    switch (field) {
+      case "stage":
+        return lead.stage;
+      case "source":
+        return lead.source_key;
+      case "owner":
+        return lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : "";
+      case "company":
+        return lead.company_name;
+      case "email":
+        return lead.email;
+      case "waiting":
+        return lead.waiting_minutes;
+      case "overdue":
+        return lead.first_reply_overdue ? "yes" : "no";
+      default:
+        return null;
+    }
+  };
+  const filtered = applyFilters(page?.leads ?? [], conditions, readField);
+  const leads = sortRows(filtered, sort, {
     lead: (lead) => lead.full_name || lead.email,
     source: (lead) => sourceLabel(lead.source_key, sourceNames),
     stage: (lead) => LEAD_STAGES.indexOf(lead.stage as (typeof LEAD_STAGES)[number]),
@@ -101,6 +179,23 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
   const staffChoices = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ value: entry.staff_id, label: entry.display_name }));
+  const groupLabel = (lead: Lead): string => {
+    switch (group) {
+      case "stage":
+        return LEAD_STAGE_LABELS[lead.stage] ?? lead.stage;
+      case "source":
+        return sourceLabel(lead.source_key, sourceNames);
+      case "owner":
+        return lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : "Unowned";
+      default:
+        return "";
+    }
+  };
+  // Grouping is a category row before each run of the same label, in the current sort.
+  const grouped = group
+    ? [...leads].sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)))
+    : leads;
+  const columnCount = COLUMNS.length + (canWrite ? 1 : 0);
 
   const counts = page?.counts ?? {};
   const target = page?.first_reply_target_minutes ?? 60;
@@ -231,8 +326,45 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
                     },
                   ]
                 : []),
+              ...conditions.map((condition, index) => ({
+                key: `f-${index}`,
+                label: "Filter",
+                value: describeFilter(condition, filterFields),
+                removeHref: listHref(
+                  {},
+                  conditions.filter((_, other) => other !== index).map(serializeFilter),
+                ),
+              })),
+              ...(group
+                ? [
+                    {
+                      key: "group",
+                      label: "Grouped by",
+                      value: GROUPS[group] ?? group,
+                      removeHref: listHref({ group: "" }),
+                    },
+                  ]
+                : []),
             ]}
           />
+          <div className="list-tools" aria-label="List tools">
+            <FilterBuilder fields={filterFields} basePath="/leads" currentQuery={currentQuery} />
+            <nav className="list-tools__group" aria-label="Group rows">
+              <span className="list-tools__label">Group by</span>
+              <Link href={listHref({ group: "" })} aria-current={group === "" ? "page" : undefined}>
+                None
+              </Link>
+              {Object.entries(GROUPS).map(([key, label]) => (
+                <Link
+                  key={key}
+                  href={listHref({ group: key })}
+                  aria-current={group === key ? "page" : undefined}
+                >
+                  {label}
+                </Link>
+              ))}
+            </nav>
+          </div>
           <ViewTabs
             token={context.token}
             listKey="leads"
@@ -261,58 +393,67 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
             sort={sort}
             sortHref={sortHrefBuilder("/leads", query, sort)}
             selectable={canWrite}
-            isEmpty={page.leads.length === 0}
+            isEmpty={leads.length === 0}
             empty={
               <EmptyState
-                title={Object.values(filters).some(Boolean) ? "Nothing matches" : "No leads yet"}
+                title={
+                  Object.values(filters).some(Boolean) || conditions.length
+                    ? "Nothing matches"
+                    : "No leads yet"
+                }
                 description={
-                  Object.values(filters).some(Boolean)
+                  Object.values(filters).some(Boolean) || conditions.length
                     ? "No lead matches these filters."
                     : "Early-access and contact forms on the website land here the moment they are sent."
                 }
               />
             }
           >
-            {leads.map((lead) => (
-              <tr
-                key={lead.lead_id}
-                className={lead.stage === "disqualified" ? "row--muted" : undefined}
-              >
-                {canWrite && (
-                  <SelectCell id={lead.lead_id} label={lead.full_name || lead.email || "lead"} />
-                )}
-                <td>
-                  <Link className="table-title" href={`/leads/${lead.lead_id}`}>
-                    {lead.full_name || lead.email || "Unnamed lead"}
-                  </Link>
-                  <span className="table-sub">
-                    {[lead.email, lead.company_name].filter(Boolean).join(" · ") ||
-                      "No contact details"}
-                  </span>
-                </td>
-                <td>{sourceLabel(lead.source_key, sourceNames)}</td>
-                <td>
-                  <LeadStagePill stage={lead.stage} />
-                </td>
-                <td>
-                  <FirstReplyClock
-                    firstRepliedAt={lead.first_replied_at}
-                    waitingMinutes={lead.waiting_minutes}
-                    overdue={lead.first_reply_overdue}
-                    targetMinutes={target}
+            {grouped.map((lead, index) => (
+              <Fragment key={lead.lead_id}>
+                {group && (index === 0 || groupLabel(grouped[index - 1]!) !== groupLabel(lead)) && (
+                  <CategoryRow
+                    span={columnCount}
+                    label={`${groupLabel(lead)} · ${grouped.filter((other) => groupLabel(other) === groupLabel(lead)).length}`}
                   />
-                </td>
-                <td>
-                  {lead.owner_staff_id ? (
-                    nameFor(names, lead.owner_staff_id)
-                  ) : (
-                    <span className="table-sub">Unowned</span>
+                )}
+                <tr className={lead.stage === "disqualified" ? "row--muted" : undefined}>
+                  {canWrite && (
+                    <SelectCell id={lead.lead_id} label={lead.full_name || lead.email || "lead"} />
                   )}
-                </td>
-                <td>
-                  <Timestamp value={lead.created_at} now={now} mode="relative" />
-                </td>
-              </tr>
+                  <td>
+                    <Link className="table-title" href={`/leads/${lead.lead_id}`}>
+                      {lead.full_name || lead.email || "Unnamed lead"}
+                    </Link>
+                    <span className="table-sub">
+                      {[lead.email, lead.company_name].filter(Boolean).join(" · ") ||
+                        "No contact details"}
+                    </span>
+                  </td>
+                  <td>{sourceLabel(lead.source_key, sourceNames)}</td>
+                  <td>
+                    <LeadStagePill stage={lead.stage} />
+                  </td>
+                  <td>
+                    <FirstReplyClock
+                      firstRepliedAt={lead.first_replied_at}
+                      waitingMinutes={lead.waiting_minutes}
+                      overdue={lead.first_reply_overdue}
+                      targetMinutes={target}
+                    />
+                  </td>
+                  <td>
+                    {lead.owner_staff_id ? (
+                      nameFor(names, lead.owner_staff_id)
+                    ) : (
+                      <span className="table-sub">Unowned</span>
+                    )}
+                  </td>
+                  <td>
+                    <Timestamp value={lead.created_at} now={now} mode="relative" />
+                  </td>
+                </tr>
+              </Fragment>
             ))}
           </DataTable>
         </>
