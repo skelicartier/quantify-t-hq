@@ -1,6 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { FavouriteStar, type Favourite } from "@/components/shell/favourites";
+
 type Crumb = { href: string; label: string };
 
 type RecordHeaderProps = {
@@ -11,6 +13,8 @@ type RecordHeaderProps = {
   /** Three or four inline readouts: mono label, tabular value. */
   readouts?: readonly { label: string; value: ReactNode }[];
   actions?: ReactNode;
+  /** Pinnable to the rail, on this device. */
+  favourite?: Favourite | undefined;
 };
 
 /**
@@ -23,6 +27,7 @@ export function RecordHeader({
   status,
   readouts = [],
   actions,
+  favourite,
 }: RecordHeaderProps) {
   return (
     <header className="rhead">
@@ -43,6 +48,7 @@ export function RecordHeader({
         )}
         <div className="rhead__title-row">
           <h1 className="rhead__title">{title}</h1>
+          {favourite && <FavouriteStar {...favourite} />}
           {status && <div className="rhead__status">{status}</div>}
         </div>
       </div>

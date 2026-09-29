@@ -169,6 +169,7 @@ export default async function StaffMemberPage({ params, searchParams }: StaffMem
       <RecordHeader
         crumbs={[{ href: "/admin/staff", label: "Staff" }]}
         title={member.display_name || member.email}
+        favourite={{ href: base, label: member.display_name || member.email, kind: "Staff" }}
         status={
           <>
             <StatusPill

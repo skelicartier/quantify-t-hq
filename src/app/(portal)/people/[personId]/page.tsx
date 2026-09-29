@@ -125,6 +125,7 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
           ...(company ? [{ href: `/companies/${company.company_id}`, label: company.name }] : []),
         ]}
         title={person.full_name || person.email}
+        favourite={{ href: base, label: person.full_name || person.email, kind: "Person" }}
         status={
           <>
             {person.title && <span className="quiet">{person.title}</span>}

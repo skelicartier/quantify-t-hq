@@ -129,6 +129,33 @@ export function Shortcuts({ capabilities }: { capabilities: readonly string[] })
                 ))}
             </dl>
           </section>
+          <section aria-labelledby="shortcuts-desk">
+            <h3 id="shortcuts-desk">In a conversation</h3>
+            <dl>
+              <div>
+                <dt>
+                  <kbd className="keycap">r</kbd>
+                  <kbd className="keycap">n</kbd>
+                </dt>
+                <dd>Write a reply, or a note</dd>
+              </div>
+              <div>
+                <dt>
+                  <kbd className="keycap">a</kbd>
+                  <kbd className="keycap">s</kbd>
+                  <kbd className="keycap">p</kbd>
+                </dt>
+                <dd>Assignee, status, priority</dd>
+              </div>
+              <div>
+                <dt>
+                  <kbd className="keycap">t</kbd>
+                  <kbd className="keycap">z</kbd>
+                </dt>
+                <dd>Tags, snooze</dd>
+              </div>
+            </dl>
+          </section>
           <section aria-labelledby="shortcuts-list">
             <h3 id="shortcuts-list">In a list</h3>
             <dl>

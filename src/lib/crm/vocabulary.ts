@@ -86,6 +86,7 @@ export const DEAL_FLAG_LABELS: Record<string, string> = {
   next_step_overdue: "Next step overdue",
   neglected: "Neglected",
   rotting: "Stuck in stage",
+  close_overdue: "Close date passed",
 };
 
 export function dealFlagTone(flag: string): PillTone {

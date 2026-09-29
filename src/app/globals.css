@@ -6681,7 +6681,11 @@
     font-size: 11.5px;
   }
 
-  /* Cohort cells: the shade says how much of the cohort is still here. */
+  /* Cohort cells: the shade says how much of the cohort is still here; the figure
+     keeps the full text colour so it reads on every tint in both themes. */
+  .cohort-cell {
+    color: var(--text);
+  }
   .cohort-cell--high {
     background: color-mix(in srgb, var(--success) 22%, transparent);
   }
@@ -6742,6 +6746,35 @@
     justify-content: space-between;
     gap: 8px;
     color: var(--muted);
+  }
+
+  /* --- Favourites: a star in the record head, a group at the top of the rail --------- */
+  .fav-star {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    background: transparent;
+    color: var(--quiet);
+    cursor: pointer;
+  }
+
+  .fav-star:hover {
+    color: var(--text);
+  }
+
+  .fav-star--on {
+    color: var(--accent);
+  }
+
+  .fav-star--on svg {
+    fill: currentColor;
+  }
+
+  .rail__group--favourites a svg {
+    color: var(--accent);
   }
 
   /* --- Sortable headers, selection, chips, saved views ------------------------------- */

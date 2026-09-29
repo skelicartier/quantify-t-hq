@@ -20,7 +20,11 @@ export function SavedReplyForm({
       <Field id="reply-title" label="Title" hint="What the desk picks from the list.">
         <Input id="reply-title" name="title" maxLength={120} required disabled={isPending} />
       </Field>
-      <Field id="reply-body" label="Body" hint="Inserted into the composer; edit before sending.">
+      <Field
+        id="reply-body"
+        label="Body"
+        hint="Inserted into the composer; edit before sending. {{first_name|there}}, {{name}}, {{plan}} and {{me}} are filled in from the ticket; the part after | is used when the value is unknown."
+      >
         <Textarea
           id="reply-body"
           name="body"

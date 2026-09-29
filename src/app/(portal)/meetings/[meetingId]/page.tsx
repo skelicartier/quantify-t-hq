@@ -125,6 +125,7 @@ export default async function MeetingPage({ params, searchParams }: MeetingPageP
       <RecordHeader
         crumbs={[{ href: "/meetings", label: "Meetings" }]}
         title={meeting.title}
+        favourite={{ href: base, label: meeting.title, kind: "Meeting" }}
         status={
           <>
             {meeting.needs_outcome ? (

@@ -7,6 +7,7 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import { BrandMark } from "@/components/brand/brand-mark";
 import { visibleNavGroups } from "@/components/shell/nav-links";
+import { RailFavourites } from "@/components/shell/favourites";
 import { RailIdentity } from "@/components/shell/rail-identity";
 import type { ShellIdentity } from "@/components/shell/shell-types";
 import { openPalette } from "@/components/shell/palette-bus";
@@ -100,6 +101,7 @@ export function Rail({ identity, capabilities, signOutAction }: RailProps) {
       </button>
 
       <div className="rail__groups">
+        <RailFavourites collapsed={collapsed} />
         {groups.map((group) => (
           <nav className="rail__group" key={group.label} aria-label={group.label}>
             <p className="rail__group-label">{group.label}</p>

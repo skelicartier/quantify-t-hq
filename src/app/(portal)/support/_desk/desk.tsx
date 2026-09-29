@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { manageTicketAction, sendMessage } from "@/app/(portal)/support/[ticketId]/actions";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { Composer } from "@/components/support/composer";
+import { DeskKeys } from "@/components/support/desk-keys";
 import { SlaChip } from "@/components/support/sla-chip";
 import { TicketControls } from "@/components/support/ticket-controls";
 import { Callout } from "@/components/ui/callout";
@@ -153,6 +154,16 @@ export async function Desk({ context, filters, selected }: DeskProps) {
   const self = {
     staff_id: context.me.staff.staff_id,
     display_name: context.me.staff.display_name || context.me.staff.email,
+  };
+  // What a saved reply's variables become for this ticket.
+  const requesterName =
+    firmContext?.account?.name || (ticket?.contact_email ?? "").split("@")[0] || "";
+  const replyVariables = {
+    name: requesterName,
+    first_name: requesterName.split(/[\s.]+/)[0] ?? "",
+    email: ticket?.contact_email ?? "",
+    plan: firmContext?.account?.plan ?? "",
+    me: self.display_name,
   };
   const inADay = new Date(now + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
 
@@ -453,7 +464,15 @@ export async function Desk({ context, filters, selected }: DeskProps) {
             </ol>
             <div className="desk__composer">
               {canWrite ? (
-                <Composer ticketId={ticket.id} action={sendMessage} savedReplies={savedReplies} />
+                <>
+                  <DeskKeys />
+                  <Composer
+                    ticketId={ticket.id}
+                    action={sendMessage}
+                    savedReplies={savedReplies}
+                    variables={replyVariables}
+                  />
+                </>
               ) : (
                 <Callout tone="neutral" compact>
                   Your role reads the desk without writing to it.

@@ -153,6 +153,7 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
           ...(company ? [{ href: `/companies/${company.company_id}`, label: company.name }] : []),
         ]}
         title={deal.name}
+        favourite={{ href: base, label: deal.name, kind: "Deal" }}
         status={
           <>
             {open ? (

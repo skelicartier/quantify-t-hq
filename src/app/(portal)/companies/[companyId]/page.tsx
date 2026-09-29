@@ -127,6 +127,13 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
     ...staff.map((entry) => ({ value: entry.staff_id, label: entry.display_name })),
   ];
   const base = `/companies/${company.company_id}`;
+  const roles = {
+    decision_maker: people.filter((person) => person.role_category === "decision_maker").length,
+    champion: people.filter((person) => person.role_category === "champion").length,
+    user: people.filter((person) => person.role_category === "user").length,
+  };
+  const singleThreaded =
+    people.length <= 1 && ["customer", "early_access", "prospect"].includes(company.lifecycle);
   const inline = {
     action: updateCompanyAction,
     idName: "company_id",
@@ -237,12 +244,20 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
       <RecordHeader
         crumbs={[{ href: "/companies", label: "Companies" }]}
         title={company.name}
+        favourite={{ href: base, label: company.name, kind: "Company" }}
         status={
           <>
             <LifecyclePill lifecycle={company.lifecycle} />
             {company.domain && <span className="mono quiet">{company.domain}</span>}
             {company.customer_since && (
               <span className="quiet">Customer since {formatDate(company.customer_since)}</span>
+            )}
+            {singleThreaded && (
+              <StatusPill
+                value="single"
+                label={people.length === 0 ? "Nobody on file" : "Single-threaded"}
+                tone="attention"
+              />
             )}
           </>
         }
@@ -364,6 +379,20 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                 value={company.notes}
                 placeholder="What the next person to open this should know"
               />
+            </Properties>
+            <Properties title="Stakeholders">
+              <Property label="Decide">{roles.decision_maker}</Property>
+              <Property label="Champion us">{roles.champion}</Property>
+              <Property label="Use it">{roles.user}</Property>
+              <Property label="Coverage">
+                {people.length === 0
+                  ? "Nobody on file"
+                  : singleThreaded
+                    ? "One contact; a second keeps the relationship if they move on"
+                    : roles.decision_maker === 0
+                      ? "No decision-maker known"
+                      : "More than one thread"}
+              </Property>
             </Properties>
             <Properties title="Product accounts">
               {accounts.length === 0 ? (

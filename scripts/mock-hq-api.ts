@@ -2589,6 +2589,8 @@ function dealSummary(row: DealRow) {
       !stepScheduled
     )
       flags.push("rotting");
+    // A close date in the past is a forecast nobody has corrected.
+    if (row.expected_close_date && row.expected_close_date < today) flags.push("close_overdue");
   }
   const probability = stage?.win_probability ?? 0;
   return {
@@ -5930,6 +5932,8 @@ type BookProspect = {
   entered: number;
   /** Days ago the deal was opened; defaults to twenty days before the last move. */
   created?: number;
+  /** Days ago the close date was set for; a past date is a forecast nobody corrected. */
+  closeDaysAgo?: number;
   contact: [string, string, string];
   /** "lost" closes it that many days ago for that reason; open otherwise. */
   lost?: [number, string, string];
@@ -6090,6 +6094,7 @@ const PROSPECTS: BookProspect[] = [
     due: 3,
     entered: 16,
     created: 50,
+    closeDaysAgo: 4,
     contact: ["Megan Foster", "Research Analyst", "champion"],
   },
   {
@@ -6681,7 +6686,11 @@ function seedBook() {
       mrr_amount: prospect.mrr,
       currency: "USD",
       seats: prospect.seats,
-      expected_close_date: lost ? dayOffset(-lost[0]) : daysFromNow(prospect.due + 14),
+      expected_close_date: lost
+        ? dayOffset(-lost[0])
+        : prospect.closeDaysAgo !== undefined
+          ? dayOffset(-prospect.closeDaysAgo)
+          : daysFromNow(prospect.due + 14),
       next_step: lost ? "" : prospect.next,
       next_step_due: lost ? "" : daysFromNow(prospect.due),
       owner_staff_id: owner,

@@ -110,6 +110,11 @@ export default async function ContractPage({ params }: ContractPageProps) {
       <RecordHeader
         crumbs={[{ href: "/revenue/contracts", label: "Contracts" }]}
         title={contract.company_name || "Contract"}
+        favourite={{
+          href: `/revenue/contracts/${contract.contract_id}`,
+          label: contract.company_name || "Contract",
+          kind: "Contract",
+        }}
         status={
           <StatusPill
             value={contract.state}

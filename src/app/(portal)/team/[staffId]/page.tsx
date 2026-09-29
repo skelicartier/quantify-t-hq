@@ -262,6 +262,7 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
       <RecordHeader
         crumbs={[{ href: "/team", label: "Team" }]}
         title={person.display_name || person.email}
+        favourite={{ href: base, label: person.display_name || person.email, kind: "Team" }}
         status={
           <>
             {!person.is_active && <StatusPill value="inactive" label="Not active" />}
