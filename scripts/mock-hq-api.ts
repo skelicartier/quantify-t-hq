@@ -1385,6 +1385,24 @@ const routes: Array<{
       if (["owner", "admin"].includes(role) && found.member.role !== "owner")
         return refuse(403, "forbidden");
       if (staff.some((row) => row.email === email)) return refuse(400, "malformed_request");
+      if (["owner", "admin"].includes(role) && approvers("role_grant", found.member.id).length)
+        return ok({
+          pending_approval: true,
+          approval: requestApproval(
+            "role_grant",
+            found.member,
+            {
+              email,
+              role,
+              kind: String(body.kind ?? "employee"),
+              display_name: String(body.display_name ?? ""),
+              starts_on: String(body.starts_on ?? ""),
+              ends_on: String(body.ends_on ?? ""),
+              personal_email: String(body.personal_email ?? ""),
+            },
+            String(body.reason ?? ""),
+          ),
+        });
       const member: Staff = {
         id: randomUUID(),
         email,
@@ -1462,6 +1480,7 @@ const routes: Array<{
       if ((endsPast || demotesOwner) && lastActiveOwner(member))
         return refuse(409, "last_owner_protected");
       let changed = false;
+      let pendingApproval: Record<string, unknown> | null = null;
       const role = String(body.role ?? "");
       if (role && role !== member.role) {
         if (member.id === found.member.id) return refuse(403, "forbidden", { reason: "own-role" });
@@ -1471,9 +1490,25 @@ const routes: Array<{
           return refuse(403, "forbidden", { required_role: "owner" });
         if (member.role === "owner" && found.member.role !== "owner")
           return refuse(403, "forbidden", { required_role: "owner" });
-        member.role = role as Staff["role"];
-        changed = true;
-        audit("staff.role_changed", found.member.id, "staff", member.id, String(body.reason ?? ""));
+        if (["owner", "admin"].includes(role) && approvers("role_grant", found.member.id).length) {
+          pendingApproval = requestApproval(
+            "role_grant",
+            found.member,
+            { role, from: member.role, target_label: member.email },
+            String(body.reason ?? ""),
+            member.id,
+          );
+        } else {
+          member.role = role as Staff["role"];
+          changed = true;
+          audit(
+            "staff.role_changed",
+            found.member.id,
+            "staff",
+            member.id,
+            String(body.reason ?? ""),
+          );
+        }
       }
       if (typeof body.display_name === "string") {
         member.display_name = body.display_name.trim();
@@ -1497,10 +1532,14 @@ const routes: Array<{
         member.personal_email = body.personal_email.trim();
         changed = true;
       }
-      if (!changed) return refuse(400, "malformed_request", { body: "nothing to change" });
-      if (!role || role === member.role)
+      if (!changed && !pendingApproval)
+        return refuse(400, "malformed_request", { body: "nothing to change" });
+      if (changed && (!role || role === member.role || pendingApproval))
         audit("staff.updated", found.member.id, "staff", member.id);
-      return ok({ staff: staffView(member) });
+      return ok({
+        staff: staffView(member),
+        ...(pendingApproval ? { pending_approval: true, approval: pendingApproval } : {}),
+      });
     },
   },
   {
@@ -2459,6 +2498,266 @@ const dealStageEvents: Array<{
 const activities: ActivityRow[] = [];
 const tasks: TaskRow[] = [];
 const apiKeys: ApiKeyRow[] = [];
+
+// --- dual control ---------------------------------------------------------------------------
+
+type ApprovalRow = {
+  id: string;
+  kind: "role_grant" | "api_key";
+  status: "pending" | "approved" | "declined" | "withdrawn" | "expired" | "done";
+  requested_by: string;
+  requested_at: string;
+  expires_at: string;
+  target_staff_id: string;
+  payload: Record<string, unknown>;
+  reason: string;
+  decided_by: string;
+  decided_at: string | null;
+  decision_note: string;
+  result_id: string;
+};
+const approvals: ApprovalRow[] = [];
+const APPROVAL_TTL_HOURS = 48;
+
+function hoursFromNowIso(hours: number): string {
+  return new Date(Date.now() + hours * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function approverRoles(kind: ApprovalRow["kind"]): string[] {
+  return kind === "role_grant" ? ["owner"] : ["owner", "admin"];
+}
+
+/** Active colleagues, other than `excluding`, with the standing to approve. */
+function approvers(kind: ApprovalRow["kind"], excluding: string): Staff[] {
+  return staff.filter(
+    (row) => row.is_active && row.id !== excluding && approverRoles(kind).includes(row.role),
+  );
+}
+
+function nameOf(staffId: string): string {
+  const member = staff.find((row) => row.id === staffId);
+  return member ? member.display_name || member.email : "";
+}
+
+function personOf(staffId: string) {
+  return staffId ? { staff_id: staffId, name: nameOf(staffId) } : null;
+}
+
+function approvalSummary(kind: ApprovalRow["kind"], payload: Record<string, unknown>): string {
+  if (kind === "api_key") {
+    const scopes = Array.isArray(payload.scopes) ? payload.scopes.join(", ") : "";
+    return `mint an intake key \u201c${String(payload.name ?? "")}\u201d for ${scopes} lasting ${String(payload.expires_in_days ?? 0)} days`;
+  }
+  if (payload.email) return `invite ${String(payload.email)} as ${String(payload.role ?? "")}`;
+  return `change ${String(payload.target_label ?? "a colleague")}'s role from ${String(payload.from || "none")} to ${String(payload.role ?? "")}`;
+}
+
+function approvalPayloadView(kind: ApprovalRow["kind"], payload: Record<string, unknown>) {
+  if (kind === "api_key") {
+    return {
+      name: String(payload.name ?? ""),
+      scopes: Array.isArray(payload.scopes) ? payload.scopes.map(String) : [],
+      expires_in_days: Number(payload.expires_in_days ?? 0),
+    };
+  }
+  return {
+    role: String(payload.role ?? ""),
+    email: String(payload.email ?? ""),
+    display_name: String(payload.display_name ?? ""),
+    kind: String(payload.kind ?? ""),
+    from: String(payload.from ?? ""),
+    target_label: String(payload.target_label ?? ""),
+  };
+}
+
+function approvalStatus(row: ApprovalRow): ApprovalRow["status"] {
+  if (["pending", "approved"].includes(row.status) && Date.parse(row.expires_at) <= Date.now())
+    return "expired";
+  return row.status;
+}
+
+function expireStaleApprovals() {
+  for (const row of approvals) if (approvalStatus(row) === "expired") row.status = "expired";
+}
+
+function approvalView(row: ApprovalRow, viewer?: Staff) {
+  const status = approvalStatus(row);
+  const view: Record<string, unknown> = {
+    approval_id: row.id,
+    kind: row.kind,
+    status,
+    summary: approvalSummary(row.kind, row.payload),
+    payload: approvalPayloadView(row.kind, row.payload),
+    reason: row.reason,
+    requested_by: personOf(row.requested_by),
+    requested_at: row.requested_at,
+    expires_at: row.expires_at,
+    target_staff_id: row.target_staff_id,
+    decided_by: personOf(row.decided_by),
+    decided_at: row.decided_at,
+    decision_note: row.decision_note,
+    result_id: row.result_id,
+    approver_roles: approverRoles(row.kind),
+  };
+  if (viewer) {
+    const mine = row.requested_by === viewer.id;
+    view.can_decide =
+      status === "pending" && !mine && approverRoles(row.kind).includes(viewer.role);
+    view.can_withdraw = mine && ["pending", "approved"].includes(status);
+    view.can_collect = mine && status === "approved" && row.kind === "api_key";
+  }
+  return view;
+}
+
+function requestApproval(
+  kind: ApprovalRow["kind"],
+  requester: Staff,
+  payload: Record<string, unknown>,
+  reason: string,
+  targetStaffId = "",
+) {
+  const row: ApprovalRow = {
+    id: randomUUID(),
+    kind,
+    status: "pending",
+    requested_by: requester.id,
+    requested_at: now(),
+    expires_at: hoursFromNowIso(APPROVAL_TTL_HOURS),
+    target_staff_id: targetStaffId,
+    payload,
+    reason: reason.slice(0, 400),
+    decided_by: "",
+    decided_at: null,
+    decision_note: "",
+    result_id: "",
+  };
+  approvals.unshift(row);
+  audit("approval.requested", requester.id, "approval", row.id, row.reason, {
+    kind,
+    summary: approvalSummary(kind, payload),
+  });
+  return approvalView(row, requester);
+}
+
+/** The key a collected request mints; the same shape the create route makes. */
+function mintKeyRow(
+  name: string,
+  lifetime: number,
+  createdBy: string,
+): { row: ApiKeyRow; secret: string } {
+  const prefix = randomUUID().replace(/-/g, "").slice(0, 8);
+  const secret = `qthq_${prefix}_${randomUUID().replace(/-/g, "")}`;
+  const row: ApiKeyRow = {
+    key_id: randomUUID(),
+    name,
+    prefix,
+    scopes: ["leads:create"],
+    created_by: createdBy,
+    created_at: now(),
+    last_used_at: null,
+    revoked_at: null,
+    expires_at: new Date(Date.now() + lifetime * 86_400_000).toISOString(),
+  };
+  apiKeys.push(row);
+  return { row, secret };
+}
+
+function seedApprovals() {
+  approvals.length = 0;
+  // The admin asked for a key: the owner can decide it.
+  approvals.push({
+    id: "ab000000-0000-4000-8000-000000000001",
+    kind: "api_key",
+    status: "pending",
+    requested_by: "aa000000-0000-4000-8000-00000000000b",
+    requested_at: agoIso(3),
+    expires_at: hoursFromNowIso(45),
+    target_staff_id: "",
+    payload: { name: "Website early-access form", scopes: ["leads:create"], expires_in_days: 180 },
+    reason: "The old key expires on Friday",
+    decided_by: "",
+    decided_at: null,
+    decision_note: "",
+    result_id: "",
+  });
+  // The owner asked for one last week; the admin declined it.
+  approvals.push({
+    id: "ab000000-0000-4000-8000-000000000002",
+    kind: "api_key",
+    status: "declined",
+    requested_by: "aa000000-0000-4000-8000-00000000000a",
+    requested_at: agoIso(24 * 6),
+    expires_at: agoIso(24 * 4),
+    target_staff_id: "",
+    payload: { name: "Partner site", scopes: ["leads:create"], expires_in_days: 90 },
+    reason: "A partner wants to post leads",
+    decided_by: "aa000000-0000-4000-8000-00000000000b",
+    decided_at: agoIso(24 * 6 - 2),
+    decision_note: "Rotate the existing key first.",
+    result_id: "",
+  });
+}
+
+/** What the sign-in rules and the new-device mail found lately; rows the audit log shows. */
+function seedSecurityEvents() {
+  for (let index = auditEvents.length - 1; index >= 0; index -= 1) {
+    if (String(auditEvents[index]!.correlation_id ?? "").startsWith("seed-security")) {
+      auditEvents.splice(index, 1);
+    }
+  }
+  const rows: Array<Record<string, unknown>> = [
+    {
+      occurred_at: agoIso(5),
+      staff_id: "aa000000-0000-4000-8000-00000000000b",
+      actor_label: "",
+      action: "auth.anomalous",
+      entity_type: "session",
+      entity_id: randomUUID(),
+      reason: "",
+      detail: {
+        rules: ["failures_first"],
+        findings: [{ rule: "failures_first", failures: 6, minutes: 60 }],
+        address: "203.0.113.9",
+      },
+      correlation_id: "seed-security-1",
+      ip: "203.0.113.9",
+    },
+    {
+      occurred_at: agoIso(48),
+      staff_id: "aa000000-0000-4000-8000-00000000000c",
+      actor_label: "",
+      action: "auth.new_device",
+      entity_type: "session",
+      entity_id: randomUUID(),
+      reason: "",
+      detail: { device: "Safari on iOS", mailed: true },
+      correlation_id: "seed-security-2",
+      ip: "198.51.100.7",
+    },
+  ];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    rows.push({
+      occurred_at: agoIso(6),
+      staff_id: "aa000000-0000-4000-8000-00000000000c",
+      actor_label: "",
+      action: "auth.login_failed",
+      entity_type: "staff",
+      entity_id: "aa000000-0000-4000-8000-00000000000c",
+      reason: "",
+      detail: {},
+      correlation_id: `seed-security-f${attempt}`,
+      ip: "203.0.113.9",
+    });
+  }
+  auditEvents.push(...rows);
+}
+
+function countAudit(action: string, sinceHours: number): number {
+  const since = Date.now() - sinceHours * 3_600_000;
+  return auditEvents.filter(
+    (row) => row.action === action && Date.parse(String(row.occurred_at)) >= since,
+  ).length;
+}
 
 const OWNER_STAFF = "aa000000-0000-4000-8000-00000000000a";
 const SALES_STAFF = "aa000000-0000-4000-8000-00000000000c";
@@ -3835,6 +4134,40 @@ routes.push(
             ...contractView(row),
             weighted_mrr: money(renewalWeightedCents(row)),
           })),
+        };
+      }
+      if (capabilities.includes("hq:admin")) {
+        expireStaleApprovals();
+        const pending = approvals
+          .filter((row) => approvalStatus(row) === "pending")
+          .map((row) => approvalView(row, found.member));
+        const approved = approvals
+          .filter((row) => approvalStatus(row) === "approved")
+          .map((row) => approvalView(row, found.member));
+        payload.approvals = {
+          pending: pending.length,
+          awaiting_me: pending.filter((view) => view.can_decide).length,
+          to_collect: approved.filter((view) => view.can_collect).length,
+          approvals: pending.slice(0, 5),
+        };
+        const latest = auditEvents
+          .filter((row) => row.action === "auth.anomalous")
+          .sort((a, b) => String(b.occurred_at).localeCompare(String(a.occurred_at)))
+          .slice(0, 5);
+        payload.security = {
+          anomalies_7d: countAudit("auth.anomalous", 24 * 7),
+          new_devices_7d: countAudit("auth.new_device", 24 * 7),
+          failed_logins_24h: countAudit("auth.login_failed", 24),
+          latest: latest.map((row) => {
+            const detail = (row.detail ?? {}) as Record<string, unknown>;
+            return {
+              occurred_at: row.occurred_at,
+              staff_id: String(row.staff_id ?? ""),
+              name: nameOf(String(row.staff_id ?? "")),
+              rules: Array.isArray(detail.rules) ? detail.rules.map(String) : [],
+              address: String(detail.address ?? row.ip ?? ""),
+            };
+          }),
         };
       }
       return ok(payload);
@@ -5917,6 +6250,210 @@ routes.push(
   },
   {
     method: "GET",
+    pattern: "hq/approvals",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers }) => {
+      const viewer = caller(headers)!.member;
+      expireStaleApprovals();
+      const since = Date.now() - 30 * 86_400_000;
+      const views = approvals
+        .filter((row) => Date.parse(row.requested_at) >= since)
+        .map((row) => approvalView(row, viewer));
+      const pending = views.filter((view) => view.status === "pending");
+      const decided = views.filter((view) => view.status !== "pending");
+      return ok({
+        approvals: [...pending, ...decided],
+        pending: pending.length,
+        awaiting_me: pending.filter((view) => view.can_decide).length,
+        to_collect: views.filter((view) => view.can_collect).length,
+        ttl_hours: APPROVAL_TTL_HOURS,
+        approver_roles: { role_grant: ["owner"], api_key: ["owner", "admin"] },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/approvals/{approval_id}/approve",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = approvals.find((candidate) => candidate.id === params.approval_id);
+      if (!row) return refuse(404, "not_found");
+      const status = approvalStatus(row);
+      if (status !== "pending")
+        return refuse(400, "malformed_request", { status: `already ${status}` });
+      if (row.requested_by === viewer.id)
+        return refuse(403, "forbidden", { reason: "own-request" });
+      if (!approverRoles(row.kind).includes(viewer.role))
+        return refuse(403, "forbidden", { required_role: approverRoles(row.kind).join(" or ") });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      let executed: Record<string, unknown> = {};
+      if (row.kind === "role_grant") {
+        const payload = row.payload;
+        if (payload.email) {
+          const member: Staff = {
+            id: randomUUID(),
+            email: String(payload.email),
+            display_name: String(payload.display_name ?? ""),
+            role: String(payload.role) as Staff["role"],
+            kind: String(payload.kind || "employee"),
+            is_active: false,
+            enrolled: false,
+            last_login_at: null,
+            created_at: now(),
+            ends_on: String(payload.ends_on ?? "") || null,
+            starts_on: String(payload.starts_on ?? "") || null,
+            personal_email: String(payload.personal_email ?? ""),
+          };
+          staff.push(member);
+          invites.set(`hqi_mock_${randomUUID().replace(/-/g, "")}`, { staffId: member.id });
+          audit("staff.invited", viewer.id, "staff", member.id, "", {
+            role: member.role,
+            kind: member.kind,
+            approval_id: row.id,
+            requested_by: row.requested_by,
+          });
+          executed = { staff_id: member.id, emailed: false };
+        } else {
+          const target = staff.find((candidate) => candidate.id === row.target_staff_id);
+          if (!target) return refuse(404, "not_found");
+          const from = target.role;
+          target.role = String(payload.role) as Staff["role"];
+          let revoked = 0;
+          for (const session of sessions.values()) {
+            if (session.staffId === target.id && !session.revoked_at) {
+              session.revoked_at = now();
+              revoked += 1;
+            }
+          }
+          audit("staff.role_changed", viewer.id, "staff", target.id, row.reason, {
+            role: { from, to: target.role },
+            sessions_revoked: revoked,
+            approval_id: row.id,
+            requested_by: row.requested_by,
+          });
+          executed = { staff_id: target.id, role: target.role, sessions_revoked: revoked };
+        }
+        row.status = "done";
+        row.result_id = String(executed.staff_id ?? "");
+      } else {
+        row.status = "approved";
+        row.expires_at = hoursFromNowIso(APPROVAL_TTL_HOURS);
+      }
+      row.decided_by = viewer.id;
+      row.decided_at = now();
+      row.decision_note = note;
+      audit("approval.approved", viewer.id, "approval", row.id, note, {
+        kind: row.kind,
+        summary: approvalSummary(row.kind, row.payload),
+        requested_by: row.requested_by,
+        executed: Object.keys(executed).length > 0,
+      });
+      return ok({ approval: approvalView(row, viewer), executed });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/approvals/{approval_id}/decline",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = approvals.find((candidate) => candidate.id === params.approval_id);
+      if (!row) return refuse(404, "not_found");
+      const status = approvalStatus(row);
+      if (status !== "pending")
+        return refuse(400, "malformed_request", { status: `already ${status}` });
+      if (row.requested_by === viewer.id)
+        return refuse(403, "forbidden", { reason: "own-request" });
+      if (!approverRoles(row.kind).includes(viewer.role))
+        return refuse(403, "forbidden", { required_role: approverRoles(row.kind).join(" or ") });
+      row.status = "declined";
+      row.decided_by = viewer.id;
+      row.decided_at = now();
+      row.decision_note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      audit("approval.declined", viewer.id, "approval", row.id, row.decision_note, {
+        kind: row.kind,
+        summary: approvalSummary(row.kind, row.payload),
+        requested_by: row.requested_by,
+      });
+      return ok({ approval: approvalView(row, viewer) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/approvals/{approval_id}/withdraw",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers, params }) => {
+      const viewer = caller(headers)!.member;
+      const row = approvals.find((candidate) => candidate.id === params.approval_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.requested_by !== viewer.id) return refuse(403, "forbidden", { reason: "not-yours" });
+      const status = approvalStatus(row);
+      if (!["pending", "approved"].includes(status))
+        return refuse(400, "malformed_request", { status: `already ${status}` });
+      row.status = "withdrawn";
+      row.decided_at = now();
+      audit("approval.withdrawn", viewer.id, "approval", row.id, "", {
+        kind: row.kind,
+        summary: approvalSummary(row.kind, row.payload),
+        was: status,
+      });
+      return ok({ approval: approvalView(row, viewer) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/approvals/{approval_id}/collect",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params }) => {
+      const viewer = caller(headers)!.member;
+      const row = approvals.find((candidate) => candidate.id === params.approval_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.requested_by !== viewer.id) return refuse(403, "forbidden", { reason: "not-yours" });
+      if (row.kind !== "api_key")
+        return refuse(400, "malformed_request", { kind: "only an intake key is collected" });
+      const status = approvalStatus(row);
+      if (status !== "approved")
+        return refuse(400, "malformed_request", { status: `${status}, not approved` });
+      const minted = mintKeyRow(
+        String(row.payload.name ?? ""),
+        Number(row.payload.expires_in_days ?? KEY_LIFETIME_DAYS),
+        viewer.id,
+      );
+      row.status = "done";
+      row.result_id = minted.row.key_id;
+      audit("api_key.minted", viewer.id, "api_key", minted.row.key_id, row.reason, {
+        name: minted.row.name,
+        expires_in_days: Number(row.payload.expires_in_days ?? KEY_LIFETIME_DAYS),
+        approval_id: row.id,
+        approved_by: row.decided_by,
+      });
+      audit("approval.collected", viewer.id, "approval", row.id, "", {
+        kind: "api_key",
+        key_id: minted.row.key_id,
+        approved_by: row.decided_by,
+      });
+      return ok({
+        key: keyView(minted.row),
+        secret: minted.secret,
+        approval: approvalView(row, viewer),
+      });
+    },
+  },
+  {
+    method: "GET",
     pattern: "hq/api-keys",
     auth: true,
     capability: "hq:admin",
@@ -5951,6 +6488,17 @@ routes.push(
         lifetime > KEY_LIFETIME_DAYS
       )
         return refuse(400, "malformed_request", { expires_in_days: `1 to ${KEY_LIFETIME_DAYS}` });
+      const requester = caller(headers)!;
+      if (approvers("api_key", requester.member.id).length)
+        return ok({
+          pending_approval: true,
+          approval: requestApproval(
+            "api_key",
+            requester.member,
+            { name, scopes: ["leads:create"], expires_in_days: lifetime },
+            reason,
+          ),
+        });
       const prefix = randomUUID().replace(/-/g, "").slice(0, 8);
       const secret = `qthq_${prefix}_${randomUUID().replace(/-/g, "")}`;
       const found = caller(headers);
@@ -10131,6 +10679,8 @@ seedOpenReview();
 seedPeopleOps();
 seedViews();
 seedPasskeys();
+seedApprovals();
+seedSecurityEvents();
 
 function accessView(row: AccessRow) {
   const todayIso = today();
@@ -11495,6 +12045,8 @@ function resetWorld() {
   seedPeopleOps();
   seedViews();
   seedPasskeys();
+  seedApprovals();
+  seedSecurityEvents();
   seedSla();
   resetDeskRules();
   seedSources();

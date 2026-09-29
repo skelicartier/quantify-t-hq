@@ -118,7 +118,7 @@ export function InviteStaffForm({ action, grantable, disabled }: InviteFormProps
         <Button variant="primary" type="submit" disabled={off}>
           {isPending ? "Inviting…" : "Send invite"}
         </Button>
-        {state.status !== "sent" && <FormFeedback state={state} />}
+        {!(state.status === "sent" && state.secret) && <FormFeedback state={state} />}
       </form>
       {state.status === "sent" && state.secret && (
         <div className="one-time-secret" role="status">
@@ -315,7 +315,7 @@ export function ReinviteForm({
         <Button type="submit" variant="primary" disabled={isPending || disabled}>
           {isPending ? "Issuing…" : "Issue a new invite"}
         </Button>
-        {state.status !== "sent" && <FormFeedback state={state} />}
+        {!(state.status === "sent" && state.secret) && <FormFeedback state={state} />}
       </form>
       {state.status === "sent" && state.secret && (
         <div className="one-time-secret" role="status">

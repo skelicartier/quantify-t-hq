@@ -9,6 +9,7 @@ import { SlaChip } from "@/components/support/sla-chip";
 import { Callout } from "@/components/ui/callout";
 import { LocalTime } from "@/components/ui/local-time";
 import { Stat, StatGrid } from "@/components/ui/stat";
+import { Timestamp } from "@/components/ui/timestamp";
 import { requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readHome, type HomeAggregate } from "@/lib/api/home";
@@ -23,6 +24,26 @@ const MENTION_PAGES: Record<string, string> = {
   lead: "leads",
   meeting: "meetings",
 };
+
+const RULE_TEXT: Record<string, string> = {
+  failures_first: "after failed sign-ins",
+  address_change: "second address in minutes",
+};
+
+/** The short form of a request for the side card: the key's name, or the grant itself. */
+function approvalLine(approval: {
+  kind: string;
+  summary: string;
+  payload: { name?: string | undefined };
+}) {
+  return approval.kind === "api_key" && approval.payload.name
+    ? `Key: ${approval.payload.name}`
+    : sentence(approval.summary);
+}
+
+function sentence(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 export const metadata = { title: "Today" };
 export const dynamic = "force-dynamic";
@@ -208,6 +229,13 @@ export default async function HomePage() {
                 hint={`${home.meetings.needs_outcome_count} outcomes owed`}
               />
             )}
+            {home.approvals && (
+              <Stat
+                label="Approvals waiting"
+                value={home.approvals.pending}
+                hint={`${home.approvals.awaiting_me} for you · ${home.approvals.to_collect} to collect`}
+              />
+            )}
           </StatGrid>
 
           <div className="briefing">
@@ -271,6 +299,66 @@ export default async function HomePage() {
                       </li>
                     ))}
                   </ol>
+                </section>
+              )}
+              {home.approvals && (home.approvals.pending > 0 || home.approvals.to_collect > 0) && (
+                <section className="briefing__block" aria-labelledby="approvals-title">
+                  <div className="briefing__head">
+                    <h2 id="approvals-title">Waiting for approval</h2>
+                    <Link className="briefing__more" href="/admin/approvals">
+                      All requests
+                    </Link>
+                  </div>
+                  {home.approvals.approvals.length === 0 ? (
+                    <p className="briefing__clear">
+                      Nothing waits on anyone. {home.approvals.to_collect} approved{" "}
+                      {home.approvals.to_collect === 1 ? "key" : "keys"} of yours to collect.
+                    </p>
+                  ) : (
+                    <ol className="agenda">
+                      {home.approvals.approvals.map((approval) => (
+                        <li key={approval.approval_id} className="agenda__row">
+                          <span className="agenda__time">
+                            {approval.can_decide ? "You" : "Others"}
+                          </span>
+                          <Link className="agenda__title" href="/admin/approvals">
+                            {approvalLine(approval)} ·{" "}
+                            {approval.requested_by?.name || "a colleague"}
+                          </Link>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </section>
+              )}
+              {home.security && (
+                <section className="briefing__block" aria-labelledby="security-title">
+                  <div className="briefing__head">
+                    <h2 id="security-title">Sign-in watch</h2>
+                    <Link className="briefing__more" href="/admin/audit?action=auth.anomalous">
+                      Audit log
+                    </Link>
+                  </div>
+                  <p className="briefing__clear">
+                    {home.security.anomalies_7d} unusual and {home.security.new_devices_7d}{" "}
+                    new-device sign-ins this week; {home.security.failed_logins_24h} failed in the
+                    last day.
+                  </p>
+                  {home.security.latest.length > 0 && (
+                    <ol className="agenda">
+                      {home.security.latest.map((item, index) => (
+                        <li key={`${item.occurred_at}-${index}`} className="agenda__row">
+                          <span className="agenda__time">
+                            <Timestamp value={item.occurred_at} now={now} mode="relative" />
+                          </span>
+                          <span className="agenda__title">
+                            {item.name || "Someone"} ·{" "}
+                            {item.rules.map((rule) => RULE_TEXT[rule] ?? rule).join("; ")}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
                 </section>
               )}
               {home.meetings && (

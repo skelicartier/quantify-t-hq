@@ -78,6 +78,7 @@ import * as crm from "@/lib/api/crm";
 import * as deals from "@/lib/api/deals";
 import * as home from "@/lib/api/home";
 import * as integrations from "@/lib/api/integrations";
+import * as approvals from "@/lib/api/approvals";
 import * as keys from "@/lib/api/keys";
 import * as meetings from "@/lib/api/meetings";
 import * as reports from "@/lib/api/reports";
@@ -101,6 +102,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/staff/{staff_id}", () => staff.readStaffMember(token, ids.staff_id!)],
   ["hq/audit", () => staff.searchAudit(token, {}, { limit: 50, offset: 0 })],
   ["hq/api-keys", () => keys.readApiKeys(token)],
+  ["hq/approvals", () => approvals.readApprovals(token)],
   ["hq/tickets", () => tickets.readQueue(token, {})],
   ["hq/tickets/{ticket_id}", () => tickets.readTicket(token, ids.ticket_id!)],
   ["hq/tickets/{ticket_id}/context", () => tickets.readTicketContext(token, ids.ticket_id!)],

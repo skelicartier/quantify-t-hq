@@ -57,7 +57,7 @@ export function MintKeyForm({ action, disabled }: { action: Action; disabled: bo
         <Button variant="primary" type="submit" disabled={isPending || disabled}>
           {isPending ? "Minting…" : "Mint key"}
         </Button>
-        {state.status !== "sent" && <FormFeedback state={state} />}
+        {!(state.status === "sent" && state.secret) && <FormFeedback state={state} />}
       </form>
       {state.status === "sent" && state.secret && (
         <div className="one-time-secret" role="status">

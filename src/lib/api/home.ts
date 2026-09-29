@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { approvalSchema } from "@/lib/api/approval-schema";
 import { renewalRowSchema } from "@/lib/api/revenue";
 
 import { fetchHqJson } from "@/lib/api/core";
@@ -74,6 +75,32 @@ const homeSchema = z.object({
       at_risk_count: z.number(),
       overdue_count: z.number(),
       renewals: z.array(renewalRowSchema),
+    })
+    .optional(),
+  /** Requests under dual control; owners and admins only. */
+  approvals: z
+    .object({
+      pending: z.number(),
+      awaiting_me: z.number(),
+      to_collect: z.number(),
+      approvals: z.array(approvalSchema),
+    })
+    .optional(),
+  /** What the sign-in rules and the new-device mail found lately; owners and admins only. */
+  security: z
+    .object({
+      anomalies_7d: z.number(),
+      new_devices_7d: z.number(),
+      failed_logins_24h: z.number(),
+      latest: z.array(
+        z.object({
+          occurred_at: z.string().nullable(),
+          staff_id: z.string(),
+          name: z.string(),
+          rules: z.array(z.string()),
+          address: z.string(),
+        }),
+      ),
     })
     .optional(),
 });

@@ -3,6 +3,7 @@ import { SegmentedLinks } from "@/components/ui/toolbar";
 const TABS = [
   { href: "/admin/staff", label: "Staff" },
   { href: "/admin/integrations", label: "Integrations" },
+  { href: "/admin/approvals", label: "Approvals" },
   { href: "/admin/settings/pipeline", label: "Pipeline" },
   { href: "/admin/settings", label: "Settings" },
   { href: "/admin/audit", label: "Audit" },

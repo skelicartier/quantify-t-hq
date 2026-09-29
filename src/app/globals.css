@@ -4236,6 +4236,24 @@
     color: var(--muted);
   }
 
+  .policy.approval {
+    flex-wrap: wrap;
+  }
+
+  .approval__decide,
+  .approval__collect {
+    flex: 1 0 100%;
+    display: grid;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .approval__buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
   .policy-list {
     margin: 0;
     padding: 0;

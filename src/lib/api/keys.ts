@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { pendingApprovalSchema } from "@/lib/api/approval-schema";
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
@@ -39,11 +40,15 @@ const mintedSchema = okEnvelope.extend({
 });
 export type MintedKey = z.infer<typeof mintedSchema>;
 
+/** Minted at once, or — when another owner or admin exists — a request that waits for them. */
 export function mintApiKey(
   token: string,
   input: { name: string; reason: string; expires_in_days?: number },
 ) {
-  return postHqJson("hq/api-keys/create", mintedSchema, { token, body: input });
+  return postHqJson("hq/api-keys/create", z.union([mintedSchema, pendingApprovalSchema]), {
+    token,
+    body: input,
+  });
 }
 
 export function revokeApiKey(token: string, keyId: string, reason: string) {

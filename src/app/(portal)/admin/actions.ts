@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { approverText, type Approval } from "@/lib/api/approval-schema";
+import * as approvalsApi from "@/lib/api/approvals";
 import * as authApi from "@/lib/api/auth";
 import { HqApiRequestError } from "@/lib/api/core";
 import * as crmApi from "@/lib/api/crm";
@@ -65,6 +67,14 @@ export async function mintKeyAction(
       expires_in_days: lifetime,
     });
     revalidatePath("/admin/integrations");
+    if ("pending_approval" in minted) {
+      refreshApprovals();
+      return {
+        status: "sent",
+        message: `${pendingMessage(minted.approval)} The key is minted when you collect it under Approvals.`,
+        sentAt: Date.now(),
+      };
+    }
     return { status: "sent", message: null, sentAt: Date.now(), secret: minted.secret };
   } catch (error) {
     return crmRefusal(error);
@@ -145,6 +155,119 @@ function refreshStaff(staffId?: string) {
   if (staffId) revalidatePath(`/admin/staff/${staffId}`);
 }
 
+// --- dual control ---------------------------------------------------------------------
+
+const APPROVAL_PATHS = ["/admin/approvals", "/home", "/admin/staff", "/admin/integrations"];
+
+function refreshApprovals() {
+  for (const path of APPROVAL_PATHS) revalidatePath(path);
+}
+
+/** What a form says when the act went to a second person instead of happening. */
+function pendingMessage(approval: Approval): string {
+  return `Sent for approval: ${approverText(approval)} must approve it within 48 hours. You will be mailed either way.`;
+}
+
+function approvalRefusal(error: unknown): ActionState {
+  const details =
+    error && typeof error === "object" && "details" in error
+      ? ((error as { details: Record<string, unknown> }).details ?? {})
+      : {};
+  if (details["reason"] === "own-request") {
+    return {
+      status: "error",
+      message: "A request is decided by somebody else, never by the one who made it.",
+    };
+  }
+  if (details["reason"] === "not-yours") {
+    return { status: "error", message: "Only the person who asked can do that." };
+  }
+  if (typeof details["status"] === "string") {
+    return {
+      status: "error",
+      message: `This request is ${details["status"]}; nothing more can be done with it.`,
+    };
+  }
+  if (typeof details["required_role"] === "string") {
+    return { status: "error", message: `Only an ${details["required_role"]} may decide this.` };
+  }
+  return staffRefusal(error);
+}
+
+export async function decideApprovalAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/approvals");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const approvalId = fieldValue(formData, "approval_id", 64);
+  const decision = fieldValue(formData, "decision", 10);
+  const note = fieldValue(formData, "note", 400).trim();
+  if (decision !== "approve" && decision !== "decline") {
+    return { status: "error", message: "Approve or decline." };
+  }
+  let carriedOut = false;
+  try {
+    if (decision === "approve") {
+      const result = await approvalsApi.approveRequest(context.token, approvalId, note);
+      carriedOut = Object.keys(result.executed ?? {}).length > 0;
+    } else {
+      await approvalsApi.declineRequest(context.token, approvalId, note);
+    }
+  } catch (error) {
+    return approvalRefusal(error);
+  }
+  refreshApprovals();
+  return {
+    status: "sent",
+    message:
+      decision === "decline"
+        ? "Declined. The requester has been told."
+        : carriedOut
+          ? "Approved and carried out."
+          : "Approved. The key is minted when the requester collects it.",
+    sentAt: Date.now(),
+  };
+}
+
+export async function withdrawApprovalAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/approvals");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  try {
+    await approvalsApi.withdrawRequest(context.token, fieldValue(formData, "approval_id", 64));
+  } catch (error) {
+    return approvalRefusal(error);
+  }
+  refreshApprovals();
+  return { status: "sent", message: "Withdrawn.", sentAt: Date.now() };
+}
+
+/** The requester mints an approved key; the only response that carries the secret. */
+export async function collectApprovalAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/approvals");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  let collected: Awaited<ReturnType<typeof approvalsApi.collectRequest>>;
+  try {
+    collected = await approvalsApi.collectRequest(
+      context.token,
+      fieldValue(formData, "approval_id", 64),
+    );
+  } catch (error) {
+    return approvalRefusal(error);
+  }
+  refreshApprovals();
+  return { status: "sent", message: null, sentAt: Date.now(), secret: collected.secret };
+}
+
 export async function inviteStaffAction(
   _previous: ActionState,
   formData: FormData,
@@ -171,6 +294,14 @@ export async function inviteStaffAction(
   try {
     const invited = await staffApi.inviteStaff(context.token, input);
     refreshStaff();
+    if ("pending_approval" in invited) {
+      refreshApprovals();
+      return {
+        status: "sent",
+        message: `${pendingMessage(invited.approval)} Nothing is created until then.`,
+        sentAt: Date.now(),
+      };
+    }
     return {
       status: "sent",
       message: invited.emailed
@@ -194,8 +325,9 @@ export async function changeStaffRoleAction(
   const staffId = fieldValue(formData, "staff_id", 64);
   const reason = fieldValue(formData, "reason", 400).trim();
   if (!reason) return { status: "error", message: "Say why the role is changing." };
+  let changed: Awaited<ReturnType<typeof staffApi.updateStaffMember>>;
   try {
-    await staffApi.updateStaffMember(context.token, staffId, {
+    changed = await staffApi.updateStaffMember(context.token, staffId, {
       role: fieldValue(formData, "role", 32),
       reason,
     });
@@ -203,6 +335,14 @@ export async function changeStaffRoleAction(
     return staffRefusal(error);
   }
   refreshStaff(staffId);
+  if (changed.pending_approval && changed.approval) {
+    refreshApprovals();
+    return {
+      status: "sent",
+      message: `${pendingMessage(changed.approval)} Their role stays as it is until then.`,
+      sentAt: Date.now(),
+    };
+  }
   return {
     status: "sent",
     message: "Role changed. Their sessions were ended.",

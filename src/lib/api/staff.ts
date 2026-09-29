@@ -4,6 +4,7 @@ import { cache } from "react";
 import { z } from "zod";
 
 import { HqApiRequestError, HqApiUnavailableError, fetchHqJson, postHqJson } from "@/lib/api/core";
+import { approvalSchema, pendingApprovalSchema } from "@/lib/api/approval-schema";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
 
@@ -49,8 +50,12 @@ const invitedSchema = okEnvelope.extend({
   emailed: z.boolean(),
 });
 
+/** Invited at once, or — an Owner or Admin seat with a second Owner around — a request that waits. */
 export function inviteStaff(token: string, input: Record<string, unknown>) {
-  return postHqJson("hq/staff/invite", invitedSchema, { token, body: input });
+  return postHqJson("hq/staff/invite", z.union([invitedSchema, pendingApprovalSchema]), {
+    token,
+    body: input,
+  });
 }
 
 export function reinviteStaff(token: string, staffId: string) {
@@ -58,10 +63,16 @@ export function reinviteStaff(token: string, staffId: string) {
 }
 
 export function updateStaffMember(token: string, staffId: string, input: Record<string, unknown>) {
-  return postHqJson(`hq/staff/${staffId}/update`, okEnvelope.extend({ staff: staffMemberSchema }), {
-    token,
-    body: input,
-  });
+  return postHqJson(
+    `hq/staff/${staffId}/update`,
+    okEnvelope.extend({
+      staff: staffMemberSchema,
+      /** An Owner or Admin seat waits for a second Owner; the other fields went through. */
+      pending_approval: z.boolean().optional(),
+      approval: approvalSchema.optional(),
+    }),
+    { token, body: input },
+  );
 }
 
 export function deactivateStaffMember(token: string, staffId: string, reason: string) {

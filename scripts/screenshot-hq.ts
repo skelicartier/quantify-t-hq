@@ -116,6 +116,7 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "certificates", path: "/certificates", ready: "main#main-content" },
   { name: "access-review", path: "/access-review", ready: "main#main-content" },
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
+  { name: "admin-approvals", path: "/admin/approvals", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
   { name: "admin-settings", path: "/admin/settings", ready: ".sla-rows" },
   { name: "admin-danger", path: "/admin/danger", ready: "main#main-content" },
@@ -245,7 +246,9 @@ async function captureInteractions(page: Page, folder: string) {
   await page.fill("#key-name", "Website contact form");
   await page.fill("#key-reason", "Screenshot run");
   await page.locator("button", { hasText: "Mint key" }).click();
-  await page.waitForSelector(".one-time-secret", { timeout: 10_000 });
+  // With the admin persona active, the owner's key waits for them (dual control): the
+  // capture is the sent-for-approval message; a lone owner would see the secret.
+  await page.waitForSelector(".one-time-secret, .form-sent", { timeout: 10_000 });
   await assertNoOverflow(page, `${folder}/admin-key-minted`);
   await assertAccessible(page, `${folder}/admin-key-minted`);
   await page.screenshot({ path: `${OUT}/${folder}/admin-key-minted.png`, fullPage: true });
