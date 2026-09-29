@@ -310,3 +310,175 @@ export function niceCeiling(value: number): number {
   const step = magnitude / 2;
   return Math.ceil(value / step) * step;
 }
+
+// ---------------------------------------------------------------------------------------
+// Movement rates and cohorts: the split the bridge hides, and retention by when a firm
+// began rather than one aggregate for everyone.
+// ---------------------------------------------------------------------------------------
+
+export type MovementRates = {
+  months: number;
+  /** Σ opening MRR over the window; every rate below is over this. */
+  opening: number;
+  expansionRate: number | null;
+  contractionRate: number | null;
+  churnRate: number | null;
+  reactivationRate: number | null;
+  /** (churn + contraction − expansion − reactivation) ÷ opening; negative is good. */
+  netChurnRate: number | null;
+  /** Twelve-month gross revenue retention on the bridge's basis: opening less churn and contraction. */
+  grossRetention: number | null;
+  retentionMonths: number;
+};
+
+/**
+ * Each kind of movement as a share of opening MRR over the last `window` completed
+ * months, weighted by month (Σ movement ÷ Σ opening), so a quiet month does not count
+ * as much as a busy one. Churn and contraction arrive negative and are shown positive.
+ */
+export function movementRates(months: readonly BridgeMonth[], window = 3): MovementRates {
+  const done = completedMonths(months);
+  const recent = done.slice(-window);
+  const opening = recent.reduce((sum, month) => sum + month.start, 0);
+  const over = (total: number) => (opening > 0 ? total / opening : null);
+  const sum = (pick: (month: BridgeMonth) => number) =>
+    recent.reduce((total, month) => total + pick(month), 0);
+  const expansion = sum((month) => month.expansion);
+  const contraction = -sum((month) => month.contraction);
+  const churn = -sum((month) => month.churn);
+  const reactivation = sum((month) => month.reactivation);
+  const year = done.slice(-12);
+  const yearOpening = year[0]?.start ?? 0;
+  const yearLosses = year.reduce((total, month) => total + month.churn + month.contraction, 0);
+  return {
+    months: recent.length,
+    opening,
+    expansionRate: over(expansion),
+    contractionRate: over(contraction),
+    churnRate: over(churn),
+    reactivationRate: over(reactivation),
+    netChurnRate: over(churn + contraction - expansion - reactivation),
+    grossRetention:
+      year.length && yearOpening > 0 ? (yearOpening + yearLosses) / yearOpening : null,
+    retentionMonths: year.length,
+  };
+}
+
+export type ReasonSlice = { reason: string; count: number; mrr: number; share: number };
+
+/** Contracts ended in the last `months` months, grouped by the reason recorded. */
+export function churnByReason(
+  contracts: readonly Contract[],
+  today: string,
+  months = 12,
+): ReasonSlice[] {
+  const since = addMonths(today, -months);
+  const ended = contracts.filter(
+    (contract) =>
+      contract.state === "ended" &&
+      contract.ends_on !== null &&
+      contract.ends_on > since &&
+      contract.ends_on <= today,
+  );
+  const total = ended.reduce((sum, contract) => sum + contract.mrr_amount, 0);
+  const slices = new Map<string, ReasonSlice>();
+  for (const contract of ended) {
+    const reason = contract.cancel_reason || "unknown";
+    const slice = slices.get(reason) ?? { reason, count: 0, mrr: 0, share: 0 };
+    slice.count += 1;
+    slice.mrr += contract.mrr_amount;
+    slices.set(reason, slice);
+  }
+  return [...slices.values()]
+    .map((slice) => ({ ...slice, share: total > 0 ? slice.mrr / total : 0 }))
+    .sort((a, b) => b.mrr - a.mrr || a.reason.localeCompare(b.reason));
+}
+
+/** MRR per paying customer at each month's end, where both figures exist. */
+export function arpaByMonth(
+  months: readonly BridgeMonth[],
+  customers: readonly CustomerCount[],
+): { month: string; arpa: number | null }[] {
+  const counts = new Map(customers.map((row) => [row.month, row.count]));
+  return months.map((month) => {
+    const count = counts.get(month.month) ?? 0;
+    return { month: month.month, arpa: count > 0 ? month.end / count : null };
+  });
+}
+
+/** "2025-08-14" → "2025-Q3". */
+export function quarterOf(day: string): string {
+  const match = /^(\d{4})-(\d{2})/.exec(day);
+  if (!match) return day;
+  return `${match[1]}-Q${Math.floor((Number(match[2]) - 1) / 3) + 1}`;
+}
+
+/** The first day of the quarter `steps` quarters after `quarter` ("2025-Q3", 1 → "2025-10-01"). */
+export function quarterStart(quarter: string, steps = 0): string {
+  const match = /^(\d{4})-Q([1-4])$/.exec(quarter);
+  if (!match) return quarter;
+  const index = Number(match[1]) * 4 + (Number(match[2]) - 1) + steps;
+  const year = Math.floor(index / 4);
+  const month = (index % 4) * 3 + 1;
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}
+
+/** The last day of the quarter `steps` quarters after `quarter`. */
+export function quarterEnd(quarter: string, steps = 0): string {
+  const nextStart = quarterStart(quarter, steps + 1);
+  return isoDay(new Date(Date.parse(nextStart) - 86_400_000));
+}
+
+export type CohortCell = { period: number; retained: number | null; active: number | null };
+export type LogoCohort = { quarter: string; size: number; cells: CohortCell[] };
+
+/**
+ * Logo retention by the quarter a firm's first contract began: for each cohort, the share
+ * of its firms still paying at the end of the k-th quarter after that one. A firm counts
+ * as paying while any of its contracts is active on the day, so a reactivation counts.
+ * Quarters that have not ended yet are left blank rather than guessed.
+ */
+export function logoCohorts(
+  contracts: readonly Contract[],
+  today: string,
+  periods = 8,
+): { cohorts: LogoCohort[]; periods: number[] } {
+  const byCompany = new Map<string, Contract[]>();
+  for (const contract of contracts) {
+    if (!contract.starts_on || contract.mrr_amount <= 0) continue;
+    const rows = byCompany.get(contract.company_id) ?? [];
+    rows.push(contract);
+    byCompany.set(contract.company_id, rows);
+  }
+  const activeOn = (rows: readonly Contract[], day: string) =>
+    rows.some(
+      (contract) =>
+        contract.starts_on !== null &&
+        contract.starts_on <= day &&
+        (contract.state !== "ended" || contract.ends_on === null || contract.ends_on > day),
+    );
+  const cohorts = new Map<string, Contract[][]>();
+  for (const rows of byCompany.values()) {
+    const first = rows.map((contract) => contract.starts_on!).sort()[0]!;
+    const quarter = quarterOf(first);
+    const members = cohorts.get(quarter) ?? [];
+    members.push(rows);
+    cohorts.set(quarter, members);
+  }
+  const periodList = Array.from({ length: periods }, (_, index) => index + 1);
+  return {
+    periods: periodList,
+    cohorts: [...cohorts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([quarter, members]) => ({
+        quarter,
+        size: members.length,
+        cells: periodList.map((period) => {
+          const end = quarterEnd(quarter, period);
+          if (end > today) return { period, retained: null, active: null };
+          const active = members.filter((rows) => activeOn(rows, end)).length;
+          return { period, active, retained: members.length > 0 ? active / members.length : null };
+        }),
+      })),
+  };
+}

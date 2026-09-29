@@ -3,14 +3,21 @@ import { describe, expect, it } from "vitest";
 import type { BridgeMonth, Contract } from "@/lib/api/revenue";
 import {
   addMonths,
+  arpaByMonth,
   averageTenureMonths,
+  churnByReason,
   concentration,
   customersByMonth,
   growthMetrics,
   logoChurn,
+  logoCohorts,
   monthEnd,
+  movementRates,
   niceCeiling,
   paying,
+  quarterEnd,
+  quarterOf,
+  quarterStart,
   renewalsByMonth,
   seatFigures,
   sliceBy,
@@ -249,5 +256,120 @@ describe("calendar arithmetic", () => {
     expect(niceCeiling(5_231)).toBe(5_500);
     expect(niceCeiling(199)).toBe(200);
     expect(niceCeiling(0)).toBe(1);
+  });
+});
+
+describe("movement rates", () => {
+  it("weights each kind by opening MRR over the window and shows losses positive", () => {
+    const rates = movementRates(MONTHS, 3);
+    // Openings 100 + 120 + 130 = 350; expansion 6; contraction 2; churn 4 + 13 = 17.
+    expect(rates.months).toBe(3);
+    expect(rates.opening).toBe(350);
+    expect(rates.expansionRate).toBeCloseTo(6 / 350, 10);
+    expect(rates.contractionRate).toBeCloseTo(2 / 350, 10);
+    expect(rates.churnRate).toBeCloseTo(17 / 350, 10);
+    expect(rates.reactivationRate).toBe(0);
+    // (17 + 2 − 6 − 0) ÷ 350.
+    expect(rates.netChurnRate).toBeCloseTo(13 / 350, 10);
+    // Gross retention over the window's months: 100 less every churn and contraction.
+    expect(rates.grossRetention).toBeCloseTo((100 - 4 - 2 - 13) / 100, 10);
+  });
+
+  it("has no rates without a completed month", () => {
+    const rates = movementRates([month({ month: "2026-09", start: 50, partial: true })]);
+    expect(rates.expansionRate).toBeNull();
+    expect(rates.grossRetention).toBeNull();
+  });
+});
+
+describe("churn by reason", () => {
+  it("groups the contracts ended in the window by reason, largest MRR first", () => {
+    const rows = [
+      contract({
+        contract_id: "a",
+        state: "ended",
+        ends_on: "2026-05-01",
+        cancel_reason: "price",
+        mrr_amount: 300,
+      }),
+      contract({
+        contract_id: "b",
+        state: "ended",
+        ends_on: "2026-08-01",
+        cancel_reason: "budget",
+        mrr_amount: 500,
+      }),
+      contract({
+        contract_id: "c",
+        state: "ended",
+        ends_on: "2025-01-01",
+        cancel_reason: "price",
+        mrr_amount: 900,
+      }),
+      contract({ contract_id: "d", state: "active", mrr_amount: 100 }),
+    ];
+    const slices = churnByReason(rows, TODAY, 12);
+    expect(slices.map((slice) => [slice.reason, slice.count, slice.mrr])).toEqual([
+      ["budget", 1, 500],
+      ["price", 1, 300],
+    ]);
+    expect(slices[0]!.share).toBeCloseTo(500 / 800, 10);
+  });
+});
+
+describe("per customer by month", () => {
+  it("divides month-end MRR by the customers paying then", () => {
+    const rows = arpaByMonth(
+      [month({ month: "2026-07", end: 900 }), month({ month: "2026-08", end: 0 })],
+      [
+        { month: "2026-07", count: 3 },
+        { month: "2026-08", count: 0 },
+      ],
+    );
+    expect(rows).toEqual([
+      { month: "2026-07", arpa: 300 },
+      { month: "2026-08", arpa: null },
+    ]);
+  });
+});
+
+describe("cohorts by start quarter", () => {
+  it("names quarters and walks their ends", () => {
+    expect(quarterOf("2025-08-14")).toBe("2025-Q3");
+    expect(quarterOf("2026-01-01")).toBe("2026-Q1");
+    expect(quarterStart("2025-Q3", 1)).toBe("2025-10-01");
+    expect(quarterStart("2025-Q4", 1)).toBe("2026-01-01");
+    expect(quarterEnd("2025-Q3", 0)).toBe("2025-09-30");
+    expect(quarterEnd("2025-Q4", 1)).toBe("2026-03-31");
+  });
+
+  it("measures each cohort's firms still paying at each later quarter's end, blank for the future", () => {
+    const rows = [
+      // Two firms began in 2025-Q3; one ended in February 2026.
+      contract({ contract_id: "a", company_id: "A", starts_on: "2025-08-01" }),
+      contract({
+        contract_id: "b",
+        company_id: "B",
+        starts_on: "2025-09-15",
+        state: "ended",
+        ends_on: "2026-02-10",
+      }),
+      // A second contract for A does not count it twice.
+      contract({ contract_id: "a2", company_id: "A", starts_on: "2026-03-01" }),
+      // One firm began in 2026-Q2.
+      contract({ contract_id: "c", company_id: "C", starts_on: "2026-05-01" }),
+    ];
+    const { cohorts, periods } = logoCohorts(rows, "2026-09-28", 4);
+    expect(periods).toEqual([1, 2, 3, 4]);
+    expect(cohorts.map((cohort) => [cohort.quarter, cohort.size])).toEqual([
+      ["2025-Q3", 2],
+      ["2026-Q2", 1],
+    ]);
+    // 2025-Q3 + 1 = end of 2025-Q4: both paying. + 2 = end of 2026-Q1: B has ended.
+    // + 3 = end of 2026-Q2: A only. + 4 = end of 2026-Q3 (30 Sep 2026), still in the future.
+    expect(cohorts[0]!.cells.map((cell) => cell.retained)).toEqual([1, 0.5, 0.5, null]);
+    expect(cohorts[0]!.cells.map((cell) => cell.active)).toEqual([2, 1, 1, null]);
+    // 2026-Q2 + 1 = end of 2026-Q3: not over yet.
+    expect(cohorts[1]!.cells.map((cell) => cell.retained)).toEqual([null, null, null, null]);
   });
 });

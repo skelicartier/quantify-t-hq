@@ -26,7 +26,7 @@ import {
   type MrrBridge,
 } from "@/lib/api/revenue";
 import { isoDay } from "@/lib/crm/dates";
-import { MOVEMENT_KIND_LABELS } from "@/lib/crm/vocabulary";
+import { CANCEL_REASON_LABELS, MOVEMENT_KIND_LABELS } from "@/lib/crm/vocabulary";
 import {
   formatAbsolute,
   formatDate,
@@ -42,10 +42,14 @@ import {
 } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import {
+  arpaByMonth,
+  churnByReason,
   concentration,
   customersByMonth,
   growthMetrics,
   logoChurn,
+  logoCohorts,
+  movementRates,
   paying,
   seatFigures,
   sliceBy,
@@ -149,6 +153,10 @@ export default async function MrrPage({ searchParams }: MrrPageProps) {
         )
       : null;
   const churn = inCurrency ? logoChurn(inCurrency, today, 12) : null;
+  const rates = bridge ? movementRates(bridge.months, 3) : null;
+  const arpa = bridge && customers ? arpaByMonth(bridge.months, customers) : null;
+  const lostByReason = inCurrency ? churnByReason(inCurrency, today, 12) : [];
+  const cohortTable = inCurrency ? logoCohorts(inCurrency, today, 8) : null;
   const byPlan = book ? sliceBy(book, (contract) => contract.plan_name || "No plan named") : [];
   const byFirm = book
     ? sliceBy(book, (contract) => companyById.get(contract.company_id)?.firm_type || "Unknown")
@@ -276,6 +284,52 @@ export default async function MrrPage({ searchParams }: MrrPageProps) {
             />
           </StatGrid>
 
+          {rates && rates.months > 0 && (
+            <StatGrid columns={6} label={`Movement rates, last ${rates.months} months`}>
+              <Stat
+                label="Expansion"
+                value={formatRatePercent(rates.expansionRate)}
+                text
+                hint={`Of opening MRR, ${rates.months}-month window`}
+              />
+              <Stat
+                label="Contraction"
+                value={formatRatePercent(rates.contractionRate)}
+                text
+                tone={
+                  rates.contractionRate !== null && rates.contractionRate > 0 ? "danger" : "default"
+                }
+                hint="Downgrades and seat returns"
+              />
+              <Stat
+                label="Churned"
+                value={formatRatePercent(rates.churnRate)}
+                text
+                tone={rates.churnRate !== null && rates.churnRate > 0 ? "danger" : "default"}
+                hint="Contracts that ended"
+              />
+              <Stat
+                label="Reactivation"
+                value={formatRatePercent(rates.reactivationRate)}
+                text
+                hint="Former customers back"
+              />
+              <Stat
+                label="Net MRR churn"
+                value={formatDeltaPercent(rates.netChurnRate)}
+                text
+                tone={rates.netChurnRate !== null && rates.netChurnRate > 0 ? "danger" : "default"}
+                hint="Losses less gains; below zero is growth"
+              />
+              <Stat
+                label="Gross revenue retention"
+                value={formatRatePercent(rates.grossRetention)}
+                text
+                hint={`${rates.retentionMonths} months, bridge basis`}
+              />
+            </StatGrid>
+          )}
+
           <div className="chart-grid">
             <Card
               title="MRR at month end"
@@ -316,6 +370,52 @@ export default async function MrrPage({ searchParams }: MrrPageProps) {
             </Card>
           </div>
 
+          <div className="chart-grid">
+            <Card
+              title="Per customer at month end"
+              titleAs="h2"
+              description="Month-end MRR divided by the customers paying then."
+            >
+              {arpa ? (
+                <TrendChart
+                  tone="info"
+                  ariaLabel={`Average monthly revenue per paying customer at each month's end over ${arpa.length} months.`}
+                  format={money}
+                  points={arpa.map((row) => ({
+                    label: formatMonthShort(row.month),
+                    title: formatMonth(row.month),
+                    value: row.arpa ?? 0,
+                  }))}
+                />
+              ) : (
+                contractsNote
+              )}
+            </Card>
+            <Card
+              title="MRR lost by reason, last twelve months"
+              titleAs="h2"
+              description="The reason recorded when each contract ended."
+            >
+              {inCurrency === null ? (
+                contractsNote
+              ) : (
+                <BarList
+                  label="MRR lost by cancellation reason"
+                  format={(value) => formatMrr(value, currency)}
+                  empty="No contract has ended in the last twelve months."
+                  rows={lostByReason.map((slice) => ({
+                    key: slice.reason,
+                    label: CANCEL_REASON_LABELS[slice.reason] ?? slice.reason,
+                    value: slice.mrr,
+                    share: slice.share,
+                    sub: `${slice.count} ${slice.count === 1 ? "contract" : "contracts"}`,
+                    tone: "loss",
+                  }))}
+                />
+              )}
+            </Card>
+          </div>
+
           <Card title="The bridge" titleAs="h2" className="bridge-card">
             <BridgeChart months={bridge.months} currency={currency} />
           </Card>
@@ -351,6 +451,65 @@ export default async function MrrPage({ searchParams }: MrrPageProps) {
                 </tr>
               ))}
             </DataTable>
+          </section>
+
+          <section className="record-section report-section" aria-labelledby="mrr-cohorts">
+            <h2 className="record-section__title" id="mrr-cohorts">
+              Retention by the quarter a firm began · share still paying at each later
+              quarter&apos;s end
+            </h2>
+            {cohortTable === null ? (
+              contractsNote
+            ) : cohortTable.cohorts.length === 0 ? (
+              <p className="side-quiet">No contracts yet.</p>
+            ) : (
+              <DataTable
+                caption="Logo retention by start quarter"
+                columnMenu={false}
+                scroll={false}
+                columns={[
+                  { key: "cohort", label: "Began" },
+                  { key: "size", label: "Firms", align: "end" },
+                  ...cohortTable.periods.map((period) => ({
+                    key: `q${period}`,
+                    label: `Q+${period}`,
+                    align: "end" as const,
+                  })),
+                ]}
+              >
+                {cohortTable.cohorts.map((cohort) => (
+                  <tr key={cohort.quarter}>
+                    <td className="nowrap">{cohort.quarter.replace("-", " ")}</td>
+                    <td className="data-table__num">{cohort.size}</td>
+                    {cohort.cells.map((cell) => (
+                      <td
+                        key={cell.period}
+                        className={`data-table__num cohort-cell${
+                          cell.retained === null
+                            ? " cohort-cell--future"
+                            : cell.retained >= 0.9
+                              ? " cohort-cell--high"
+                              : cell.retained >= 0.7
+                                ? " cohort-cell--mid"
+                                : " cohort-cell--low"
+                        }`}
+                        title={
+                          cell.retained === null
+                            ? "That quarter has not ended yet"
+                            : `${cell.active} of ${cohort.size} still paying`
+                        }
+                      >
+                        {cell.retained === null ? "" : formatPercent(cell.retained)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </DataTable>
+            )}
+            <p className="chart-note">
+              A firm counts as paying while any of its contracts is active on the day, so a firm
+              that left and came back counts. Quarters still running are left blank.
+            </p>
           </section>
 
           <section className="record-section report-section" aria-labelledby="mrr-book">
