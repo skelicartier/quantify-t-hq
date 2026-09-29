@@ -52,6 +52,10 @@ export function DealBoard({ columns, today, defaultDue, names, moveAction }: Dea
     columns.flatMap((column) => column.deals.map((deal) => [deal.deal_id, deal])),
   );
   const canMove = Boolean(moveAction);
+  // In the Won and Lost views every stage column is empty by definition; only the
+  // columns holding deals are drawn, so the outcome is not a board's width away.
+  const outcomeView = columns.some((column) => column.outcome && column.deals.length > 0);
+  const visible = outcomeView ? columns.filter((column) => column.deals.length > 0) : columns;
 
   const dropOn = (column: BoardColumn) => (event: React.DragEvent) => {
     event.preventDefault();
@@ -67,7 +71,7 @@ export function DealBoard({ columns, today, defaultDue, names, moveAction }: Dea
   return (
     <>
       <div className="board" role="region" aria-label="Pipeline board" tabIndex={0}>
-        {columns.map((column) => {
+        {visible.map((column) => {
           const droppable = canMove && !column.outcome && dragging !== null;
           return (
             <section
