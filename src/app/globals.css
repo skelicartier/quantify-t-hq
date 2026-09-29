@@ -3964,6 +3964,23 @@
     display: contents;
   }
 
+  .checkbox-group {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-inline-size: 0;
+  }
+
+  .checkbox-group > legend {
+    margin-bottom: 6px;
+  }
+
+  .checkbox-group > .field__hint {
+    margin-bottom: 4px;
+  }
+
   .convo-head__followers {
     color: var(--quiet);
     font-size: 12px;

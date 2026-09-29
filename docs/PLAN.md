@@ -17,7 +17,7 @@ danger zone), with real TOTP sign-in. Two repositories:
 | Repo                                           | Path                                                                                                                        | What lives there                                                                                                                                                                                                                                            |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **HQ portal** (Next.js 16, TypeScript)         | `~/Documents/Projects/HQ Quantify Terminal` — GitHub `aaryansaroha98/quantify-t-hq`, branch `main`, pushed                  | UI, server actions, zod API clients (`src/lib/api/*`), the mock service (`scripts/mock-hq-api.ts`), the screenshot harness, `docs/DESIGN.md` (the UI contract), `docs/RESEARCH-2026-09-30.md` (the research), this file                                     |
-| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0018`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
+| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0020`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
 
 ## 2. Ground rules (do not relearn these)
 
@@ -30,7 +30,7 @@ danger zone), with real TOTP sign-in. Two repositories:
 - **The mock must mirror the real routes** (route names, methods, payload shapes): the
   route-parity and payload-contract tests enforce it. Any new route = service handler +
   test + mock handler + portal client, in that order.
-- **The harness is the gate** (`npm run check:hq-ui`, ~5 min, 202 screens, axe serious /
+- **The harness is the gate** (`npm run check:hq-ui`, ~5 min, 210 screens, axe serious /
   critical = 0, no horizontal overflow, no console errors). Never edit files while it runs.
   Restart the dev server after any `next build`. Restart the mock after a seed change.
 - Never name a data vendor in UI copy (copy-guard test). Tables never truncate data
@@ -91,34 +91,40 @@ rail identity menu lists them.
 
 ### 2026-09-30 — the research-led waves (`docs/RESEARCH-2026-09-30.md`)
 
-| Wave           | What                                                                                                                                                                                                                                                                                                         | Where                                                                                                                       | Commits                                               |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Lists          | sortable headers, `x` / shift-click selection with a bulk bar (owner, lifecycle), removable filter chips, per-device saved views; Won/Lost views open as a table                                                                                                                                             | companies, leads, deals                                                                                                     | HQ `b39dfbf`, `4586571`                               |
-| Analytics 2    | quarterly logo cohorts, expansion / contraction / churn / reactivation rates, net churn, GRR beside NRR, MRR lost by reason, per-customer trend                                                                                                                                                              | `/revenue/mrr`                                                                                                              | HQ `391d4ee`                                          |
-| Desk & details | desk keys `r n a s p t z`, `{{first_name                                                                                                                                                                                                                                                                     | there}}`reply variables, favourites (star → rail), stakeholder coverage + single-threaded warning,`close_overdue` deal flag | desk, records, rail                                   | HQ `e4aae34`; service `0ab9fc7` |
-| Price list     | `hq_plans` (migration 0017), `plan_key` on deals/contracts, `hq/settings/plans/update`, deals and contracts priced from seats × rate held to the plan's minimum; settings section; keyed inputs; record-head popovers open right                                                                             | settings, deal/contract forms and records                                                                                   | HQ `09b6a04`; service `caeefd2`, `59db2c8`            |
-| Renewal ledger | migration 0018 (status / confidence / renews-at / note / recorded by), `hq/contracts/{id}/renewal`, `hq/revenue/renewals` (window, six-month due vs forecast roll-up, dates passed), Home renewals section; `/revenue/renewals` page with bulk expectation; contract Renewal properties; Home "Renewal" rows | revenue, home                                                                                                               | service `58e403e`; HQ `9dd7ba4`                       |
-| Field history  | every update's audit row carries `changes` (value before → after, per field); a History tab on company, person and contract records and a Changes tab on deals, read from `hq/audit` for roles with `audit:read`                                                                                             | records                                                                                                                     | service `b91e82a`; HQ: the commit that added this row |
+| Wave           | What                                                                                                                                                                                                                                                                                                         | Where                                                                                                                       | Commits                                    |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| Lists          | sortable headers, `x` / shift-click selection with a bulk bar (owner, lifecycle), removable filter chips, per-device saved views; Won/Lost views open as a table                                                                                                                                             | companies, leads, deals                                                                                                     | HQ `b39dfbf`, `4586571`                    |
+| Analytics 2    | quarterly logo cohorts, expansion / contraction / churn / reactivation rates, net churn, GRR beside NRR, MRR lost by reason, per-customer trend                                                                                                                                                              | `/revenue/mrr`                                                                                                              | HQ `391d4ee`                               |
+| Desk & details | desk keys `r n a s p t z`, `{{first_name                                                                                                                                                                                                                                                                     | there}}`reply variables, favourites (star → rail), stakeholder coverage + single-threaded warning,`close_overdue` deal flag | desk, records, rail                        | HQ `e4aae34`; service `0ab9fc7` |
+| Price list     | `hq_plans` (migration 0017), `plan_key` on deals/contracts, `hq/settings/plans/update`, deals and contracts priced from seats × rate held to the plan's minimum; settings section; keyed inputs; record-head popovers open right                                                                             | settings, deal/contract forms and records                                                                                   | HQ `09b6a04`; service `caeefd2`, `59db2c8` |
+| Renewal ledger | migration 0018 (status / confidence / renews-at / note / recorded by), `hq/contracts/{id}/renewal`, `hq/revenue/renewals` (window, six-month due vs forecast roll-up, dates passed), Home renewals section; `/revenue/renewals` page with bulk expectation; contract Renewal properties; Home "Renewal" rows | revenue, home                                                                                                               | service `58e403e`; HQ `9dd7ba4`            |
+| Field history  | every update's audit row carries `changes` (value before → after, per field); a History tab on company, person and contract records and a Changes tab on deals, read from `hq/audit` for roles with `audit:read`                                                                                             | records                                                                                                                     | service `b91e82a`; HQ `7712133`            |
+
+### 2026-10-01 — the support desk
+
+| Wave          | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Where                                   | Commits                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------- |
+| Desk: threads | followers (migration 0019, `hq/tickets/{id}/follow`, a Following queue filter that opens every status, `o` key, "Followed by …" in the head); merge (`hq/tickets/{id}/merge {into}`: messages in time order, tags + followers united, more urgent priority kept, duplicate resolved + tagged `merged`, notes both sides, refused when either side is resolved); reopen counting (by hand or by the customer writing again; "Reopened once" pill); weekly report "Support desk" card                                 | desk, reports                           | service `c90578c`; HQ `d4dea8a`               |
+| Desk: rules   | migration 0020 (`support_alerts` + `desk.*` settings); `desk_rules` / `desk_sweeper`: fewest-open assignment from an admin-chosen pool, one public "still there?" nudge, a public close a reply reopens, one mail per deadline to an assignee whose reply timer is at risk or breached; runs from the queue read when the last pass is > 15 min old + nightly at 03:51 (no quarter-hour timer: the serverless database's free hours); `hq/settings/desk/update`; Settings → Desk rules form; breadcrumb fix ("Ngs") | settings, desk, `function_app.py` timer | service `c90578c`; HQ: the commit adding this |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
-1. **Support desk**: followers (internal watchers), ticket merge, auto-nudge/close of
-   threads waiting on the customer (timer worker), SLA at-risk / breach notification to the
-   assignee (mailer), fewest-open auto-assignment on create, quality metrics (reopens,
-   resolved on first reply). S each; the worker and mail need the service's timers.
-2. **Security quick wins**: HIBP k-anonymity breached-password check on set / reset;
+1. **Security quick wins**: HIBP k-anonymity breached-password check on set / reset;
    15-minute idle for owner / admin; security-event emails (password change, authenticator
    reset, recovery-code use, role change, key created); API key `expires_at` (180 days) and
    rotate-on-offboarding checklist item; SoD rules and orphan-grant detection in the access
    review; signed JSONL audit export. Then passkeys (WebAuthn) as a second factor — M.
-3. **People-ops quick wins**: manager field and reporting line; asset register with return
+2. **People-ops quick wins**: manager field and reporting line; asset register with return
    gating the offboarding clock; versioned policy acknowledgements; date reminders
    (probation end, engagement end); training records; 1:1 action items; emergency contacts.
-4. **CRM**: CSV import with mapping / dedupe / summary; duplicate detection + merge;
+3. **CRM**: CSV import with mapping / dedupe / summary; duplicate detection + merge;
    parent / child companies; stage-conversion funnel and time-in-stage report from
    `hq_deal_stage_events`; comments with @mentions; pipeline snapshots (nightly job).
-5. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
+4. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
    grouping, a filter builder. Saved views shared with the team (server-side).
+
+Desk items deliberately left: email-to-ticket needs an MX record and an inbound secret
+(founder), and the desk reads the customer's app version from the ticket, not live.
 
 Deliberately **not** built, with the research's reasons: round-robin routing, CSAT
 surveys, LTV, health scores, territories, automated email sequences, AI deal scores,
@@ -127,7 +133,7 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile) → apply migrations 0006–0018 and publish → move the desk onto SQL → Vercel
+Turnstile) → apply migrations 0006–0020 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
 Actions on the account fails every run in seconds with no runner (billing) — only the
@@ -137,13 +143,18 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of 2026-09-30, late evening.**
+**As of 2026-10-01, evening.**
 
-- HQ repo: `origin/main` HEAD carries field history (History / Changes tabs, `RecordHistory`,
-  the mock's `changesBetween`, a `company-history` harness screen); working tree clean.
-  Harness passed with 206 screens; `~/Downloads/HQ Portal screenshots 2026-09-29` refreshed.
-- Product repo: HEAD `b91e82a` (field history); 159 tests pass; not pushed.
-- **Next step:** §5 item 1, the support desk — followers, ticket merge, auto-nudge/close of
-  threads waiting on the customer (timer worker), SLA at-risk / breach notification to the
-  assignee, fewest-open assignment on create, reopen and resolved-on-first-reply metrics.
-  Service first (routes + worker + tests), then the mock, then the desk UI.
+- HQ repo: `origin/main` HEAD carries the support-desk wave (followers, merge, reopen
+  counting, the weekly desk card, the Desk rules settings form, the breadcrumb fix);
+  working tree clean. Harness passed with 210 screens (dark + light, desktop + phone, axe
+  clean); `~/Downloads/HQ Portal screenshots 2026-09-29` refreshed.
+- Product repo: HEAD `c90578c` (desk wave: migrations 0019–0020, `desk_rules.py`,
+  `desk_sweeper.py`, `hq_desk_sweeper` timer); 166 tests pass; not pushed.
+  `docs/HQ_GO_LIVE.md` now says 0006–0020.
+- **Next step:** §5 item 1, the security quick wins — HIBP k-anonymity breached-password
+  check on set / reset, 15-minute idle for owner / admin, security-event emails for the
+  acts not yet mailed (role change, key created), API key `expires_at` (180 days) with a
+  rotate-on-offboarding checklist item, SoD rules and orphan-grant detection in the access
+  review, signed JSONL audit export. Service first (routes + tests), then the mock, then
+  the portal; passkeys (WebAuthn) after, as their own wave.

@@ -3,10 +3,10 @@
 import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select } from "@/components/ui/field";
+import { Checkbox, Field, Input, Select } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { AttemptField } from "@/components/ui/attempt-field";
-import type { SlaRow } from "@/lib/api/settings";
+import type { DeskRules, SlaRow } from "@/lib/api/settings";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -367,6 +367,101 @@ export function NewPlanForm({ action }: { action: Action }) {
         {isPending ? "Adding…" : "Add plan"}
       </Button>
       <FormFeedback state={state} sentLabel="Added." />
+    </form>
+  );
+}
+
+/**
+ * The desk's standing rules in one form: when a thread waiting on the customer is nudged
+ * and then closed, whether an assignee is mailed about a reply timer, and who new
+ * conversations are dealt to. Saved together because the two day counts constrain each
+ * other.
+ */
+export function DeskRulesForm({
+  action,
+  rules,
+  staff,
+}: {
+  action: Action;
+  rules: DeskRules;
+  /** Active staff who can write on the desk; the pool is chosen from these. */
+  staff: readonly { staff_id: string; display_name: string }[];
+}) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  return (
+    <form className="stack-form" action={formAction}>
+      <AttemptField state={state} />
+      <div className="form-row">
+        <Field
+          id="desk-nudge"
+          label="Nudge after (days)"
+          hint="Waiting on the customer, since the desk last wrote. 0 turns it off."
+        >
+          <Input
+            id="desk-nudge"
+            name="nudge_days"
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={rules.max_days}
+            defaultValue={rules.nudge_days}
+            required
+            disabled={isPending}
+          />
+        </Field>
+        <Field
+          id="desk-autoclose"
+          label="Close after (days)"
+          hint="Resolved by rule with a public line; a reply reopens it. 0 turns it off."
+        >
+          <Input
+            id="desk-autoclose"
+            name="autoclose_days"
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={rules.max_days}
+            defaultValue={rules.autoclose_days}
+            required
+            disabled={isPending}
+          />
+        </Field>
+      </div>
+      <Checkbox
+        id="desk-alert"
+        name="alert_assignee"
+        label="Email the assignee when a reply timer is at risk or breached"
+        description="One mail per deadline, to the person the conversation is assigned to."
+        defaultChecked={rules.alert_assignee}
+        disabled={isPending}
+      />
+      <fieldset className="checkbox-group" disabled={isPending}>
+        <legend className="field__label">Deal new conversations to</legend>
+        <p className="field__hint">
+          Whoever has the fewest open conversations takes the next one. Nobody ticked means
+          conversations wait in the unassigned queue.
+        </p>
+        {staff.length === 0 ? (
+          <p className="table-sub">No active desk staff to choose from.</p>
+        ) : (
+          staff.map((member) => (
+            <Checkbox
+              key={member.staff_id}
+              id={`desk-pool-${member.staff_id}`}
+              name="assign_pool"
+              value={member.staff_id}
+              label={member.display_name}
+              defaultChecked={rules.assign_pool.includes(member.staff_id)}
+            />
+          ))
+        )}
+      </fieldset>
+      <div className="sla-row__foot">
+        <Button type="submit" size="small" disabled={isPending}>
+          {isPending ? "Saving…" : "Save rules"}
+        </Button>
+        <FormFeedback state={state} />
+      </div>
     </form>
   );
 }

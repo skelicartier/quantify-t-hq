@@ -14,31 +14,31 @@ import { ThemeToggle } from "@/components/shell/theme-toggle";
 
 type Crumb = { href: string; label: string };
 
+/** Path words whose title case is not their spelling. */
+const LEAF_LABELS: Record<string, string> = { mrr: "MRR", sla: "SLA", api: "API" };
+
 /** The section and page a path sits under, from the navigation table; records add their own name in the page bar. */
 function crumbsFor(pathname: string): Crumb[] {
   for (const group of NAV_GROUPS) {
     for (const link of group.links) {
-      const match =
-        pathname === link.href || (link.activePrefix && pathname.startsWith(link.activePrefix));
-      if (match) {
-        const crumbs: Crumb[] = [{ href: link.href, label: link.label }];
-        if (pathname !== link.href) {
-          const tail = pathname.slice(link.href.length).split("/").filter(Boolean);
-          const leaf = tail[0] ?? "";
-          if (
-            leaf &&
-            !/^[0-9a-f-]{20,}$/i.test(leaf) &&
-            !/^sup_/.test(leaf) &&
-            !/^QT-/.test(leaf)
-          ) {
-            crumbs.push({
-              href: pathname,
-              label: leaf.replace(/-/g, " ").replace(/^\w/, (c) => c.toUpperCase()),
-            });
-          }
-        }
-        return [{ href: "/home", label: group.label }, ...crumbs];
+      const byPrefix = Boolean(link.activePrefix && pathname.startsWith(link.activePrefix));
+      if (pathname !== link.href && !byPrefix) continue;
+      const crumbs: Crumb[] = [{ href: link.href, label: link.label }];
+      // The leaf is the first word after the part of the path the link owns — its
+      // active prefix when that is what matched, never the link's own longer href
+      // (slicing "/admin/settings" by the length of "/admin/staff" once read "ngs").
+      const owned = byPrefix && link.activePrefix ? link.activePrefix : link.href;
+      const tail = pathname.slice(owned.length).split("/").filter(Boolean);
+      const leaf = tail[0] ?? "";
+      const isRecordId = /^[0-9a-f-]{20,}$/i.test(leaf) || /^sup_/.test(leaf) || /^QT-/.test(leaf);
+      if (leaf && !isRecordId && `${owned}/${leaf}` !== link.href) {
+        crumbs.push({
+          href: `${owned}/${leaf}`,
+          label:
+            LEAF_LABELS[leaf] ?? leaf.replace(/-/g, " ").replace(/^\w/, (c) => c.toUpperCase()),
+        });
       }
+      return [{ href: "/home", label: group.label }, ...crumbs];
     }
   }
   return [];

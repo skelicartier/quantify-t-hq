@@ -13,9 +13,23 @@ const slaRowSchema = z.object({
 });
 export type SlaRow = z.infer<typeof slaRowSchema>;
 
+export const deskRulesSchema = z.object({
+  /** Days waiting on the customer before one "still there?" message; 0 is off. */
+  nudge_days: z.number(),
+  /** Days waiting before the thread is resolved by rule; 0 is off. */
+  autoclose_days: z.number(),
+  alert_assignee: z.boolean(),
+  /** Staff ids new conversations are dealt to, fewest open first; empty means nobody. */
+  assign_pool: z.array(z.string()),
+  max_days: z.number(),
+  last_sweep_at: z.string().nullable(),
+});
+export type DeskRules = z.infer<typeof deskRulesSchema>;
+
 const supportSettingsSchema = okEnvelope.extend({
   sla: z.array(slaRowSchema),
   bounds: z.object({ min_minutes: z.number(), max_minutes: z.number() }),
+  desk: deskRulesSchema,
 });
 export type SupportSettings = z.infer<typeof supportSettingsSchema>;
 
@@ -27,6 +41,14 @@ export function updateSla(token: string, input: Record<string, unknown>) {
   return postHqJson(
     "hq/settings/sla/update",
     okEnvelope.extend({ updated: z.boolean(), sla: z.array(slaRowSchema) }),
+    { token, body: input },
+  );
+}
+
+export function updateDeskRules(token: string, input: Record<string, unknown>) {
+  return postHqJson(
+    "hq/settings/desk/update",
+    okEnvelope.extend({ updated: z.boolean(), desk: deskRulesSchema }),
     { token, body: input },
   );
 }

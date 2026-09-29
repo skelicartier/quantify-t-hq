@@ -427,6 +427,52 @@ export async function updateSlaAction(
   return { status: "sent", message: "Saved.", sentAt: Date.now() };
 }
 
+export async function updateDeskRulesAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/settings");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const nudge = wholeNumber(formData, "nudge_days");
+  const autoclose = wholeNumber(formData, "autoclose_days");
+  if (nudge === null || autoclose === null) {
+    return { status: "error", message: "Enter both as whole days; 0 turns a rule off." };
+  }
+  const pool = formData
+    .getAll("assign_pool")
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 20);
+  try {
+    await settingsApi.updateDeskRules(context.token, {
+      nudge_days: nudge,
+      autoclose_days: autoclose,
+      alert_assignee: formData.get("alert_assignee") === "on",
+      assign_pool: pool,
+    });
+  } catch (error) {
+    if (error instanceof HqApiRequestError && error.code === "malformed_request") {
+      const details = error.details ?? {};
+      if ("autoclose_days" in details) {
+        return { status: "error", message: "The close must come after the nudge." };
+      }
+      if ("assign_pool" in details) {
+        return {
+          status: "error",
+          message: "Every pool member must be active staff who can write on the desk.",
+        };
+      }
+      if ("reason" in details) {
+        return { status: "error", message: "Nothing changed." };
+      }
+    }
+    return crmRefusal(error);
+  }
+  revalidatePath("/admin/settings");
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
+
 export async function updatePlanAction(
   _previous: ActionState,
   formData: FormData,

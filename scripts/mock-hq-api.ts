@@ -690,6 +690,160 @@ function slaFor(row: TicketRow): {
   };
 }
 
+const DESK_MAX_DAYS = 90;
+const DESK_RULES: {
+  nudge_days: number;
+  autoclose_days: number;
+  alert_assignee: boolean;
+  assign_pool: string[];
+  last_sweep_at: string | null;
+} = {
+  nudge_days: 3,
+  autoclose_days: 7,
+  alert_assignee: true,
+  assign_pool: [],
+  last_sweep_at: null,
+};
+const alertsSent = new Set<string>();
+let lastDeskPass = 0;
+
+function resetDeskRules() {
+  Object.assign(DESK_RULES, {
+    nudge_days: 3,
+    autoclose_days: 7,
+    alert_assignee: true,
+    assign_pool: [],
+    last_sweep_at: null,
+  });
+  alertsSent.clear();
+  lastDeskPass = 0;
+}
+
+function deskRulesView() {
+  return { ...DESK_RULES, assign_pool: [...DESK_RULES.assign_pool], max_days: DESK_MAX_DAYS };
+}
+
+function lastPublicStaffAt(row: TicketRow): string | null {
+  const stamps = row.messages
+    .filter((message) => message.author === "staff" && message.visibility === "public")
+    .map((message) => message.at)
+    .sort();
+  return stamps[stamps.length - 1] ?? null;
+}
+
+/** As the service's desk_sweeper: assign, then close, then nudge, then alert. */
+function sweepDesk() {
+  const at = now();
+  const nowMs = Date.now();
+  const days = (iso: string) => (nowMs - Date.parse(iso)) / 86_400_000;
+  const systemLine = (body: string, visibility: Message["visibility"] = "public"): Message => ({
+    id: messageId(),
+    author: "system",
+    author_id: "",
+    author_name: "desk rules",
+    visibility,
+    body,
+    at,
+  });
+  if (DESK_RULES.assign_pool.length > 0) {
+    const openCounts = new Map<string, number>();
+    for (const row of tickets) {
+      if (row.status !== "resolved" && row.assignee_staff_id)
+        openCounts.set(row.assignee_staff_id, (openCounts.get(row.assignee_staff_id) ?? 0) + 1);
+    }
+    for (const row of tickets) {
+      if (row.status === "resolved" || row.assignee_staff_id) continue;
+      const members = DESK_RULES.assign_pool
+        .map((id) => staff.find((candidate) => candidate.id === id && candidate.is_active))
+        .filter((member): member is Staff => Boolean(member))
+        .sort(
+          (a, b) =>
+            (openCounts.get(a.id) ?? 0) - (openCounts.get(b.id) ?? 0) ||
+            a.display_name.toLowerCase().localeCompare(b.display_name.toLowerCase()) ||
+            a.id.localeCompare(b.id),
+        );
+      const member = members[0];
+      if (!member) break;
+      row.assignee_staff_id = member.id;
+      row.assignee_name = member.display_name;
+      row.messages.push(systemLine("Assigned to Support Team"));
+      row.updated_at = at;
+      openCounts.set(member.id, (openCounts.get(member.id) ?? 0) + 1);
+      audit("ticket.auto_assigned", null, "ticket", row.id, "", {
+        assignee: member.display_name,
+        assignee_staff_id: member.id,
+      });
+    }
+  }
+  for (const row of tickets) {
+    if (row.status !== "pending") continue;
+    if (row.snoozed_until && Date.parse(row.snoozed_until) > nowMs) continue;
+    const lastStaff = lastPublicStaffAt(row);
+    if (!lastStaff) continue;
+    const waited = days(lastStaff);
+    if (DESK_RULES.autoclose_days && waited >= DESK_RULES.autoclose_days) {
+      row.messages.push(
+        systemLine(
+          `Closed after ${DESK_RULES.autoclose_days} days without a reply. If this is still a problem, reply here and it reopens on our side.`,
+        ),
+      );
+      row.status = "resolved";
+      row.resolved_at = at;
+      row.snoozed_until = null;
+      row.updated_at = at;
+      audit("ticket.auto_closed", null, "ticket", row.id, "", {
+        waited_days: Math.round(waited * 10) / 10,
+      });
+      continue;
+    }
+    const nudged = row.messages.some(
+      (message) =>
+        message.author === "system" &&
+        message.visibility === "public" &&
+        message.body.startsWith("Still there?") &&
+        message.at >= lastStaff,
+    );
+    if (DESK_RULES.nudge_days && waited >= DESK_RULES.nudge_days && !nudged) {
+      const remaining = DESK_RULES.autoclose_days - DESK_RULES.nudge_days;
+      row.messages.push(
+        systemLine(
+          DESK_RULES.autoclose_days > DESK_RULES.nudge_days
+            ? `Still there? We have not heard back since our last message. Reply here and this conversation carries on where it left off; otherwise it closes in ${remaining} ${remaining === 1 ? "day" : "days"}.`
+            : "Still there? We have not heard back since our last message. Reply here and this conversation carries on where it left off.",
+        ),
+      );
+      row.updated_at = at;
+      audit("ticket.auto_nudged", null, "ticket", row.id, "", {
+        waited_days: Math.round(waited * 10) / 10,
+      });
+    }
+  }
+  if (DESK_RULES.alert_assignee) {
+    for (const row of tickets) {
+      if (row.status === "resolved" || !row.assignee_staff_id) continue;
+      const sla = slaFor(row);
+      if ((sla.status !== "at-risk" && sla.status !== "breached") || !sla.due_at) continue;
+      const key = `${row.id}:${sla.status}:${sla.due_at}`;
+      if (alertsSent.has(key)) continue;
+      alertsSent.add(key);
+      // The mock sends no mail; the audit row is the record the service would also write.
+      audit("ticket.alerted", null, "ticket", row.id, "", {
+        state: sla.status,
+        timer: sla.timer,
+        assignee_staff_id: row.assignee_staff_id,
+        mailed: false,
+      });
+    }
+  }
+  DESK_RULES.last_sweep_at = at;
+}
+
+function sweepDeskIfStale() {
+  if (Date.now() - lastDeskPass < 15 * 60_000) return;
+  lastDeskPass = Date.now();
+  sweepDesk();
+}
+
 function ticketSummary(row: TicketRow, viewer = "") {
   const pub = publicMessages(row);
   const last = pub[pub.length - 1];
@@ -1258,6 +1412,7 @@ const routes: Array<{
     capability: "tickets:read",
     handler: ({ query, headers }) => {
       const viewer = caller(headers)!.member.id;
+      sweepDeskIfStale();
       const summaries = tickets.map((row) => ticketSummary(row, viewer));
       const visible = summaries.filter((summary) => {
         if (query.following && !summary.following) return false;
@@ -4172,7 +4327,61 @@ routes.push(
       ok({
         sla: slaView(),
         bounds: { min_minutes: SLA_MIN_MINUTES, max_minutes: SLA_MAX_MINUTES },
+        desk: deskRulesView(),
       }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/desk/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const before = { ...DESK_RULES, assign_pool: [...DESK_RULES.assign_pool] };
+      const next = { ...before, assign_pool: [...before.assign_pool] };
+      for (const name of ["nudge_days", "autoclose_days"] as const) {
+        if (!(name in body)) continue;
+        const value = Number(body[name]);
+        if (!Number.isInteger(value) || value < 0 || value > DESK_MAX_DAYS)
+          return refuse(400, "malformed_request", { [name]: `0 (off) to ${DESK_MAX_DAYS} days` });
+        next[name] = value;
+      }
+      if (next.nudge_days && next.autoclose_days && next.autoclose_days <= next.nudge_days)
+        return refuse(400, "malformed_request", {
+          autoclose_days: "the close must come after the nudge",
+        });
+      if ("alert_assignee" in body) {
+        if (typeof body.alert_assignee !== "boolean")
+          return refuse(400, "malformed_request", { alert_assignee: "true or false" });
+        next.alert_assignee = body.alert_assignee;
+      }
+      if ("assign_pool" in body) {
+        if (!Array.isArray(body.assign_pool))
+          return refuse(400, "malformed_request", { assign_pool: "a list of staff ids" });
+        const cleaned: string[] = [];
+        for (const raw of body.assign_pool) {
+          const id = String(raw).trim();
+          if (!id || cleaned.includes(id)) continue;
+          const member = staff.find((candidate) => candidate.id === id);
+          if (!member || !member.is_active)
+            return refuse(400, "malformed_request", {
+              assign_pool: "every member must be active staff",
+            });
+          if (!(CAPABILITIES[member.role] ?? []).includes("tickets:write"))
+            return refuse(400, "malformed_request", {
+              assign_pool: "every member must be able to write on the desk",
+            });
+          cleaned.push(id);
+        }
+        next.assign_pool = cleaned.slice(0, 20);
+      }
+      if (JSON.stringify(next) === JSON.stringify(before))
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
+      Object.assign(DESK_RULES, next);
+      audit("settings.desk_updated", caller(headers)?.member.id ?? null, "settings", "desk", "", {
+        changes: changesBetween(before, next),
+      });
+      return ok({ updated: true, desk: deskRulesView() });
+    },
   },
   {
     method: "POST",
@@ -9070,6 +9279,7 @@ function resetWorld() {
   seedRevenue();
   seedTeam();
   seedSla();
+  resetDeskRules();
   seedSources();
   seedPlans();
   Object.assign(retentionRules, RETENTION_SEED);

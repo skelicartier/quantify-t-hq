@@ -1,10 +1,12 @@
 import {
+  updateDeskRulesAction,
   updatePlanAction,
   updateSlaAction,
   updateSourceAction,
 } from "@/app/(portal)/admin/actions";
 import { AdminTabs } from "@/components/admin/admin-tabs";
 import {
+  DeskRulesForm,
   NewPlanForm,
   NewSourceForm,
   PlanRowForm,
@@ -18,6 +20,9 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, type CrmSettings } from "@/lib/api/crm";
 import { readSupportSettings, type SupportSettings } from "@/lib/api/settings";
+import { listStaff } from "@/lib/api/staff";
+import { Timestamp } from "@/components/ui/timestamp";
+import { requestNow } from "@/lib/request-time";
 
 export const metadata = { title: "Settings" };
 export const dynamic = "force-dynamic";
@@ -41,18 +46,32 @@ export default async function SettingsPage() {
       </>
     );
   }
-  const [support, crm]: [SupportSettings | null, CrmSettings | null] = await Promise.all([
+  const [support, crm, staff]: [
+    SupportSettings | null,
+    CrmSettings | null,
+    Awaited<ReturnType<typeof listStaff>> | null,
+  ] = await Promise.all([
     orNull(() => readSupportSettings(context.token)),
     orNull(() => readCrmSettings(context.token)),
+    orNull(() => listStaff(context.token)),
   ]);
   const fixed = new Set(crm?.protected_sources ?? []);
+  const now = requestNow();
+  // The pool is chosen from staff whose role writes on the desk.
+  const DESK_ROLES = new Set(["owner", "admin", "support"]);
+  const deskStaff = (staff?.staff ?? [])
+    .filter((member) => member.is_active && DESK_ROLES.has(member.role))
+    .map((member) => ({
+      staff_id: member.staff_id,
+      display_name: member.display_name || member.email,
+    }));
 
   return (
     <>
       <PageHeader
         eyebrow="Admin"
         title="Settings"
-        description="The price list, the reply times the desk is held to, and the sources a lead can come from."
+        description="The price list, the reply times the desk is held to, the desk's standing rules, and the sources a lead can come from."
         actions={<AdminTabs current="/admin/settings" />}
       />
       <div className="record-layout">
@@ -136,6 +155,33 @@ export default async function SettingsPage() {
                   />
                 ))}
               </div>
+            )}
+          </section>
+          <section className="record-section" aria-labelledby="settings-desk">
+            <h2 className="record-section__title" id="settings-desk">
+              Desk rules
+            </h2>
+            <p className="page-note">
+              Run when somebody opens the queue and the last pass is more than fifteen minutes old,
+              and once a night. Every act is in the audit log under &ldquo;desk rules&rdquo;.
+              {support?.desk.last_sweep_at && (
+                <>
+                  {" "}
+                  Last pass{" "}
+                  <Timestamp value={support.desk.last_sweep_at} now={now} mode="relative" />.
+                </>
+              )}
+            </p>
+            {support === null ? (
+              <Callout tone="danger" role="alert">
+                The rules could not be read just now. Nothing was changed.
+              </Callout>
+            ) : (
+              <DeskRulesForm
+                action={updateDeskRulesAction}
+                rules={support.desk}
+                staff={deskStaff}
+              />
             )}
           </section>
           <section className="record-section" aria-labelledby="settings-sources">
