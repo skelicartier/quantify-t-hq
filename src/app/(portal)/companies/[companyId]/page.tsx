@@ -134,15 +134,16 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
     readOnly: !canWrite,
   };
 
-  const dealsTable = (
+  // The overview shows only what is still in play; the Deals tab shows the history too.
+  const dealsTableFor = (rows: typeof deals, empty: string) => (
     <DataTable
       caption="Deals with this company"
       columns={DEAL_COLUMNS}
       scroll={false}
-      isEmpty={deals.length === 0}
-      empty={<p className="timeline-empty">No deals with this company yet.</p>}
+      isEmpty={rows.length === 0}
+      empty={<p className="timeline-empty">{empty}</p>}
     >
-      {deals.map((deal) => (
+      {rows.map((deal) => (
         <tr key={deal.deal_id} className={deal.status === "open" ? undefined : "row--muted"}>
           <td>
             <Link className="table-title" href={`/deals/${deal.deal_id}`}>
@@ -181,6 +182,13 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
         </tr>
       ))}
     </DataTable>
+  );
+  const dealsTable = dealsTableFor(deals, "No deals with this company yet.");
+  const openDealsTable = dealsTableFor(
+    openDeals,
+    deals.length === 0
+      ? "No deals with this company yet."
+      : "Nothing open; the history is under Deals.",
   );
 
   const peopleTable = (
@@ -410,7 +418,7 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
         {tab === "overview" && (
           <>
             <RecordSection id="company-deals" title="Open deals">
-              {dealsTable}
+              {openDealsTable}
             </RecordSection>
             {activity}
           </>
