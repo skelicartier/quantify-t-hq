@@ -6,7 +6,11 @@ import { FirstReplyClock, LeadStagePill } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
-import { DataTable } from "@/components/ui/data-table";
+import { bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
+import { DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
+import { FilterChips } from "@/components/ui/filter-chips";
+import { SelectionBar } from "@/components/ui/selection-bar";
+import { ViewTabs } from "@/components/ui/view-tabs";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Popover } from "@/components/ui/popover";
 import { Stat, StatGrid } from "@/components/ui/stat";
@@ -17,18 +21,19 @@ import { readCrmSettings, readLeads, type CrmSettings, type LeadsPage } from "@/
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LEAD_STAGES, LEAD_STAGE_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { requestNow } from "@/lib/request-time";
+import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
 import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Leads" };
 export const dynamic = "force-dynamic";
 
 const COLUMNS = [
-  { key: "lead", label: "Lead" },
-  { key: "source", label: "Source" },
-  { key: "stage", label: "Stage" },
-  { key: "clock", label: "First reply" },
-  { key: "owner", label: "Owner" },
-  { key: "received", label: "Received" },
+  { key: "lead", sortable: true, label: "Lead" },
+  { key: "source", sortable: true, label: "Source" },
+  { key: "stage", sortable: true, label: "Stage" },
+  { key: "clock", sortable: true, label: "First reply" },
+  { key: "owner", sortable: true, label: "Owner" },
+  { key: "received", sortable: true, label: "Received" },
 ];
 
 /** The reply target as prose: 60 → "an hour", 120 → "2 hours", 45 → "45 minutes". */
@@ -50,6 +55,10 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
     source: firstSearchValue(parameters.source) ?? "",
     q: firstSearchValue(parameters.q) ?? "",
   };
+  const sort = parseSort(
+    firstSearchValue(parameters.sort),
+    COLUMNS.map((column) => column.key),
+  );
   const now = requestNow();
 
   let page: LeadsPage | null = null;
@@ -70,15 +79,28 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
   const sourceNames = sourceNamesFrom(settings);
   const canWrite = hasCapability(context, "crm:write");
 
+  const query = { ...filters, sort: serializeSort(sort) };
   const filterLink = (name: keyof typeof filters, value: string) => {
     const next = new URLSearchParams();
-    for (const [key, current] of Object.entries(filters)) {
+    for (const [key, current] of Object.entries(query)) {
       const chosen = key === name ? value : current;
       if (chosen) next.set(key, chosen);
     }
     const rendered = next.toString();
     return rendered ? `/leads?${rendered}` : "/leads";
   };
+  const currentQuery = filterLink("q", filters.q).split("?")[1] ?? "";
+  const leads = sortRows(page?.leads ?? [], sort, {
+    lead: (lead) => lead.full_name || lead.email,
+    source: (lead) => sourceLabel(lead.source_key, sourceNames),
+    stage: (lead) => LEAD_STAGES.indexOf(lead.stage as (typeof LEAD_STAGES)[number]),
+    clock: (lead) => lead.waiting_minutes,
+    owner: (lead) => (lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : null),
+    received: (lead) => lead.created_at,
+  });
+  const staffChoices = [...(names ?? new Map()).values()]
+    .filter((entry) => entry.is_active)
+    .map((entry) => ({ value: entry.staff_id, label: entry.display_name }));
 
   const counts = page?.counts ?? {};
   const target = page?.first_reply_target_minutes ?? 60;
@@ -183,9 +205,56 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
             </form>
           </nav>
 
+          <FilterChips
+            clearHref="/leads"
+            chips={[
+              ...(filters.q
+                ? [{ key: "q", label: "Search", value: filters.q, removeHref: filterLink("q", "") }]
+                : []),
+              ...(filters.stage
+                ? [
+                    {
+                      key: "stage",
+                      label: "Stage",
+                      value: LEAD_STAGE_LABELS[filters.stage] ?? filters.stage,
+                      removeHref: filterLink("stage", ""),
+                    },
+                  ]
+                : []),
+              ...(filters.source
+                ? [
+                    {
+                      key: "source",
+                      label: "Source",
+                      value: sourceLabel(filters.source, sourceNames),
+                      removeHref: filterLink("source", ""),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+          <ViewTabs listKey="leads" basePath="/leads" currentQuery={currentQuery} />
+          {canWrite && (
+            <SelectionBar
+              tableId={tableIdFor("Leads")}
+              kind="leads"
+              noun={["lead", "leads"]}
+              action={bulkUpdateAction}
+              fields={[
+                {
+                  field: "owner_staff_id",
+                  label: "Owner",
+                  choices: [{ value: "", label: "Unowned" }, ...staffChoices],
+                },
+              ]}
+            />
+          )}
           <DataTable
             caption="Leads"
             columns={COLUMNS}
+            sort={sort}
+            sortHref={sortHrefBuilder("/leads", query, sort)}
+            selectable={canWrite}
             isEmpty={page.leads.length === 0}
             empty={
               <EmptyState
@@ -198,11 +267,14 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
               />
             }
           >
-            {page.leads.map((lead) => (
+            {leads.map((lead) => (
               <tr
                 key={lead.lead_id}
                 className={lead.stage === "disqualified" ? "row--muted" : undefined}
               >
+                {canWrite && (
+                  <SelectCell id={lead.lead_id} label={lead.full_name || lead.email || "lead"} />
+                )}
                 <td>
                   <Link className="table-title" href={`/leads/${lead.lead_id}`}>
                     {lead.full_name || lead.email || "Unnamed lead"}

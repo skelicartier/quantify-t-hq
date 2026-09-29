@@ -1,13 +1,19 @@
 import type { ReactNode } from "react";
 
+import Link from "next/link";
+
 import { ColumnMenu } from "@/components/ui/column-menu";
+import { SelectAll } from "@/components/ui/select-all";
 import { TableKeys } from "@/components/ui/table-keys";
+import type { SortState } from "@/lib/lists/sort";
 
 export type DataTableColumn = {
   key: string;
   label: ReactNode;
   align?: "start" | "end";
   width?: string;
+  /** The header links to the sorted list; the page does the sorting. */
+  sortable?: boolean;
 };
 
 type DataTableProps = {
@@ -28,6 +34,12 @@ type DataTableProps = {
    * choice is kept per device under the table's caption, so the caption must be stable.
    */
   columnMenu?: boolean;
+  /** The current sort, drawn on the matching header. */
+  sort?: SortState | undefined;
+  /** Where a click on a sortable header goes. */
+  sortHref?: ((key: string) => string) | undefined;
+  /** A leading column of checkboxes; rows add their own `SelectCell`. */
+  selectable?: boolean | undefined;
   children: ReactNode;
 };
 
@@ -36,6 +48,11 @@ function slug(text: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+/** The id a table gets from its caption — what a selection bar or column menu targets. */
+export function tableIdFor(caption: string): string {
+  return `table-${slug(caption)}`;
 }
 
 /**
@@ -51,10 +68,13 @@ export function DataTable({
   minWidth,
   scroll = true,
   columnMenu,
+  sort,
+  sortHref,
+  selectable = false,
   children,
 }: DataTableProps) {
   if (isEmpty) return <>{empty ?? null}</>;
-  const tableId = `table-${slug(caption)}`;
+  const tableId = tableIdFor(caption);
   const menu =
     (columnMenu ?? columns.length >= 4)
       ? columns.map((column) => ({
@@ -66,7 +86,7 @@ export function DataTable({
     <>
       {menu && (
         <div className="table-tools">
-          <ColumnMenu tableId={tableId} columns={menu} />
+          <ColumnMenu tableId={tableId} columns={menu} offset={selectable ? 1 : 0} />
         </div>
       )}
       <div
@@ -80,22 +100,64 @@ export function DataTable({
           <caption className="sr-only">{caption}</caption>
           <thead>
             <tr>
-              {columns.map((column) => (
-                <th
-                  key={column.key}
-                  scope="col"
-                  className={column.align === "end" ? "data-table__num" : undefined}
-                  style={column.width ? { width: column.width } : undefined}
-                >
-                  {column.label}
+              {selectable && (
+                <th scope="col" className="data-table__select">
+                  <SelectAll tableId={tableId} />
                 </th>
-              ))}
+              )}
+              {columns.map((column) => {
+                const sortable = Boolean(column.sortable && sortHref);
+                const active = sortable && sort && sort.key === column.key ? sort : null;
+                const classes = [
+                  column.align === "end" ? "data-table__num" : "",
+                  sortable ? "data-table__sortable" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ");
+                return (
+                  <th
+                    key={column.key}
+                    scope="col"
+                    className={classes || undefined}
+                    style={column.width ? { width: column.width } : undefined}
+                    aria-sort={
+                      sortable
+                        ? active
+                          ? active.dir === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                        : undefined
+                    }
+                  >
+                    {sortable && sortHref ? (
+                      <Link className="data-table__sort" href={sortHref(column.key)}>
+                        {column.label}
+                        <span className="data-table__sort-mark" aria-hidden="true">
+                          {active ? (active.dir === "asc" ? "↑" : "↓") : "↕"}
+                        </span>
+                      </Link>
+                    ) : (
+                      column.label
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>{children}</tbody>
         </table>
       </div>
     </>
+  );
+}
+
+/** A row's checkbox, first in the row of a selectable table. */
+export function SelectCell({ id, label }: { id: string; label: string }) {
+  return (
+    <td className="data-table__select">
+      <input type="checkbox" data-select="" value={id} aria-label={`Select ${label}`} />
+    </td>
   );
 }
 

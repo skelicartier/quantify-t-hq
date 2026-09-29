@@ -49,9 +49,12 @@ function subscribe(onChange: () => void) {
 export function ColumnMenu({
   tableId,
   columns,
+  offset = 0,
 }: {
   tableId: string;
   columns: readonly MenuColumn[];
+  /** Cells before the first named column (a selection column), which shift every rule. */
+  offset?: number;
 }) {
   const stored = useSyncExternalStore(
     subscribe,
@@ -73,7 +76,7 @@ export function ColumnMenu({
     writeHidden(tableId, [...next]);
   };
   const rules = columns
-    .map((column, index) => (hidden.has(column.key) ? index + 1 : 0))
+    .map((column, index) => (hidden.has(column.key) ? index + 1 + offset : 0))
     .filter((position) => position > 0)
     .map(
       (position) =>

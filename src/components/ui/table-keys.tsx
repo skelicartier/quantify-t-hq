@@ -6,7 +6,7 @@ import { isTypingTarget } from "@/components/shell/palette-bus";
 
 /**
  * `j`/`k` walk the rows of every list on the page, `Enter` opens the active row's
- * link, `Escape` clears. Mounted once per page by the table frame; the active row is
+ * link, `x` toggles its selection, `Escape` clears. Mounted once per page by the table frame; the active row is
  * marked with `data-active` and styled by the table.
  */
 export function TableKeys() {
@@ -45,6 +45,12 @@ export function TableKeys() {
         if (link) {
           event.preventDefault();
           link.click();
+        }
+      } else if (event.key === "x" && active) {
+        const box = active.querySelector<HTMLInputElement>("input[data-select]");
+        if (box) {
+          event.preventDefault();
+          box.click();
         }
       } else if (event.key === "Escape" && active) {
         mark(null);

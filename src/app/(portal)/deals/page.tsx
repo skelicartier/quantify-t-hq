@@ -6,7 +6,10 @@ import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
-import { DataTable } from "@/components/ui/data-table";
+import { bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
+import { DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
+import { SelectionBar } from "@/components/ui/selection-bar";
+import { ViewTabs } from "@/components/ui/view-tabs";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { SegmentedLinks } from "@/components/ui/toolbar";
@@ -18,6 +21,7 @@ import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
 import { formatMoney, formatMrr, formatMrrBy } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
+import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
 import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Deals" };
@@ -31,13 +35,13 @@ const STATUSES = [
 ] as const;
 
 const TABLE_COLUMNS = [
-  { key: "deal", label: "Deal" },
-  { key: "stage", label: "Stage" },
-  { key: "value", label: "Monthly value", align: "end" as const },
-  { key: "weighted", label: "Weighted", align: "end" as const },
-  { key: "next", label: "Next step" },
-  { key: "owner", label: "Owner" },
-  { key: "age", label: "In stage", align: "end" as const },
+  { key: "deal", sortable: true, label: "Deal" },
+  { key: "stage", sortable: true, label: "Stage" },
+  { key: "value", sortable: true, label: "Monthly value", align: "end" as const },
+  { key: "weighted", sortable: true, label: "Weighted", align: "end" as const },
+  { key: "next", sortable: true, label: "Next step" },
+  { key: "owner", sortable: true, label: "Owner" },
+  { key: "age", sortable: true, label: "In stage", align: "end" as const },
 ];
 
 type DealsPageProps = {
@@ -54,6 +58,10 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
   const requestedView = firstSearchValue(parameters.view);
   const view =
     requestedView === "table" || requestedView === "board" ? requestedView : defaultView(status);
+  const sort = parseSort(
+    firstSearchValue(parameters.sort),
+    TABLE_COLUMNS.map((column) => column.key),
+  );
   const now = requestNow();
   const today = isoDay(now);
 
@@ -72,10 +80,28 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
     const chosenView = next.view ?? view;
     if (chosenStatus !== "open") parameters.set("status", chosenStatus);
     if (chosenView !== defaultView(chosenStatus)) parameters.set("view", chosenView);
+    if (chosenView === "table" && sort) parameters.set("sort", serializeSort(sort));
     const rendered = parameters.toString();
     return rendered ? `/deals?${rendered}` : "/deals";
   };
-  const rows = (board?.columns ?? []).flatMap((column) => column.deals);
+  const currentQuery = link({}).split("?")[1] ?? "";
+  const canMoveDeals = hasCapability(context, "deals:write");
+  const rows = sortRows(
+    (board?.columns ?? []).flatMap((column) => column.deals),
+    sort,
+    {
+      deal: (deal) => deal.company_name || deal.name,
+      stage: (deal) => deal.stage_label,
+      value: (deal) => deal.mrr_amount,
+      weighted: (deal) => (deal.status === "open" ? deal.weighted_mrr : null),
+      next: (deal) => deal.next_step_due || null,
+      owner: (deal) => (deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : null),
+      age: (deal) => (deal.status === "open" ? deal.days_in_stage : null),
+    },
+  );
+  const staffChoices = [...(names ?? new Map()).values()]
+    .filter((entry) => entry.is_active)
+    .map((entry) => ({ value: entry.staff_id, label: entry.display_name }));
 
   return (
     <>
@@ -164,65 +190,97 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
               />
             )
           ) : (
-            <DataTable
-              caption="Deals"
-              columns={TABLE_COLUMNS}
-              isEmpty={rows.length === 0}
-              empty={<EmptyState title="Nothing here" description="No deals match this view." />}
-            >
-              {rows.map((deal) => (
-                <tr
-                  key={deal.deal_id}
-                  className={deal.status === "open" ? undefined : "row--muted"}
-                >
-                  <td>
-                    <Link className="table-title" href={`/deals/${deal.deal_id}`}>
-                      {deal.company_name || deal.name}
-                    </Link>
-                    <span className="table-sub">{deal.name}</span>
-                    <DealFlags
-                      flags={deal.flags}
-                      idleDays={deal.idle_days}
-                      daysInStage={deal.days_in_stage}
-                    />
-                  </td>
-                  <td>
-                    {deal.status === "open" ? (
-                      deal.stage_label
-                    ) : (
-                      <DealStatusPill status={deal.status} />
+            <>
+              <ViewTabs listKey="deals" basePath="/deals" currentQuery={currentQuery} />
+              {canMoveDeals && (
+                <SelectionBar
+                  tableId={tableIdFor("Deals")}
+                  kind="deals"
+                  noun={["deal", "deals"]}
+                  action={bulkUpdateAction}
+                  fields={[
+                    {
+                      field: "owner_staff_id",
+                      label: "Owner",
+                      choices: [{ value: "", label: "Unowned" }, ...staffChoices],
+                    },
+                  ]}
+                />
+              )}
+              <DataTable
+                caption="Deals"
+                columns={TABLE_COLUMNS}
+                sort={sort}
+                sortHref={sortHrefBuilder(
+                  "/deals",
+                  {
+                    status: status !== "open" ? status : "",
+                    view: view !== defaultView(status) ? view : "",
+                    sort: serializeSort(sort),
+                  },
+                  sort,
+                )}
+                selectable={canMoveDeals}
+                isEmpty={rows.length === 0}
+                empty={<EmptyState title="Nothing here" description="No deals match this view." />}
+              >
+                {rows.map((deal) => (
+                  <tr
+                    key={deal.deal_id}
+                    className={deal.status === "open" ? undefined : "row--muted"}
+                  >
+                    {canMoveDeals && (
+                      <SelectCell id={deal.deal_id} label={deal.company_name || deal.name} />
                     )}
-                    {deal.loss_reason && (
-                      <span className="table-sub">
-                        {LOSS_REASON_LABELS[deal.loss_reason] ?? deal.loss_reason}
-                      </span>
-                    )}
-                  </td>
-                  <td className="data-table__num">{formatMrr(deal.mrr_amount, deal.currency)}</td>
-                  <td className="data-table__num">
-                    {deal.status === "open" ? formatMoney(deal.weighted_mrr, deal.currency) : "—"}
-                  </td>
-                  <td>
-                    {deal.status === "open" ? (
-                      <>
-                        {deal.next_step || <span className="table-sub">None</span>}
-                        {deal.next_step && (
-                          <span className="table-sub">
-                            <DueChip due={deal.next_step_due} today={today} />
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <span className="table-sub">—</span>
-                    )}
-                  </td>
-                  <td>{deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned"}</td>
-                  <td className="data-table__num">
-                    {deal.status === "open" ? `${deal.days_in_stage}d` : "—"}
-                  </td>
-                </tr>
-              ))}
-            </DataTable>
+                    <td>
+                      <Link className="table-title" href={`/deals/${deal.deal_id}`}>
+                        {deal.company_name || deal.name}
+                      </Link>
+                      <span className="table-sub">{deal.name}</span>
+                      <DealFlags
+                        flags={deal.flags}
+                        idleDays={deal.idle_days}
+                        daysInStage={deal.days_in_stage}
+                      />
+                    </td>
+                    <td>
+                      {deal.status === "open" ? (
+                        deal.stage_label
+                      ) : (
+                        <DealStatusPill status={deal.status} />
+                      )}
+                      {deal.loss_reason && (
+                        <span className="table-sub">
+                          {LOSS_REASON_LABELS[deal.loss_reason] ?? deal.loss_reason}
+                        </span>
+                      )}
+                    </td>
+                    <td className="data-table__num">{formatMrr(deal.mrr_amount, deal.currency)}</td>
+                    <td className="data-table__num">
+                      {deal.status === "open" ? formatMoney(deal.weighted_mrr, deal.currency) : "—"}
+                    </td>
+                    <td>
+                      {deal.status === "open" ? (
+                        <>
+                          {deal.next_step || <span className="table-sub">None</span>}
+                          {deal.next_step && (
+                            <span className="table-sub">
+                              <DueChip due={deal.next_step_due} today={today} />
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="table-sub">—</span>
+                      )}
+                    </td>
+                    <td>{deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned"}</td>
+                    <td className="data-table__num">
+                      {deal.status === "open" ? `${deal.days_in_stage}d` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </DataTable>
+            </>
           )}
         </>
       )}
