@@ -19,7 +19,9 @@ prompt accepts `000000`. `newbie@hq.test` walks the first-run enrollment.
 To skip sign-in while testing, set `HQ_DEV_AUTOLOGIN=owner@hq.test` in `.env.local`
 and restart `npm run dev`: opening any page signs you in as that persona, and the
 identity menu at the foot of the rail switches between Owner, Admin, Sales, Support
-and the read-only Intern (`/dev/signin?as=sales@hq.test`). A production build ignores
+and the read-only Intern (`/dev/signin?as=sales@hq.test`). For those test personas the
+confirm-it's-you window before sensitive changes (invites, roles, exports, corrections)
+is granted automatically too, so nothing asks for a code. A production build ignores
 the flag and the route does not exist.
 
 ## The gates
