@@ -32,6 +32,8 @@ export const companySchema = z.object({
   archived: z.boolean(),
   created_at: z.string().nullable(),
   updated_at: z.string().nullable(),
+  /** The group this company belongs to, if any. */
+  parent_id: z.string().default(""),
 });
 export type Company = z.infer<typeof companySchema>;
 
@@ -134,6 +136,19 @@ export type DealSummary = z.infer<typeof dealSummarySchema>;
 
 const companyDetailSchema = okEnvelope.extend({
   company: companySchema,
+  parent: z.object({ company_id: z.string(), name: z.string() }).nullable().default(null),
+  children: z
+    .array(
+      z.object({
+        company_id: z.string(),
+        name: z.string(),
+        lifecycle: z.string(),
+        mrr: moneyByCurrencySchema.nullable(),
+      }),
+    )
+    .default([]),
+  /** Own MRR plus the children's; null without children or without revenue:read. */
+  group_mrr: moneyByCurrencySchema.nullable().default(null),
   people: z.array(personSchema),
   deals: z.array(dealSummarySchema),
   mrr: moneyByCurrencySchema.nullable(),
@@ -164,6 +179,95 @@ export function createCompany(token: string, input: Record<string, unknown>) {
 
 export function updateCompany(token: string, companyId: string, input: Record<string, unknown>) {
   return postHqJson(`hq/companies/${companyId}/update`, companyEnvelope, { token, body: input });
+}
+
+/** Fold `companyId` into `into`; the response is the company that stays. */
+export function mergeCompany(token: string, companyId: string, into: string) {
+  return postHqJson(
+    `hq/companies/${companyId}/merge`,
+    companyEnvelope.extend({ moved: z.record(z.string(), z.number()) }),
+    { token, body: { into } },
+  );
+}
+
+const importResultSchema = okEnvelope.extend({
+  created: z.array(z.object({ name: z.string() }).passthrough()),
+  skipped: z.array(z.object({ row: z.number(), name: z.string(), reason: z.string() })),
+  invalid: z.array(z.object({ row: z.number(), reason: z.string() })),
+  rows: z.number(),
+});
+export type ImportResult = z.infer<typeof importResultSchema>;
+
+export function importCompanies(
+  token: string,
+  rows: readonly Record<string, string>[],
+  reason: string,
+) {
+  return postHqJson("hq/companies/import", importResultSchema, { token, body: { rows, reason } });
+}
+
+export function importPeople(
+  token: string,
+  rows: readonly Record<string, string>[],
+  reason: string,
+) {
+  return postHqJson("hq/people/import", importResultSchema, { token, body: { rows, reason } });
+}
+
+const duplicatesSchema = okEnvelope.extend({
+  groups: z.array(
+    z.object({
+      kind: z.enum(["company", "person"]),
+      reason: z.string(),
+      records: z.array(
+        z.object({
+          company_id: z.string().optional(),
+          person_id: z.string().optional(),
+          name: z.string().optional(),
+          full_name: z.string().optional(),
+          domain: z.string().optional(),
+          lifecycle: z.string().optional(),
+          email: z.string().optional(),
+          company_name: z.string().optional(),
+        }),
+      ),
+    }),
+  ),
+  companies: z.number(),
+  people: z.number(),
+});
+export type DuplicateGroups = z.infer<typeof duplicatesSchema>;
+
+/** Likely duplicates for a person to judge; nothing is merged by reading this. */
+export function readDuplicates(token: string) {
+  return fetchHqJson("hq/crm/duplicates", duplicatesSchema, { token });
+}
+
+export const mentionSchema = z.object({
+  mention_id: z.string(),
+  by_staff_id: z.string(),
+  by_name: z.string(),
+  entity_type: z.string(),
+  entity_id: z.string(),
+  excerpt: z.string(),
+  at: z.string().nullable(),
+  seen_at: z.string().nullable(),
+});
+export type Mention = z.infer<typeof mentionSchema>;
+
+export function readMentions(token: string, unseenOnly = false) {
+  return fetchHqJson(
+    "hq/mentions",
+    okEnvelope.extend({ mentions: z.array(mentionSchema), unseen: z.number() }),
+    { token, query: unseenOnly ? { unseen: "1" } : {} },
+  );
+}
+
+export function markMentionSeen(token: string, mentionId: string) {
+  return postHqJson(`hq/mentions/${mentionId}/seen`, okEnvelope.extend({ seen: z.boolean() }), {
+    token,
+    body: {},
+  });
 }
 
 export function linkCompanyAccount(token: string, companyId: string, accountUserId: string) {
@@ -209,6 +313,15 @@ export function createPerson(token: string, input: Record<string, unknown>) {
 
 export function updatePerson(token: string, personId: string, input: Record<string, unknown>) {
   return postHqJson(`hq/people/${personId}/update`, personEnvelope, { token, body: input });
+}
+
+/** Fold `personId` into `into`; the response is the person that stays. */
+export function mergePerson(token: string, personId: string, into: string) {
+  return postHqJson(
+    `hq/people/${personId}/merge`,
+    personEnvelope.extend({ moved: z.record(z.string(), z.number()) }),
+    { token, body: { into } },
+  );
 }
 
 // ---------------------------------------------------------------------------------------

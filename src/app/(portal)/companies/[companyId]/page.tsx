@@ -6,7 +6,8 @@ import {
   logActivityAction,
   setTaskStatusAction,
 } from "@/app/(portal)/_actions/work";
-import { updateCompanyAction } from "@/app/(portal)/companies/actions";
+import { mergeCompanyAction, updateCompanyAction } from "@/app/(portal)/companies/actions";
+import { MergeRecordForm } from "@/components/crm/merge-record-form";
 import { createDealAction } from "@/app/(portal)/deals/actions";
 import { createPersonAction } from "@/app/(portal)/people/actions";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
@@ -34,7 +35,13 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { readCompany, readCrmSettings, type CompanyDetail, type CrmSettings } from "@/lib/api/crm";
+import {
+  readCompanies,
+  readCompany,
+  readCrmSettings,
+  type CompanyDetail,
+  type CrmSettings,
+} from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import {
@@ -136,6 +143,17 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
   };
   const singleThreaded =
     people.length <= 1 && ["customer", "early_access", "prospect"].includes(company.lifecycle);
+  // Every other live company, for the parent picker and the merge target.
+  let otherCompanies: { company_id: string; name: string; domain: string }[] = [];
+  try {
+    otherCompanies = (await readCompanies(context.token)).companies
+      .filter((row) => row.company_id !== company.company_id)
+      .map((row) => ({ company_id: row.company_id, name: row.name, domain: row.domain }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
   const inline = {
     action: updateCompanyAction,
     idName: "company_id",
@@ -295,6 +313,20 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                 />
               </Popover>
             )}
+            {canWrite && (
+              <Popover align="start" label="Merge" width="wide">
+                <MergeRecordForm
+                  action={mergeCompanyAction}
+                  idField="company_id"
+                  recordId={company.company_id}
+                  noun="company"
+                  candidates={otherCompanies.slice(0, 40).map((row) => ({
+                    id: row.company_id,
+                    label: `${row.name}${row.domain ? ` · ${row.domain}` : ""}`,
+                  }))}
+                />
+              </Popover>
+            )}
           </>
         }
       />
@@ -372,6 +404,26 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                 readOnly={!canWrite || names === null}
               />
               <Property label="Source">{sourceLabel(company.source_key, sourceNames)}</Property>
+              <InlineField
+                {...inline}
+                name="parent_id"
+                label="Part of"
+                type="select"
+                value={company.parent_id}
+                options={[
+                  { value: "", label: "No parent company" },
+                  ...otherCompanies.map((row) => ({ value: row.company_id, label: row.name })),
+                ]}
+                display={
+                  detail.parent ? (
+                    <Link href={`/companies/${detail.parent.company_id}`}>
+                      {detail.parent.name}
+                    </Link>
+                  ) : (
+                    "—"
+                  )
+                }
+              />
               <Property label="Added">
                 <Timestamp value={company.created_at} mode="date" />
               </Property>
@@ -384,6 +436,27 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                 placeholder="What the next person to open this should know"
               />
             </Properties>
+            {detail.children.length > 0 && (
+              <RecordSection id="company-group" title="Group">
+                <ul className="side-list">
+                  {detail.children.map((child) => (
+                    <li key={child.company_id} className="renewal">
+                      <Link href={`/companies/${child.company_id}`}>{child.name}</Link>
+                      <span className="side-quiet">
+                        {child.mrr
+                          ? formatMrrBy(child.mrr)
+                          : (LIFECYCLE_LABELS[child.lifecycle] ?? child.lifecycle)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {detail.group_mrr && (
+                  <p className="side-quiet">
+                    Group MRR, this company and its children: {formatMrrBy(detail.group_mrr)}.
+                  </p>
+                )}
+              </RecordSection>
+            )}
             <Properties title="Stakeholders">
               <Property label="Decide">{roles.decision_maker}</Property>
               <Property label="Champion us">{roles.champion}</Property>

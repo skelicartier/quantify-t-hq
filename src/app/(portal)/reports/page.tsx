@@ -13,7 +13,15 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, type DealSummary } from "@/lib/api/crm";
 import { readDealsBoard } from "@/lib/api/deals";
-import { EXPORT_KINDS, readWeeklyReport, type WeeklyReport } from "@/lib/api/reports";
+import {
+  EXPORT_KINDS,
+  readFunnel,
+  readPipelineHistory,
+  readWeeklyReport,
+  type FunnelReport,
+  type PipelineHistory,
+  type WeeklyReport,
+} from "@/lib/api/reports";
 import { readMrrBridge, type MrrBridge } from "@/lib/api/revenue";
 import {
   LOSS_REASON_LABELS,
@@ -95,15 +103,22 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   let wonDeals: DealSummary[] | null = null;
   let lostDeals: DealSummary[] | null = null;
   let bridge: MrrBridge | null = null;
-  const [settingsRead, wonRead, lostRead, bridgeRead] = await Promise.allSettled([
-    readCrmSettings(context.token),
-    readDealsBoard(context.token, "won"),
-    readDealsBoard(context.token, "lost"),
-    readMrrBridge(context.token, "USD", 12),
-  ]);
-  for (const read of [settingsRead, wonRead, lostRead, bridgeRead]) {
+  let funnel: FunnelReport | null = null;
+  let history: PipelineHistory | null = null;
+  const [settingsRead, wonRead, lostRead, bridgeRead, funnelRead, historyRead] =
+    await Promise.allSettled([
+      readCrmSettings(context.token),
+      readDealsBoard(context.token, "won"),
+      readDealsBoard(context.token, "lost"),
+      readMrrBridge(context.token, "USD", 12),
+      readFunnel(context.token, 90),
+      readPipelineHistory(context.token, 90),
+    ]);
+  for (const read of [settingsRead, wonRead, lostRead, bridgeRead, funnelRead, historyRead]) {
     if (read.status === "rejected" && !isReadFailure(read.reason)) throw read.reason;
   }
+  if (funnelRead.status === "fulfilled") funnel = funnelRead.value;
+  if (historyRead.status === "fulfilled") history = historyRead.value;
   if (settingsRead.status === "fulfilled") sourceNames = sourceNamesFrom(settingsRead.value);
   if (wonRead.status === "fulfilled")
     wonDeals = wonRead.value.columns.flatMap((column) => column.deals);
@@ -453,6 +468,92 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
               )}
             </Card>
           </div>
+
+          <div className="chart-grid chart-grid--single">
+            <Card
+              title="Pipeline over time"
+              titleAs="h2"
+              description="Open monthly value at each day's end over ninety days, from the nightly snapshot, in US dollars."
+            >
+              {history === null ? (
+                <Callout tone="attention" compact>
+                  The pipeline history could not be read just now — a read failure, not an empty
+                  pipeline.
+                </Callout>
+              ) : history.points.length === 0 ? (
+                <p className="table-sub">No snapshot yet; the first is taken tonight.</p>
+              ) : (
+                <TrendChart
+                  ariaLabel={`Open pipeline value over ${history.points.length} days, ending at ${formatMoney(history.points[history.points.length - 1]!.open_mrr_cents / 100)}.`}
+                  format={(value) => formatMoney(value, "USD")}
+                  tone="info"
+                  points={history.points.map((point, index) => ({
+                    // A label on the first of each month and on the last day; the rest
+                    // stay blank so ninety days do not fight for the axis.
+                    label:
+                      point.day.endsWith("-01") || index === history.points.length - 1
+                        ? formatMonthShort(point.day.slice(0, 7))
+                        : "",
+                    title: `${formatDate(point.day)} · ${point.open_count} open · ${formatMoney(point.weighted_cents / 100, "USD")} weighted`,
+                    value: point.open_mrr_cents / 100,
+                  }))}
+                />
+              )}
+            </Card>
+          </div>
+
+          <section className="record-section report-section" aria-labelledby="report-funnel">
+            <h2 className="record-section__title" id="report-funnel">
+              How the stages convert · last ninety days
+            </h2>
+            <p className="page-note">
+              Every deal that entered a stage in the last ninety days, and where it went. Conversion
+              is of those that have left; time in stage is the median for those that left.
+            </p>
+            {funnel === null ? (
+              <Callout tone="attention" compact>
+                The funnel could not be read just now — a read failure, not an empty funnel.
+              </Callout>
+            ) : (
+              <>
+                <DataTable
+                  caption="Stage conversion, last ninety days"
+                  columns={[
+                    { key: "stage", label: "Stage" },
+                    { key: "entered", label: "Entered", align: "end" },
+                    { key: "forward", label: "Moved on", align: "end" },
+                    { key: "lost", label: "Lost", align: "end" },
+                    { key: "here", label: "Still here", align: "end" },
+                    { key: "conversion", label: "Conversion", align: "end" },
+                    { key: "days", label: "Median days", align: "end" },
+                  ]}
+                >
+                  {funnel.stages.map((stage) => (
+                    <tr key={stage.key}>
+                      <td>{stage.label}</td>
+                      <td className="num">{stage.entered}</td>
+                      <td className="num">{stage.advanced + stage.won_from_here}</td>
+                      <td className="num">{stage.lost_from_here}</td>
+                      <td className="num">{stage.still_here}</td>
+                      <td className="num">
+                        {stage.conversion === null ? "—" : formatPercent(stage.conversion)}
+                      </td>
+                      <td className="num">
+                        {stage.median_days === null ? "—" : formatNumber(stage.median_days)}
+                      </td>
+                    </tr>
+                  ))}
+                </DataTable>
+                <p className="table-sub">
+                  {funnel.deals_moved} {funnel.deals_moved === 1 ? "deal" : "deals"} moved since{" "}
+                  {formatDate(funnel.since)} · {funnel.closed.won} won · {funnel.closed.lost} lost
+                  {funnel.closed.win_rate !== null &&
+                    ` · ${formatPercent(funnel.closed.win_rate)} win rate`}
+                  .
+                </p>
+              </>
+            )}
+          </section>
 
           <section className="record-section report-section" aria-labelledby="report-pipeline">
             <h2 className="record-section__title" id="report-pipeline">

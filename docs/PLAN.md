@@ -17,7 +17,7 @@ danger zone), with real TOTP sign-in. Two repositories:
 | Repo                                           | Path                                                                                                                        | What lives there                                                                                                                                                                                                                                            |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **HQ portal** (Next.js 16, TypeScript)         | `~/Documents/Projects/HQ Quantify Terminal` — GitHub `aaryansaroha98/quantify-t-hq`, branch `main`, pushed                  | UI, server actions, zod API clients (`src/lib/api/*`), the mock service (`scripts/mock-hq-api.ts`), the screenshot harness, `docs/DESIGN.md` (the UI contract), `docs/RESEARCH-2026-09-30.md` (the research), this file                                     |
-| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0022`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
+| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0023`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
 
 ## 2. Ground rules (do not relearn these)
 
@@ -30,7 +30,7 @@ danger zone), with real TOTP sign-in. Two repositories:
 - **The mock must mirror the real routes** (route names, methods, payload shapes): the
   route-parity and payload-contract tests enforce it. Any new route = service handler +
   test + mock handler + portal client, in that order.
-- **The harness is the gate** (`npm run check:hq-ui`, ~5 min, 210 screens, axe serious /
+- **The harness is the gate** (`npm run check:hq-ui`, ~5 min, 212 screens, axe serious /
   critical = 0, no horizontal overflow, no console errors). Never edit files while it runs.
   Restart the dev server after any `next build`. Restart the mock after a seed change.
 - Never name a data vendor in UI copy (copy-guard test). Tables never truncate data
@@ -102,20 +102,23 @@ rail identity menu lists them.
 
 ### 2026-10-01 — the support desk
 
-| Wave          | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Where                                   | Commits                                       |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------- |
-| Desk: threads | followers (migration 0019, `hq/tickets/{id}/follow`, a Following queue filter that opens every status, `o` key, "Followed by …" in the head); merge (`hq/tickets/{id}/merge {into}`: messages in time order, tags + followers united, more urgent priority kept, duplicate resolved + tagged `merged`, notes both sides, refused when either side is resolved); reopen counting (by hand or by the customer writing again; "Reopened once" pill); weekly report "Support desk" card                                                                                                                                                                                                                                           | desk, reports                           | service `c90578c`; HQ `d4dea8a`               |
-| Desk: rules   | migration 0020 (`support_alerts` + `desk.*` settings); `desk_rules` / `desk_sweeper`: fewest-open assignment from an admin-chosen pool, one public "still there?" nudge, a public close a reply reopens, one mail per deadline to an assignee whose reply timer is at risk or breached; runs from the queue read when the last pass is > 15 min old + nightly at 03:51 (no quarter-hour timer: the serverless database's free hours); `hq/settings/desk/update`; Settings → Desk rules form; breadcrumb fix ("Ngs")                                                                                                                                                                                                           | settings, desk, `function_app.py` timer | service `c90578c`; HQ: the commit adding this |
-| Security      | breached-password check (HIBP k-anonymity; fails open; `QT_HQ_BREACH_CHECK=0` off) on invite / reset / change; owner and admin sessions idle out at 15 min (`hq/me.session_policy`); a role change mails the person, a minted key mails every owner; migration 0021 gives intake keys `expires_at` (180 days or less), expired keys are refused, the offboarding checklist gains "rotate the keys"; the access review names orphans, shared accounts and money separation-of-duties conflicts; `POST hq/audit/export` hands back a signed JSONL copy (digest + HMAC, audited first; `scripts/verify_hq_audit_export.py` checks it); Integrations shows expiry and a "Lives for" picker, Audit an "Export a signed copy" block | auth, admin, access review              | service `4b239cf`; HQ: the commit adding this |
-| People ops    | migration 0022: manager / reporting line (no loops), probation end, emergency contact; asset register whose returns gate the offboarding step "Devices and materials returned"; versioned company policies acknowledged per version (publishing asks everyone again), acknowledged under My security, edited under Settings; training records with expiry; one-to-ones with actions (HR or the manager writes, the owner ticks); reminders within 60 days on the person and across the Team page                                                                                                                                                                                                                              | team, my security, settings             | service `ea4b7c7`; HQ: the commit adding this |
+| Wave          | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Where                                   | Commits                                                  |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------- |
+| Desk: threads | followers (migration 0019, `hq/tickets/{id}/follow`, a Following queue filter that opens every status, `o` key, "Followed by …" in the head); merge (`hq/tickets/{id}/merge {into}`: messages in time order, tags + followers united, more urgent priority kept, duplicate resolved + tagged `merged`, notes both sides, refused when either side is resolved); reopen counting (by hand or by the customer writing again; "Reopened once" pill); weekly report "Support desk" card                                                                                                                                                                                                                                                                            | desk, reports                           | service `c90578c`; HQ `d4dea8a`                          |
+| Desk: rules   | migration 0020 (`support_alerts` + `desk.*` settings); `desk_rules` / `desk_sweeper`: fewest-open assignment from an admin-chosen pool, one public "still there?" nudge, a public close a reply reopens, one mail per deadline to an assignee whose reply timer is at risk or breached; runs from the queue read when the last pass is > 15 min old + nightly at 03:51 (no quarter-hour timer: the serverless database's free hours); `hq/settings/desk/update`; Settings → Desk rules form; breadcrumb fix ("Ngs")                                                                                                                                                                                                                                            | settings, desk, `function_app.py` timer | service `c90578c`; HQ: the commit adding this            |
+| Security      | breached-password check (HIBP k-anonymity; fails open; `QT_HQ_BREACH_CHECK=0` off) on invite / reset / change; owner and admin sessions idle out at 15 min (`hq/me.session_policy`); a role change mails the person, a minted key mails every owner; migration 0021 gives intake keys `expires_at` (180 days or less), expired keys are refused, the offboarding checklist gains "rotate the keys"; the access review names orphans, shared accounts and money separation-of-duties conflicts; `POST hq/audit/export` hands back a signed JSONL copy (digest + HMAC, audited first; `scripts/verify_hq_audit_export.py` checks it); Integrations shows expiry and a "Lives for" picker, Audit an "Export a signed copy" block                                  | auth, admin, access review              | service `4b239cf`; HQ: the commit adding this            |
+| People ops    | migration 0022: manager / reporting line (no loops), probation end, emergency contact; asset register whose returns gate the offboarding step "Devices and materials returned"; versioned company policies acknowledged per version (publishing asks everyone again), acknowledged under My security, edited under Settings; training records with expiry; one-to-ones with actions (HR or the manager writes, the owner ticks); reminders within 60 days on the person and across the Team page                                                                                                                                                                                                                                                               | team, my security, settings             | service `ea4b7c7`; HQ: the commit adding this            |
+| CRM structure | migration 0023: parent companies (no loops; the record names its parent, lists children and rolls the group's MRR up); company and person merge (sudo: every reference moves, blanks fill, stricter do-not-contact wins, notes keep provenance, the duplicate is archived and its domain / address released); duplicate suggestions by legal-form-stripped name and by person name or address; CSV import for companies and people (read in the browser, mapped, ≤ 500 rows, each validated, known records skipped and named, counts audited with a reason); @mentions in notes (a row on Home until seen, and a mail); the stage funnel (entered / moved on / lost / still here / conversion / median days) and the pipeline over time from nightly snapshots | companies, people, reports, home        | service `531e7b6`, `3c779d2`; HQ: the commit adding this |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
-1. **CRM**: CSV import with mapping / dedupe / summary; duplicate detection + merge;
-   parent / child companies; stage-conversion funnel and time-in-stage report from
-   `hq_deal_stage_events`; comments with @mentions; pipeline snapshots (nightly job).
-2. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
+1. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
    grouping, a filter builder. Saved views shared with the team (server-side).
+
+CRM items deliberately left: a three-way merge picker (three or more look-alikes are
+merged one at a time from the kept record), import of deals or contracts (money is typed
+against a plan, not pasted), mention autocomplete (the handle is a first name or a mail
+name; unknown handles are left alone).
 
 People-ops items deliberately left: an applicant pipeline (the careers form), an org
 chart (the reporting line is a field, read on the record), and storing pay.
@@ -135,7 +138,7 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile) → apply migrations 0006–0022 and publish → move the desk onto SQL → Vercel
+Turnstile) → apply migrations 0006–0023 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
 Actions on the account fails every run in seconds with no runner (billing) — only the
@@ -145,17 +148,22 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of 2026-10-01, late night.**
+**As of 2026-10-02, early hours.**
 
-- HQ repo: `origin/main` HEAD carries people ops (team member One-to-ones tab, Issued to
-  them, Training, Reporting line and contact, Coming up, Policies; directory Reports to /
-  Issued / Coming up; My security Company policies; Settings Company policies; the mock's
-  seeds and handlers; "Team › Team" crumb dropped); working tree clean. Harness passed with
-  210 screens; `~/Downloads/HQ Portal screenshots 2026-09-29` refreshed.
-- Product repo: HEAD `28d28fc` (people ops `ea4b7c7` + go-live doc); 177 tests pass; not
-  pushed. `docs/HQ_GO_LIVE.md` says 0006–0022.
-- **Next step:** §5 item 1, the CRM wave — CSV import with column mapping, dedupe against
-  domain / email and a summary; duplicate detection + merge for companies and people;
-  parent / child companies; the stage-conversion funnel and time-in-stage report from
-  `hq_deal_stage_events`; comments with @mentions; nightly pipeline snapshots. Service
-  first (migration 0023 + routes + tests), then the mock, then the CRM pages.
+- HQ repo: `origin/main` HEAD carries the CRM structure wave (company Part of / Group /
+  Merge; person Merge; Companies → Import and Duplicates; `/companies/import`,
+  `/people/import`, `/companies/duplicates`; reports Pipeline over time and How the
+  stages convert; Home "You were mentioned"; the CSV reader `src/lib/crm/csv.ts` with its
+  test; the mock's merges, imports, duplicates, mentions, funnel, history and a seeded
+  child company + mention); working tree clean. Harness passed with 212 screens;
+  `~/Downloads/HQ Portal screenshots 2026-09-29` refreshed.
+- Product repo: HEAD `adc4e38` (CRM structure `531e7b6` + `3c779d2`, then the lists
+  wave's service side: migration 0024 `hq_saved_views` + `hq_preferences`, `view_routes.py`
+  — `hq/views`, `hq/views/save`, `hq/views/{id}/delete`, `hq/preferences`,
+  `hq/preferences/set`); 187 tests pass; not pushed. `docs/HQ_GO_LIVE.md` says 0006–0024.
+- Reports: the funnel table is a full-width scrolling section and the pipeline chart labels
+  month starts only, after a 13px phone overflow the harness caught.
+- **Next step:** §5 item 1, the lists wave's portal side — saved views read from and saved to
+  the service (shared with the team), column / density preferences synced to the account,
+  a peek pane on list rows (`?peek=`), undo for bulk changes, grouping and a filter builder
+  on the companies list; the mock mirrors `hq/views*` and `hq/preferences*`. Then passkeys.

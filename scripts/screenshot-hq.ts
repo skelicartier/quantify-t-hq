@@ -30,6 +30,8 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "home", path: "/home", ready: "main#main-content" },
   { name: "support-queue", path: "/support", ready: ".desk" },
   { name: "support-following", path: "/support?view=all&following=1", ready: ".desk" },
+  { name: "companies-import", path: "/companies/import", ready: ".csv-import" },
+  { name: "companies-duplicates", path: "/companies/duplicates", ready: "main#main-content" },
   {
     name: "support-ticket",
     path: "/support/sup_00000000000000000004",

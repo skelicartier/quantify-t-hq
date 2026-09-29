@@ -1964,6 +1964,7 @@ type CompanyRow = {
   archived: boolean;
   created_at: string;
   updated_at: string;
+  parent_id?: string;
 };
 type PersonRow = {
   id: string;
@@ -1979,7 +1980,19 @@ type PersonRow = {
   notes: string;
   last_contacted_at: string | null;
   created_at: string;
+  archived?: boolean;
 };
+type MentionRow = {
+  id: string;
+  staff_id: string;
+  mentioned_by: string;
+  entity_type: string;
+  entity_id: string;
+  excerpt: string;
+  at: string;
+  seen_at: string | null;
+};
+const mentions: MentionRow[] = [];
 type LeadRow = {
   id: string;
   source_key: string;
@@ -2676,6 +2689,40 @@ function seedCrm() {
     expires_at: new Date(Date.now() + (KEY_LIFETIME_DAYS - 14) * 86_400_000).toISOString(),
   });
   seedRetentionExamples();
+  // A group: the first paying firm owns a vehicle of its own.
+  const parent = companies.find((row) => row.lifecycle === "customer" && !row.archived);
+  if (parent) {
+    companies.push({
+      id: "c0000000-0000-4000-8000-0000000000fe",
+      name: `${parent.name} Vehicle II`,
+      domain: "",
+      firm_type: parent.firm_type,
+      team_size_band: parent.team_size_band,
+      country: parent.country,
+      lifecycle: "prospect",
+      owner_staff_id: parent.owner_staff_id,
+      source_key: parent.source_key,
+      notes: "A second vehicle run by the same team; billed under the parent for now.",
+      customer_since: null,
+      archived: false,
+      created_at: agoIso(24 * 40),
+      updated_at: agoIso(24 * 40),
+      parent_id: parent.id,
+    });
+  }
+  mentions.length = 0;
+  const firstCompany = companies[0];
+  if (firstCompany)
+    mentions.push({
+      id: "me000000-0000-4000-8000-000000000001",
+      staff_id: OWNER_STAFF,
+      mentioned_by: SALES_STAFF,
+      entity_type: "company",
+      entity_id: firstCompany.id,
+      excerpt: `@owner they asked for a reference call before signing — can you take it this week?`,
+      at: agoIso(5),
+      seen_at: null,
+    });
 }
 seedCrm();
 
@@ -2962,6 +3009,7 @@ function daysSince(iso: string): number {
 
 function companyView(row: CompanyRow) {
   return {
+    parent_id: row.parent_id ?? "",
     company_id: row.id,
     name: row.name,
     domain: row.domain,
@@ -3194,14 +3242,100 @@ function companyDetailPayload(row: CompanyRow, money = true) {
   const openTasks = tasks
     .filter((task) => task.company_id === row.id && task.status === "open")
     .map((row) => taskView(row));
+  const parent = companies.find((candidate) => candidate.id === row.parent_id);
+  const children = companies
+    .filter((candidate) => candidate.parent_id === row.id && !candidate.archived)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  let groupMrr: Record<string, number> | null = null;
+  if (money && children.length) {
+    groupMrr = {};
+    for (const member of [row, ...children]) {
+      for (const [currency, amount] of Object.entries(ledgerMrr(member.id, true) ?? {}))
+        groupMrr[currency] = Math.round(((groupMrr[currency] ?? 0) + amount) * 100) / 100;
+    }
+  }
   return {
     company: companyView(row),
-    people: linkedPeople,
+    parent: parent ? { company_id: parent.id, name: parent.name } : null,
+    children: children.map((child) => ({
+      company_id: child.id,
+      name: child.name,
+      lifecycle: child.lifecycle,
+      mrr: ledgerMrr(child.id, money),
+    })),
+    group_mrr: groupMrr,
+    people: linkedPeople.filter(
+      (person) => !people.find((p) => p.id === person.person_id)?.archived,
+    ),
     deals: companyDeals,
     mrr: ledgerMrr(row.id, money),
     accounts,
     open_tasks: openTasks,
     activities: activityViews({ company_id: row.id }),
+  };
+}
+
+/** As the service's normalise_company_name: legal suffixes and punctuation gone. */
+function normaliseCompanyName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(
+      /\b(ltd|limited|llp|llc|inc|incorporated|plc|gmbh|ag|sa|sarl|bv|nv|pty|co|corp|corporation|company)\b\.?/g,
+      " ",
+    )
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function mergeNotes(kept: string, folded: string, label: string): string {
+  const extra = folded.trim();
+  if (!extra || kept.includes(extra)) return kept;
+  const line = `[Merged from ${label}] ${extra}`;
+  return (kept.trim() ? `${kept.trimEnd()}\n\n${line}` : line).slice(0, 2000);
+}
+
+const MENTION = /(?<![\w@])@([A-Za-z0-9._-]{2,40})/g;
+
+/** @first-name or @mail-name names a colleague; unknown handles are left alone. */
+function recordMentions(callerId: string, text: string, links: Record<string, string>): string[] {
+  const handles = new Set([...text.matchAll(MENTION)].map((match) => match[1]!.toLowerCase()));
+  if (!handles.size) return [];
+  const [entityName, entityId] = Object.entries(links).find(([, value]) => value) ?? ["", ""];
+  const entityType = entityName.replace(/_id$/, "");
+  const mentioned: string[] = [];
+  for (const member of staff) {
+    if (!member.is_active || member.id === callerId) continue;
+    const first = member.display_name.split(" ")[0]?.toLowerCase() ?? "";
+    const local = member.email.split("@")[0]?.toLowerCase() ?? "";
+    const full = member.display_name.replace(/ /g, ".").toLowerCase();
+    if (!(handles.has(first) || handles.has(local) || handles.has(full))) continue;
+    mentions.push({
+      id: randomUUID(),
+      staff_id: member.id,
+      mentioned_by: callerId,
+      entity_type: entityType,
+      entity_id: entityId,
+      excerpt: text.slice(0, 400),
+      at: now(),
+      seen_at: null,
+    });
+    mentioned.push(member.id);
+  }
+  return mentioned;
+}
+
+function mentionView(row: MentionRow) {
+  return {
+    mention_id: row.id,
+    by_staff_id: row.mentioned_by,
+    by_name: staff.find((member) => member.id === row.mentioned_by)?.display_name ?? "",
+    entity_type: row.entity_type,
+    entity_id: row.entity_id,
+    excerpt: row.excerpt,
+    at: row.at,
+    seen_at: row.seen_at,
   };
 }
 
@@ -3229,9 +3363,16 @@ routes.push(
       const found = caller(headers);
       if (!found) return refuse(401, "session_invalid");
       const capabilities = CAPABILITIES[found.member.role] ?? [];
+      const unseenMentions = mentions
+        .filter((row) => row.staff_id === found.member.id && !row.seen_at)
+        .sort((a, b) => b.at.localeCompare(a.at));
       const payload: Record<string, unknown> = {
         as_of: now(),
         staff: { display_name: found.member.display_name, role: found.member.role },
+        mentions: {
+          unseen: unseenMentions.length,
+          mentions: unseenMentions.slice(0, 5).map(mentionView),
+        },
       };
       if (capabilities.includes("tickets:read")) {
         // As the service counts: open-like and not snoozed; totals over the whole
@@ -3472,12 +3613,228 @@ routes.push(
         return refuse(400, "malformed_request", { owner_staff_id: "not an id" });
       if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
       if ("archived" in body) row.archived = Boolean(body.archived);
+      if ("parent_id" in body) {
+        const parentId = String(body.parent_id ?? "").trim();
+        if (parentId) {
+          if (parentId === row.id)
+            return refuse(400, "malformed_request", {
+              parent_id: "a company cannot be its own parent",
+            });
+          if (!companies.some((candidate) => candidate.id === parentId))
+            return refuse(400, "malformed_request", { parent_id: "no such company" });
+          const seen = new Set([row.id]);
+          let cursor: string | undefined = parentId;
+          while (cursor) {
+            if (seen.has(cursor))
+              return refuse(400, "malformed_request", {
+                parent_id: "that would make the group a loop",
+              });
+            seen.add(cursor);
+            cursor = companies.find((candidate) => candidate.id === cursor)?.parent_id || undefined;
+          }
+        }
+        row.parent_id = parentId;
+      }
       row.updated_at = now();
       audit("company.updated", caller(headers)?.member.id ?? null, "company", row.id, "", {
         fields: Object.keys(changesBetween(before, row)).sort(),
         changes: changesBetween(before, row),
       });
       return ok({ company: companyView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/{company_id}/merge",
+    auth: true,
+    capability: "crm:write",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const duplicate = companies.find((company) => company.id === params.company_id);
+      if (!duplicate) return refuse(404, "not_found");
+      const into = String(body.into ?? "").trim();
+      if (!into || into === duplicate.id)
+        return refuse(400, "malformed_request", { into: "the company to keep" });
+      const kept = companies.find((company) => company.id === into);
+      if (!kept) return refuse(404, "not_found");
+      if (kept.archived)
+        return refuse(400, "malformed_request", {
+          into: "unarchive it first; a merge cannot land on an archived company",
+        });
+      const moved: Record<string, number> = {};
+      const count = (key: string) => (moved[key] = (moved[key] ?? 0) + 1);
+      for (const person of people) {
+        if (person.company_id === duplicate.id) {
+          person.company_id = kept.id;
+          count("hq_people.company_id");
+        }
+      }
+      for (const deal of deals) {
+        if (deal.company_id === duplicate.id) {
+          deal.company_id = kept.id;
+          count("hq_deals.company_id");
+        }
+      }
+      for (const row of contracts) {
+        if (row.company_id === duplicate.id) {
+          row.company_id = kept.id;
+          count("hq_contracts.company_id");
+        }
+      }
+      for (const row of movements) {
+        if (row.company_id === duplicate.id) {
+          row.company_id = kept.id;
+          count("hq_mrr_movements.company_id");
+        }
+      }
+      for (const row of activities) {
+        if (row.company_id === duplicate.id) {
+          row.company_id = kept.id;
+          count("hq_activities.company_id");
+        }
+      }
+      for (const row of tasks) {
+        if (row.company_id === duplicate.id) {
+          row.company_id = kept.id;
+          count("hq_tasks.company_id");
+        }
+      }
+      for (const row of companies) {
+        if (row.parent_id === duplicate.id) {
+          row.parent_id = kept.id;
+          count("hq_companies.parent_id");
+        }
+      }
+      const filled: string[] = [];
+      for (const name of [
+        "domain",
+        "firm_type",
+        "team_size_band",
+        "country",
+        "source_key",
+        "owner_staff_id",
+      ] as const) {
+        if (!kept[name] && duplicate[name]) {
+          kept[name] = duplicate[name];
+          filled.push(name);
+        }
+      }
+      if (!kept.customer_since && duplicate.customer_since) {
+        kept.customer_since = duplicate.customer_since;
+        filled.push("customer_since");
+      }
+      if (!kept.parent_id && duplicate.parent_id && duplicate.parent_id !== kept.id) {
+        kept.parent_id = duplicate.parent_id;
+        filled.push("parent_id");
+      }
+      const rank: Record<string, number> = {
+        prospect: 0,
+        disqualified: 0,
+        early_access: 1,
+        former_customer: 2,
+        customer: 3,
+      };
+      if ((rank[duplicate.lifecycle] ?? 0) > (rank[kept.lifecycle] ?? 0)) {
+        kept.lifecycle = duplicate.lifecycle;
+        filled.push("lifecycle");
+      }
+      kept.notes = mergeNotes(kept.notes, duplicate.notes, duplicate.name);
+      kept.updated_at = now();
+      duplicate.domain = "";
+      duplicate.archived = true;
+      duplicate.notes = `Merged into ${kept.name} (${kept.id}) on ${today()}.`;
+      duplicate.updated_at = now();
+      const actor = caller(headers)?.member.id ?? null;
+      recordActivity({
+        kind: "system",
+        body: `Merged ${duplicate.name} into this company`,
+        staff_id: actor ?? "",
+        company_id: kept.id,
+      });
+      audit("company.merged_into", actor, "company", duplicate.id, "", {
+        other: kept.id,
+        moved,
+        filled,
+      });
+      audit("company.merged_from", actor, "company", kept.id, "", {
+        other: duplicate.id,
+        moved,
+        filled,
+      });
+      return ok({ company: companyView(kept), moved });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/import",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const rows = body.rows;
+      if (!Array.isArray(rows) || !rows.length)
+        return refuse(400, "malformed_request", { rows: "a non-empty list" });
+      if (rows.length > 500)
+        return refuse(400, "malformed_request", { rows: "at most 500 rows at a time" });
+      const reason = String(body.reason ?? "").trim();
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say where the file came from" });
+      const domains = new Set(companies.filter((row) => row.domain).map((row) => row.domain));
+      const names = new Map(companies.map((row) => [normaliseCompanyName(row.name), row.name]));
+      const created: { company_id: string; name: string }[] = [];
+      const skipped: { row: number; name: string; reason: string }[] = [];
+      const invalid: { row: number; reason: string }[] = [];
+      (rows as Record<string, unknown>[]).forEach((raw, index) => {
+        const number = index + 1;
+        const name = String(raw?.name ?? "")
+          .trim()
+          .slice(0, 200);
+        if (!name) return void invalid.push({ row: number, reason: "a name is required" });
+        const domain = String(raw?.domain ?? "")
+          .trim()
+          .toLowerCase();
+        if (domain && FREE_MAIL.has(domain))
+          return void invalid.push({
+            row: number,
+            reason: "a personal mail domain cannot anchor a company",
+          });
+        const key = normaliseCompanyName(name);
+        if (domain && domains.has(domain))
+          return void skipped.push({ row: number, name, reason: `domain ${domain} already known` });
+        if (key && names.has(key))
+          return void skipped.push({ row: number, name, reason: `looks like ${names.get(key)}` });
+        const sourceKey = String(raw?.source_key ?? "").trim();
+        const row: CompanyRow = {
+          id: randomUUID(),
+          name,
+          domain,
+          firm_type: String(raw?.firm_type ?? "").trim(),
+          team_size_band: String(raw?.team_size_band ?? "").trim(),
+          country: String(raw?.country ?? "").trim(),
+          lifecycle: "prospect",
+          owner_staff_id: "",
+          source_key: sources.some((source) => source.key === sourceKey)
+            ? sourceKey
+            : sourceKey
+              ? "other"
+              : "",
+          notes: String(raw?.notes ?? "").trim(),
+          customer_since: null,
+          archived: false,
+          created_at: now(),
+          updated_at: now(),
+        };
+        companies.push(row);
+        created.push({ company_id: row.id, name });
+        if (domain) domains.add(domain);
+        if (key) names.set(key, name);
+      });
+      audit("crm.imported", caller(headers)?.member.id ?? null, "import", "companies", reason, {
+        rows: rows.length,
+        created: created.length,
+        skipped: skipped.length,
+        invalid: invalid.length,
+      });
+      return ok({ created, skipped, invalid, rows: rows.length });
     },
   },
   {
@@ -3502,6 +3859,7 @@ routes.push(
     handler: ({ query }) => {
       const needle = (query.q ?? "").toLowerCase();
       const views = people
+        .filter((row) => !row.archived)
         .filter((row) => !needle || `${row.full_name} ${row.email}`.toLowerCase().includes(needle))
         .map((row) => ({
           ...personView(row),
@@ -3564,6 +3922,278 @@ routes.push(
           .filter((task) => task.person_id === row.id && task.status === "open")
           .map((row) => taskView(row)),
       });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/people/{person_id}/merge",
+    auth: true,
+    capability: "crm:write",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const duplicate = people.find((person) => person.id === params.person_id);
+      if (!duplicate) return refuse(404, "not_found");
+      const into = String(body.into ?? "").trim();
+      if (!into || into === duplicate.id)
+        return refuse(400, "malformed_request", { into: "the person to keep" });
+      const kept = people.find((person) => person.id === into);
+      if (!kept) return refuse(404, "not_found");
+      if (kept.archived)
+        return refuse(400, "malformed_request", {
+          into: "a merge cannot land on an archived person",
+        });
+      const moved: Record<string, number> = {};
+      const count = (key: string) => (moved[key] = (moved[key] ?? 0) + 1);
+      for (const deal of deals) {
+        if (deal.primary_person_id === duplicate.id) {
+          deal.primary_person_id = kept.id;
+          count("hq_deals.primary_person_id");
+        }
+      }
+      for (const row of activities) {
+        if (row.person_id === duplicate.id) {
+          row.person_id = kept.id;
+          count("hq_activities.person_id");
+        }
+      }
+      for (const row of tasks) {
+        if (row.person_id === duplicate.id) {
+          row.person_id = kept.id;
+          count("hq_tasks.person_id");
+        }
+      }
+      const filled: string[] = [];
+      for (const name of [
+        "company_id",
+        "full_name",
+        "email",
+        "title",
+        "role_category",
+        "phone",
+        "account_user_id",
+        "source_key",
+      ] as const) {
+        if (!kept[name] && duplicate[name]) {
+          kept[name] = duplicate[name];
+          filled.push(name);
+        }
+      }
+      if (duplicate.do_not_contact && !kept.do_not_contact) {
+        kept.do_not_contact = true;
+        filled.push("do_not_contact");
+      }
+      if (
+        duplicate.last_contacted_at &&
+        (!kept.last_contacted_at || duplicate.last_contacted_at > kept.last_contacted_at)
+      )
+        kept.last_contacted_at = duplicate.last_contacted_at;
+      kept.notes = mergeNotes(kept.notes, duplicate.notes, duplicate.full_name || duplicate.email);
+      duplicate.email = "";
+      duplicate.archived = true;
+      duplicate.notes = `Merged into ${kept.full_name || kept.email} (${kept.id}) on ${today()}.`;
+      const actor = caller(headers)?.member.id ?? null;
+      audit("person.merged_into", actor, "person", duplicate.id, "", {
+        other: kept.id,
+        moved,
+        filled,
+      });
+      audit("person.merged_from", actor, "person", kept.id, "", {
+        other: duplicate.id,
+        moved,
+        filled,
+      });
+      return ok({ person: personView(kept), moved });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/people/import",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const rows = body.rows;
+      if (!Array.isArray(rows) || !rows.length)
+        return refuse(400, "malformed_request", { rows: "a non-empty list" });
+      if (rows.length > 500)
+        return refuse(400, "malformed_request", { rows: "at most 500 rows at a time" });
+      const reason = String(body.reason ?? "").trim();
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say where the file came from" });
+      const byDomain = new Map(
+        companies.filter((row) => row.domain && !row.archived).map((row) => [row.domain, row.id]),
+      );
+      const byName = new Map(
+        companies
+          .filter((row) => !row.archived)
+          .map((row) => [normaliseCompanyName(row.name), row.id]),
+      );
+      const emails = new Set(
+        people.filter((row) => row.email).map((row) => row.email.toLowerCase()),
+      );
+      const created: { person_id: string; name: string; company_id: string }[] = [];
+      const skipped: { row: number; name: string; reason: string }[] = [];
+      const invalid: { row: number; reason: string }[] = [];
+      (rows as Record<string, unknown>[]).forEach((raw, index) => {
+        const number = index + 1;
+        const email = String(raw?.email ?? "")
+          .trim()
+          .toLowerCase();
+        const fullName = String(raw?.full_name ?? "")
+          .trim()
+          .slice(0, 160);
+        if (email && !email.includes("@"))
+          return void invalid.push({ row: number, reason: "not an address" });
+        if (!email && !fullName)
+          return void invalid.push({ row: number, reason: "a name or an email is required" });
+        if (email && emails.has(email))
+          return void skipped.push({
+            row: number,
+            name: fullName || email,
+            reason: `${email} is already a person`,
+          });
+        let companyId = "";
+        const companyDomain = String(raw?.company_domain ?? "")
+          .trim()
+          .toLowerCase();
+        const companyHint = String(raw?.company ?? raw?.company_name ?? "").trim();
+        if (companyDomain && byDomain.has(companyDomain)) companyId = byDomain.get(companyDomain)!;
+        else if (companyHint && byName.has(normaliseCompanyName(companyHint)))
+          companyId = byName.get(normaliseCompanyName(companyHint))!;
+        else {
+          const mailDomain = email.split("@")[1] ?? "";
+          if (mailDomain && !FREE_MAIL.has(mailDomain) && byDomain.has(mailDomain))
+            companyId = byDomain.get(mailDomain)!;
+        }
+        const row: PersonRow = {
+          id: randomUUID(),
+          company_id: companyId,
+          full_name: fullName,
+          email,
+          title: String(raw?.title ?? "").trim(),
+          role_category: String(raw?.role_category ?? "").trim(),
+          phone: String(raw?.phone ?? "").trim(),
+          account_user_id: "",
+          do_not_contact: false,
+          source_key: String(raw?.source_key ?? "").trim(),
+          notes: String(raw?.notes ?? "").trim(),
+          last_contacted_at: null,
+          created_at: now(),
+        };
+        people.push(row);
+        created.push({ person_id: row.id, name: fullName || email, company_id: companyId });
+        if (email) emails.add(email);
+      });
+      audit("crm.imported", caller(headers)?.member.id ?? null, "import", "people", reason, {
+        rows: rows.length,
+        created: created.length,
+        skipped: skipped.length,
+        invalid: invalid.length,
+      });
+      return ok({ created, skipped, invalid, rows: rows.length });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/crm/duplicates",
+    auth: true,
+    capability: "crm:read",
+    handler: () => {
+      const byKey = new Map<string, CompanyRow[]>();
+      for (const row of companies.filter((company) => !company.archived)) {
+        const key = normaliseCompanyName(row.name);
+        if (key) byKey.set(key, [...(byKey.get(key) ?? []), row]);
+      }
+      const companyGroups = [...byKey.values()]
+        .filter((rows) => rows.length > 1)
+        .map((rows) => ({
+          kind: "company",
+          reason: "same name once legal suffixes are removed",
+          records: rows
+            .sort((a, b) => a.created_at.localeCompare(b.created_at))
+            .map((row) => ({
+              company_id: row.id,
+              name: row.name,
+              domain: row.domain,
+              lifecycle: row.lifecycle,
+            })),
+        }));
+      const groups = new Map<string, PersonRow[]>();
+      for (const row of people.filter((person) => !person.archived)) {
+        const full = row.full_name.toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+        if (full && row.company_id)
+          groups.set(`name:${row.company_id}:${full}`, [
+            ...(groups.get(`name:${row.company_id}:${full}`) ?? []),
+            row,
+          ]);
+        if (row.email.includes("@")) {
+          const [local, domain] = row.email.toLowerCase().split("@") as [string, string];
+          const key = `email:${domain}:${local.split("+")[0]!.replace(/\./g, "")}`;
+          groups.set(key, [...(groups.get(key) ?? []), row]);
+        }
+      }
+      const seen = new Set<string>();
+      const peopleGroups: { kind: string; reason: string; records: Record<string, string>[] }[] =
+        [];
+      for (const [key, rows] of groups) {
+        if (rows.length < 2) continue;
+        const ids = rows
+          .map((row) => row.id)
+          .sort()
+          .join(",");
+        if (seen.has(ids)) continue;
+        seen.add(ids);
+        peopleGroups.push({
+          kind: "person",
+          reason: key.startsWith("name:")
+            ? "same name at the same company"
+            : "same address once dots and plus-tags are removed",
+          records: rows
+            .sort((a, b) => a.created_at.localeCompare(b.created_at))
+            .map((row) => ({
+              person_id: row.id,
+              full_name: row.full_name,
+              email: row.email,
+              company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
+            })),
+        });
+      }
+      return ok({
+        groups: [...companyGroups, ...peopleGroups],
+        companies: companyGroups.length,
+        people: peopleGroups.length,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mentions",
+    auth: true,
+    handler: ({ headers, query }) => {
+      const me = caller(headers)!.member.id;
+      const rows = mentions
+        .filter((row) => row.staff_id === me && (query.unseen !== "1" || !row.seen_at))
+        .sort((a, b) => b.at.localeCompare(a.at))
+        .slice(0, 50);
+      return ok({
+        mentions: rows.map(mentionView),
+        unseen: rows.filter((row) => !row.seen_at).length,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mentions/{mention_id}/seen",
+    auth: true,
+    handler: ({ headers, params }) => {
+      const me = caller(headers)!.member.id;
+      const row = mentions.find(
+        (candidate) =>
+          candidate.id === params.mention_id && candidate.staff_id === me && !candidate.seen_at,
+      );
+      if (!row) return refuse(404, "not_found");
+      row.seen_at = now();
+      audit("mention.seen", me, "mention", row.id);
+      return ok({ seen: true });
     },
   },
   {
@@ -4245,6 +4875,10 @@ routes.push(
       if (meetingId)
         (activities[activities.length - 1] as ActivityRow & { meeting_id?: string }).meeting_id =
           meetingId;
+      const mentioned = recordMentions(found?.member.id ?? "", text, {
+        ...links,
+        meeting_id: meetingId,
+      });
       const deal = deals.find((candidate) => candidate.id === links.deal_id);
       if (deal) deal.last_activity_at = now();
       const lead = leads.find((candidate) => candidate.id === links.lead_id);
@@ -4256,8 +4890,10 @@ routes.push(
         if (kind === "email_in" && (lead.stage === "new" || lead.stage === "attempting"))
           lead.stage = "connected";
       }
-      audit("activity.logged", found?.member.id ?? null, "activity", kind);
-      return ok({ logged: true });
+      audit("activity.logged", found?.member.id ?? null, "activity", kind, "", {
+        ...(mentioned.length ? { mentioned } : {}),
+      });
+      return ok({ logged: true, mentioned });
     },
   },
   {
@@ -8178,6 +8814,171 @@ routes.push(
         })(),
         generated_at: now(),
       });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/reports/funnel",
+    auth: true,
+    capability: "deals:read",
+    handler: ({ query }) => {
+      const days = query.days === undefined ? 90 : Number(query.days);
+      if (!Number.isInteger(days) || days < 1 || days > 366)
+        return refuse(400, "malformed_request", { days: "1 to 366" });
+      const start = Date.now() - days * 86_400_000;
+      const ordered = stages.filter((row) => !row.archived).sort((a, b) => a.position - b.position);
+      const order = new Map(ordered.map((row, index) => [row.key, index]));
+      const outcome = new Map(ordered.map((row) => [row.key, row.outcome]));
+      const byDeal = new Map<string, typeof dealStageEvents>();
+      for (const event of dealStageEvents)
+        byDeal.set(
+          event.deal_id,
+          [...(byDeal.get(event.deal_id) ?? []), event].sort((a, b) => a.at.localeCompare(b.at)),
+        );
+      const inWindow = dealStageEvents.filter((event) => Date.parse(event.at) >= start);
+      const buckets = new Map(
+        ordered
+          .filter((row) => !row.outcome)
+          .map((row) => [
+            row.key,
+            {
+              key: row.key,
+              label: row.label,
+              entered: 0,
+              advanced: 0,
+              won: 0,
+              lost: 0,
+              still: 0,
+              durations: [] as number[],
+            },
+          ]),
+      );
+      const dealsMoved = new Set<string>();
+      for (const event of inWindow) {
+        const bucket = buckets.get(event.to_stage_key);
+        if (!bucket) continue;
+        dealsMoved.add(event.deal_id);
+        bucket.entered += 1;
+        const left = (byDeal.get(event.deal_id) ?? []).find(
+          (later) => later.at > event.at && later.from_stage_key === event.to_stage_key,
+        );
+        if (!left) {
+          bucket.still += 1;
+          continue;
+        }
+        bucket.durations.push((Date.parse(left.at) - Date.parse(event.at)) / 86_400_000);
+        const next = outcome.get(left.to_stage_key);
+        if (next === "won") bucket.won += 1;
+        else if (next === "lost" || next === "unqualified") bucket.lost += 1;
+        else if ((order.get(left.to_stage_key) ?? -1) > (order.get(event.to_stage_key) ?? -1))
+          bucket.advanced += 1;
+      }
+      const median = (values: number[]) => {
+        if (!values.length) return null;
+        const sorted = [...values].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        return (
+          Math.round(
+            (sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2) * 10,
+          ) / 10
+        );
+      };
+      const funnel = [...buckets.values()].map((bucket) => {
+        const left = bucket.advanced + bucket.won + bucket.lost;
+        return {
+          key: bucket.key,
+          label: bucket.label,
+          entered: bucket.entered,
+          advanced: bucket.advanced,
+          won_from_here: bucket.won,
+          lost_from_here: bucket.lost,
+          still_here: bucket.still,
+          conversion: left
+            ? Math.round(((bucket.advanced + bucket.won) / left) * 1000) / 1000
+            : null,
+          median_days: median(bucket.durations),
+        };
+      });
+      const won = inWindow.filter((event) => outcome.get(event.to_stage_key) === "won").length;
+      const lost = inWindow.filter((event) => outcome.get(event.to_stage_key) === "lost").length;
+      return ok({
+        days,
+        since: new Date(start).toISOString().slice(0, 10),
+        deals_moved: dealsMoved.size,
+        stages: funnel,
+        closed: {
+          won,
+          lost,
+          win_rate: won + lost ? Math.round((won / (won + lost)) * 1000) / 1000 : null,
+        },
+        generated_at: now(),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/reports/pipeline-history",
+    auth: true,
+    capability: "deals:read",
+    handler: ({ query }) => {
+      const days = query.days === undefined ? 90 : Number(query.days);
+      if (!Number.isInteger(days) || days < 1 || days > 366)
+        return refuse(400, "malformed_request", { days: "1 to 366" });
+      // The mock has no nightly job: each day's point is what the board would have said
+      // on the day, from when deals were created and closed, at today's probabilities.
+      const probability = new Map(stages.map((row) => [row.key, row.win_probability]));
+      const labels = new Map(
+        stages.map((row) => [row.key, { label: row.label, position: row.position }]),
+      );
+      const points = [];
+      for (let back = days; back >= 0; back -= 1) {
+        const day = dayOffset(-back);
+        const dayEnd = `${day}T23:59:59Z`;
+        const open = deals.filter(
+          (deal) =>
+            deal.created_at <= dayEnd &&
+            (deal.status === "open" || !deal.closed_at || deal.closed_at > dayEnd),
+        );
+        const byStage = new Map<
+          string,
+          {
+            key: string;
+            label: string;
+            position: number;
+            count: number;
+            mrr_cents: number;
+            weighted_cents: number;
+          }
+        >();
+        let mrr = 0;
+        let weighted = 0;
+        for (const deal of open) {
+          const cents = Math.round(deal.mrr_amount * 100);
+          const weight = Math.round((cents * (probability.get(deal.stage_key) ?? 0)) / 100);
+          mrr += cents;
+          weighted += weight;
+          const bucket = byStage.get(deal.stage_key) ?? {
+            key: deal.stage_key,
+            label: labels.get(deal.stage_key)?.label ?? deal.stage_key,
+            position: labels.get(deal.stage_key)?.position ?? 0,
+            count: 0,
+            mrr_cents: 0,
+            weighted_cents: 0,
+          };
+          bucket.count += 1;
+          bucket.mrr_cents += cents;
+          bucket.weighted_cents += weight;
+          byStage.set(deal.stage_key, bucket);
+        }
+        points.push({
+          day,
+          open_count: open.length,
+          open_mrr_cents: mrr,
+          weighted_cents: weighted,
+          by_stage: [...byStage.values()].sort((a, b) => a.position - b.position),
+        });
+      }
+      return ok({ days, currency: "USD", points });
     },
   },
   {

@@ -6,7 +6,9 @@ import {
   logActivityAction,
   setTaskStatusAction,
 } from "@/app/(portal)/_actions/work";
-import { updatePersonAction } from "@/app/(portal)/people/actions";
+import { mergePersonAction, updatePersonAction } from "@/app/(portal)/people/actions";
+import { MergeRecordForm } from "@/components/crm/merge-record-form";
+import { Popover } from "@/components/ui/popover";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
 import { RecordHistory } from "@/components/crm/record-history";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
@@ -153,11 +155,24 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
           { label: "Activity", value: activities.length },
         ]}
         actions={
-          person.email && !person.do_not_contact ? (
-            <a className="btn btn--small" href={`mailto:${person.email}`}>
-              Email
-            </a>
-          ) : undefined
+          <>
+            {person.email && !person.do_not_contact && (
+              <a className="btn btn--small" href={`mailto:${person.email}`}>
+                Email
+              </a>
+            )}
+            {canWrite && (
+              <Popover align="start" label="Merge" width="wide">
+                <MergeRecordForm
+                  action={mergePersonAction}
+                  idField="person_id"
+                  recordId={person.person_id}
+                  noun="person"
+                  candidates={[]}
+                />
+              </Popover>
+            )}
+          </>
         }
       />
       {person.do_not_contact && (

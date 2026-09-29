@@ -112,3 +112,63 @@ const exportSchema = okEnvelope.extend({
 export function createExport(token: string, kind: ExportKind, reason: string) {
   return postHqJson(`hq/exports/${kind}`, exportSchema, { token, body: { reason } });
 }
+
+const funnelSchema = okEnvelope.extend({
+  days: z.number(),
+  since: z.string(),
+  deals_moved: z.number(),
+  stages: z.array(
+    z.object({
+      key: z.string(),
+      label: z.string(),
+      entered: z.number(),
+      advanced: z.number(),
+      won_from_here: z.number(),
+      lost_from_here: z.number(),
+      still_here: z.number(),
+      /** Of those that left the stage, the share that went forward; null until one left. */
+      conversion: z.number().nullable(),
+      median_days: z.number().nullable(),
+    }),
+  ),
+  closed: z.object({ won: z.number(), lost: z.number(), win_rate: z.number().nullable() }),
+  generated_at: z.string().nullable(),
+});
+export type FunnelReport = z.infer<typeof funnelSchema>;
+
+/** What happened to every deal that entered each stage in the window. */
+export function readFunnel(token: string, days = 90) {
+  return fetchHqJson("hq/reports/funnel", funnelSchema, { token, query: { days: String(days) } });
+}
+
+const pipelineHistorySchema = okEnvelope.extend({
+  days: z.number(),
+  currency: z.string(),
+  points: z.array(
+    z.object({
+      day: z.string(),
+      open_count: z.number(),
+      open_mrr_cents: z.number(),
+      weighted_cents: z.number(),
+      by_stage: z.array(
+        z.object({
+          key: z.string(),
+          label: z.string(),
+          position: z.number(),
+          count: z.number(),
+          mrr_cents: z.number(),
+          weighted_cents: z.number(),
+        }),
+      ),
+    }),
+  ),
+});
+export type PipelineHistory = z.infer<typeof pipelineHistorySchema>;
+
+/** The nightly pipeline snapshots for a window, oldest first. */
+export function readPipelineHistory(token: string, days = 90) {
+  return fetchHqJson("hq/reports/pipeline-history", pipelineHistorySchema, {
+    token,
+    query: { days: String(days) },
+  });
+}

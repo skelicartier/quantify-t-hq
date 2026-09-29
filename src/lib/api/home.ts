@@ -6,7 +6,7 @@ import { renewalRowSchema } from "@/lib/api/revenue";
 
 import { fetchHqJson } from "@/lib/api/core";
 import { moneyByCurrencySchema } from "@/lib/api/crm";
-import { dealSummarySchema, leadSchema, taskSchema } from "@/lib/api/crm";
+import { dealSummarySchema, leadSchema, mentionSchema, taskSchema } from "@/lib/api/crm";
 import { meetingSchema } from "@/lib/api/meetings";
 import { ticketSummarySchema } from "@/lib/api/tickets";
 
@@ -19,6 +19,8 @@ const homeSchema = z.object({
   ok: z.literal(true),
   as_of: z.string(),
   staff: z.object({ display_name: z.string(), role: z.string() }),
+  /** Notes that named this person and that they have not marked seen. */
+  mentions: z.object({ unseen: z.number(), mentions: z.array(mentionSchema) }).optional(),
   desk: z
     .object({
       open: z.number(),

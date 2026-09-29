@@ -106,11 +106,21 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
         title="Companies"
         description="Every firm we know, anchored on its web domain. Colleagues' leads join the same company."
         actions={
-          canWrite ? (
-            <Popover label="New company" variant="primary">
-              <CompanyCreateForm action={createCompanyAction} />
-            </Popover>
-          ) : undefined
+          <>
+            <Link className="btn btn--small btn--ghost" href="/companies/duplicates">
+              Duplicates
+            </Link>
+            {canWrite && (
+              <Link className="btn btn--small" href="/companies/import">
+                Import
+              </Link>
+            )}
+            {canWrite && (
+              <Popover label="New company" variant="primary">
+                <CompanyCreateForm action={createCompanyAction} />
+              </Popover>
+            )}
+          </>
         }
       />
       {companies === null ? (

@@ -1,6 +1,8 @@
 import Link from "next/link";
 
+import { markMentionSeenAction } from "@/app/(portal)/_actions/mentions";
 import { DealFlags, DueChip, FirstReplyClock } from "@/components/crm/pills";
+import { RowAction } from "@/components/ui/row-action";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
 import { SlaChip } from "@/components/support/sla-chip";
@@ -13,6 +15,14 @@ import { readHome, type HomeAggregate } from "@/lib/api/home";
 import { isoDay } from "@/lib/crm/dates";
 import { formatMrr, formatMrrBy } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
+
+const MENTION_PAGES: Record<string, string> = {
+  company: "companies",
+  person: "people",
+  deal: "deals",
+  lead: "leads",
+  meeting: "meetings",
+};
 
 export const metadata = { title: "Today" };
 export const dynamic = "force-dynamic";
@@ -230,6 +240,39 @@ export default async function HomePage() {
             </section>
 
             <aside className="briefing__side">
+              {home.mentions && home.mentions.unseen > 0 && (
+                <section className="briefing__block" aria-labelledby="mentions-title">
+                  <div className="briefing__head">
+                    <h2 id="mentions-title">You were mentioned</h2>
+                    <span className="briefing__count">{home.mentions.unseen}</span>
+                  </div>
+                  <ol className="mentions">
+                    {home.mentions.mentions.map((mention) => (
+                      <li key={mention.mention_id} className="mention">
+                        <p className="mention__excerpt">{mention.excerpt}</p>
+                        <p className="mention__meta">
+                          {mention.by_name || "A colleague"}
+                          {mention.entity_id && (
+                            <>
+                              {" · "}
+                              <Link
+                                href={`/${MENTION_PAGES[mention.entity_type] ?? "home"}/${mention.entity_id}`}
+                              >
+                                open the {mention.entity_type || "record"}
+                              </Link>
+                            </>
+                          )}
+                        </p>
+                        <RowAction
+                          action={markMentionSeenAction}
+                          fields={{ mention_id: mention.mention_id }}
+                          buttons={[{ label: "Seen", className: "btn btn--small btn--ghost" }]}
+                        />
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              )}
               {home.meetings && (
                 <section className="briefing__block" aria-labelledby="today-meetings">
                   <div className="briefing__head">

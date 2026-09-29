@@ -18,6 +18,11 @@ export type ActionState = {
    * retry replays rather than repeats; every other outcome mints a fresh one.
    */
   keepAttempt?: boolean;
+  /**
+   * A structured outcome for a form that renders a summary of what happened — an
+   * import's created / skipped / invalid rows — as JSON text the client parses.
+   */
+  detail?: string;
 };
 
 export const INITIAL_ACTION_STATE: ActionState = { status: "idle", message: null };

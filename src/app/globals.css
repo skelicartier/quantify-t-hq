@@ -3981,6 +3981,136 @@
     margin-bottom: 4px;
   }
 
+  .chart-grid--single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .csv-import {
+    display: grid;
+    gap: 20px;
+  }
+
+  .csv-import__step {
+    display: grid;
+    gap: 10px;
+  }
+
+  .csv-import__paste summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .csv-import__map {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px 14px;
+  }
+
+  .csv-import__preview {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .csv-import__preview th,
+  .csv-import__preview td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 240px;
+  }
+
+  .csv-import__preview th {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--quiet);
+  }
+
+  .csv-import__issues {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    color: var(--muted);
+    display: grid;
+    gap: 4px;
+  }
+
+  .dup-groups {
+    display: grid;
+    gap: 14px;
+  }
+
+  .dup-records {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 8px;
+  }
+
+  .dup-record {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .dup-record:last-child {
+    border-bottom: 0;
+  }
+
+  .dup-record__main {
+    display: grid;
+    gap: 2px;
+    min-inline-size: 0;
+  }
+
+  .dup-record form {
+    display: contents;
+  }
+
+  .mentions {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 10px;
+  }
+
+  .mention {
+    display: grid;
+    gap: 4px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .mention:last-child {
+    border-bottom: 0;
+  }
+
+  .mention__excerpt {
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .mention__meta {
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  .mention form {
+    display: contents;
+  }
+
   .policy-list {
     margin: 0;
     padding: 0;
