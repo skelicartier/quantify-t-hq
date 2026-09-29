@@ -1,14 +1,25 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { cancelContractAction, changePriceAction } from "@/app/(portal)/revenue/actions";
+import {
+  cancelContractAction,
+  changePriceAction,
+  updateContractAction,
+} from "@/app/(portal)/revenue/actions";
+import { TrendChart, type TrendPoint } from "@/components/charts/trend-chart";
 import { PageHeader } from "@/components/shell/page-header";
-import { RecordHeader } from "@/components/ui/record-shell";
 import { ContractCancelForm, ContractPriceForm } from "@/components/revenue/contract-forms";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
-import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
+import { InlineField } from "@/components/ui/inline-field";
+import {
+  Properties,
+  Property,
+  RecordGrid,
+  RecordHeader,
+  RecordSection,
+} from "@/components/ui/record-shell";
 import { StatusPill } from "@/components/ui/status-pill";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError } from "@/lib/api/core";
@@ -20,7 +31,7 @@ import {
   MOVEMENT_KIND_LABELS,
   contractStateTone,
 } from "@/lib/crm/vocabulary";
-import { formatDate, formatMoney, formatMrr } from "@/lib/format";
+import { formatDate, formatMoney, formatMonthShort, formatMrr } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 
 export const metadata = { title: "Contract" };
@@ -32,6 +43,27 @@ const MOVEMENT_COLUMNS = [
   { key: "amount", label: "Change", align: "end" as const },
   { key: "note", label: "Note" },
 ];
+
+const CADENCES = [
+  { value: "monthly", label: "Monthly" },
+  { value: "annual", label: "Annually" },
+];
+
+/** The contract's monthly value after each movement that has taken effect: its shape. */
+function valueHistory(movements: ContractDetail["movements"], today: string): TrendPoint[] {
+  let running = 0;
+  return movements
+    .filter((movement) => movement.effective_on && movement.effective_on <= today)
+    .sort((a, b) => (a.effective_on ?? "").localeCompare(b.effective_on ?? ""))
+    .map((movement) => {
+      running += movement.amount;
+      return {
+        label: formatMonthShort(movement.effective_on),
+        title: `${formatDate(movement.effective_on)} · ${MOVEMENT_KIND_LABELS[movement.kind] ?? movement.kind}`,
+        value: running,
+      };
+    });
+}
 
 type ContractPageProps = { params: Promise<{ contractId: string }> };
 
@@ -65,6 +97,13 @@ export default async function ContractPage({ params }: ContractPageProps) {
   )
     .toISOString()
     .slice(0, 10);
+  const inline = {
+    action: updateContractAction,
+    idName: "contract_id",
+    id: contract.contract_id,
+    readOnly: !canWrite || !active,
+  };
+  const history = valueHistory(movements, today);
 
   return (
     <>
@@ -94,84 +133,138 @@ export default async function ContractPage({ params }: ContractPageProps) {
           Revenue continues until then; the churn is dated that day.
         </Callout>
       )}
-      <div className="record-layout">
-        <div className="record-layout__main">
-          <Card title="Agreement" titleAs="h2">
-            <KeyValue columns={2}>
-              <KeyValueRow label="Customer">
-                <Link href={`/companies/${contract.company_id}`}>{contract.company_name}</Link>
-              </KeyValueRow>
-              <KeyValueRow label="Monthly value">
+      <RecordGrid
+        side={
+          <>
+            <Properties title="Agreement">
+              <Property label="Customer">
+                <Link href={`/companies/${contract.company_id}`}>
+                  {contract.company_name || "Company"}
+                </Link>
+              </Property>
+              <InlineField
+                {...inline}
+                name="plan_name"
+                label="Plan"
+                value={contract.plan_name}
+                placeholder="e.g. Professional desk"
+              />
+              <InlineField
+                {...inline}
+                name="seats"
+                label="Seats"
+                type="number"
+                value={String(contract.seats)}
+              />
+              <Property label="Monthly value">
                 {formatMrr(contract.mrr_amount, contract.currency)}
-              </KeyValueRow>
-              <KeyValueRow label="Billed">
-                {contract.billing_cadence === "annual" ? "Annually" : "Monthly"}
-              </KeyValueRow>
-              <KeyValueRow label="Term">{contract.term_months} months</KeyValueRow>
-              <KeyValueRow label="Started">{formatDate(contract.starts_on)}</KeyValueRow>
-              <KeyValueRow label={active ? "Renews" : "Ends"}>
-                {formatDate(active ? contract.renews_on : contract.ends_on, "—")}
-              </KeyValueRow>
-              {contract.deal_id && (
-                <KeyValueRow label="From deal">
-                  <Link href={`/deals/${contract.deal_id}`}>Open the deal</Link>
-                </KeyValueRow>
+                {canWrite && active && (
+                  <span className="table-sub">Changes below, with an effective date</span>
+                )}
+              </Property>
+              <InlineField
+                {...inline}
+                name="billing_cadence"
+                label="Billed"
+                type="select"
+                options={CADENCES}
+                value={contract.billing_cadence}
+              />
+              <Property label="Term">
+                {contract.term_months} {contract.term_months === 1 ? "month" : "months"}
+              </Property>
+              <Property label="Started">{formatDate(contract.starts_on)}</Property>
+              {active ? (
+                <InlineField
+                  {...inline}
+                  name="renews_on"
+                  label="Renews"
+                  type="date"
+                  value={contract.renews_on ?? ""}
+                  display={contract.renews_on ? formatDate(contract.renews_on) : "Not set"}
+                />
+              ) : (
+                <Property label={contract.state === "ending" ? "Ends" : "Ended"}>
+                  {formatDate(contract.ends_on, "—")}
+                </Property>
               )}
-            </KeyValue>
-            {contract.notes && <p className="prose-block prose-block--side">{contract.notes}</p>}
-          </Card>
-          <section className="record-section" aria-labelledby="contract-movements">
-            <h2 className="record-section__title" id="contract-movements">
-              Revenue movements
-            </h2>
-            <DataTable caption="Revenue movements" columns={MOVEMENT_COLUMNS} scroll={false}>
-              {movements.map((movement, index) => (
-                <tr key={`${movement.effective_on}-${movement.kind}-${index}`}>
-                  <td>
-                    {formatDate(movement.effective_on)}
-                    {movement.effective_on && movement.effective_on > today && (
-                      <span className="table-sub">Scheduled</span>
-                    )}
-                  </td>
-                  <td>{MOVEMENT_KIND_LABELS[movement.kind] ?? movement.kind}</td>
-                  <td
-                    className={`data-table__num ${movement.amount < 0 ? "num--down" : "num--up"}`}
-                  >
-                    {movement.amount > 0 ? "+" : ""}
-                    {formatMoney(movement.amount, movement.currency)}
-                  </td>
-                  <td>{movement.note || <span className="table-sub">—</span>}</td>
-                </tr>
-              ))}
-            </DataTable>
-          </section>
-        </div>
-        {canWrite && active && (
-          <aside className="record-layout__side">
-            <Card
-              title="Change the price"
-              titleAs="h3"
-              description="An upgrade, a downgrade or a seat change."
-            >
-              <ContractPriceForm
-                action={changePriceAction}
-                contractId={contract.contract_id}
-                currentMrr={contract.mrr_amount}
-                currentSeats={contract.seats}
-                currency={contract.currency}
-                today={today}
+              {contract.cancel_reason && (
+                <Property label="Reason">
+                  {CANCEL_REASON_LABELS[contract.cancel_reason] ?? contract.cancel_reason}
+                </Property>
+              )}
+              {contract.deal_id && (
+                <Property label="From deal">
+                  <Link href={`/deals/${contract.deal_id}`}>Open the deal</Link>
+                </Property>
+              )}
+              <InlineField
+                {...inline}
+                name="notes"
+                label="Notes"
+                type="textarea"
+                value={contract.notes}
+                placeholder="Who signs renewals, what was agreed…"
               />
-            </Card>
-            <Card title="They are leaving" titleAs="h3" danger>
-              <ContractCancelForm
-                action={cancelContractAction}
-                contractId={contract.contract_id}
-                defaultEnd={monthEnd}
-              />
-            </Card>
-          </aside>
+            </Properties>
+            {canWrite && active && (
+              <>
+                <Card
+                  title="Change the price"
+                  titleAs="h3"
+                  description="An upgrade, a downgrade or a seat change, from a date."
+                >
+                  <ContractPriceForm
+                    action={changePriceAction}
+                    contractId={contract.contract_id}
+                    currentMrr={contract.mrr_amount}
+                    currentSeats={contract.seats}
+                    currency={contract.currency}
+                    today={today}
+                  />
+                </Card>
+                <Card title="They are leaving" titleAs="h3" danger>
+                  <ContractCancelForm
+                    action={cancelContractAction}
+                    contractId={contract.contract_id}
+                    defaultEnd={monthEnd}
+                  />
+                </Card>
+              </>
+            )}
+          </>
+        }
+      >
+        {history.length >= 2 && (
+          <RecordSection id="contract-history" title="Monthly value over time">
+            <TrendChart
+              ariaLabel={`This contract's monthly value after each of ${history.length} movements, now ${formatMrr(contract.mrr_amount, contract.currency)}.`}
+              format={(value) => formatMoney(value, contract.currency)}
+              points={history}
+            />
+          </RecordSection>
         )}
-      </div>
+        <RecordSection id="contract-movements" title="Revenue movements">
+          <DataTable caption="Revenue movements" columns={MOVEMENT_COLUMNS} scroll={false}>
+            {movements.map((movement, index) => (
+              <tr key={`${movement.effective_on}-${movement.kind}-${index}`}>
+                <td>
+                  {formatDate(movement.effective_on)}
+                  {movement.effective_on && movement.effective_on > today && (
+                    <span className="table-sub">Scheduled</span>
+                  )}
+                </td>
+                <td>{MOVEMENT_KIND_LABELS[movement.kind] ?? movement.kind}</td>
+                <td className={`data-table__num ${movement.amount < 0 ? "num--down" : "num--up"}`}>
+                  {movement.amount > 0 ? "+" : ""}
+                  {formatMoney(movement.amount, movement.currency)}
+                </td>
+                <td>{movement.note || <span className="table-sub">—</span>}</td>
+              </tr>
+            ))}
+          </DataTable>
+        </RecordSection>
+      </RecordGrid>
     </>
   );
 }

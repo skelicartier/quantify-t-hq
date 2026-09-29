@@ -124,3 +124,34 @@ export async function linkMeetingAction(
   revalidatePath(`/companies/${companyId}`);
   return { status: "sent", message: "Linked.", sentAt: Date.now() };
 }
+
+/**
+ * One property of a meeting, edited where it sits. Only the fields present in the
+ * submission are sent, so a single-field edit can never blank its neighbours.
+ */
+export async function updateMeetingFieldAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/meetings");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const meetingId = fieldValue(formData, "meeting_id", 64);
+  const input: Record<string, string> = {};
+  for (const [name, limit] of [
+    ["title", 200],
+    ["kind", 20],
+    ["prep_notes", 8_000],
+    ["recording_url", 400],
+  ] as const) {
+    if (formData.has(name)) input[name] = fieldValue(formData, name, limit).trim();
+  }
+  if (Object.keys(input).length === 0) return { status: "error", message: "Nothing to save." };
+  try {
+    await meetingsApi.updateMeeting(context.token, meetingId, input);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refreshMeeting(meetingId);
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}

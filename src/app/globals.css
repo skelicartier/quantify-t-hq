@@ -4579,6 +4579,12 @@
     font-size: var(--fs-mono);
   }
 
+  /* A note under a property's value takes the whole row, never the space beside it. */
+  .prop__value > .table-sub {
+    flex: 1 0 100%;
+    margin-top: 0;
+  }
+
   .prop__edit {
     display: inline-flex;
     align-items: center;

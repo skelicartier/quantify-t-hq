@@ -122,3 +122,36 @@ export async function adjustMrrAction(
   refreshRevenue();
   return { status: "sent", message: "Adjustment recorded.", sentAt: Date.now() };
 }
+
+/**
+ * One property of a contract, edited where it sits: the plan's name, the seat count,
+ * how it is billed, when it renews, the notes. The price itself changes through
+ * `changePriceAction`, because a price needs an effective date to land in the ledger.
+ */
+export async function updateContractAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/revenue/contracts");
+  if (!hasCapability(context, "revenue:write")) return READ_ONLY;
+  const contractId = fieldValue(formData, "contract_id", 64);
+  const input: Record<string, string> = {};
+  for (const [name, limit] of [
+    ["plan_name", 80],
+    ["seats", 6],
+    ["billing_cadence", 10],
+    ["renews_on", 10],
+    ["notes", 2_000],
+  ] as const) {
+    if (formData.has(name)) input[name] = fieldValue(formData, name, limit).trim();
+  }
+  if (Object.keys(input).length === 0) return { status: "error", message: "Nothing to save." };
+  try {
+    await revenueApi.updateContract(context.token, contractId, input);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refreshRevenue(contractId);
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
