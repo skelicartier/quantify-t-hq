@@ -47,6 +47,8 @@ export const meSchema = okEnvelope.extend({
   sudo_until: z.string().nullable(),
   /** Unused recovery codes left; absent from an older service. */
   recovery_codes_remaining: z.number().optional(),
+  /** How long this role's session may sit idle, and its absolute life. */
+  session_policy: z.object({ idle_minutes: z.number(), absolute_hours: z.number() }).optional(),
   environment: z.string(),
 });
 export type HqMe = z.infer<typeof meSchema>;

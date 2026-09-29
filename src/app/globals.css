@@ -3981,6 +3981,71 @@
     margin-bottom: 4px;
   }
 
+  .review-findings {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+  }
+
+  .review-flags {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  .tag--conflict,
+  .tag--orphan {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  .tag--shared {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .audit-export {
+    margin: 0 0 12px;
+    border: 1px solid var(--line-soft);
+  }
+
+  .audit-export__summary {
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .audit-export__body {
+    padding: 0 12px 12px;
+    display: grid;
+    gap: 12px;
+  }
+
+  .audit-export__form {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px 12px;
+    align-items: center;
+  }
+
+  .audit-export__form .btn {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  @media (max-width: 640px) {
+    .audit-export__form {
+      grid-template-columns: 1fr;
+    }
+
+    .audit-export__form .btn {
+      grid-column: 1;
+    }
+  }
+
   .convo-head__followers {
     color: var(--quiet);
     font-size: 12px;

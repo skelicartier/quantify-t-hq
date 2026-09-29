@@ -22,6 +22,19 @@ import { formatAbsolute, formatDate } from "@/lib/format";
 export const metadata = { title: "Access review" };
 export const dynamic = "force-dynamic";
 
+const FINDING_WORDS: Record<string, string> = {
+  orphan: "Orphan",
+  shared: "Shared account",
+  conflict: "Conflict",
+};
+
+/** "conflict:Bank portal" reads as "Conflicts with Bank portal". */
+function flagLabel(flag: string): string {
+  const [kind, rest] = flag.split(/:(.*)/s);
+  if (kind === "conflict") return rest ? `Conflicts with ${rest}` : "Conflict";
+  return FINDING_WORDS[kind ?? ""] ?? flag;
+}
+
 export default async function AccessReviewPage() {
   const context = await requireStaff("/access-review");
   if (!hasCapability(context, "hr:read")) {
@@ -79,6 +92,24 @@ export default async function AccessReviewPage() {
               label={`${current.decided} of ${current.total} decided`}
             />
           </Card>
+          {current.findings.length > 0 && (
+            <Callout tone="attention" role="status">
+              <strong>
+                {current.findings.length} {current.findings.length === 1 ? "finding" : "findings"}{" "}
+                to look at first.
+              </strong>
+              <ul className="review-findings">
+                {current.findings.map((finding, index) => (
+                  <li key={`${finding.kind}-${finding.access_id}-${index}`}>
+                    <span className={`tag tag--${finding.kind}`}>
+                      {FINDING_WORDS[finding.kind] ?? finding.kind}
+                    </span>{" "}
+                    {finding.staff_name || "A colleague"} · {finding.system}: {finding.detail}.
+                  </li>
+                ))}
+              </ul>
+            </Callout>
+          )}
           <DataTable
             caption="Grants under review"
             scroll={false}
@@ -99,6 +130,15 @@ export default async function AccessReviewPage() {
                 <td>
                   {item.access.system}
                   <span className="table-sub">{item.access.level || "Access"}</span>
+                  {item.flags.length > 0 && (
+                    <span className="review-flags">
+                      {item.flags.map((flag) => (
+                        <span key={flag} className={`tag tag--${flag.split(":")[0]}`}>
+                          {flagLabel(flag)}
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </td>
                 <td>{formatDate(item.access.granted_on)}</td>
                 <td>

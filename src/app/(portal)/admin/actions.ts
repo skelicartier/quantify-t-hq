@@ -53,8 +53,16 @@ export async function mintKeyAction(
   if (!name || !reason) {
     return { status: "error", message: "Name what holds the key and say why it is needed." };
   }
+  const lifetime = formData.has("expires_in_days") ? wholeNumber(formData, "expires_in_days") : 180;
+  if (lifetime === null || lifetime < 1 || lifetime > 180) {
+    return { status: "error", message: "A key lives 1 to 180 days." };
+  }
   try {
-    const minted = await keysApi.mintApiKey(context.token, { name, reason });
+    const minted = await keysApi.mintApiKey(context.token, {
+      name,
+      reason,
+      expires_in_days: lifetime,
+    });
     revalidatePath("/admin/integrations");
     return { status: "sent", message: null, sentAt: Date.now(), secret: minted.secret };
   } catch (error) {

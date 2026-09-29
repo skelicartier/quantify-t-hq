@@ -40,9 +40,15 @@ const KEY_COLUMNS = [
   { key: "scope", label: "Allows" },
   { key: "used", label: "Last used" },
   { key: "created", label: "Minted" },
+  { key: "expires", label: "Expires" },
   { key: "state", label: "State" },
   { key: "revoke", label: "Revoke" },
 ];
+
+/** Whole days from `now` to the key's expiry; negative once past. */
+function daysUntil(iso: string, now: number): number {
+  return Math.ceil((Date.parse(iso) - now) / 86_400_000);
+}
 
 const WEBHOOK_COLUMNS = [
   { key: "received", label: "Received" },
@@ -155,7 +161,7 @@ export default async function IntegrationsPage({ searchParams }: IntegrationsPag
           <Card
             title="Website intake keys"
             titleAs="h2"
-            description="The early-access and contact forms post leads with one of these. A key can only create leads; revoking one stops it at once."
+            description="The early-access and contact forms post leads with one of these. A key can only create leads; revoking one stops it at once, and every key expires — 180 days unless minted for less."
           >
             {keys === null ? (
               <Callout tone="danger" compact>
@@ -195,8 +201,32 @@ export default async function IntegrationsPage({ searchParams }: IntegrationsPag
                       <span className="table-sub">{nameFor(names, key.created_by)}</span>
                     </td>
                     <td>
+                      {key.expires_at === null ? (
+                        <span className="table-sub">Never</span>
+                      ) : (
+                        <>
+                          <Timestamp value={key.expires_at} mode="date" />
+                          {!key.revoked_at && !key.expired && (
+                            <span
+                              className={
+                                daysUntil(key.expires_at, now) <= 30
+                                  ? "table-sub num--down"
+                                  : "table-sub"
+                              }
+                            >
+                              {daysUntil(key.expires_at, now) <= 30
+                                ? `In ${daysUntil(key.expires_at, now)} days — rotate soon`
+                                : `In ${daysUntil(key.expires_at, now)} days`}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </td>
+                    <td>
                       {key.revoked_at ? (
                         <StatusPill value="revoked" label="Revoked" />
+                      ) : key.expired ? (
+                        <StatusPill value="expired" label="Expired" tone="danger" />
                       ) : (
                         <StatusPill value="active" label="Live" />
                       )}

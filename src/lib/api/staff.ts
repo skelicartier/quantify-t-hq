@@ -121,6 +121,22 @@ const auditPageSchema = okEnvelope.extend({
 });
 export type AuditPage = z.infer<typeof auditPageSchema>;
 
+const auditExportSchema = okEnvelope.extend({
+  filename: z.string(),
+  rows: z.number(),
+  truncated: z.boolean(),
+  sha256: z.string(),
+  signature: z.string(),
+  algorithm: z.string(),
+  jsonl: z.string(),
+});
+export type AuditExport = z.infer<typeof auditExportSchema>;
+
+/** A signed JSONL copy of the log for a date range; the service audits it before answering. */
+export function exportAudit(token: string, input: { from: string; to: string; reason: string }) {
+  return postHqJson("hq/audit/export", auditExportSchema, { token, body: input });
+}
+
 export function searchAudit(
   token: string,
   filters: Partial<Record<"staff_id" | "action" | "entity_type" | "entity_id", string>>,

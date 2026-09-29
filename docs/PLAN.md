@@ -17,7 +17,7 @@ danger zone), with real TOTP sign-in. Two repositories:
 | Repo                                           | Path                                                                                                                        | What lives there                                                                                                                                                                                                                                            |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **HQ portal** (Next.js 16, TypeScript)         | `~/Documents/Projects/HQ Quantify Terminal` — GitHub `aaryansaroha98/quantify-t-hq`, branch `main`, pushed                  | UI, server actions, zod API clients (`src/lib/api/*`), the mock service (`scripts/mock-hq-api.ts`), the screenshot harness, `docs/DESIGN.md` (the UI contract), `docs/RESEARCH-2026-09-30.md` (the research), this file                                     |
-| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0020`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
+| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0021`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
 
 ## 2. Ground rules (do not relearn these)
 
@@ -102,26 +102,27 @@ rail identity menu lists them.
 
 ### 2026-10-01 — the support desk
 
-| Wave          | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Where                                   | Commits                                       |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------- |
-| Desk: threads | followers (migration 0019, `hq/tickets/{id}/follow`, a Following queue filter that opens every status, `o` key, "Followed by …" in the head); merge (`hq/tickets/{id}/merge {into}`: messages in time order, tags + followers united, more urgent priority kept, duplicate resolved + tagged `merged`, notes both sides, refused when either side is resolved); reopen counting (by hand or by the customer writing again; "Reopened once" pill); weekly report "Support desk" card                                 | desk, reports                           | service `c90578c`; HQ `d4dea8a`               |
-| Desk: rules   | migration 0020 (`support_alerts` + `desk.*` settings); `desk_rules` / `desk_sweeper`: fewest-open assignment from an admin-chosen pool, one public "still there?" nudge, a public close a reply reopens, one mail per deadline to an assignee whose reply timer is at risk or breached; runs from the queue read when the last pass is > 15 min old + nightly at 03:51 (no quarter-hour timer: the serverless database's free hours); `hq/settings/desk/update`; Settings → Desk rules form; breadcrumb fix ("Ngs") | settings, desk, `function_app.py` timer | service `c90578c`; HQ: the commit adding this |
+| Wave          | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Where                                   | Commits                                       |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------- |
+| Desk: threads | followers (migration 0019, `hq/tickets/{id}/follow`, a Following queue filter that opens every status, `o` key, "Followed by …" in the head); merge (`hq/tickets/{id}/merge {into}`: messages in time order, tags + followers united, more urgent priority kept, duplicate resolved + tagged `merged`, notes both sides, refused when either side is resolved); reopen counting (by hand or by the customer writing again; "Reopened once" pill); weekly report "Support desk" card                                                                                                                                                                                                                                           | desk, reports                           | service `c90578c`; HQ `d4dea8a`               |
+| Desk: rules   | migration 0020 (`support_alerts` + `desk.*` settings); `desk_rules` / `desk_sweeper`: fewest-open assignment from an admin-chosen pool, one public "still there?" nudge, a public close a reply reopens, one mail per deadline to an assignee whose reply timer is at risk or breached; runs from the queue read when the last pass is > 15 min old + nightly at 03:51 (no quarter-hour timer: the serverless database's free hours); `hq/settings/desk/update`; Settings → Desk rules form; breadcrumb fix ("Ngs")                                                                                                                                                                                                           | settings, desk, `function_app.py` timer | service `c90578c`; HQ: the commit adding this |
+| Security      | breached-password check (HIBP k-anonymity; fails open; `QT_HQ_BREACH_CHECK=0` off) on invite / reset / change; owner and admin sessions idle out at 15 min (`hq/me.session_policy`); a role change mails the person, a minted key mails every owner; migration 0021 gives intake keys `expires_at` (180 days or less), expired keys are refused, the offboarding checklist gains "rotate the keys"; the access review names orphans, shared accounts and money separation-of-duties conflicts; `POST hq/audit/export` hands back a signed JSONL copy (digest + HMAC, audited first; `scripts/verify_hq_audit_export.py` checks it); Integrations shows expiry and a "Lives for" picker, Audit an "Export a signed copy" block | auth, admin, access review              | service `4b239cf`; HQ: the commit adding this |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
-1. **Security quick wins**: HIBP k-anonymity breached-password check on set / reset;
-   15-minute idle for owner / admin; security-event emails (password change, authenticator
-   reset, recovery-code use, role change, key created); API key `expires_at` (180 days) and
-   rotate-on-offboarding checklist item; SoD rules and orphan-grant detection in the access
-   review; signed JSONL audit export. Then passkeys (WebAuthn) as a second factor — M.
-2. **People-ops quick wins**: manager field and reporting line; asset register with return
+1. **People-ops quick wins**: manager field and reporting line; asset register with return
    gating the offboarding clock; versioned policy acknowledgements; date reminders
    (probation end, engagement end); training records; 1:1 action items; emergency contacts.
-3. **CRM**: CSV import with mapping / dedupe / summary; duplicate detection + merge;
+2. **CRM**: CSV import with mapping / dedupe / summary; duplicate detection + merge;
    parent / child companies; stage-conversion funnel and time-in-stage report from
    `hq_deal_stage_events`; comments with @mentions; pipeline snapshots (nightly job).
-4. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
+3. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
    grouping, a filter builder. Saved views shared with the team (server-side).
+
+Security items deliberately left for their own wave: passkeys (WebAuthn) as a second
+factor — M; dual control for owner grants and key creation; anomalous sign-in rules
+(new country, velocity). A tamper-evident ledger (Azure SQL ledger tables) is a
+production-side switch, not code.
 
 Desk items deliberately left: email-to-ticket needs an MX record and an inbound secret
 (founder), and the desk reads the customer's app version from the ticket, not live.
@@ -133,7 +134,7 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile) → apply migrations 0006–0020 and publish → move the desk onto SQL → Vercel
+Turnstile) → apply migrations 0006–0021 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
 Actions on the account fails every run in seconds with no runner (billing) — only the
@@ -143,18 +144,20 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of 2026-10-01, evening.**
+**As of 2026-10-01, night.**
 
-- HQ repo: `origin/main` HEAD carries the support-desk wave (followers, merge, reopen
-  counting, the weekly desk card, the Desk rules settings form, the breadcrumb fix);
-  working tree clean. Harness passed with 210 screens (dark + light, desktop + phone, axe
-  clean); `~/Downloads/HQ Portal screenshots 2026-09-29` refreshed.
-- Product repo: HEAD `c90578c` (desk wave: migrations 0019–0020, `desk_rules.py`,
-  `desk_sweeper.py`, `hq_desk_sweeper` timer); 166 tests pass; not pushed.
-  `docs/HQ_GO_LIVE.md` now says 0006–0020.
-- **Next step:** §5 item 1, the security quick wins — HIBP k-anonymity breached-password
-  check on set / reset, 15-minute idle for owner / admin, security-event emails for the
-  acts not yet mailed (role change, key created), API key `expires_at` (180 days) with a
-  rotate-on-offboarding checklist item, SoD rules and orphan-grant detection in the access
-  review, signed JSONL audit export. Service first (routes + tests), then the mock, then
-  the portal; passkeys (WebAuthn) after, as their own wave.
+- HQ repo: `origin/main` HEAD carries the security quick wins (session policy on My
+  security, key expiry + "Lives for" on Integrations, review findings + flags, the signed
+  audit export block and its download route, the mock's breached list / expiry / findings /
+  export / seeded open review, the breadcrumb no longer repeating "/me/security"); working
+  tree clean. Harness passed with 210 screens; `~/Downloads/HQ Portal screenshots
+2026-09-29` refreshed.
+- Product repo: HEAD `4b239cf` (security wave: migration 0021, `breach_check.py`,
+  `audit_export.py`, `scripts/verify_hq_audit_export.py`, idle per role, key expiry,
+  review findings, security mail); 172 tests pass; not pushed. `docs/HQ_GO_LIVE.md` says
+  0006–0021 and lists `QT_HQ_BREACH_CHECK`.
+- **Next step:** §5 item 1, the people-ops quick wins — manager field and reporting line;
+  asset register with return gating the offboarding clock; versioned policy
+  acknowledgements; date reminders (probation end, engagement end); training records; 1:1
+  action items; emergency contacts. Service first (migration 0022 + routes + tests), then
+  the mock, then the Team pages.

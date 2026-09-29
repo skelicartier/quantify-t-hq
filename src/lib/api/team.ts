@@ -326,8 +326,22 @@ const reviewDetailSchema = okEnvelope.extend({
         decided_at: z.string().nullable(),
         access: accessSchema,
         staff_name: z.string(),
+        /** "orphan", "shared", or "conflict:<other system>"; empty when nothing is wrong. */
+        flags: z.array(z.string()).default([]),
       }),
     ),
+    /** What an auditor reads first: orphans, shared accounts, separation-of-duties conflicts. */
+    findings: z
+      .array(
+        z.object({
+          kind: z.string(),
+          access_id: z.string(),
+          staff_name: z.string(),
+          system: z.string(),
+          detail: z.string(),
+        }),
+      )
+      .default([]),
   }),
 });
 export type AccessReview = z.infer<typeof reviewDetailSchema>["review"];

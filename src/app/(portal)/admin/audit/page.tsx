@@ -1,7 +1,10 @@
 import Link from "next/link";
 
+import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { AdminTabs } from "@/components/admin/admin-tabs";
+import { SudoGate } from "@/components/admin/sudo-gate";
 import { PageHeader } from "@/components/shell/page-header";
+import { Card } from "@/components/ui/card";
 import { Callout } from "@/components/ui/callout";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -10,7 +13,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { directoryOrNull, searchAudit, type AuditPage } from "@/lib/api/staff";
-import { formatSentence } from "@/lib/format";
+import { formatAbsolute, formatSentence } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -68,6 +71,14 @@ function describeDetail(detail: Record<string, unknown>): string {
     .join(" · ");
 }
 
+const EXPORT_OUTCOMES: Record<string, string> = {
+  sudo: "Confirm it's you below, then export again.",
+  reason: "Say what the export is for, in a sentence.",
+  dates: "The range needs two dates, the later one second, at most a year apart.",
+  forbidden: "Your role cannot export the audit log.",
+  failed: "The export could not be built just now. Nothing was downloaded.",
+};
+
 type AuditPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -91,6 +102,13 @@ export default async function AuditIndexPage({ searchParams }: AuditPageProps) {
   };
   const offset = Math.max(0, Number(firstSearchValue(parameters.offset) ?? 0) || 0);
   const now = requestNow();
+  const exportOutcome = EXPORT_OUTCOMES[firstSearchValue(parameters.export) ?? ""] ?? null;
+  const fresh = context.me.sudo_fresh;
+  const untilLabel = context.me.sudo_until
+    ? (formatAbsolute(context.me.sudo_until).split(", ")[1] ?? null)
+    : null;
+  const today = new Date(now).toISOString().slice(0, 10);
+  const monthAgo = new Date(now - 30 * 86_400_000).toISOString().slice(0, 10);
 
   let page: AuditPage | null = null;
   try {
@@ -175,6 +193,70 @@ export default async function AuditIndexPage({ searchParams }: AuditPageProps) {
           </Link>
         )}
       </form>
+      {exportOutcome && (
+        <Callout tone="danger" role="alert" compact>
+          {exportOutcome}
+        </Callout>
+      )}
+      <details className="audit-export">
+        <summary className="audit-export__summary">Export a signed copy</summary>
+        <div className="audit-export__body">
+          <SudoGate
+            action={confirmSudoAction}
+            fresh={fresh}
+            untilLabel={untilLabel}
+            returnPath="/admin/audit"
+            purpose="Exporting the log needs a fresh code from your authenticator app."
+          />
+          <Card
+            title="Signed JSONL export"
+            titleAs="h2"
+            description="One line per event for a date range, with a digest and an HMAC signature an auditor can verify against the service's secret. The export itself is recorded in the log before the file leaves."
+          >
+            <form className="audit-export__form" action="/admin/audit/export" method="post">
+              <label className="field__label" htmlFor="audit-export-from">
+                From
+              </label>
+              <input
+                id="audit-export-from"
+                className="input input--small"
+                type="date"
+                name="from"
+                defaultValue={monthAgo}
+                max={today}
+                required
+              />
+              <label className="field__label" htmlFor="audit-export-to">
+                To
+              </label>
+              <input
+                id="audit-export-to"
+                className="input input--small"
+                type="date"
+                name="to"
+                defaultValue={today}
+                max={today}
+                required
+              />
+              <label className="field__label" htmlFor="audit-export-reason">
+                What it is for
+              </label>
+              <input
+                id="audit-export-reason"
+                className="input input--small"
+                name="reason"
+                placeholder="e.g. Q3 evidence pack for the bank"
+                minLength={8}
+                maxLength={400}
+                required
+              />
+              <button className="btn btn--small btn--primary" type="submit" disabled={!fresh}>
+                Download .jsonl
+              </button>
+            </form>
+          </Card>
+        </div>
+      </details>
       {page === null ? (
         <Callout tone="danger" role="alert">
           The audit log could not be read just now. This is a read failure, not an empty log.

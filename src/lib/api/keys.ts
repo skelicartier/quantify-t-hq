@@ -15,12 +15,17 @@ export const apiKeySchema = z.object({
   created_at: z.string().nullable(),
   last_used_at: z.string().nullable(),
   revoked_at: z.string().nullable(),
+  /** The day the key stops working; every key has one. */
+  expires_at: z.string().nullable(),
+  expired: z.boolean(),
 });
 export type ApiKey = z.infer<typeof apiKeySchema>;
 
 const keysSchema = okEnvelope.extend({
   keys: z.array(apiKeySchema),
   grantable_scopes: z.array(z.string()),
+  /** The longest life a key can be minted with, in days. */
+  lifetime_days: z.number().optional(),
 });
 
 export function readApiKeys(token: string) {
@@ -34,7 +39,10 @@ const mintedSchema = okEnvelope.extend({
 });
 export type MintedKey = z.infer<typeof mintedSchema>;
 
-export function mintApiKey(token: string, input: { name: string; reason: string }) {
+export function mintApiKey(
+  token: string,
+  input: { name: string; reason: string; expires_in_days?: number },
+) {
   return postHqJson("hq/api-keys/create", mintedSchema, { token, body: input });
 }
 

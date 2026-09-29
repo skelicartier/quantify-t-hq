@@ -20,7 +20,7 @@
  */
 
 import { createServer } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 
 const PORT = 7071;
 const PREFIX = "/api/v1/";
@@ -1017,6 +1017,8 @@ const routes: Array<{
     handler: ({ body }) => {
       const invite = invites.get(String(body.token ?? ""));
       if (!invite || String(body.password ?? "").length < 12) return refuse(401, "unauthenticated");
+      const breached = breachedRefusal(String(body.password ?? ""));
+      if (breached) return breached;
       invites.delete(String(body.token ?? ""));
       const member = staff.find((row) => row.id === invite.staffId);
       if (!member) return refuse(401, "unauthenticated");
@@ -1029,10 +1031,14 @@ const routes: Array<{
   {
     method: "POST",
     pattern: "hq/auth/reset",
-    handler: ({ body }) =>
-      String(body.token ?? "").startsWith("mock-reset-") && String(body.password ?? "").length >= 12
+    handler: ({ body }) => {
+      if (String(body.password ?? "").length < 12) return refuse(400, "malformed_request");
+      const breached = breachedRefusal(String(body.password ?? ""));
+      if (breached) return breached;
+      return String(body.token ?? "").startsWith("mock-reset-")
         ? ok({ reset: true })
-        : refuse(401, "unauthenticated"),
+        : refuse(401, "unauthenticated");
+    },
   },
   {
     method: "GET",
@@ -1054,6 +1060,10 @@ const routes: Array<{
         sudo_fresh: sudoFresh,
         sudo_until: found.session.sudo_until,
         recovery_codes_remaining: found.member.recovery_codes_remaining ?? 10,
+        session_policy: {
+          idle_minutes: ["owner", "admin"].includes(found.member.role) ? 15 : 30,
+          absolute_hours: 12,
+        },
         environment: "mock",
       });
     },
@@ -1104,6 +1114,8 @@ const routes: Array<{
       const found = caller(headers)!;
       if (String(body.current_password ?? "").length < 8) return refuse(401, "unauthenticated");
       if (String(body.new_password ?? "").length < 12) return refuse(400, "malformed_request");
+      const breached = breachedRefusal(String(body.new_password ?? ""));
+      if (breached) return breached;
       let revoked = 0;
       for (const session of sessions.values()) {
         if (
@@ -1830,6 +1842,68 @@ const routes: Array<{
       return ok({ events: rows.slice(offset, offset + limit), limit, offset });
     },
   },
+  {
+    method: "POST",
+    pattern: "hq/audit/export",
+    auth: true,
+    capability: "audit:read",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const reason = String(body.reason ?? "").trim();
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say what the export is for" });
+      const from = String(body.from ?? "");
+      const to = String(body.to ?? "");
+      const day = /^\d{4}-\d{2}-\d{2}$/;
+      if (!day.test(from)) return refuse(400, "malformed_request", { from: "a date, YYYY-MM-DD" });
+      if (!day.test(to)) return refuse(400, "malformed_request", { to: "a date, YYYY-MM-DD" });
+      if (to < from) return refuse(400, "malformed_request", { to: "before from" });
+      const start = Date.parse(`${from}T00:00:00Z`);
+      const end = Date.parse(`${to}T00:00:00Z`) + 86_400_000;
+      if (end - start > 367 * 86_400_000)
+        return refuse(400, "malformed_request", { to: "at most 366 days at a time" });
+      const stamp = (row: (typeof auditEvents)[number]) => String(row.occurred_at ?? "");
+      const events = auditEvents
+        .filter((row) => {
+          const at = Date.parse(stamp(row));
+          return at >= start && at < end;
+        })
+        .sort((a, b) => stamp(a).localeCompare(stamp(b)));
+      const line = (value: unknown) => JSON.stringify(value);
+      const bodyText = events.map((row) => line(row) + "\n").join("");
+      const sha256 = createHash("sha256").update(bodyText, "utf8").digest("hex");
+      const key = createHash("sha256").update("hq-audit-export:mock-secret").digest();
+      const signature = createHmac("sha256", key).update(sha256).digest("hex");
+      const found = caller(headers);
+      const correlation = `qt-${randomUUID().replace(/-/g, "")}`;
+      const header = {
+        format: "quantify-hq-audit-jsonl/1",
+        exported_at: now(),
+        from,
+        to,
+        rows: events.length,
+        truncated: false,
+        exported_by: found?.member.id ?? "",
+        reason,
+        correlation_id: correlation,
+      };
+      const trailer = { sha256, signature, algorithm: "HMAC-SHA256" };
+      audit("audit.exported", found?.member.id ?? null, "audit", `${from}..${to}`, reason, {
+        rows: events.length,
+        sha256,
+        truncated: false,
+      });
+      return ok({
+        filename: `hq-audit-${from}-${to}.jsonl`,
+        rows: events.length,
+        truncated: false,
+        sha256,
+        signature,
+        algorithm: "HMAC-SHA256",
+        jsonl: line(header) + "\n" + bodyText + line(trailer) + "\n",
+      });
+    },
+  },
 ];
 
 // =====================================================================================
@@ -1984,7 +2058,28 @@ type ApiKeyRow = {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  expires_at: string | null;
 };
+
+const KEY_LIFETIME_DAYS = 180;
+
+function keyView(row: ApiKeyRow) {
+  return {
+    ...row,
+    expired: Boolean(row.expires_at && Date.parse(row.expires_at) <= Date.now()),
+  };
+}
+
+/** Stands in for the public breach corpus: the service asks HIBP, the mock asks this. */
+const BREACHED_PASSWORDS = new Set(["password1234", "qwerty123456", "letmein12345"]);
+
+function breachedRefusal(password: string) {
+  return BREACHED_PASSWORDS.has(password.toLowerCase())
+    ? refuse(400, "malformed_request", {
+        password: "this password appears in a public data breach; choose another",
+      })
+    : null;
+}
 
 const stages: StageRow[] = [];
 const companies: CompanyRow[] = [];
@@ -2573,6 +2668,7 @@ function seedCrm() {
     created_at: agoIso(24 * 14),
     last_used_at: agoIso(3),
     revoked_at: null,
+    expires_at: new Date(Date.now() + (KEY_LIFETIME_DAYS - 14) * 86_400_000).toISOString(),
   });
   seedRetentionExamples();
 }
@@ -4683,8 +4779,9 @@ routes.push(
         keys: apiKeys
           .slice()
           .sort((a, b) => b.created_at.localeCompare(a.created_at))
-          .map((row) => ({ ...row })),
+          .map(keyView),
         grantable_scopes: ["leads:create"],
+        lifetime_days: KEY_LIFETIME_DAYS,
       }),
   },
   {
@@ -4699,6 +4796,15 @@ routes.push(
       const reason = String(body.reason ?? "").trim();
       if (!reason)
         return refuse(400, "malformed_request", { reason: "a written reason is required" });
+      const lifetime =
+        body.expires_in_days === undefined ? KEY_LIFETIME_DAYS : body.expires_in_days;
+      if (
+        typeof lifetime !== "number" ||
+        !Number.isInteger(lifetime) ||
+        lifetime < 1 ||
+        lifetime > KEY_LIFETIME_DAYS
+      )
+        return refuse(400, "malformed_request", { expires_in_days: `1 to ${KEY_LIFETIME_DAYS}` });
       const prefix = randomUUID().replace(/-/g, "").slice(0, 8);
       const secret = `qthq_${prefix}_${randomUUID().replace(/-/g, "")}`;
       const found = caller(headers);
@@ -4711,10 +4817,14 @@ routes.push(
         created_at: now(),
         last_used_at: null,
         revoked_at: null,
+        expires_at: new Date(Date.now() + lifetime * 86_400_000).toISOString(),
       };
       apiKeys.push(row);
-      audit("api_key.minted", found?.member.id ?? null, "api_key", row.key_id, reason);
-      return ok({ key: { ...row }, secret });
+      audit("api_key.minted", found?.member.id ?? null, "api_key", row.key_id, reason, {
+        name,
+        expires_in_days: lifetime,
+      });
+      return ok({ key: keyView(row), secret });
     },
   },
   {
@@ -4746,6 +4856,7 @@ routes.push(
       // prefix matches a live row, which is enough to exercise both refusal paths.
       if (!presented.startsWith("qthq_") || !live)
         return refuse(403, "forbidden", { api_key: "unknown or revoked" });
+      if (keyView(live).expired) return refuse(403, "forbidden", { api_key: "expired" });
       if (String(body.website ?? "").trim()) return ok({ received: true });
       const email = String(body.email ?? "")
         .trim()
@@ -8238,6 +8349,31 @@ const certificates: CertificateRow[] = [];
 const reviews: ReviewRow[] = [];
 const reviewItems: ReviewItemRow[] = [];
 
+/** This quarter's review, started two days ago with one grant already kept. */
+function seedOpenReview() {
+  reviews.length = 0;
+  reviewItems.length = 0;
+  // Not quarterOf: that arrow is declared further down and this runs at module load.
+  const started = new Date();
+  const review: ReviewRow = {
+    id: "ar000000-0000-4000-8000-000000000001",
+    quarter: `${started.getUTCFullYear()}-Q${Math.floor(started.getUTCMonth() / 3) + 1}`,
+    started_at: agoIso(48),
+    completed_at: null,
+  };
+  reviews.push(review);
+  for (const row of systemAccess.filter((candidate) => accessView(candidate).live)) {
+    const kept = row.system === "Mail";
+    reviewItems.push({
+      review_id: review.id,
+      access_id: row.id,
+      decision: kept ? "keep" : "pending",
+      evidence: kept ? "Works the shared inbox every day" : "",
+      decided_at: kept ? agoIso(40) : null,
+    });
+  }
+}
+
 function isoWeek(date: Date): string {
   const monday = new Date(
     Date.UTC(
@@ -8326,7 +8462,17 @@ function seedTeam() {
       granted_on: dayOffset(-58),
       expires_on: dayOffset(9),
       revoked_on: null,
-      notes: "Project-scoped",
+      notes: "Project-scoped; shared team login until the vendor adds seats",
+    },
+    {
+      id: "ac000000-0000-4000-8000-000000000005",
+      staff_id: SALES_STAFF,
+      system: "Bank portal",
+      level: "Viewer",
+      granted_on: dayOffset(-40),
+      expires_on: null,
+      revoked_on: null,
+      notes: "To read incoming payments against invoices",
     },
     {
       id: "ac000000-0000-4000-8000-000000000003",
@@ -8425,6 +8571,7 @@ function seedTeam() {
   });
 }
 seedTeam();
+seedOpenReview();
 
 function accessView(row: AccessRow) {
   const todayIso = today();
@@ -8515,7 +8662,8 @@ function reviewView(review: ReviewRow, withItems: boolean) {
     decided: items.filter((item) => item.decision !== "pending").length,
     revoked: items.filter((item) => item.decision === "revoke").length,
   };
-  if (withItems)
+  if (withItems) {
+    const { flags, findings } = reviewFindings(items);
     view.items = items.map((item) => {
       const access = systemAccess.find((row) => row.id === item.access_id)!;
       return {
@@ -8525,9 +8673,94 @@ function reviewView(review: ReviewRow, withItems: boolean) {
         decided_at: item.decided_at,
         access: accessView(access),
         staff_name: staff.find((member) => member.id === access.staff_id)?.display_name ?? "",
+        flags: flags.get(item.access_id) ?? [],
       };
     });
+    view.findings = findings;
+  }
   return view;
+}
+
+/** As the service's team_routes.review_findings: orphans, shared accounts, money SoD. */
+const SOD_MONEY_OUT = ["bank", "banking", "treasury", "payments", "card"];
+const SOD_MONEY_RECORDED = [
+  "accounting",
+  "bookkeeping",
+  "billing",
+  "invoicing",
+  "payroll",
+  "ledger",
+];
+const sodSide = (system: string, words: string[]) =>
+  words.some((word) => system.toLowerCase().includes(word));
+
+function reviewFindings(items: ReviewItemRow[]) {
+  const flags = new Map<string, string[]>();
+  const findings: {
+    kind: string;
+    access_id: string;
+    staff_name: string;
+    system: string;
+    detail: string;
+  }[] = [];
+  const liveByStaff = new Map<string, AccessRow[]>();
+  for (const item of items) {
+    const access = systemAccess.find((row) => row.id === item.access_id);
+    if (!access || !accessView(access).live) continue;
+    liveByStaff.set(access.staff_id, [...(liveByStaff.get(access.staff_id) ?? []), access]);
+  }
+  for (const item of items) {
+    const access = systemAccess.find((row) => row.id === item.access_id);
+    if (!access) continue;
+    const holder = staff.find((member) => member.id === access.staff_id);
+    const name = holder?.display_name ?? "";
+    const own: string[] = [];
+    const ended = Boolean(holder?.ends_on && holder.ends_on < today());
+    if (!holder || !holder.is_active || ended) {
+      own.push("orphan");
+      findings.push({
+        kind: "orphan",
+        access_id: access.id,
+        staff_name: name,
+        system: access.system,
+        detail: holder ? "the holder is no longer active" : "the holder is not on the staff list",
+      });
+    }
+    if (`${access.system} ${access.level} ${access.notes}`.toLowerCase().includes("shared")) {
+      own.push("shared");
+      findings.push({
+        kind: "shared",
+        access_id: access.id,
+        staff_name: name,
+        system: access.system,
+        detail: "a shared account cannot be attributed to one person",
+      });
+    }
+    const out = sodSide(access.system, SOD_MONEY_OUT);
+    const recorded = sodSide(access.system, SOD_MONEY_RECORDED);
+    if (out || recorded) {
+      const otherSide = out ? SOD_MONEY_RECORDED : SOD_MONEY_OUT;
+      for (const other of liveByStaff.get(access.staff_id) ?? []) {
+        if (other.id === access.id || !sodSide(other.system, otherSide)) continue;
+        own.push(`conflict:${other.system}`);
+        findings.push({
+          kind: "conflict",
+          access_id: access.id,
+          staff_name: name,
+          system: access.system,
+          detail: `moves money and records it: also holds ${other.system}`,
+        });
+      }
+    }
+    if (own.length) flags.set(access.id, own);
+  }
+  findings.sort(
+    (a, b) =>
+      a.kind.localeCompare(b.kind) ||
+      a.staff_name.toLowerCase().localeCompare(b.staff_name.toLowerCase()) ||
+      a.system.toLowerCase().localeCompare(b.system.toLowerCase()),
+  );
+  return { flags, findings };
 }
 
 const hasCap = (headers: Record<string, string | string[] | undefined>, capability: string) =>
@@ -9278,6 +9511,7 @@ function resetWorld() {
   resetCalendar();
   seedRevenue();
   seedTeam();
+  seedOpenReview();
   seedSla();
   resetDeskRules();
   seedSources();

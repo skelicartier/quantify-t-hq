@@ -51,7 +51,7 @@ export default async function SecurityPage() {
       <PageHeader
         eyebrow="My account"
         title="My security"
-        description="Your sessions and your password. A session ends after 30 minutes without activity, and after 12 hours regardless."
+        description={`Your sessions and your password. A session ends after ${context.me.session_policy?.idle_minutes ?? 30} minutes without activity, and after ${context.me.session_policy?.absolute_hours ?? 12} hours regardless.`}
       />
       <Section id="sessions" title="Where you are signed in">
         {sessions === null ? (

@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input } from "@/components/ui/field";
+import { Field, Input, Select } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
@@ -37,6 +37,22 @@ export function MintKeyForm({ action, disabled }: { action: Action; disabled: bo
             required
             disabled={isPending || disabled}
           />
+        </Field>
+        <Field
+          id="key-lifetime"
+          label="Lives for"
+          hint="Every key expires. Rotate before the day; the old key keeps working until then."
+        >
+          <Select
+            id="key-lifetime"
+            name="expires_in_days"
+            defaultValue="180"
+            disabled={isPending || disabled}
+          >
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+            <option value="180">180 days</option>
+          </Select>
         </Field>
         <Button variant="primary" type="submit" disabled={isPending || disabled}>
           {isPending ? "Minting…" : "Mint key"}

@@ -27,7 +27,12 @@ function crumbsFor(pathname: string): Crumb[] {
       // The leaf is the first word after the part of the path the link owns — its
       // active prefix when that is what matched, never the link's own longer href
       // (slicing "/admin/settings" by the length of "/admin/staff" once read "ngs").
-      const owned = byPrefix && link.activePrefix ? link.activePrefix : link.href;
+      // Without the trailing slash: a prefix "/me/" owning "/me/security" must not repeat
+      // the link as a second crumb.
+      const owned = (byPrefix && link.activePrefix ? link.activePrefix : link.href).replace(
+        /\/$/,
+        "",
+      );
       const tail = pathname.slice(owned.length).split("/").filter(Boolean);
       const leaf = tail[0] ?? "";
       const isRecordId = /^[0-9a-f-]{20,}$/i.test(leaf) || /^sup_/.test(leaf) || /^QT-/.test(leaf);
