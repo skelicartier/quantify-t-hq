@@ -422,6 +422,29 @@ async function captureMailFlows(page: Page, folder: string) {
   await page.screenshot({ path: `${OUT}/${folder}/mail-segment-checked.png`, fullPage: true });
   console.log(`  ✓ ${folder}/mail-segment-checked`);
 
+  // A sender ticked by hand, checked with the provider; then paused and resumed.
+  await page.goto(`${BASE}/mail/settings`, { waitUntil: "networkidle" });
+  const salesRow = page.locator("tr", { hasText: "sales@quantifyterminal.com" });
+  if ((await salesRow.locator(".table-sub", { hasText: "Ticked by hand" }).count()) > 0) {
+    await page
+      .locator('button[aria-label="Check sales@quantifyterminal.com with the provider"]')
+      .click();
+    await salesRow
+      .locator(".table-sub", { hasText: "Checked with the provider" })
+      .waitFor({ timeout: 15_000 });
+  }
+  await page.locator('button[aria-label="Pause sales@quantifyterminal.com"]').click();
+  await page
+    .locator('button[aria-label="Resume sales@quantifyterminal.com"]')
+    .waitFor({ timeout: 15_000 });
+  await assertAccessible(page, `${folder}/mail-sender-paused`);
+  await page.screenshot({ path: `${OUT}/${folder}/mail-sender-paused.png`, fullPage: true });
+  await page.locator('button[aria-label="Resume sales@quantifyterminal.com"]').click();
+  await page
+    .locator('button[aria-label="Pause sales@quantifyterminal.com"]')
+    .waitFor({ timeout: 15_000 });
+  console.log(`  ✓ ${folder}/mail-sender-paused`);
+
   await page.goto(`${BASE}/mail/sequences/${MAIL.fundIntro}?tab=enrol`, {
     waitUntil: "networkidle",
   });

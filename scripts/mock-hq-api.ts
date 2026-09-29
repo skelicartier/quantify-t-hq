@@ -5754,6 +5754,8 @@ routes.push(
         if (kind === "email_in" && (lead.stage === "new" || lead.stage === "attempting"))
           lead.stage = "connected";
       }
+      if (kind === "email_in" && (links.person_id || links.lead_id))
+        mailCrmEvent("reply_logged", { person_id: links.person_id, lead_id: links.lead_id });
       audit("activity.logged", found?.member.id ?? null, "activity", kind, "", {
         ...(mentioned.length ? { mentioned } : {}),
       });
@@ -10838,7 +10840,12 @@ type MailSenderRow = {
   staff_id: string;
   daily_cap: number;
   verified: boolean;
+  verified_source: "manual" | "provider";
+  verified_checked_at: string | null;
+  verification_detail: string;
   active: boolean;
+  paused_at: string | null;
+  paused_reason: string;
   created_at: string;
 };
 type MailTemplateRow = {
@@ -11618,8 +11625,47 @@ function mailSenderView(row: MailSenderRow) {
     staff_name: mailStaffName(row.staff_id),
     daily_cap: row.daily_cap,
     verified: row.verified,
+    verified_source: row.verified_source,
+    verified_checked_at: row.verified_checked_at,
+    verification_detail: row.verification_detail,
     active: row.active,
+    paused_at: row.paused_at,
+    paused_reason: row.paused_reason,
     created_at: row.created_at,
+  };
+}
+/** What the mock's provider knows: the seeded addresses, and the company's two domains. */
+const MAIL_PROVIDER_SENDERS = new Set([
+  "news@mail.quantifyterminal.com",
+  "owner@quantifyterminal.com",
+  "sales@quantifyterminal.com",
+]);
+const MAIL_PROVIDER_DOMAINS: Record<string, boolean> = {
+  "mail.quantifyterminal.com": true,
+  "quantifyterminal.com": true,
+};
+/** mail_routes.sender_check_text, word for word. */
+function mailSenderCheck(email: string): { verified: boolean; detail: string } {
+  const address = email.trim().toLowerCase();
+  const domain = address.split("@")[1] ?? "";
+  if (!MAIL_PROVIDER_SENDERS.has(address))
+    return {
+      verified: false,
+      detail: `The provider does not list ${email} as a sender. Add it there, then check again.`,
+    };
+  if (!(domain in MAIL_PROVIDER_DOMAINS))
+    return {
+      verified: false,
+      detail: `${domain} is not set up with the provider, so mail from it would fail DMARC.`,
+    };
+  if (!MAIL_PROVIDER_DOMAINS[domain])
+    return {
+      verified: false,
+      detail: `${domain} is set up with the provider but not authenticated: its DNS records are missing or wrong.`,
+    };
+  return {
+    verified: true,
+    detail: `${email} is an active sender, and ${domain} is authenticated with the provider.`,
   };
 }
 function mailVersionOf(templateId: string, version?: number): MailVersionRow | undefined {
@@ -11915,6 +11961,26 @@ const MAIL_COUNTRY_ZONES: Record<string, string> = {
 };
 /** mail_worker.DOMAIN_DAILY_CAP: no more than this many to one domain in a day. */
 const MAIL_DOMAIN_DAILY_CAP = 3;
+/** crm_routes.FREE_MAIL_DOMAINS: addresses there name a person, not a firm. */
+const MAIL_FREE_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "yahoo.com",
+  "icloud.com",
+  "me.com",
+  "proton.me",
+  "protonmail.com",
+  "gmx.com",
+  "aol.com",
+  "mail.com",
+  "yandex.com",
+  "zoho.com",
+  "hey.com",
+  "pm.me",
+]);
 function mailIsoMs(ms: number): string {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
@@ -12192,7 +12258,7 @@ function mailPauseCompany(companyId: string, exceptId: string) {
   }
 }
 function mailCrmEvent(
-  kind: "meeting" | "deal" | "lead_stage" | "task_done" | "do_not_contact",
+  kind: "meeting" | "deal" | "lead_stage" | "task_done" | "do_not_contact" | "reply_logged",
   ids: {
     person_id?: string;
     lead_id?: string;
@@ -12233,6 +12299,9 @@ function mailCrmEvent(
       else if (ids.stage === "disqualified") mailExit(row, "STAGE_CLOSED", "", "");
     } else if (kind === "do_not_contact" && same) {
       mailExit(row, "DO_NOT_CONTACT", "", "");
+    } else if (kind === "reply_logged" && same) {
+      mailExit(row, "REPLIED", "", "", "a reply was logged on the record");
+      mailPauseCompany(row.company_id, row.id);
     }
   }
 }
@@ -12246,7 +12315,13 @@ function mailRunWorker(): Record<string, number | boolean> {
         (row.state === "pending" || row.state === "retry") &&
         Date.parse(row.scheduled_at) <= Date.now(),
     )
-    .sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at));
+    .sort(
+      (a, b) =>
+        Number(b.is_seed) - Number(a.is_seed) ||
+        Number(b.kind === "sequence" && (b.step_no ?? 0) > 1) -
+          Number(a.kind === "sequence" && (a.step_no ?? 0) > 1) ||
+        a.scheduled_at.localeCompare(b.scheduled_at),
+    );
   for (const row of due) {
     report.claimed += 1;
     const campaign = row.campaign_id
@@ -12304,7 +12379,13 @@ function mailRunWorker(): Record<string, number | boolean> {
         continue;
       }
     }
-    const domain = row.email_norm.split("@")[1] ?? "";
+    const pausedSender = mailSenders.find((candidate) => candidate.id === row.sender_id);
+    if (pausedSender?.paused_at && !row.is_seed) {
+      Object.assign(row, { state: "held", last_error: "SENDER_PAUSED" });
+      continue;
+    }
+    const rawDomain = row.email_norm.split("@")[1] ?? "";
+    const domain = MAIL_FREE_DOMAINS.has(rawDomain) ? "" : rawDomain;
     if (
       domain &&
       !row.is_seed &&
@@ -12312,6 +12393,26 @@ function mailRunWorker(): Record<string, number | boolean> {
     ) {
       defer(mailNextSlotMs(tomorrow, zone), `${MAIL_DOMAIN_DAILY_CAP} to ${domain} today already`);
       continue;
+    }
+    if (domain && !row.is_seed && row.kind === "sequence" && row.step_no === 1) {
+      const lastFirst = mailMessages
+        .filter(
+          (sent) =>
+            sent.kind === "sequence" &&
+            sent.step_no === 1 &&
+            sent.sent_at &&
+            sent.email_norm.endsWith(`@${domain}`) &&
+            Date.parse(sent.sent_at) >= Date.now() - 86_400_000,
+        )
+        .map((sent) => Date.parse(sent.sent_at!))
+        .sort((a, b) => b - a)[0];
+      if (lastFirst !== undefined) {
+        defer(
+          Math.max(mailNextSlotMs(lastFirst + 86_400_000, zone), Date.now() + 60_000),
+          `a first email went to ${domain} in the last day`,
+        );
+        continue;
+      }
     }
     if (!row.is_seed && !campaign?.dry_run) {
       const sender = mailSenders.find((candidate) => candidate.id === row.sender_id);
@@ -12918,6 +13019,12 @@ function seedMail() {
       staff_id: "",
       daily_cap: 100,
       verified: true,
+      verified_source: "provider",
+      verified_checked_at: mailHoursAgo(49),
+      verification_detail:
+        "news@mail.quantifyterminal.com is an active sender, and mail.quantifyterminal.com is authenticated with the provider.",
+      paused_at: null,
+      paused_reason: "",
       active: true,
       created_at: mailHoursAgo(24 * 40),
     },
@@ -12930,6 +13037,11 @@ function seedMail() {
       staff_id: OWNER_STAFF,
       daily_cap: 50,
       verified: true,
+      verified_source: "manual",
+      verified_checked_at: null,
+      verification_detail: "",
+      paused_at: null,
+      paused_reason: "",
       active: true,
       created_at: mailHoursAgo(24 * 38),
     },
@@ -12942,6 +13054,11 @@ function seedMail() {
       staff_id: SALES_STAFF,
       daily_cap: 50,
       verified: true,
+      verified_source: "manual",
+      verified_checked_at: null,
+      verification_detail: "",
+      paused_at: null,
+      paused_reason: "",
       active: true,
       created_at: mailHoursAgo(24 * 30),
     },
@@ -13912,13 +14029,83 @@ routes.push(
       let row = existing;
       if (row) Object.assign(row, fields);
       else {
-        row = { id: randomUUID(), created_at: now(), ...fields };
+        row = {
+          id: randomUUID(),
+          created_at: now(),
+          verified_source: "manual",
+          verified_checked_at: null,
+          verification_detail: "",
+          paused_at: null,
+          paused_reason: "",
+          ...fields,
+        };
         mailSenders.push(row);
       }
       audit("mail.sender_saved", found.member.id, "mail_sender", row.id, "", {
         from_email: fromEmail,
         verified: fields.verified,
       });
+      return ok({ sender: mailSenderView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/senders/{sender_id}/check",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers, params }) => {
+      const row = mailSenders.find((candidate) => candidate.id === params.sender_id);
+      if (!row) return refuse(404, "not_found");
+      const check = mailSenderCheck(row.from_email);
+      Object.assign(row, {
+        verified: check.verified,
+        verified_source: "provider",
+        verified_checked_at: now(),
+        verification_detail: check.detail,
+      });
+      audit("mail.sender_checked", caller(headers)!.member.id, "mail_sender", row.id, "", {
+        status: "ok",
+        verified: check.verified,
+      });
+      return ok({
+        sender: mailSenderView(row),
+        check: { status: "ok", verified: check.verified, detail: check.detail },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/senders/{sender_id}/pause",
+    auth: true,
+    capability: "mail:send",
+    handler: ({ headers, params, body }) => {
+      const row = mailSenders.find((candidate) => candidate.id === params.sender_id);
+      if (!row) return refuse(404, "not_found");
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 200);
+      if (body.resume) {
+        if (!row.paused_at)
+          return refuse(400, "malformed_request", { state: "this sender is not paused" });
+        Object.assign(row, { paused_at: null, paused_reason: "" });
+        let released = 0;
+        for (const message of mailMessages)
+          if (
+            message.sender_id === row.id &&
+            message.state === "held" &&
+            message.last_error === "SENDER_PAUSED"
+          ) {
+            Object.assign(message, { state: "pending", last_error: "" });
+            released += 1;
+          }
+        audit("mail.sender_resumed", caller(headers)!.member.id, "mail_sender", row.id, note, {
+          released,
+        });
+        return ok({ sender: mailSenderView(row), released });
+      }
+      if (row.paused_at) return refuse(400, "malformed_request", { state: "already paused" });
+      Object.assign(row, { paused_at: now(), paused_reason: note || "paused by hand" });
+      audit("mail.sender_paused", caller(headers)!.member.id, "mail_sender", row.id, note, {});
       return ok({ sender: mailSenderView(row) });
     },
   },

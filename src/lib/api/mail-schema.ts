@@ -18,7 +18,14 @@ export const senderSchema = z.object({
   staff_name: z.string(),
   daily_cap: z.number(),
   verified: z.boolean(),
+  /** How "verified" was decided: read from the provider's lists, or ticked by an admin. */
+  verified_source: z.enum(["manual", "provider"]),
+  verified_checked_at: z.string().nullable(),
+  verification_detail: z.string(),
   active: z.boolean(),
+  /** Set by the bounce breaker or by hand; its sequence mail is held until resumed. */
+  paused_at: z.string().nullable(),
+  paused_reason: z.string(),
   created_at: z.string().nullable(),
 });
 export type MailSender = z.infer<typeof senderSchema>;

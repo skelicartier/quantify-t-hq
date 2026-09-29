@@ -4778,6 +4778,14 @@
     margin: 0;
   }
 
+  .sender-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
   .form-feedback--error {
     color: var(--danger);
   }

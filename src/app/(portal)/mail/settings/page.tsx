@@ -1,5 +1,7 @@
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import {
+  checkSenderAction,
+  pauseSenderAction,
   rotateWebhookAction,
   runWorkerAction,
   saveMailSettingsAction,
@@ -17,6 +19,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/field";
 import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
 import { Popover } from "@/components/ui/popover";
+import { RowAction } from "@/components/ui/row-action";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
@@ -34,7 +37,7 @@ const SENDER_COLUMNS = [
   { key: "kind", label: "For" },
   { key: "cap", label: "A day", align: "end" as const },
   { key: "state", label: "State" },
-  { key: "edit", label: "" },
+  { key: "edit", label: "Actions" },
 ];
 
 function SenderFields({
@@ -113,8 +116,8 @@ function SenderFields({
       <Checkbox
         id={`sender-verified-${prefix}`}
         name="verified"
-        label="Verified with the provider"
-        description="Tick only once the provider shows the address or its domain as authenticated (SPF, DKIM)."
+        label="Verified (ticked by hand)"
+        description="Prefer “Check with the provider” on the sender's row, which reads the provider's own lists. Tick this only when the provider cannot be asked; the row then says so."
         defaultChecked={sender?.verified ?? false}
       />
       <Checkbox
@@ -409,19 +412,71 @@ export default async function MailSettingsPage() {
                         value={sender.verified ? "verified" : "unverified"}
                         label={sender.verified ? "Verified" : "Not verified"}
                       />
+                      <span className="table-sub">
+                        {sender.verified_source === "provider" ? (
+                          <>
+                            Checked with the provider{" "}
+                            <Timestamp
+                              value={sender.verified_checked_at}
+                              now={now}
+                              mode="relative"
+                            />
+                          </>
+                        ) : sender.verified ? (
+                          "Ticked by hand"
+                        ) : (
+                          "Not checked yet"
+                        )}
+                      </span>
+                      {!sender.verified && sender.verification_detail && (
+                        <span className="table-sub">{sender.verification_detail}</span>
+                      )}
+                      {sender.paused_at && (
+                        <>
+                          <StatusPill value="paused" label="Paused" tone="danger" />
+                          <span className="table-sub">{sender.paused_reason}</span>
+                        </>
+                      )}
                       {!sender.active && <span className="table-sub">Not in use</span>}
                     </td>
                     <td>
-                      <Popover label="Edit" align="end" width="wide">
-                        <MailForm
-                          action={saveSenderAction}
+                      <div className="sender-actions">
+                        <RowAction
+                          action={checkSenderAction}
                           fields={{ sender_id: sender.sender_id }}
-                          submitLabel="Save sender"
-                          disabled={locked}
-                        >
-                          <SenderFields sender={sender} staff={staff} />
-                        </MailForm>
-                      </Popover>
+                          buttons={[
+                            {
+                              label: "Check with the provider",
+                              className: "btn btn--small",
+                              ariaLabel: `Check ${sender.from_email} with the provider`,
+                            },
+                          ]}
+                        />
+                        <RowAction
+                          action={pauseSenderAction}
+                          fields={{
+                            sender_id: sender.sender_id,
+                            resume: sender.paused_at ? "1" : "0",
+                          }}
+                          buttons={[
+                            {
+                              label: sender.paused_at ? "Resume" : "Pause",
+                              className: "btn btn--small btn--ghost",
+                              ariaLabel: `${sender.paused_at ? "Resume" : "Pause"} ${sender.from_email}`,
+                            },
+                          ]}
+                        />
+                        <Popover label="Edit" align="end" width="wide">
+                          <MailForm
+                            action={saveSenderAction}
+                            fields={{ sender_id: sender.sender_id }}
+                            submitLabel="Save sender"
+                            disabled={locked}
+                          >
+                            <SenderFields sender={sender} staff={staff} />
+                          </MailForm>
+                        </Popover>
+                      </div>
                     </td>
                   </tr>
                 ))}

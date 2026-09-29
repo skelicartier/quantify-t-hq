@@ -185,24 +185,28 @@ that inbox and are recorded on the replies checklist.
   enrolment, and unsubscribes through both the stop page and the RFC 8058 POST, reading
   the result back from the service.
 
-## 7. Open
+## 7. Built in the second pass, and still open
 
-Rules from the sequence pass the engine does not yet enforce:
+Built after the first commit, from the lists above:
 
-- one first email per recipient firm domain per rolling day (rule 25);
-- a per-sender bounce breaker: three hard bounces in a day pauses that sender (rule 27);
-- follow-ups dispatched before first emails when a cap is contended (rule 28);
-- a reply logged on the CRM ends the enrolment (rule 22 in spirit);
+- one first email per recipient firm domain per rolling day, whoever sends it (rule 25);
+  free-mail domains are exempt from this and from the three-a-day limit;
+- follow-ups claimed before first emails, seeds still first (rule 28);
+- a per-sender bounce breaker: three hard bounces from one sender's sequences within a day
+  hold its mail and mail the owners; resuming releases exactly the held rows (rule 27);
+- a reply logged on the CRM ends the enrolment and pauses colleagues at the firm (rule 22
+  in spirit); it had been moving a lead to Connected while its sequence kept sending;
+- sender verification read from the provider's own sender and domain lists, exact domain
+  only; a hand tick is labelled as one;
+- a one-click stop that arrives while the database is asleep is parked in blob storage,
+  answered 200 and applied first on the next pass (invariant 28).
+
+Still open:
+
 - randomised spacing between one sender's sends (rule 26);
-- a separate first-touch budget per sender (rule 24).
-
-From the architecture pass:
-
-- a one-click unsubscribe that arrives while the database is asleep should be accepted
-  and applied on the next run, not answered 503 (invariant 28);
-- sender verification should be read from the provider's own domain-authentication status
-  rather than ticked by hand.
-
-The deliverability and provider-API passes that were interrupted would have covered:
-warm-up schedules for a new sending domain, reputation monitoring (Google Postmaster
-Tools, Microsoft SNDS), DMARC reporting, and the provider's sender and domain endpoints.
+- a separate first-touch budget per sender (rule 24);
+- sender consent to automated sending in their name (rule 14): today an admin creates the
+  identity;
+- the deliverability and provider-API passes that were interrupted would have covered
+  warm-up schedules for a new sending domain, reputation monitoring (Google Postmaster
+  Tools, Microsoft SNDS) and DMARC reporting.

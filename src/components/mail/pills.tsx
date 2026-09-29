@@ -102,7 +102,10 @@ export function deferralText(lastError: string): string {
   if (text === "cap reached: hour") return "Hourly limit reached";
   if (text === "outside the recipient's window") return "Outside their working hours";
   if (text === "SENDER_UNVERIFIED") return "The sender is not verified yet";
+  if (text === "SENDER_PAUSED") return "The sender is paused";
   if (text === "provider refused the key") return "The provider refused the key; sending is off";
+  const firstTouch = /^a first email went to (.+) in the last day$/.exec(text);
+  if (firstTouch) return `${firstTouch[1]} had a first email in the last day`;
   const domain = /^(\d+) to (.+) today already$/.exec(text);
   if (domain) return `${domain[1]} already sent to ${domain[2]} today`;
   return text;

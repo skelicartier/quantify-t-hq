@@ -84,6 +84,31 @@ export function saveSender(token: string, input: Record<string, unknown>) {
   });
 }
 
+/** Ask the provider about a sender; its answer, not a person, sets "verified". */
+export function checkSender(token: string, senderId: string) {
+  return postHqJson(
+    `hq/mail/senders/${senderId}/check`,
+    okEnvelope.extend({
+      sender: senderSchema,
+      check: z.object({ status: z.string(), verified: z.boolean(), detail: z.string() }),
+    }),
+    { token, body: {} },
+  );
+}
+
+/** Hold a sender's mail (`resume: false`) or release it again. */
+export function pauseSender(
+  token: string,
+  senderId: string,
+  input: { resume: boolean; note?: string },
+) {
+  return postHqJson(
+    `hq/mail/senders/${senderId}/pause`,
+    okEnvelope.extend({ sender: senderSchema, released: z.number().optional() }),
+    { token, body: input },
+  );
+}
+
 // --- templates ----------------------------------------------------------------------------
 
 export function readTemplates(token: string) {
@@ -606,7 +631,12 @@ export function unsubscribe(
 ) {
   return postHqJson(
     "public/mail/unsubscribe",
-    okEnvelope.merge(unsubscribeViewSchema).extend({ done: z.boolean(), cancelled: z.number() }),
+    okEnvelope.merge(unsubscribeViewSchema).extend({
+      done: z.boolean(),
+      cancelled: z.number(),
+      /** The service's database was asleep: the stop is kept and applied within minutes. */
+      spooled: z.boolean().optional(),
+    }),
     { body: { token, mode, topics_off: topicsOff } },
   );
 }

@@ -22,8 +22,11 @@ export async function stopMailAction(
   const topicsOff = formData.getAll("topics_off").map(String).slice(0, 5);
   if (!["all", "topics", "sales"].includes(mode))
     return { status: "error", message: "Choose what to stop." };
+  let spooled = false;
   try {
-    await unsubscribe(token, mode as "all" | "topics" | "sales", topicsOff);
+    spooled = Boolean(
+      (await unsubscribe(token, mode as "all" | "topics" | "sales", topicsOff)).spooled,
+    );
   } catch (error) {
     if (error instanceof HqApiRequestError && error.status === 404) {
       return {
@@ -38,6 +41,16 @@ export async function stopMailAction(
       };
     }
     return { status: "error", message: "It could not be saved just now. Try again shortly." };
+  }
+  if (spooled) {
+    // Kept by the service while its database woke: the page cannot re-read the choice yet,
+    // so it is not refreshed; the answer says when it takes effect.
+    return {
+      status: "sent",
+      message:
+        "Received. It takes effect within a few minutes; nothing more will be sent after that.",
+      sentAt: Date.now(),
+    };
   }
   revalidatePath(`/u/${token}`);
   return {

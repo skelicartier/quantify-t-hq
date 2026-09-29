@@ -126,6 +126,48 @@ export async function saveSenderAction(
   return sent(senderId ? "Sender updated." : "Sender added.");
 }
 
+export async function checkSenderAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/settings");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  try {
+    const answer = await mailApi.checkSender(context.token, fieldValue(formData, "sender_id", 64));
+    refresh("/mail/settings", "/mail");
+    return answer.check.status === "ok"
+      ? sent(answer.check.detail)
+      : { status: "error", message: answer.check.detail };
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+export async function pauseSenderAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/settings");
+  if (!hasCapability(context, "mail:send")) return NOT_SENDER;
+  const resume = fieldValue(formData, "resume", 4) === "1";
+  try {
+    const answer = await mailApi.pauseSender(context.token, fieldValue(formData, "sender_id", 64), {
+      resume,
+      note: fieldValue(formData, "note", 200),
+    });
+    refresh("/mail/settings", "/mail");
+    return sent(
+      resume
+        ? `Resumed; ${answer.released ?? 0} held ${answer.released === 1 ? "email goes" : "emails go"} back in the queue.`
+        : "Paused; its sequence mail waits until it is resumed.",
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
 export async function rotateWebhookAction(
   _previous: ActionState,
   formData: FormData,

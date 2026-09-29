@@ -270,6 +270,13 @@ export default async function MailOverviewPage() {
                       value={sender.verified ? "verified" : "unverified"}
                       label={sender.verified ? "Verified" : "Not verified"}
                     />
+                    {sender.paused_at && (
+                      <StatusPill
+                        value="paused"
+                        label={`Paused: ${sender.paused_reason}`}
+                        tone="danger"
+                      />
+                    )}
                   </li>
                 ))}
               </ul>
