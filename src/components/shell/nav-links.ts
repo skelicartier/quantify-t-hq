@@ -13,6 +13,7 @@ import {
   Inbox,
   LayoutDashboard,
   LifeBuoy,
+  Mail,
   ScrollText,
   ShieldCheck,
   UserCog,
@@ -81,6 +82,19 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         activePrefix: "/deals/",
         capability: "deals:read",
         key: "d",
+      },
+    ],
+  },
+  {
+    label: "Outreach",
+    links: [
+      {
+        href: "/mail",
+        label: "Mail",
+        icon: Mail,
+        activePrefix: "/mail/",
+        capability: "crm:read",
+        key: "o",
       },
     ],
   },

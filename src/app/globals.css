@@ -1113,6 +1113,11 @@
     margin-top: 16px;
   }
 
+  /* A wide table scrolls inside its own wrapper instead of widening the page. */
+  .page-content > * {
+    min-width: 0;
+  }
+
   .page-state {
     max-width: 640px;
   }
@@ -4234,6 +4239,558 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--muted);
+  }
+
+  /* --- Mail -------------------------------------------------------------------------- */
+  .inline-form {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .inline-form .form-actions {
+    display: contents;
+  }
+
+  .form-grid > .form-actions,
+  .form-grid > .form-feedback,
+  .form-grid > p {
+    grid-column: 1 / -1;
+  }
+
+  .inline-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .campaign-form,
+  .template-form,
+  .sequence-editor,
+  .segment-builder {
+    display: grid;
+    gap: 20px;
+    max-width: 880px;
+  }
+
+  .campaign-form__step {
+    display: grid;
+    gap: 12px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .audience-kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .audience-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .audience-kind input {
+    accent-color: var(--accent);
+  }
+
+  .audience-kind--on {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .audience-pick {
+    display: grid;
+    gap: 8px;
+  }
+
+  .audience-pick__bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .audience-pick__count {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .audience-pick__list {
+    max-height: 320px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line);
+  }
+
+  .audience-pick__list li label {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 10px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+  }
+
+  .audience-pick__list li:last-child label {
+    border-bottom: 0;
+  }
+
+  .audience-pick__list input {
+    grid-row: span 2;
+    align-self: center;
+    accent-color: var(--accent);
+  }
+
+  .audience-pick__name {
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .audience-pick__sub {
+    font-size: 12px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .audience-pick__none {
+    padding: 10px;
+    color: var(--muted);
+  }
+
+  .audience-summary {
+    margin: 0 0 10px;
+  }
+
+  .reason-list {
+    display: grid;
+    gap: 2px;
+    max-width: 480px;
+    margin: 8px 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .reason-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+
+  .reason-list__count {
+    font-family: var(--font-mono);
+  }
+
+  .checklist {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .check {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .check__mark {
+    width: 16px;
+    font-family: var(--font-mono);
+    text-align: center;
+  }
+
+  .check--ok .check__mark {
+    color: var(--success, #3fb950);
+  }
+
+  .check--block .check__mark {
+    color: var(--danger);
+  }
+
+  .check--warn .check__mark {
+    color: var(--accent);
+  }
+
+  .side-panel {
+    display: grid;
+    gap: 12px;
+    margin-top: 18px;
+  }
+
+  .mail-preview {
+    display: grid;
+    gap: 10px;
+  }
+
+  .mail-preview__subject {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  .mail-preview__label {
+    margin-right: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .mail-preview__frame {
+    width: 100%;
+    min-height: 460px;
+    border: 1px solid var(--line);
+    background: #ffffff;
+  }
+
+  .mail-preview__text pre {
+    margin: 8px 0 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+  }
+
+  .token-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .token-bar__label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .token {
+    padding: 3px 8px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .token:hover {
+    border-color: var(--accent);
+  }
+
+  .textarea--code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .conditions,
+  .steps,
+  .verdicts,
+  .mail-history,
+  .ended-list,
+  .sender-list {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .condition {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .condition__join {
+    width: 44px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .segment-result {
+    padding: 12px;
+    border: 1px solid var(--line);
+  }
+
+  .segment-result p {
+    margin: 0 0 8px;
+  }
+
+  .sequence-summary {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .step {
+    display: grid;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .step__head,
+  .step__body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .step__no {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+  }
+
+  .step__delay {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .step__delay input {
+    width: 64px;
+  }
+
+  .step__tools {
+    margin-left: auto;
+    display: inline-flex;
+    gap: 4px;
+  }
+
+  .step-lines {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding-left: 18px;
+    list-style: decimal;
+  }
+
+  .step-lines li::marker {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .enrol-panel {
+    display: grid;
+    gap: 12px;
+  }
+
+  .enrol-panel .form-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .verdict {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 12px;
+    padding: 6px 10px;
+    border-left: 2px solid var(--line);
+  }
+
+  .verdict--ok {
+    border-left-color: var(--success, #3fb950);
+  }
+
+  .verdict--no {
+    border-left-color: var(--danger);
+  }
+
+  .verdict__name {
+    font-size: 13px;
+  }
+
+  .verdict__sub {
+    grid-column: 1;
+    font-size: 12px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .verdict__reason {
+    grid-row: 1 / span 2;
+    grid-column: 2;
+    align-self: center;
+    font-size: 12px;
+  }
+
+  .ended-list li,
+  .sender {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+
+  .sender__name {
+    display: grid;
+    min-width: 220px;
+  }
+
+  .sender__kind,
+  .sender__cap {
+    color: var(--muted);
+  }
+
+  .outcome-row {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .record-mail {
+    display: grid;
+    gap: 12px;
+  }
+
+  .record-mail__facts {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+  }
+
+  .record-mail__facts div {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr);
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .record-mail__facts dt {
+    color: var(--muted);
+  }
+
+  .record-mail__facts dd {
+    margin: 0;
+  }
+
+  .record-mail__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mail-history__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .mail-history__subject {
+    flex: 1 1 180px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .record-mail__consent summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .unsub {
+    display: grid;
+    gap: 16px;
+  }
+
+  .unsub__choices summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .unsub__topics {
+    display: grid;
+    gap: 8px;
+    margin: 10px 0 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .unsub__topic {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+  }
+
+  .unsub__topic input {
+    accent-color: var(--accent);
+  }
+
+  /* Banners between a record's head and its tabs: spaced from both. */
+  .record-banners {
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  /* A URL pattern shown for copying into another system: it wraps, never scrolls the page. */
+  .url-shape {
+    margin: 0;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .setting-state {
+    margin: 0;
+  }
+
+  .form-feedback--error {
+    color: var(--danger);
+  }
+
+  .audience-csv,
+  .unsub__stop {
+    display: grid;
+    gap: 10px;
+    justify-items: start;
+  }
+
+  .unsub__stop {
+    justify-items: stretch;
   }
 
   .policy.approval {

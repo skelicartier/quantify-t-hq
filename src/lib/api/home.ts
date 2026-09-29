@@ -86,6 +86,18 @@ const homeSchema = z.object({
       approvals: z.array(approvalSchema),
     })
     .optional(),
+  /** Outbound mail for anyone who drafts: what is sending, what waits, the replies owed. */
+  mail: z
+    .object({
+      running: z.number(),
+      awaiting_approval: z.number(),
+      paused: z.number(),
+      awaiting_reply: z.number(),
+      sending_enabled: z.boolean(),
+      sent_today: z.number(),
+      daily_cap: z.number(),
+    })
+    .optional(),
   /** What the sign-in rules and the new-device mail found lately; owners and admins only. */
   security: z
     .object({

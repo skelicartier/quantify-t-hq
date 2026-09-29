@@ -1,3 +1,4 @@
+import { RecordMail } from "@/components/mail/record-mail";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -159,6 +160,18 @@ export default async function LeadPage({ params }: LeadPageProps) {
       <RecordGrid
         side={
           <>
+            <RecordSection id="lead-mail" title="Outreach">
+              <RecordMail
+                token={context.token}
+                kind="lead"
+                contactId={lead.lead_id}
+                email={anonymised ? "" : lead.email}
+                returnPath={`/leads/${lead.lead_id}`}
+                canWrite={canWrite}
+                now={now}
+                full={false}
+              />
+            </RecordSection>
             <Properties title="Details">
               <InlineField
                 action={updateLeadAction}

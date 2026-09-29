@@ -43,6 +43,7 @@ const CAPABILITIES: Record<string, string[]> = {
     "hq:admin",
     "hr:read",
     "hr:write",
+    "mail:send",
     "revenue:read",
     "revenue:write",
     "tickets:manage",
@@ -60,6 +61,7 @@ const CAPABILITIES: Record<string, string[]> = {
     "hq:admin",
     "hr:read",
     "hr:write",
+    "mail:send",
     "revenue:read",
     "revenue:write",
     "tickets:manage",
@@ -95,6 +97,8 @@ type Staff = {
 const STAFF_KINDS = ["founder", "employee", "intern", "contractor"];
 
 const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+/** Where the portal under test runs: links the mock hands back (invites, calendar, stop links) point here. */
+const PORTAL_ORIGIN = process.env.HQ_UI_BASE ?? "http://127.0.0.1:3000";
 
 const staff: Staff[] = [
   {
@@ -1425,7 +1429,7 @@ const routes: Array<{
       audit("staff.invited", found.member.id, "staff", member.id);
       return ok({
         staff_id: member.id,
-        invite_url: `http://127.0.0.1:3000/reset-password?invite=${token}`,
+        invite_url: `${PORTAL_ORIGIN}/reset-password?invite=${token}`,
         emailed: false,
       });
     },
@@ -1600,7 +1604,7 @@ const routes: Array<{
       audit("staff.reinvited", found.member.id, "staff", member.id);
       return ok({
         staff_id: member.id,
-        invite_url: `http://127.0.0.1:3000/reset-password?invite=${token}`,
+        invite_url: `${PORTAL_ORIGIN}/reset-password?invite=${token}`,
         emailed: false,
       });
     },
@@ -4170,6 +4174,25 @@ routes.push(
           }),
         };
       }
+      if (capabilities.includes("crm:write")) {
+        const maySend = capabilities.includes("mail:send");
+        const byState = (state: string) =>
+          mailCampaigns.filter((row) => row.state === state).length;
+        payload.mail = {
+          running: byState("running") + byState("scheduled"),
+          awaiting_approval: maySend ? byState("review") : 0,
+          paused: byState("paused") + byState("auto_paused"),
+          awaiting_reply: mailEnrolments.filter(
+            (row) =>
+              row.state === "active" &&
+              (maySend || row.owner_staff_id === found.member.id) &&
+              mailEnrolmentView(row).awaiting_reply,
+          ).length,
+          sending_enabled: mailSettings.sending_enabled,
+          sent_today: mailSentToday(),
+          daily_cap: mailSettings.global_daily_cap,
+        };
+      }
       return ok(payload);
     },
   },
@@ -5055,6 +5078,7 @@ routes.push(
       }
       if ("company_id" in body) row.company_id = String(body.company_id ?? "");
       if ("do_not_contact" in body) row.do_not_contact = Boolean(body.do_not_contact);
+      if (body.do_not_contact === true) mailCrmEvent("do_not_contact", { person_id: row.id });
       audit("person.updated", caller(headers)?.member.id ?? null, "person", row.id, "", {
         fields: Object.keys(changesBetween(before, row)).sort(),
         changes: changesBetween(before, row),
@@ -5197,6 +5221,7 @@ routes.push(
       }
       if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
       row.updated_at = now();
+      if (stage) mailCrmEvent("lead_stage", { lead_id: row.id, stage });
       audit("lead.updated", caller(headers)?.member.id ?? null, "lead", row.id, "", {
         fields: Object.keys(changesBetween(before, row)).sort(),
         changes: changesBetween(before, row),
@@ -5469,6 +5494,7 @@ routes.push(
         staff_id: found?.member.id ?? "",
       });
       audit("deal.created", found?.member.id ?? null, "deal", row.id);
+      mailCrmEvent("deal", { company_id: row.company_id });
       return ok({ deal: withoutMoney(dealSummary(row), seesMoney(headers)) });
     },
   },
@@ -5810,6 +5836,8 @@ routes.push(
       if (status) {
         if (!["open", "done", "canceled"].includes(status))
           return refuse(400, "malformed_request", { status: "open, done or canceled" });
+        if (status === "done" && row.status !== "done")
+          mailCrmEvent("task_done", { task_id: row.id });
         row.status = status;
         row.completed_at = status === "done" ? now() : null;
         if (status === "done" && row.deal_id) {
@@ -6937,6 +6965,9 @@ routes.push(
       meetings.push(row);
       meetingAttendees.push(...matched);
       audit("meeting.created", caller(headers)?.member.id ?? null, "meeting", id);
+      for (const attendee of matched)
+        if (attendee.person_id)
+          mailCrmEvent("meeting", { person_id: attendee.person_id, company_id: row.company_id });
       return ok({ meeting: meetingView(row) });
     },
   },
@@ -10674,6 +10705,4727 @@ function seedTeam() {
     revoke_reason: "",
   });
 }
+// =====================================================================================
+// Outbound mail — mirrors account_api/hq/mail_*.py
+// =====================================================================================
+
+// --- outbound mail --------------------------------------------------------------------------
+// Mirrors account_api/hq/mail_*.py: the same eligibility rules and reason codes, the same
+// campaign states and approval rule, the same sequence refusals and exits. What the mock
+// does NOT model: recipients' working-hour windows (it sends at once, so screens do not
+// depend on the hour the harness runs), the per-domain cap, and provider retries.
+
+const ADMIN_STAFF_ID = "aa000000-0000-4000-8000-00000000000b";
+const MAIL_TOPICS: Record<string, string> = {
+  updates: "Product updates",
+  news: "Announcements",
+  events: "Events",
+  sales: "Sales",
+};
+const MAIL_MARKETING_TOPICS = ["updates", "news", "events"];
+const MAIL_KNOWN_VARS = [
+  "first_name",
+  "last_name",
+  "full_name",
+  "email",
+  "company",
+  "title",
+  "country",
+  "sender_name",
+  "sender_email",
+  "owner_name",
+  "unsubscribe_url",
+  "preferences_url",
+];
+const MAIL_ROLE_LOCALS = new Set([
+  "info",
+  "sales",
+  "admin",
+  "administrator",
+  "support",
+  "help",
+  "noreply",
+  "no-reply",
+  "postmaster",
+  "abuse",
+  "webmaster",
+  "contact",
+  "office",
+  "hello",
+  "team",
+  "billing",
+  "accounts",
+  "hr",
+  "jobs",
+  "careers",
+  "press",
+  "marketing",
+  "security",
+  "privacy",
+]);
+const MAIL_EXPLICIT_CONSENT = new Set([
+  "de",
+  "germany",
+  "deutschland",
+  "at",
+  "austria",
+  "österreich",
+]);
+const MAIL_SENT_LIKE = [
+  "sent",
+  "delivered",
+  "soft_bounced",
+  "hard_bounced",
+  "complained",
+  "unsubscribed",
+  "unknown",
+];
+const MAIL_CUSTOMER_LIFECYCLES = ["customer", "early_access"];
+const MAIL_OUTCOMES: Record<string, string> = {
+  replied_positive: "Replied, interested",
+  not_now: "Not now",
+  not_interested: "Not interested",
+  wrong_person: "Wrong person",
+  unsubscribe: "Asked us to stop",
+  bounced: "Address bounced",
+  meeting_booked: "Meeting booked",
+  stop: "Stopped by hand",
+  out_of_office: "Out of office until a date",
+};
+const MAIL_OUTCOME_REASONS: Record<string, string> = {
+  replied_positive: "REPLIED",
+  not_now: "NOT_NOW",
+  not_interested: "NOT_INTERESTED",
+  wrong_person: "WRONG_PERSON",
+  unsubscribe: "UNSUBSCRIBED",
+  bounced: "HARD_BOUNCE",
+  meeting_booked: "MEETING_BOOKED",
+  stop: "MANUAL",
+};
+const MAIL_PEOPLE_FIELDS: Record<string, string> = {
+  lifecycle: "Lifecycle",
+  firm_type: "Firm type",
+  country: "Country",
+  role_category: "Role",
+  title: "Title",
+  source: "Source",
+  owner: "Owner",
+  company: "Company",
+  domain: "Web domain",
+  do_not_contact: "Do not contact",
+  marketing: "Marketing consent",
+  last_emailed_days: "Days since last email",
+  customer_days: "Days as a customer",
+};
+const MAIL_LEAD_FIELDS: Record<string, string> = {
+  stage: "Stage",
+  source: "Source",
+  owner: "Owner",
+  company: "Company",
+  email: "Email",
+  created_days: "Days since received",
+  last_emailed_days: "Days since last email",
+};
+const MAIL_OPS = ["is", "not", "has", "gt", "lt", "empty", "set"];
+const MAIL_TOKEN = /\{\{\s*([a-z][a-z0-9_]*)\s*(?:\|\s*([^}]*?)\s*)?\}\}/g;
+
+type MailSenderRow = {
+  id: string;
+  from_email: string;
+  from_name: string;
+  reply_to: string;
+  kind: "marketing" | "sales";
+  staff_id: string;
+  daily_cap: number;
+  verified: boolean;
+  active: boolean;
+  created_at: string;
+};
+type MailTemplateRow = {
+  id: string;
+  name: string;
+  kind: "campaign" | "sequence";
+  current_version: number;
+  created_by: string;
+  created_at: string;
+  archived_at: string | null;
+};
+type MailVersionRow = {
+  template_id: string;
+  version: number;
+  subject: string;
+  body_html: string;
+  body_text: string;
+  required_vars: string[];
+  content_hash: string;
+  created_by: string;
+  created_at: string;
+};
+type MailSegmentRow = {
+  id: string;
+  name: string;
+  kind: "people" | "leads";
+  conditions: string[];
+  last_count: number | null;
+  last_evaluated_at: string | null;
+  created_by: string;
+  created_at: string;
+  archived_at: string | null;
+};
+type MailConsentRow = {
+  email_norm: string;
+  marketing_state: "unknown" | "subscribed" | "unsubscribed";
+  topics_off: string[];
+  sales_stop: boolean;
+  lawful_basis: string;
+  source: string;
+  timezone: string;
+  updated_at: string;
+};
+type MailSuppressionRow = {
+  id: string;
+  email_norm: string;
+  scope: string;
+  scope_key: string;
+  reason: string;
+  source: string;
+  detail: string;
+  created_at: string;
+  created_by: string;
+  released_at: string | null;
+  released_by: string;
+  release_note: string;
+};
+type MailCounts = {
+  recipients: number;
+  skipped: number;
+  sent: number;
+  delivered: number;
+  hard_bounced: number;
+  soft_bounced: number;
+  complained: number;
+  unsubscribed: number;
+  clicked: number;
+  failed: number;
+};
+type MailCampaignRow = {
+  id: string;
+  name: string;
+  sender_id: string;
+  template_id: string;
+  template_version: number;
+  topic: string;
+  audience: Record<string, unknown>;
+  state: string;
+  scheduled_at: string | null;
+  send_anytime: boolean;
+  dry_run: boolean;
+  requires_approval: boolean;
+  approved_by: string;
+  approved_at: string | null;
+  pause_reason: string;
+  paused_at: string | null;
+  counts: MailCounts;
+  started_at: string | null;
+  completed_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+type MailMessageRow = {
+  id: string;
+  kind: "campaign" | "sequence" | "test";
+  campaign_id: string;
+  enrolment_id: string;
+  step_no: number | null;
+  sender_id: string;
+  topic: string;
+  contact_kind: string;
+  contact_id: string;
+  company_id: string;
+  email: string;
+  email_norm: string;
+  variables: Record<string, string>;
+  template_id: string;
+  template_version: number;
+  state: string;
+  scheduled_at: string;
+  sent_at: string | null;
+  delivered_at: string | null;
+  first_clicked_at: string | null;
+  first_opened_at: string | null;
+  bounced_at: string | null;
+  complained_at: string | null;
+  unsubscribed_at: string | null;
+  provider_message_id: string;
+  provider_status: string;
+  subject: string;
+  in_reply_to: string;
+  skip_reason: string;
+  last_error: string;
+  attempts: number;
+  is_seed: boolean;
+};
+type MailSequenceRow = {
+  id: string;
+  name: string;
+  kind: "prospect" | "customer";
+  sender_id: string;
+  state: "draft" | "active" | "paused" | "archived";
+  cooling_days: number;
+  recent_contact_days: number;
+  company_limit: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+type MailStepRow = {
+  step_no: number;
+  kind: "email" | "task";
+  delay_days: number;
+  template_id: string;
+  template_version: number | null;
+  thread: "new" | "reply";
+  task_title: string;
+};
+type MailEnrolmentRow = {
+  id: string;
+  sequence_id: string;
+  contact_kind: "person" | "lead";
+  contact_id: string;
+  company_id: string;
+  email_norm: string;
+  owner_staff_id: string;
+  sender_id: string;
+  state: "active" | "paused" | "completed" | "exited";
+  current_step: number;
+  waiting_task_id: string;
+  exit_reason: string;
+  outcome: string;
+  paused_until: string | null;
+  pause_reason: string;
+  thread_subject: string;
+  thread_message_id: string;
+  enrolled_at: string;
+  enrolled_by: string;
+  last_sent_at: string | null;
+  exited_at: string | null;
+};
+type MailEventRow = {
+  message_id: string;
+  event_type: string;
+  occurred_at: string;
+  reason: string;
+  link: string;
+};
+type MailRecipient = {
+  contact_kind: string;
+  contact_id: string;
+  company_id: string;
+  email: string;
+  full_name: string;
+  title: string;
+  company_name: string;
+  country: string;
+  lifecycle: string;
+  do_not_contact: boolean;
+  owner_staff_id: string;
+  source: string;
+  stage: string;
+  created_at: string | null;
+  domain: string;
+  role_category: string;
+  firm_type: string;
+  customer_since: string | null;
+};
+type MailVerdict = { allowed: boolean; reason: string; detail: string };
+
+const mailSenders: MailSenderRow[] = [];
+const mailTemplates: MailTemplateRow[] = [];
+const mailVersions: MailVersionRow[] = [];
+const mailSegments: MailSegmentRow[] = [];
+const mailConsent = new Map<string, MailConsentRow>();
+const mailSuppressions: MailSuppressionRow[] = [];
+const mailCampaigns: MailCampaignRow[] = [];
+const mailMessages: MailMessageRow[] = [];
+const mailSequences: MailSequenceRow[] = [];
+const mailSteps = new Map<string, MailStepRow[]>();
+const mailEnrolments: MailEnrolmentRow[] = [];
+const mailEvents: MailEventRow[] = [];
+const MAIL_SETTINGS_SEED = {
+  sending_enabled: true,
+  global_daily_cap: 100,
+  hourly_cap: 30,
+  frequency_cap_per_week: 2,
+  approval_threshold: 50,
+  bounce_pause_pct: 2.0,
+  complaint_pause_pct: 0.1,
+  window_start: "09:00",
+  window_end: "17:30",
+  fallback_timezone: "UTC",
+  postal_address: "Quantify Terminal · London, United Kingdom",
+  seed_addresses: ["seed@quantifyterminal.com"],
+  webhook_configured: true,
+  paused_reason: "",
+  last_worker_at: "" as string,
+};
+const mailSettings = {
+  ...MAIL_SETTINGS_SEED,
+  seed_addresses: [...MAIL_SETTINGS_SEED.seed_addresses],
+};
+let mailProviderCounter = 1000;
+
+function mailNorm(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+function mailValidEmail(email: string): boolean {
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) && email.length <= 254;
+}
+function mailMask(email: string): string {
+  const [local = "", domain = ""] = mailNorm(email).split("@");
+  if (!domain) return "";
+  return `${local.length > 1 ? `${local[0]}…` : "…"}@${domain}`;
+}
+function mailFirstName(full: string): string {
+  return full.trim().split(/\s+/)[0] ?? "";
+}
+function mailLastName(full: string): string {
+  const parts = full.trim().split(/\s+/);
+  return parts.length > 1 ? parts.slice(1).join(" ") : "";
+}
+function mailHoursAgo(hours: number): string {
+  return new Date(Date.now() - hours * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function mailStaffName(staffId: string): string {
+  const member = staff.find((row) => row.id === staffId);
+  return member ? member.display_name || member.email : "";
+}
+function mailPerson(staffId: string) {
+  return staffId ? { staff_id: staffId, name: mailStaffName(staffId) } : null;
+}
+function mailEmptyCounts(): MailCounts {
+  return {
+    recipients: 0,
+    skipped: 0,
+    sent: 0,
+    delivered: 0,
+    hard_bounced: 0,
+    soft_bounced: 0,
+    complained: 0,
+    unsubscribed: 0,
+    clicked: 0,
+    failed: 0,
+  };
+}
+
+// -- rendering ----------------------------------------------------------------------------
+function mailAnalyse(...parts: string[]): { required: string[]; unknown: string[] } {
+  const required: string[] = [];
+  const unknown: string[] = [];
+  for (const part of parts) {
+    for (const match of (part ?? "").matchAll(MAIL_TOKEN)) {
+      const name = match[1]!;
+      if (!MAIL_KNOWN_VARS.includes(name)) {
+        if (!unknown.includes(name)) unknown.push(name);
+        continue;
+      }
+      if (
+        match[2] === undefined &&
+        !required.includes(name) &&
+        name !== "unsubscribe_url" &&
+        name !== "preferences_url"
+      )
+        required.push(name);
+    }
+  }
+  return { required, unknown };
+}
+function mailEscape(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+function mailRender(
+  template: string,
+  vars: Record<string, string>,
+  asHtml: boolean,
+): { text: string } | { missing: string } {
+  let missing = "";
+  const text = (template ?? "").replace(
+    MAIL_TOKEN,
+    (_whole, name: string, fallback: string | undefined) => {
+      let value = String(vars[name] ?? "").trim();
+      if (!value) {
+        if (fallback === undefined) {
+          missing = missing || name;
+          return "";
+        }
+        value = fallback.trim().replace(/^["']|["']$/g, "");
+      }
+      return asHtml && name !== "unsubscribe_url" && name !== "preferences_url"
+        ? mailEscape(value)
+        : value;
+    },
+  );
+  return missing ? { missing } : { text };
+}
+function mailHtmlToText(html: string): string {
+  return html
+    .replace(/<a\b[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, "$2 ($1)")
+    .replace(/<\/(p|div|h[1-6]|li)>|<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line, index, all) => line || (index > 0 && all[index - 1]))
+    .join("\n")
+    .trim();
+}
+function mailTextToHtml(text: string): string {
+  return text
+    .split(/\n\s*\n/)
+    .filter((part) => part.trim())
+    .map(
+      (part) =>
+        `<p style="margin:0 0 14px 0;">${mailEscape(part.trim()).replace(/\n/g, "<br>")}</p>`,
+    )
+    .join("");
+}
+function mailRenderMessage(
+  version: MailVersionRow,
+  vars: Record<string, string>,
+  topic: string,
+  messageId: string,
+  threadSubject = "",
+): { subject: string; html: string; text: string } | { missing: string } {
+  const sales = topic === "sales";
+  const unsubscribe = `${PORTAL_ORIGIN}/u/mock-${messageId}`;
+  const full = {
+    ...vars,
+    unsubscribe_url: unsubscribe,
+    preferences_url: `${unsubscribe}?choose=1`,
+  };
+  const subject = mailRender(version.subject, full, false);
+  if ("missing" in subject) return subject;
+  let bodyHtml: string;
+  let bodyText: string;
+  if (version.body_html) {
+    const html = mailRender(version.body_html, full, true);
+    if ("missing" in html) return html;
+    bodyHtml = html.text;
+    const text = version.body_text
+      ? mailRender(version.body_text, full, false)
+      : { text: mailHtmlToText(html.text) };
+    if ("missing" in text) return text;
+    bodyText = text.text;
+  } else {
+    const text = mailRender(version.body_text, full, false);
+    if ("missing" in text) return text;
+    bodyText = text.text;
+    bodyHtml = mailTextToHtml(text.text);
+  }
+  const address = mailEscape(mailSettings.postal_address);
+  const footerHtml = sales
+    ? `<p style="margin:24px 0 0 0;font-size:12px;color:#6b6b6b;">${address}<br>Not the right person, or not interested? <a href="${unsubscribe}">Tell us once</a> and we will not write again.</p>`
+    : `<p style="margin:24px 0 0 0;font-size:12px;color:#6b6b6b;">${address}<br><a href="${unsubscribe}">Unsubscribe</a> · <a href="${unsubscribe}?choose=1">Choose what you receive</a></p>`;
+  const footerText = sales
+    ? `\n--\n${mailSettings.postal_address}\nNot the right person, or not interested? Tell us once: ${unsubscribe}`
+    : `\n--\n${mailSettings.postal_address}\nUnsubscribe: ${unsubscribe}\nChoose what you receive: ${unsubscribe}?choose=1`;
+  const shownSubject = threadSubject
+    ? threadSubject.toLowerCase().startsWith("re:")
+      ? threadSubject
+      : `Re: ${threadSubject}`
+    : subject.text.replace(/[\r\n\t]+/g, " ").trim();
+  const html = sales
+    ? `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#111;padding:24px;">${bodyHtml}${footerHtml}</div>`
+    : `<div style="background:#f4f4f4;padding:28px 0;"><div style="max-width:560px;margin:0 auto;background:#ffffff;padding:32px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#111;"><p style="margin:0 0 20px 0;font-weight:600;letter-spacing:0.02em;">Quantify Terminal</p>${bodyHtml}${footerHtml}</div></div>`;
+  return { subject: shownSubject, html, text: `${bodyText}${footerText}`.trim() };
+}
+
+// -- recipients -----------------------------------------------------------------------------
+function mailPersonRecipient(row: PersonRow): MailRecipient {
+  const company = companies.find((candidate) => candidate.id === row.company_id);
+  return {
+    contact_kind: "person",
+    contact_id: row.id,
+    company_id: row.company_id,
+    email: row.email,
+    full_name: row.full_name,
+    title: row.title,
+    company_name: company?.name ?? "",
+    country: company?.country ?? "",
+    lifecycle: company?.lifecycle ?? "",
+    do_not_contact: row.do_not_contact,
+    owner_staff_id: company?.owner_staff_id ?? "",
+    source: row.source_key,
+    stage: "",
+    created_at: row.created_at,
+    domain: company?.domain ?? "",
+    role_category: row.role_category,
+    firm_type: company?.firm_type ?? "",
+    customer_since: company?.customer_since ?? null,
+  };
+}
+function mailLeadRecipient(row: LeadRow): MailRecipient {
+  return {
+    contact_kind: "lead",
+    contact_id: row.id,
+    company_id: row.converted_company_id,
+    email: row.email,
+    full_name: row.full_name,
+    title: "",
+    company_name: row.company_name,
+    country: "",
+    lifecycle: "",
+    do_not_contact: false,
+    owner_staff_id: row.owner_staff_id,
+    source: row.source_key,
+    stage: row.stage,
+    created_at: row.created_at,
+    domain: "",
+    role_category: "",
+    firm_type: "",
+    customer_since: null,
+  };
+}
+function mailPeopleRecipients(): MailRecipient[] {
+  return people
+    .filter(
+      (row) =>
+        !row.archived && !companies.find((company) => company.id === row.company_id)?.archived,
+    )
+    .map(mailPersonRecipient);
+}
+function mailLeadRecipients(): MailRecipient[] {
+  return leads.filter((row) => row.email && !row.anonymised_at).map(mailLeadRecipient);
+}
+function mailVariables(recipient: MailRecipient): Record<string, string> {
+  return {
+    first_name: mailFirstName(recipient.full_name),
+    last_name: mailLastName(recipient.full_name),
+    full_name: recipient.full_name,
+    email: recipient.email,
+    company: recipient.company_name,
+    title: recipient.title,
+    country: recipient.country,
+  };
+}
+
+// -- verdicts -------------------------------------------------------------------------------
+function mailSuppressionsFor(email: string, topic: string, senderId: string): MailSuppressionRow[] {
+  const norm = mailNorm(email);
+  return mailSuppressions.filter(
+    (row) =>
+      row.email_norm === norm &&
+      !row.released_at &&
+      (row.scope === "global" ||
+        (row.scope === "topic" && row.scope_key === topic) ||
+        (row.scope === "sender" && row.scope_key === senderId)),
+  );
+}
+function mailAddressVerdict(email: string, topic: string, senderId: string): MailVerdict {
+  const norm = mailNorm(email);
+  if (!norm) return { allowed: false, reason: "NO_EMAIL", detail: "" };
+  if (!mailValidEmail(norm)) return { allowed: false, reason: "INVALID_EMAIL", detail: "" };
+  for (const row of mailSuppressionsFor(norm, topic, senderId)) {
+    if (
+      ["hard_bounce", "invalid_address", "provider_blocked", "soft_bounce_limit"].includes(
+        row.reason,
+      )
+    )
+      return { allowed: false, reason: "BOUNCED", detail: row.reason };
+    if (row.reason === "complaint") return { allowed: false, reason: "COMPLAINED", detail: "" };
+    if (row.reason === "unsubscribe") {
+      if (row.scope === "topic" && row.scope_key === "sales")
+        return { allowed: false, reason: "SALES_STOP", detail: "" };
+      return { allowed: false, reason: "UNSUBSCRIBED", detail: row.scope };
+    }
+    if (row.reason === "manual")
+      return { allowed: false, reason: "SUPPRESSED", detail: row.detail };
+  }
+  return { allowed: true, reason: "", detail: "" };
+}
+function mailRecentMarketing(norm: string): number {
+  const since = Date.now() - 7 * 86_400_000;
+  return mailMessages.filter(
+    (row) =>
+      row.kind === "campaign" &&
+      row.email_norm === norm &&
+      MAIL_SENT_LIKE.concat(["delivered"]).includes(row.state) &&
+      Date.parse(row.sent_at ?? row.scheduled_at) >= since,
+  ).length;
+}
+function mailMarketingVerdict(
+  recipient: MailRecipient,
+  topic: string,
+  senderId: string,
+): MailVerdict {
+  if (recipient.do_not_contact) return { allowed: false, reason: "DO_NOT_CONTACT", detail: "" };
+  const base = mailAddressVerdict(recipient.email, topic, senderId);
+  if (!base.allowed) return base;
+  const norm = mailNorm(recipient.email);
+  if (MAIL_ROLE_LOCALS.has(norm.split("@")[0] ?? ""))
+    return { allowed: false, reason: "ROLE_ADDRESS", detail: "" };
+  const consent = mailConsent.get(norm);
+  if (consent?.marketing_state === "unsubscribed")
+    return { allowed: false, reason: "UNSUBSCRIBED", detail: "all marketing" };
+  if (consent?.topics_off.includes(topic))
+    return { allowed: false, reason: "TOPIC_OFF", detail: topic };
+  const isCustomer = MAIL_CUSTOMER_LIFECYCLES.includes(recipient.lifecycle);
+  if (
+    consent?.marketing_state !== "subscribed" &&
+    MAIL_EXPLICIT_CONSENT.has(recipient.country.trim().toLowerCase()) &&
+    !isCustomer
+  )
+    return { allowed: false, reason: "NO_CONSENT", detail: "explicit consent required" };
+  const recent = mailRecentMarketing(norm);
+  if (mailSettings.frequency_cap_per_week && recent >= mailSettings.frequency_cap_per_week)
+    return { allowed: false, reason: "FREQUENCY_CAP", detail: `${recent} in the last 7 days` };
+  return { allowed: true, reason: "", detail: "" };
+}
+function mailSalesVerdict(recipient: MailRecipient, senderId: string): MailVerdict {
+  if (recipient.do_not_contact) return { allowed: false, reason: "DO_NOT_CONTACT", detail: "" };
+  const base = mailAddressVerdict(recipient.email, "sales", senderId);
+  if (!base.allowed) return base;
+  const norm = mailNorm(recipient.email);
+  if (mailConsent.get(norm)?.sales_stop)
+    return { allowed: false, reason: "SALES_STOP", detail: "" };
+  if (MAIL_ROLE_LOCALS.has(norm.split("@")[0] ?? ""))
+    return { allowed: false, reason: "ROLE_ADDRESS", detail: "" };
+  return { allowed: true, reason: "", detail: "" };
+}
+
+// -- segments and audiences -----------------------------------------------------------------
+function mailParseConditions(
+  raw: unknown,
+  kind: string,
+): {
+  conditions: Array<{ field: string; op: string; value: string }>;
+  errors: Record<string, string>;
+} {
+  const fields = kind === "people" ? MAIL_PEOPLE_FIELDS : MAIL_LEAD_FIELDS;
+  const conditions: Array<{ field: string; op: string; value: string }> = [];
+  const errors: Record<string, string> = {};
+  (Array.isArray(raw) ? raw : []).slice(0, 8).forEach((item, index) => {
+    const [field = "", op = "", ...rest] = String(typeof item === "string" ? item : "").split(":");
+    const value = rest.join(":").slice(0, 120);
+    if (!(field in fields)) errors[`conditions[${index}]`] = `unknown field '${field}'`;
+    else if (!MAIL_OPS.includes(op)) errors[`conditions[${index}]`] = `unknown comparison '${op}'`;
+    else if (["is", "not", "has", "gt", "lt"].includes(op) && value === "")
+      errors[`conditions[${index}]`] = "needs a value";
+    else conditions.push({ field, op, value });
+  });
+  return { conditions, errors };
+}
+function mailLastEmailed(norm: string): number | null {
+  const times = mailMessages
+    .filter((row) => row.email_norm === norm && row.sent_at)
+    .map((row) => Date.parse(row.sent_at!));
+  return times.length ? Math.max(...times) : null;
+}
+function mailReadField(recipient: MailRecipient, field: string): string | number | null {
+  const days = (iso: string | null) => (iso ? (Date.now() - Date.parse(iso)) / 86_400_000 : null);
+  switch (field) {
+    case "lifecycle":
+      return recipient.lifecycle;
+    case "firm_type":
+      return recipient.firm_type;
+    case "country":
+      return recipient.country;
+    case "role_category":
+      return recipient.role_category;
+    case "title":
+      return recipient.title;
+    case "source":
+      return recipient.source;
+    case "owner":
+      return recipient.owner_staff_id ? mailStaffName(recipient.owner_staff_id) : "";
+    case "company":
+      return recipient.company_name;
+    case "domain":
+      return recipient.domain;
+    case "do_not_contact":
+      return recipient.do_not_contact ? "yes" : "no";
+    case "marketing":
+      return mailConsent.get(mailNorm(recipient.email))?.marketing_state ?? "unknown";
+    case "stage":
+      return recipient.stage;
+    case "email":
+      return recipient.email;
+    case "created_days":
+      return days(recipient.created_at);
+    case "last_emailed_days": {
+      const last = mailLastEmailed(mailNorm(recipient.email));
+      return last === null ? null : (Date.now() - last) / 86_400_000;
+    }
+    case "customer_days":
+      return days(recipient.customer_since);
+    default:
+      return null;
+  }
+}
+function mailMatches(value: string | number | null, op: string, wanted: string): boolean {
+  const text = value === null ? "" : String(value);
+  if (op === "empty") return text === "";
+  if (op === "set") return text !== "";
+  if (op === "is") return text.toLowerCase() === wanted.toLowerCase();
+  if (op === "not") return text.toLowerCase() !== wanted.toLowerCase();
+  if (op === "has") return text.toLowerCase().includes(wanted.toLowerCase());
+  const left = typeof value === "number" ? value : Number(text);
+  const right = Number(wanted);
+  if (Number.isNaN(left) || Number.isNaN(right) || text === "") return false;
+  return op === "gt" ? left > right : left < right;
+}
+function mailEvaluateSegment(
+  kind: string,
+  conditions: Array<{ field: string; op: string; value: string }>,
+): MailRecipient[] {
+  const pool = kind === "people" ? mailPeopleRecipients() : mailLeadRecipients();
+  return pool.filter((recipient) =>
+    conditions.every((condition) =>
+      mailMatches(mailReadField(recipient, condition.field), condition.op, condition.value),
+    ),
+  );
+}
+function mailResolveAudience(audience: Record<string, unknown>): MailRecipient[] {
+  const kind = String(audience.kind ?? "");
+  const ids = new Set(Array.isArray(audience.ids) ? audience.ids.map(String) : []);
+  if (kind === "people") return mailPeopleRecipients().filter((row) => ids.has(row.contact_id));
+  if (kind === "leads") return mailLeadRecipients().filter((row) => ids.has(row.contact_id));
+  if (kind === "companies") return mailPeopleRecipients().filter((row) => ids.has(row.company_id));
+  if (kind === "segment") {
+    const segment = mailSegments.find((row) => row.id === String(audience.segment_id ?? ""));
+    if (!segment) return [];
+    return mailEvaluateSegment(
+      segment.kind,
+      mailParseConditions(segment.conditions, segment.kind).conditions,
+    );
+  }
+  if (kind === "csv") {
+    return (Array.isArray(audience.rows) ? audience.rows : []).map((raw) => {
+      const row = raw as Record<string, string>;
+      const full = row.full_name || [row.first_name, row.last_name].filter(Boolean).join(" ");
+      return {
+        contact_kind: "csv",
+        contact_id: "",
+        company_id: "",
+        email: String(row.email ?? "").trim(),
+        full_name: full ?? "",
+        title: row.title ?? "",
+        company_name: row.company ?? "",
+        country: row.country ?? "",
+        lifecycle: "",
+        do_not_contact: false,
+        owner_staff_id: "",
+        source: "",
+        stage: "",
+        created_at: null,
+        domain: "",
+        role_category: "",
+        firm_type: "",
+        customer_since: null,
+      };
+    });
+  }
+  return [];
+}
+function mailDescribeAudience(audience: Record<string, unknown>): string {
+  const kind = String(audience.kind ?? "");
+  const count = Array.isArray(audience.ids) ? audience.ids.length : 0;
+  if (kind === "people") return `${count} chosen ${count === 1 ? "person" : "people"}`;
+  if (kind === "leads") return `${count} chosen ${count === 1 ? "lead" : "leads"}`;
+  if (kind === "companies") return `everyone at ${count} ${count === 1 ? "company" : "companies"}`;
+  if (kind === "segment") {
+    const segment = mailSegments.find((row) => row.id === String(audience.segment_id ?? ""));
+    return segment ? `segment “${segment.name}”` : "a saved segment";
+  }
+  if (kind === "csv")
+    return `${Array.isArray(audience.rows) ? audience.rows.length : 0} rows from ${String(audience.label ?? "") || "a CSV"}`;
+  return "nobody yet";
+}
+function mailDecide(
+  recipients: MailRecipient[],
+  topic: string,
+  senderId: string,
+  required: string[],
+) {
+  const seen = new Set<string>();
+  return recipients.map((recipient) => {
+    const norm = mailNorm(recipient.email);
+    if (norm && seen.has(norm))
+      return { recipient, verdict: { allowed: false, reason: "DUPLICATE", detail: "" } };
+    if (norm) seen.add(norm);
+    let verdict = mailMarketingVerdict(recipient, topic, senderId);
+    if (verdict.allowed && required.length) {
+      const vars = mailVariables(recipient);
+      const missing = required.filter(
+        (name) =>
+          !["sender_name", "sender_email", "owner_name"].includes(name) &&
+          !String(vars[name] ?? "").trim(),
+      );
+      if (missing.length)
+        verdict = { allowed: false, reason: "MISSING_TOKEN", detail: missing.join(", ") };
+    }
+    return { recipient, verdict };
+  });
+}
+function mailSummarise(decided: Array<{ recipient: MailRecipient; verdict: MailVerdict }>) {
+  const byReason: Record<string, number> = {};
+  for (const item of decided)
+    if (!item.verdict.allowed)
+      byReason[item.verdict.reason] = (byReason[item.verdict.reason] ?? 0) + 1;
+  const eligible = decided.filter((item) => item.verdict.allowed);
+  return {
+    total: decided.length,
+    eligible: eligible.length,
+    skipped: decided.length - eligible.length,
+    skipped_by_reason: Object.fromEntries(Object.entries(byReason).sort()),
+    sample: eligible.slice(0, 8).map((item) => ({
+      name: item.recipient.full_name,
+      email: mailMask(item.recipient.email),
+      company: item.recipient.company_name,
+    })),
+    skipped_sample: decided
+      .filter((item) => !item.verdict.allowed)
+      .slice(0, 12)
+      .map((item) => ({
+        name: item.recipient.full_name,
+        email: mailMask(item.recipient.email),
+        reason: item.verdict.reason,
+        detail: item.verdict.detail,
+      })),
+    has_customers: eligible.some((item) =>
+      MAIL_CUSTOMER_LIFECYCLES.includes(item.recipient.lifecycle),
+    ),
+  };
+}
+
+// -- views ------------------------------------------------------------------------------------
+function mailSenderView(row: MailSenderRow) {
+  return {
+    sender_id: row.id,
+    from_email: row.from_email,
+    from_name: row.from_name,
+    reply_to: row.reply_to,
+    kind: row.kind,
+    staff_id: row.staff_id || null,
+    staff_name: mailStaffName(row.staff_id),
+    daily_cap: row.daily_cap,
+    verified: row.verified,
+    active: row.active,
+    created_at: row.created_at,
+  };
+}
+function mailVersionOf(templateId: string, version?: number): MailVersionRow | undefined {
+  const template = mailTemplates.find((row) => row.id === templateId);
+  const wanted = version ?? template?.current_version ?? 1;
+  return mailVersions.find((row) => row.template_id === templateId && row.version === wanted);
+}
+function mailTemplateView(row: MailTemplateRow) {
+  const version = mailVersionOf(row.id);
+  return {
+    template_id: row.id,
+    name: row.name,
+    kind: row.kind,
+    current_version: row.current_version,
+    subject: version?.subject ?? "",
+    body_html: version?.body_html ?? "",
+    body_text: version?.body_text ?? "",
+    required_vars: version?.required_vars ?? [],
+    content_hash: version?.content_hash ?? "",
+    created_by: mailPerson(row.created_by),
+    created_at: row.created_at,
+    updated_at: version?.created_at ?? row.created_at,
+    archived_at: row.archived_at,
+    variables: MAIL_KNOWN_VARS,
+  };
+}
+function mailSegmentView(row: MailSegmentRow) {
+  return {
+    segment_id: row.id,
+    name: row.name,
+    kind: row.kind,
+    conditions: mailParseConditions(row.conditions, row.kind).conditions,
+    last_count: row.last_count,
+    last_evaluated_at: row.last_evaluated_at,
+    created_by: mailPerson(row.created_by),
+    created_at: row.created_at,
+    archived_at: row.archived_at,
+  };
+}
+function mailRate(part: number, whole: number): number | null {
+  return whole > 0 ? Math.round((part * 10_000) / whole) / 100 : null;
+}
+function mailCampaignView(row: MailCampaignRow) {
+  const sender = mailSenders.find((candidate) => candidate.id === row.sender_id);
+  const template = mailTemplates.find((candidate) => candidate.id === row.template_id);
+  const audience: Record<string, unknown> = { ...row.audience };
+  if (audience.kind === "csv") {
+    audience.row_count = Array.isArray(audience.rows) ? audience.rows.length : 0;
+    delete audience.rows;
+  }
+  const counts = row.counts;
+  return {
+    campaign_id: row.id,
+    name: row.name,
+    sender: {
+      sender_id: row.sender_id,
+      from_email: sender?.from_email ?? "",
+      from_name: sender?.from_name ?? "",
+    },
+    template: {
+      template_id: row.template_id,
+      name: template?.name ?? "",
+      version: row.template_version,
+    },
+    topic: row.topic,
+    topic_label: MAIL_TOPICS[row.topic] ?? row.topic,
+    audience,
+    audience_description: mailDescribeAudience(row.audience),
+    state: row.state,
+    scheduled_at: row.scheduled_at,
+    send_anytime: row.send_anytime,
+    dry_run: row.dry_run,
+    requires_approval: row.requires_approval,
+    approved_by: mailPerson(row.approved_by),
+    approved_at: row.approved_at,
+    pause_reason: row.pause_reason,
+    paused_at: row.paused_at,
+    counts: { ...counts },
+    rates: {
+      delivered_pct: mailRate(counts.delivered, counts.sent),
+      hard_bounce_pct: mailRate(counts.hard_bounced, counts.sent),
+      complaint_pct: mailRate(counts.complained, counts.sent),
+      click_pct: mailRate(counts.clicked, counts.delivered),
+      unsubscribe_pct: mailRate(counts.unsubscribed, counts.delivered),
+    },
+    started_at: row.started_at,
+    completed_at: row.completed_at,
+    created_by: mailPerson(row.created_by),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+function mailMessageView(row: MailMessageRow, fullEmail = true) {
+  return {
+    message_id: row.id,
+    kind: row.kind,
+    campaign_id: row.campaign_id || null,
+    enrolment_id: row.enrolment_id || null,
+    step_no: row.step_no,
+    contact_kind: row.contact_kind,
+    contact_id: row.contact_id || null,
+    company_id: row.company_id || null,
+    email: fullEmail ? row.email : mailMask(row.email),
+    state: row.state,
+    scheduled_at: row.scheduled_at,
+    sent_at: row.sent_at,
+    delivered_at: row.delivered_at,
+    first_clicked_at: row.first_clicked_at,
+    first_opened_at: row.first_opened_at,
+    bounced_at: row.bounced_at,
+    complained_at: row.complained_at,
+    unsubscribed_at: row.unsubscribed_at,
+    provider_status: row.provider_status,
+    subject: row.subject,
+    skip_reason: row.skip_reason,
+    last_error: row.last_error,
+    attempts: row.attempts,
+    is_seed: row.is_seed,
+  };
+}
+function mailSuppressionView(row: MailSuppressionRow) {
+  return {
+    suppression_id: row.id,
+    email: row.email_norm,
+    scope: row.scope,
+    scope_key: row.scope_key,
+    reason: row.reason,
+    source: row.source,
+    detail: row.detail,
+    created_at: row.created_at,
+    created_by: mailPerson(row.created_by),
+    released_at: row.released_at,
+    released_by: mailPerson(row.released_by),
+    release_note: row.release_note,
+    active: !row.released_at,
+  };
+}
+function mailConsentView(norm: string) {
+  const row = mailConsent.get(norm);
+  return {
+    email: norm,
+    marketing_state: row?.marketing_state ?? "unknown",
+    topics_off: row?.topics_off ?? [],
+    sales_stop: row?.sales_stop ?? false,
+    lawful_basis: row?.lawful_basis ?? "",
+    source: row?.source ?? "",
+    timezone: row?.timezone ?? "",
+    updated_at: row?.updated_at ?? null,
+  };
+}
+function mailStepView(step: MailStepRow) {
+  return {
+    step_no: step.step_no,
+    kind: step.kind,
+    delay_days: step.delay_days,
+    template_id: step.template_id || null,
+    template_name: mailTemplates.find((row) => row.id === step.template_id)?.name ?? "",
+    template_version: step.template_version,
+    thread: step.thread,
+    task_title: step.task_title,
+  };
+}
+function mailSequenceView(row: MailSequenceRow) {
+  const enrolments = mailEnrolments.filter((candidate) => candidate.sequence_id === row.id);
+  const sender = mailSenders.find((candidate) => candidate.id === row.sender_id);
+  return {
+    sequence_id: row.id,
+    name: row.name,
+    kind: row.kind,
+    sender: sender
+      ? { sender_id: sender.id, from_email: sender.from_email, from_name: sender.from_name }
+      : null,
+    state: row.state,
+    cooling_days: row.cooling_days,
+    recent_contact_days: row.recent_contact_days,
+    company_limit: row.company_limit,
+    steps: (mailSteps.get(row.id) ?? []).map(mailStepView),
+    counts: {
+      active: enrolments.filter((item) => item.state === "active").length,
+      paused: enrolments.filter((item) => item.state === "paused").length,
+      completed: enrolments.filter((item) => item.state === "completed").length,
+      exited: enrolments.filter((item) => item.state === "exited").length,
+      enrolled: enrolments.length,
+      replied: enrolments.filter((item) => item.outcome === "replied_positive").length,
+      meetings: enrolments.filter(
+        (item) => item.outcome === "meeting_booked" || item.exit_reason === "MEETING_BOOKED",
+      ).length,
+    },
+    created_by: mailPerson(row.created_by),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+function mailContactLabel(kind: string, id: string): string {
+  if (kind === "lead") return leads.find((row) => row.id === id)?.full_name ?? "";
+  return people.find((row) => row.id === id)?.full_name ?? "";
+}
+function mailBusinessDaysSince(iso: string | null): number {
+  if (!iso) return 0;
+  let count = 0;
+  const day = new Date(iso);
+  const end = new Date();
+  day.setUTCHours(0, 0, 0, 0);
+  while (day < end) {
+    day.setUTCDate(day.getUTCDate() + 1);
+    const weekday = day.getUTCDay();
+    if (day <= end && weekday !== 0 && weekday !== 6) count += 1;
+  }
+  return count;
+}
+function mailEnrolmentView(row: MailEnrolmentRow) {
+  const steps = mailSteps.get(row.sequence_id) ?? [];
+  return {
+    enrolment_id: row.id,
+    sequence_id: row.sequence_id,
+    contact_kind: row.contact_kind,
+    contact_id: row.contact_id,
+    contact_name: mailContactLabel(row.contact_kind, row.contact_id),
+    company_id: row.company_id,
+    company_name:
+      companies.find((company) => company.id === row.company_id)?.name ??
+      (row.contact_kind === "lead"
+        ? (leads.find((lead) => lead.id === row.contact_id)?.company_name ?? "")
+        : ""),
+    email: mailMask(row.email_norm),
+    owner_staff_id: row.owner_staff_id,
+    owner_name: mailStaffName(row.owner_staff_id),
+    state: row.state,
+    current_step: row.current_step,
+    steps_total: steps.length,
+    waiting_task_id: row.waiting_task_id || null,
+    exit_reason: row.exit_reason,
+    outcome: row.outcome,
+    outcome_label: MAIL_OUTCOMES[row.outcome] ?? "",
+    paused_until: row.paused_until,
+    pause_reason: row.pause_reason,
+    enrolled_at: row.enrolled_at,
+    last_sent_at: row.last_sent_at,
+    exited_at: row.exited_at,
+    awaiting_reply:
+      row.state === "active" &&
+      Boolean(row.last_sent_at) &&
+      mailBusinessDaysSince(row.last_sent_at) >= 1 &&
+      !row.outcome,
+  };
+}
+
+// -- the queue ---------------------------------------------------------------------------------
+function mailSentToday(): number {
+  return mailSentTodayWhere(() => true);
+}
+/** mail_rules.COUNTRY_ZONES: a country picks the recipient's clock when no zone is recorded. */
+const MAIL_COUNTRY_ZONES: Record<string, string> = {
+  "united kingdom": "Europe/London",
+  uk: "Europe/London",
+  gb: "Europe/London",
+  ireland: "Europe/Dublin",
+  "united states": "America/New_York",
+  usa: "America/New_York",
+  us: "America/New_York",
+  canada: "America/Toronto",
+  switzerland: "Europe/Zurich",
+  germany: "Europe/Berlin",
+  austria: "Europe/Vienna",
+  france: "Europe/Paris",
+  netherlands: "Europe/Amsterdam",
+  belgium: "Europe/Brussels",
+  luxembourg: "Europe/Luxembourg",
+  spain: "Europe/Madrid",
+  italy: "Europe/Rome",
+  sweden: "Europe/Stockholm",
+  denmark: "Europe/Copenhagen",
+  norway: "Europe/Oslo",
+  finland: "Europe/Helsinki",
+  poland: "Europe/Warsaw",
+  portugal: "Europe/Lisbon",
+  india: "Asia/Kolkata",
+  singapore: "Asia/Singapore",
+  "hong kong": "Asia/Hong_Kong",
+  japan: "Asia/Tokyo",
+  australia: "Australia/Sydney",
+  "new zealand": "Pacific/Auckland",
+  "united arab emirates": "Asia/Dubai",
+  uae: "Asia/Dubai",
+  "south africa": "Africa/Johannesburg",
+  brazil: "America/Sao_Paulo",
+  mexico: "America/Mexico_City",
+  israel: "Asia/Jerusalem",
+  china: "Asia/Shanghai",
+  "south korea": "Asia/Seoul",
+  qatar: "Asia/Qatar",
+  "saudi arabia": "Asia/Riyadh",
+};
+/** mail_worker.DOMAIN_DAILY_CAP: no more than this many to one domain in a day. */
+const MAIL_DOMAIN_DAILY_CAP = 3;
+function mailIsoMs(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function mailValidZone(key: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-GB", { timeZone: key });
+    return true;
+  } catch {
+    return false;
+  }
+}
+/** mail_rules.zone_for: the first candidate naming a zone, by IANA key or by country. */
+function mailZoneFor(...candidates: string[]): string {
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").trim();
+    if (!text) continue;
+    const key = MAIL_COUNTRY_ZONES[text.toLowerCase()] ?? (text.includes("/") ? text : "");
+    if (key && mailValidZone(key)) return key;
+  }
+  return mailValidZone(mailSettings.fallback_timezone) ? mailSettings.fallback_timezone : "UTC";
+}
+/** `ms` as `zone`'s wall clock, written as if it were UTC (so getUTC* read local time). */
+function mailWall(ms: number, zone: string): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(ms));
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second"),
+  );
+}
+/** The instant at which `zone`'s wall clock reads `wallMs`. */
+function mailFromWall(wallMs: number, zone: string): number {
+  let guess = wallMs;
+  for (let round = 0; round < 3; round += 1) guess = wallMs - (mailWall(guess, zone) - guess);
+  return guess;
+}
+function mailMinutes(hhmm: string): number {
+  const [hours, minutes] = hhmm.split(":").map(Number);
+  return (hours ?? 0) * 60 + (minutes ?? 0);
+}
+function mailWeekend(wallDay: number): boolean {
+  const weekday = new Date(wallDay).getUTCDay();
+  return weekday === 0 || weekday === 6;
+}
+/** mail_rules.next_slot: `fromMs` itself inside the window, else the next opening on a business day. */
+function mailNextSlotMs(fromMs: number, zone: string): number {
+  const start = mailMinutes(mailSettings.window_start);
+  const end = mailMinutes(mailSettings.window_end);
+  const wall = mailWall(fromMs, zone);
+  const day = Math.floor(wall / 86_400_000) * 86_400_000;
+  const minute = Math.floor((wall - day) / 60_000);
+  if (!mailWeekend(day) && minute >= start && minute < end) return fromMs;
+  let next = !mailWeekend(day) && minute < start ? day : day + 86_400_000;
+  while (mailWeekend(next)) next += 86_400_000;
+  return mailFromWall(next + start * 60_000, zone);
+}
+/** Sends today by anyone but seeds and tests, narrowed by `match` (a sender, a domain, an hour). */
+function mailSentTodayWhere(match: (row: MailMessageRow) => boolean): number {
+  const day = new Date().toISOString().slice(0, 10);
+  return mailMessages.filter(
+    (row) =>
+      row.kind !== "test" && !row.is_seed && Boolean(row.sent_at?.startsWith(day)) && match(row),
+  ).length;
+}
+function mailSentThisHour(): number {
+  const hour = new Date().toISOString().slice(0, 13);
+  return mailSentTodayWhere((row) => Boolean(row.sent_at?.startsWith(hour)));
+}
+/**
+ * Seeded sends sit where the worker could have made them: inside the recipient's window, on
+ * a business day `businessDaysBack` before today (0 = today), `minutesIn` after it opened.
+ */
+function mailSeedSentAt(businessDaysBack: number, zone: string, minutesIn: number): string {
+  let day = Math.floor(mailWall(Date.now(), zone) / 86_400_000) * 86_400_000;
+  let remaining = businessDaysBack;
+  while (remaining > 0 || mailWeekend(day)) {
+    day -= 86_400_000;
+    if (!mailWeekend(day)) remaining -= 1;
+  }
+  const at = mailFromWall(
+    day + (mailMinutes(mailSettings.window_start) + minutesIn) * 60_000,
+    zone,
+  );
+  return mailIsoMs(Math.min(at, Date.now() - 60_000));
+}
+/** 0 when `needMinutes` of today's window in `zone` have already passed, else 1. */
+function mailSeedDayBack(zone: string, needMinutes: number): number {
+  const wall = mailWall(Date.now(), zone);
+  const day = Math.floor(wall / 86_400_000) * 86_400_000;
+  if (mailWeekend(day)) return 1;
+  const minute = Math.floor((wall - day) / 60_000);
+  const open =
+    Math.min(minute, mailMinutes(mailSettings.window_end)) - mailMinutes(mailSettings.window_start);
+  return open >= needMinutes ? 0 : 1;
+}
+function mailTomorrowNine(): string {
+  const next = new Date();
+  next.setUTCDate(next.getUTCDate() + 1);
+  while (next.getUTCDay() === 0 || next.getUTCDay() === 6) next.setUTCDate(next.getUTCDate() + 1);
+  next.setUTCHours(9, 0, 0, 0);
+  return next.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function mailAddBusinessDays(fromIso: string, count: number): string {
+  const day = new Date(fromIso);
+  let remaining = count;
+  while (remaining > 0) {
+    day.setUTCDate(day.getUTCDate() + 1);
+    if (day.getUTCDay() !== 0 && day.getUTCDay() !== 6) remaining -= 1;
+  }
+  day.setUTCHours(9, 0, 0, 0);
+  return day.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function mailActivity(row: MailMessageRow, subject: string) {
+  if (row.contact_kind !== "person" && row.contact_kind !== "lead") return;
+  activities.unshift({
+    kind: "email_out",
+    at: now(),
+    staff_id: "",
+    staff_name: "",
+    body: `${row.kind === "campaign" ? "Campaign email" : `Sequence email, step ${row.step_no ?? 1}`}: “${subject}”`,
+    company_id: row.company_id,
+    person_id: row.contact_kind === "person" ? row.contact_id : "",
+    deal_id: "",
+    lead_id: row.contact_kind === "lead" ? row.contact_id : "",
+  });
+}
+function mailStageStep(enrolment: MailEnrolmentRow, step: MailStepRow, afterIso: string) {
+  const when = step.delay_days > 0 ? mailAddBusinessDays(afterIso, step.delay_days) : afterIso;
+  if (step.kind === "task") {
+    const taskId = randomUUID();
+    tasks.push({
+      id: taskId,
+      title: step.task_title || "Follow up",
+      body: `Sequence step ${step.step_no} for ${mailContactLabel(enrolment.contact_kind, enrolment.contact_id) || enrolment.email_norm}. Mark it done and the sequence carries on.`,
+      status: "open",
+      priority: "medium",
+      due_on: when.slice(0, 10),
+      assignee_staff_id: enrolment.owner_staff_id,
+      company_id: enrolment.company_id,
+      person_id: enrolment.contact_kind === "person" ? enrolment.contact_id : "",
+      deal_id: "",
+      lead_id: enrolment.contact_kind === "lead" ? enrolment.contact_id : "",
+      ticket_id: "",
+      origin: `sequence:step-${step.step_no}`,
+      completed_at: null,
+      created_at: now(),
+    });
+    enrolment.current_step = step.step_no;
+    enrolment.waiting_task_id = taskId;
+    return;
+  }
+  const existing = mailMessages.find(
+    (row) => row.enrolment_id === enrolment.id && row.step_no === step.step_no,
+  );
+  if (existing) {
+    if (existing.state === "cancelled")
+      Object.assign(existing, { state: "pending", scheduled_at: when, skip_reason: "" });
+    enrolment.current_step = step.step_no;
+    return;
+  }
+  const recipient =
+    enrolment.contact_kind === "lead"
+      ? mailLeadRecipient(leads.find((row) => row.id === enrolment.contact_id)!)
+      : mailPersonRecipient(people.find((row) => row.id === enrolment.contact_id)!);
+  const sender = mailSenders.find((row) => row.id === enrolment.sender_id);
+  mailMessages.push({
+    id: randomUUID(),
+    kind: "sequence",
+    campaign_id: "",
+    enrolment_id: enrolment.id,
+    step_no: step.step_no,
+    sender_id: enrolment.sender_id,
+    topic: "sales",
+    contact_kind: enrolment.contact_kind,
+    contact_id: enrolment.contact_id,
+    company_id: enrolment.company_id,
+    email: recipient.email,
+    email_norm: mailNorm(recipient.email),
+    variables: {
+      ...mailVariables(recipient),
+      sender_name: sender?.from_name ?? "",
+      sender_email: sender?.from_email ?? "",
+      owner_name: mailStaffName(enrolment.owner_staff_id),
+    },
+    template_id: step.template_id,
+    template_version: step.template_version ?? 1,
+    state: "pending",
+    scheduled_at: when,
+    sent_at: null,
+    delivered_at: null,
+    first_clicked_at: null,
+    first_opened_at: null,
+    bounced_at: null,
+    complained_at: null,
+    unsubscribed_at: null,
+    provider_message_id: "",
+    provider_status: "",
+    subject: "",
+    in_reply_to: step.thread === "reply" ? enrolment.thread_message_id : "",
+    skip_reason: "",
+    last_error: "",
+    attempts: 0,
+    is_seed: false,
+  });
+  enrolment.current_step = step.step_no;
+  enrolment.waiting_task_id = "";
+}
+function mailAfterSend(row: MailMessageRow, sentAt: string) {
+  const enrolment = mailEnrolments.find((candidate) => candidate.id === row.enrolment_id);
+  if (!enrolment || (enrolment.state !== "active" && enrolment.state !== "paused")) return;
+  enrolment.last_sent_at = sentAt;
+  if (!enrolment.thread_message_id) {
+    enrolment.thread_message_id = row.provider_message_id;
+    enrolment.thread_subject = row.subject;
+  }
+  const steps = mailSteps.get(enrolment.sequence_id) ?? [];
+  const next = steps.find((step) => step.step_no > (row.step_no ?? 1));
+  if (!next) {
+    enrolment.state = "completed";
+    enrolment.exit_reason = "COMPLETED";
+    enrolment.exited_at = sentAt;
+    return;
+  }
+  mailStageStep(enrolment, next, sentAt);
+}
+function mailExit(
+  enrolment: MailEnrolmentRow,
+  reason: string,
+  outcome: string,
+  actor: string,
+  note = "",
+) {
+  enrolment.state = "exited";
+  enrolment.exit_reason = reason;
+  enrolment.outcome = outcome || enrolment.outcome;
+  enrolment.exited_at = now();
+  enrolment.waiting_task_id = "";
+  for (const row of mailMessages) {
+    if (row.enrolment_id === enrolment.id && ["pending", "retry", "held"].includes(row.state)) {
+      row.state = "cancelled";
+      row.skip_reason = "ENROLMENT_ENDED";
+    }
+  }
+  audit("mail.enrolment_exited", actor || null, "mail_enrolment", enrolment.id, note, {
+    reason,
+    outcome,
+  });
+}
+function mailPauseCompany(companyId: string, exceptId: string) {
+  if (!companyId) return;
+  for (const row of mailEnrolments) {
+    if (row.company_id !== companyId || row.id === exceptId || row.state !== "active") continue;
+    row.state = "paused";
+    row.pause_reason = "COMPANY_ENGAGED";
+    row.paused_until = mailAddBusinessDays(now(), 3).slice(0, 10);
+    for (const message of mailMessages) {
+      if (message.enrolment_id === row.id && ["pending", "retry"].includes(message.state)) {
+        message.state = "cancelled";
+        message.skip_reason = "COMPANY_ENGAGED";
+      }
+    }
+  }
+}
+function mailCrmEvent(
+  kind: "meeting" | "deal" | "lead_stage" | "task_done" | "do_not_contact",
+  ids: {
+    person_id?: string;
+    lead_id?: string;
+    company_id?: string;
+    stage?: string;
+    task_id?: string;
+  },
+) {
+  if (kind === "task_done") {
+    const enrolment = mailEnrolments.find(
+      (row) => row.state === "active" && row.waiting_task_id === ids.task_id,
+    );
+    if (!enrolment) return;
+    enrolment.waiting_task_id = "";
+    const next = (mailSteps.get(enrolment.sequence_id) ?? []).find(
+      (step) => step.step_no > enrolment.current_step,
+    );
+    if (next) mailStageStep(enrolment, next, now());
+    else
+      Object.assign(enrolment, { state: "completed", exit_reason: "COMPLETED", exited_at: now() });
+    return;
+  }
+  for (const row of mailEnrolments.filter(
+    (candidate) => candidate.state === "active" || candidate.state === "paused",
+  )) {
+    const same =
+      (ids.person_id && row.contact_id === ids.person_id) ||
+      (ids.lead_id && row.contact_id === ids.lead_id);
+    if (kind === "meeting" && same) {
+      mailExit(row, "MEETING_BOOKED", "meeting_booked", "");
+      mailPauseCompany(row.company_id, row.id);
+    } else if (kind === "deal" && ids.company_id && row.company_id === ids.company_id) {
+      const sequence = mailSequences.find((candidate) => candidate.id === row.sequence_id);
+      if (sequence?.kind !== "customer") mailExit(row, "DEAL_CREATED", "", "");
+    } else if (kind === "lead_stage" && ids.lead_id && row.contact_id === ids.lead_id) {
+      if (ids.stage === "connected" || ids.stage === "qualified")
+        mailExit(row, "STAGE_ADVANCED", "", "");
+      else if (ids.stage === "disqualified") mailExit(row, "STAGE_CLOSED", "", "");
+    } else if (kind === "do_not_contact" && same) {
+      mailExit(row, "DO_NOT_CONTACT", "", "");
+    }
+  }
+}
+function mailRunWorker(): Record<string, number | boolean> {
+  const report = { claimed: 0, sent: 0, deferred: 0, skipped: 0, dry_run: 0, paused: false };
+  mailSettings.last_worker_at = now();
+  if (!mailSettings.sending_enabled) return { ...report, paused: true };
+  const due = mailMessages
+    .filter(
+      (row) =>
+        (row.state === "pending" || row.state === "retry") &&
+        Date.parse(row.scheduled_at) <= Date.now(),
+    )
+    .sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at));
+  for (const row of due) {
+    report.claimed += 1;
+    const campaign = row.campaign_id
+      ? mailCampaigns.find((candidate) => candidate.id === row.campaign_id)
+      : undefined;
+    if (campaign && !["running", "scheduled"].includes(campaign.state)) continue;
+    const enrolment = row.enrolment_id
+      ? mailEnrolments.find((candidate) => candidate.id === row.enrolment_id)
+      : undefined;
+    if (row.enrolment_id && enrolment?.state !== "active") {
+      row.state = "cancelled";
+      row.skip_reason = "ENROLMENT_ENDED";
+      continue;
+    }
+    const recipient = {
+      ...(row.contact_kind === "person"
+        ? mailPersonRecipient(people.find((p) => p.id === row.contact_id) ?? ({} as PersonRow))
+        : {}),
+      email: row.email,
+    } as MailRecipient;
+    const verdict = row.is_seed
+      ? { allowed: true, reason: "", detail: "" }
+      : row.kind === "campaign"
+        ? mailAddressVerdict(row.email, row.topic, row.sender_id)
+        : mailSalesVerdict(
+            { ...recipient, do_not_contact: Boolean(recipient.do_not_contact) },
+            row.sender_id,
+          );
+    if (!verdict.allowed) {
+      row.state = "skipped";
+      row.skip_reason = verdict.reason;
+      if (campaign) {
+        campaign.counts.skipped += 1;
+        campaign.counts.recipients = Math.max(0, campaign.counts.recipients - 1);
+      }
+      report.skipped += 1;
+      continue;
+    }
+    // mail_worker.process_row: the recipient's window, then one domain's day, then the caps
+    // (global, sender, hour) — seeds are exempt, a dry run reserves no cap.
+    const zone = mailZoneFor(
+      mailConsent.get(row.email_norm)?.timezone ?? "",
+      String(row.variables.country ?? ""),
+    );
+    const defer = (whenMs: number, reason: string) => {
+      row.scheduled_at = mailIsoMs(whenMs);
+      row.last_error = reason;
+      report.deferred += 1;
+    };
+    const tomorrow = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`) + 86_400_000;
+    if (!row.is_seed && !campaign?.send_anytime) {
+      const slot = mailNextSlotMs(Date.now(), zone);
+      if (slot > Date.now()) {
+        defer(slot, "outside the recipient's window");
+        continue;
+      }
+    }
+    const domain = row.email_norm.split("@")[1] ?? "";
+    if (
+      domain &&
+      !row.is_seed &&
+      mailSentTodayWhere((sent) => sent.email_norm.endsWith(`@${domain}`)) >= MAIL_DOMAIN_DAILY_CAP
+    ) {
+      defer(mailNextSlotMs(tomorrow, zone), `${MAIL_DOMAIN_DAILY_CAP} to ${domain} today already`);
+      continue;
+    }
+    if (!row.is_seed && !campaign?.dry_run) {
+      const sender = mailSenders.find((candidate) => candidate.id === row.sender_id);
+      if (mailSentToday() >= mailSettings.global_daily_cap) {
+        defer(mailNextSlotMs(tomorrow, zone), "cap reached: global");
+        continue;
+      }
+      if (
+        sender &&
+        mailSentTodayWhere((sent) => sent.sender_id === sender.id) >= sender.daily_cap
+      ) {
+        defer(mailNextSlotMs(tomorrow, zone), "cap reached: sender");
+        continue;
+      }
+      if (mailSentThisHour() >= mailSettings.hourly_cap) {
+        defer(mailNextSlotMs(Date.now() + 3_600_000, zone), "cap reached: hour");
+        continue;
+      }
+    }
+    const version = mailVersionOf(row.template_id, row.template_version);
+    const rendered = version
+      ? mailRenderMessage(
+          version,
+          row.variables,
+          row.topic,
+          row.id,
+          row.in_reply_to ? (enrolment?.thread_subject ?? "") : "",
+        )
+      : { missing: "template" };
+    if ("missing" in rendered) {
+      row.state = "skipped";
+      row.skip_reason = "MISSING_TOKEN";
+      row.last_error = rendered.missing;
+      report.skipped += 1;
+      continue;
+    }
+    if (campaign?.dry_run) {
+      Object.assign(row, {
+        state: "dry_run",
+        provider_message_id: `dry-run:${row.id}`,
+        subject: rendered.subject,
+        sent_at: now(),
+      });
+      report.dry_run += 1;
+      continue;
+    }
+    mailProviderCounter += 1;
+    const sentAt = now();
+    Object.assign(row, {
+      state: "delivered",
+      sent_at: sentAt,
+      delivered_at: sentAt,
+      provider_message_id: `<mock-${mailProviderCounter}@mail.test>`,
+      provider_status: "delivered",
+      subject: rendered.subject,
+      attempts: row.attempts + 1,
+      last_error: "",
+    });
+    mailEvents.push({
+      message_id: row.id,
+      event_type: "delivered",
+      occurred_at: sentAt,
+      reason: "",
+      link: "",
+    });
+    if (campaign && !row.is_seed) {
+      campaign.counts.sent += 1;
+      campaign.counts.delivered += 1;
+    }
+    if (row.contact_kind === "person") {
+      const person = people.find((candidate) => candidate.id === row.contact_id);
+      if (person) person.last_contacted_at = sentAt;
+    }
+    mailActivity(row, rendered.subject);
+    if (row.enrolment_id) mailAfterSend(row, sentAt);
+    report.sent += 1;
+  }
+  for (const campaign of mailCampaigns) {
+    if (campaign.state !== "running") continue;
+    if (
+      !mailMessages.some(
+        (row) =>
+          row.campaign_id === campaign.id && ["pending", "retry", "claimed"].includes(row.state),
+      )
+    ) {
+      campaign.state = "completed";
+      campaign.completed_at = now();
+      campaign.updated_at = now();
+    }
+  }
+  return report;
+}
+function mailChecklist(campaign: MailCampaignRow, eligible: number, skipped: number) {
+  const sender = mailSenders.find((row) => row.id === campaign.sender_id);
+  const tested = mailMessages.some(
+    (row) =>
+      row.kind === "test" &&
+      row.state === "sent" &&
+      row.template_id === campaign.template_id &&
+      row.template_version === campaign.template_version,
+  );
+  return [
+    {
+      key: "sender_verified",
+      ok: Boolean(sender?.verified && sender.active),
+      blocking: true,
+      label: "The sender is verified with the provider",
+    },
+    {
+      key: "postal_address",
+      ok: Boolean(mailSettings.postal_address),
+      blocking: true,
+      label: "A postal address is set for the footer",
+    },
+    {
+      key: "audience",
+      ok: eligible > 0,
+      blocking: true,
+      label: `${eligible} eligible recipients; ${skipped} skipped`,
+    },
+    {
+      key: "test_send",
+      ok: tested,
+      blocking: true,
+      label: "A test of this template version was sent to a colleague",
+    },
+    {
+      key: "sending_enabled",
+      ok: mailSettings.sending_enabled,
+      blocking: true,
+      label: "Sending is switched on",
+    },
+    {
+      key: "webhook",
+      ok: mailSettings.webhook_configured,
+      blocking: false,
+      label: "The provider's delivery events are wired (bounces, complaints)",
+    },
+    {
+      key: "approval",
+      ok: !campaign.requires_approval || Boolean(campaign.approved_by),
+      blocking: true,
+      label: campaign.requires_approval
+        ? "Approved by a second person"
+        : "No second approval needed at this size",
+    },
+  ];
+}
+function mailCampaignPreview(campaign: MailCampaignRow) {
+  const version = mailVersionOf(campaign.template_id, campaign.template_version);
+  const decided = mailDecide(
+    mailResolveAudience(campaign.audience),
+    campaign.topic,
+    campaign.sender_id,
+    version?.required_vars ?? [],
+  );
+  return mailSummarise(decided);
+}
+function mailEnqueue(campaign: MailCampaignRow, startIso: string) {
+  const version = mailVersionOf(campaign.template_id, campaign.template_version);
+  const sender = mailSenders.find((row) => row.id === campaign.sender_id);
+  const decided = mailDecide(
+    mailResolveAudience(campaign.audience),
+    campaign.topic,
+    campaign.sender_id,
+    version?.required_vars ?? [],
+  );
+  let eligible = 0;
+  let skipped = 0;
+  const base = { sender_name: sender?.from_name ?? "", sender_email: sender?.from_email ?? "" };
+  const push = (recipient: MailRecipient, verdict: MailVerdict, isSeed: boolean, when: string) => {
+    mailMessages.push({
+      id: randomUUID(),
+      kind: "campaign",
+      campaign_id: campaign.id,
+      enrolment_id: "",
+      step_no: null,
+      sender_id: campaign.sender_id,
+      topic: campaign.topic,
+      contact_kind: recipient.contact_kind,
+      contact_id: recipient.contact_id,
+      company_id: recipient.company_id,
+      email: recipient.email,
+      email_norm: mailNorm(recipient.email),
+      variables: { ...mailVariables(recipient), ...base },
+      template_id: campaign.template_id,
+      template_version: campaign.template_version,
+      state: verdict.allowed ? "pending" : "skipped",
+      scheduled_at: when,
+      sent_at: null,
+      delivered_at: null,
+      first_clicked_at: null,
+      first_opened_at: null,
+      bounced_at: null,
+      complained_at: null,
+      unsubscribed_at: null,
+      provider_message_id: "",
+      provider_status: "",
+      subject: "",
+      in_reply_to: "",
+      skip_reason: verdict.reason,
+      last_error: verdict.detail,
+      attempts: 0,
+      is_seed: isSeed,
+    });
+  };
+  for (const seed of mailSettings.seed_addresses) {
+    push(
+      {
+        ...mailResolveAudience({
+          kind: "csv",
+          rows: [{ email: seed, full_name: "Seed inbox", company: "Quantify Terminal" }],
+        })[0]!,
+      },
+      { allowed: true, reason: "", detail: "" },
+      true,
+      startIso,
+    );
+  }
+  for (const item of decided) {
+    if (!item.verdict.allowed && item.verdict.reason === "DUPLICATE") {
+      skipped += 1;
+      continue;
+    }
+    push(item.recipient, item.verdict, false, startIso);
+    if (item.verdict.allowed) eligible += 1;
+    else skipped += 1;
+  }
+  const running = Date.parse(startIso) <= Date.now();
+  Object.assign(campaign, {
+    state: running ? "running" : "scheduled",
+    scheduled_at: startIso,
+    started_at: running ? now() : null,
+    counts: { ...campaign.counts, recipients: eligible, skipped },
+    updated_at: now(),
+  });
+  return { eligible, skipped, state: campaign.state, starts_at: startIso };
+}
+function mailEnrolVerdicts(
+  sequence: MailSequenceRow,
+  contacts: Array<{ kind: string; id: string }>,
+  enroller: Staff,
+  mayEnrolOthers: boolean,
+) {
+  const seen = new Set<string>();
+  const perCompany = new Map<string, number>();
+  for (const row of mailEnrolments) {
+    if (
+      row.sequence_id === sequence.id &&
+      (row.state === "active" || row.state === "paused") &&
+      row.company_id
+    )
+      perCompany.set(row.company_id, (perCompany.get(row.company_id) ?? 0) + 1);
+  }
+  const sender =
+    mailSenders.find((row) => row.id === sequence.sender_id && row.active) ??
+    mailSenders.find((row) => row.kind === "sales" && row.staff_id === enroller.id && row.active);
+  const required: string[] = [];
+  for (const step of mailSteps.get(sequence.id) ?? []) {
+    if (step.kind !== "email") continue;
+    for (const name of mailVersionOf(step.template_id, step.template_version ?? undefined)
+      ?.required_vars ?? []) {
+      if (!required.includes(name) && !["sender_name", "sender_email", "owner_name"].includes(name))
+        required.push(name);
+    }
+  }
+  return contacts.map((contact) => {
+    const personRow =
+      contact.kind === "person"
+        ? people.find((row) => row.id === contact.id && !row.archived)
+        : undefined;
+    const leadRow =
+      contact.kind === "lead" ? leads.find((row) => row.id === contact.id) : undefined;
+    const recipient = personRow
+      ? mailPersonRecipient(personRow)
+      : leadRow
+        ? mailLeadRecipient(leadRow)
+        : null;
+    const entry = {
+      contact_kind: contact.kind,
+      contact_id: contact.id,
+      name: recipient?.full_name ?? "",
+      email: recipient ? mailMask(recipient.email) : "",
+      company: recipient?.company_name ?? "",
+      allowed: true,
+      reason: "",
+      detail: "",
+      recipient,
+      sender,
+    };
+    const refuse = (reason: string, detail = "") =>
+      Object.assign(entry, { allowed: false, reason, detail });
+    if (!recipient) return refuse("NOT_FOUND");
+    if (!sender) return refuse("NO_SENDER", "no sales identity for the sender");
+    const norm = mailNorm(recipient.email);
+    if (seen.has(norm)) return refuse("DUPLICATE");
+    seen.add(norm);
+    const verdict = mailSalesVerdict(recipient, sender.id);
+    if (!verdict.allowed) return refuse(verdict.reason, verdict.detail);
+    const live = mailEnrolments.find(
+      (row) =>
+        row.contact_id === recipient.contact_id &&
+        (row.state === "active" || row.state === "paused"),
+    );
+    if (live) return refuse("ALREADY_IN_SEQUENCE", live.sequence_id);
+    const past = mailEnrolments.find(
+      (row) => row.contact_id === recipient.contact_id && row.sequence_id === sequence.id,
+    );
+    if (
+      past &&
+      Date.now() - Date.parse(past.exited_at ?? past.enrolled_at) <
+        sequence.cooling_days * 86_400_000
+    )
+      return refuse("ALREADY_HAD_SEQUENCE");
+    if (MAIL_CUSTOMER_LIFECYCLES.includes(recipient.lifecycle) && sequence.kind !== "customer")
+      return refuse("IS_CUSTOMER");
+    const last = mailLastEmailed(norm);
+    if (last !== null && Date.now() - last < sequence.recent_contact_days * 86_400_000)
+      return refuse("CONTACTED_RECENTLY", new Date(last).toISOString().slice(0, 10));
+    if (recipient.owner_staff_id && recipient.owner_staff_id !== enroller.id && !mayEnrolOthers)
+      return refuse("OWNED_BY_COLLEAGUE", recipient.owner_staff_id);
+    if (
+      recipient.company_id &&
+      (perCompany.get(recipient.company_id) ?? 0) >= sequence.company_limit
+    )
+      return refuse("COMPANY_LIMIT", String(sequence.company_limit));
+    const vars = mailVariables(recipient);
+    const missing = required.filter((name) => !String(vars[name] ?? "").trim());
+    if (missing.length) return refuse("MISSING_TOKEN", missing.join(", "));
+    if (recipient.company_id)
+      perCompany.set(recipient.company_id, (perCompany.get(recipient.company_id) ?? 0) + 1);
+    return entry;
+  });
+}
+function mailPublicVerdict(entry: ReturnType<typeof mailEnrolVerdicts>[number]) {
+  const { recipient: _recipient, sender: _sender, ...rest } = entry;
+  void _recipient;
+  void _sender;
+  return rest;
+}
+function mailTotals(sinceMs: number) {
+  const rows = mailMessages.filter(
+    (row) =>
+      row.kind !== "test" && !row.is_seed && Date.parse(row.sent_at ?? row.scheduled_at) >= sinceMs,
+  );
+  const counts = {
+    sent: 0,
+    delivered: 0,
+    hard_bounced: 0,
+    soft_bounced: 0,
+    complained: 0,
+    unsubscribed: 0,
+    clicked: 0,
+    failed: 0,
+    skipped: 0,
+  };
+  for (const row of rows) {
+    if (MAIL_SENT_LIKE.includes(row.state) || row.state === "delivered") counts.sent += 1;
+    if (row.delivered_at) counts.delivered += 1;
+    if (row.state === "hard_bounced") counts.hard_bounced += 1;
+    if (row.state === "soft_bounced") counts.soft_bounced += 1;
+    if (row.complained_at) counts.complained += 1;
+    if (row.unsubscribed_at) counts.unsubscribed += 1;
+    if (row.first_clicked_at) counts.clicked += 1;
+    if (row.state === "failed") counts.failed += 1;
+    if (row.state === "skipped") counts.skipped += 1;
+  }
+  return {
+    ...counts,
+    hard_bounce_pct: mailRate(counts.hard_bounced, counts.sent),
+    complaint_pct: mailRate(counts.complained, counts.sent),
+    unsubscribe_pct: mailRate(counts.unsubscribed, counts.delivered),
+    click_pct: mailRate(counts.clicked, counts.delivered),
+    thresholds: { hard_bounce_pct: 2.0, complaint_pct_watch: 0.1, complaint_pct_stop: 0.3 },
+  };
+}
+function mailSuppress(
+  norm: string,
+  reason: string,
+  source: string,
+  detail = "",
+  by = "",
+  at = now(),
+) {
+  if (
+    mailSuppressions.some(
+      (row) =>
+        row.email_norm === norm &&
+        row.reason === reason &&
+        !row.released_at &&
+        row.scope === "global",
+    )
+  )
+    return;
+  mailSuppressions.unshift({
+    id: randomUUID(),
+    email_norm: norm,
+    scope: "global",
+    scope_key: "",
+    reason,
+    source,
+    detail,
+    created_at: at,
+    created_by: by,
+    released_at: null,
+    released_by: "",
+    release_note: "",
+  });
+}
+
+// -- the seeded world ---------------------------------------------------------------------------
+const MAIL_IDS = {
+  news: "ea100000-0000-4000-8000-000000000001",
+  ownerSales: "ea100000-0000-4000-8000-000000000002",
+  salesSales: "ea100000-0000-4000-8000-000000000003",
+  release: "ea200000-0000-4000-8000-000000000001",
+  webinar: "ea200000-0000-4000-8000-000000000002",
+  roadmap: "ea200000-0000-4000-8000-000000000003",
+  intro: "ea200000-0000-4000-8000-000000000004",
+  bump: "ea200000-0000-4000-8000-000000000005",
+  last: "ea200000-0000-4000-8000-000000000006",
+  ukCustomers: "ea300000-0000-4000-8000-000000000001",
+  hedgeProspects: "ea300000-0000-4000-8000-000000000002",
+  newLeads: "ea300000-0000-4000-8000-000000000003",
+  september: "ea400000-0000-4000-8000-000000000001",
+  october: "ea400000-0000-4000-8000-000000000002",
+  webinarCampaign: "ea400000-0000-4000-8000-000000000003",
+  roadmapCampaign: "ea400000-0000-4000-8000-000000000004",
+  prospectNewsletter: "ea400000-0000-4000-8000-000000000005",
+  fundIntro: "ea500000-0000-4000-8000-000000000001",
+  renewal: "ea500000-0000-4000-8000-000000000002",
+  stopMessage: "ea600000-0000-4000-8000-000000000001",
+  stopMessage2: "ea600000-0000-4000-8000-000000000002",
+  stopMessage3: "ea600000-0000-4000-8000-000000000003",
+};
+function mailSeedVersion(
+  templateId: string,
+  version: number,
+  subject: string,
+  bodyHtml: string,
+  bodyText: string,
+  createdBy: string,
+  createdAt: string,
+) {
+  const { required } = mailAnalyse(subject, bodyHtml, bodyText);
+  mailVersions.push({
+    template_id: templateId,
+    version,
+    subject,
+    body_html: bodyHtml,
+    body_text: bodyText,
+    required_vars: required,
+    content_hash: createHash("sha256")
+      .update(`${subject}\u001f${bodyHtml}\u001f${bodyText}`)
+      .digest("hex"),
+    created_by: createdBy,
+    created_at: createdAt,
+  });
+}
+function mailSeedHistoricMessage(
+  campaign: MailCampaignRow,
+  recipient: MailRecipient,
+  sentAt: string,
+  outcome: string,
+  index: number,
+) {
+  mailProviderCounter += 1;
+  const row: MailMessageRow = {
+    // The first three September messages have fixed ids: the harness opens their footer links.
+    id:
+      campaign.id === MAIL_IDS.september && index < 3
+        ? [MAIL_IDS.stopMessage, MAIL_IDS.stopMessage2, MAIL_IDS.stopMessage3][index]!
+        : randomUUID(),
+    kind: "campaign",
+    campaign_id: campaign.id,
+    enrolment_id: "",
+    step_no: null,
+    sender_id: campaign.sender_id,
+    topic: campaign.topic,
+    contact_kind: recipient.contact_kind,
+    contact_id: recipient.contact_id,
+    company_id: recipient.company_id,
+    email: recipient.email,
+    email_norm: mailNorm(recipient.email),
+    variables: mailVariables(recipient),
+    template_id: campaign.template_id,
+    template_version: campaign.template_version,
+    state: "delivered",
+    scheduled_at: sentAt,
+    sent_at: sentAt,
+    delivered_at: sentAt,
+    first_clicked_at: null,
+    first_opened_at: null,
+    bounced_at: null,
+    complained_at: null,
+    unsubscribed_at: null,
+    provider_message_id: `<mock-${mailProviderCounter}@mail.test>`,
+    provider_status: "delivered",
+    subject: `What's new in Quantify Terminal for ${recipient.company_name || "your desk"}`,
+    in_reply_to: "",
+    skip_reason: "",
+    last_error: "",
+    attempts: 1,
+    is_seed: false,
+  };
+  campaign.counts.sent += 1;
+  if (outcome === "hard_bounce") {
+    Object.assign(row, {
+      state: "hard_bounced",
+      delivered_at: null,
+      bounced_at: sentAt,
+      provider_status: "hard_bounce",
+    });
+    campaign.counts.hard_bounced += 1;
+    mailSuppress(
+      row.email_norm,
+      "hard_bounce",
+      "webhook:brevo",
+      "550 5.1.1 mailbox unavailable",
+      "",
+      mailIsoMs(Date.parse(sentAt) + 120_000),
+    );
+  } else if (outcome === "soft_bounce") {
+    Object.assign(row, {
+      state: "soft_bounced",
+      delivered_at: null,
+      bounced_at: sentAt,
+      provider_status: "soft_bounce",
+    });
+    campaign.counts.soft_bounced += 1;
+  } else {
+    campaign.counts.delivered += 1;
+    if (outcome === "click" || outcome === "click_unsubscribe") {
+      row.first_clicked_at = new Date(Date.parse(sentAt) + 3_600_000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, "Z");
+      campaign.counts.clicked += 1;
+    }
+    if (outcome === "unsubscribe" || outcome === "click_unsubscribe") {
+      row.unsubscribed_at = new Date(Date.parse(sentAt) + 7_200_000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, "Z");
+      campaign.counts.unsubscribed += 1;
+      mailConsent.set(row.email_norm, {
+        email_norm: row.email_norm,
+        marketing_state: "unsubscribed",
+        topics_off: [],
+        sales_stop: false,
+        lawful_basis: "",
+        source: "one_click",
+        timezone: "",
+        updated_at: row.unsubscribed_at,
+      });
+      mailSuppress(row.email_norm, "unsubscribe", "one_click", "all", "", row.unsubscribed_at);
+    }
+  }
+  mailMessages.push(row);
+  return row;
+}
+/** A seeded campaign's own clock follows its messages: approved, started, finished or paused. */
+function mailSeedCampaignTimes(campaign: MailCampaignRow, finished: "completed" | "paused" | "") {
+  const sent = mailMessages
+    .filter((row) => row.campaign_id === campaign.id && row.sent_at)
+    .map((row) => Date.parse(row.sent_at!))
+    .sort((a, b) => a - b);
+  if (!sent.length) return;
+  const first = sent[0]!;
+  const last = sent[sent.length - 1]!;
+  campaign.created_at = mailIsoMs(first - 44 * 3_600_000);
+  campaign.approved_at = campaign.approved_by ? mailIsoMs(first - 20 * 3_600_000) : null;
+  campaign.scheduled_at = mailIsoMs(first);
+  campaign.started_at = mailIsoMs(first);
+  if (finished === "completed") campaign.completed_at = mailIsoMs(last + 60_000);
+  if (finished === "paused") campaign.paused_at = mailIsoMs(last + 60_000);
+  campaign.updated_at = mailIsoMs(last + 60_000);
+}
+function seedMail() {
+  mailSenders.length = 0;
+  mailTemplates.length = 0;
+  mailVersions.length = 0;
+  mailSegments.length = 0;
+  mailConsent.clear();
+  mailSuppressions.length = 0;
+  mailCampaigns.length = 0;
+  mailMessages.length = 0;
+  mailSequences.length = 0;
+  mailSteps.clear();
+  mailEnrolments.length = 0;
+  mailEvents.length = 0;
+  Object.assign(mailSettings, {
+    ...MAIL_SETTINGS_SEED,
+    seed_addresses: [...MAIL_SETTINGS_SEED.seed_addresses],
+    last_worker_at: mailHoursAgo(0.1),
+  });
+  mailProviderCounter = 1000;
+
+  mailSenders.push(
+    {
+      id: MAIL_IDS.news,
+      from_email: "news@mail.quantifyterminal.com",
+      from_name: "Quantify Terminal",
+      reply_to: "hello@quantifyterminal.com",
+      kind: "marketing",
+      staff_id: "",
+      daily_cap: 100,
+      verified: true,
+      active: true,
+      created_at: mailHoursAgo(24 * 40),
+    },
+    {
+      id: MAIL_IDS.ownerSales,
+      from_email: "owner@quantifyterminal.com",
+      from_name: "The Owner",
+      reply_to: "",
+      kind: "sales",
+      staff_id: OWNER_STAFF,
+      daily_cap: 50,
+      verified: true,
+      active: true,
+      created_at: mailHoursAgo(24 * 38),
+    },
+    {
+      id: MAIL_IDS.salesSales,
+      from_email: "sales@quantifyterminal.com",
+      from_name: "Sales Person",
+      reply_to: "",
+      kind: "sales",
+      staff_id: SALES_STAFF,
+      daily_cap: 50,
+      verified: true,
+      active: true,
+      created_at: mailHoursAgo(24 * 30),
+    },
+  );
+
+  const templateRows: Array<[string, string, "campaign" | "sequence", number, string, number]> = [
+    [MAIL_IDS.release, "Release notes", "campaign", 2, OWNER_STAFF, 24 * 20],
+    [MAIL_IDS.webinar, "Webinar invitation", "campaign", 1, SALES_STAFF, 24 * 3],
+    [MAIL_IDS.roadmap, "Q4 roadmap preview", "campaign", 1, OWNER_STAFF, 24 * 1],
+    [MAIL_IDS.intro, "Fund intro", "sequence", 1, OWNER_STAFF, 24 * 35],
+    [MAIL_IDS.bump, "Short follow-up", "sequence", 1, OWNER_STAFF, 24 * 35],
+    [MAIL_IDS.last, "Last note", "sequence", 1, OWNER_STAFF, 24 * 35],
+  ];
+  for (const [id, name, kind, version, by, hours] of templateRows) {
+    mailTemplates.push({
+      id,
+      name,
+      kind,
+      current_version: version,
+      created_by: by,
+      created_at: mailHoursAgo(hours),
+      archived_at: null,
+    });
+  }
+  const releaseHtml =
+    '<p>Hi {{first_name | there}},</p>\n<p>October\'s release brings scenario runs on the whole book, faster screens on large universes, and exports that keep your column choices.</p>\n<p>Everything is live in the terminal today; nothing to install.</p>\n<p><a href="https://quantifyterminal.com/changelog">Read what changed</a></p>\n<p>{{sender_name}}</p>';
+  mailSeedVersion(
+    MAIL_IDS.release,
+    1,
+    "What's new for {{company | your desk}}",
+    releaseHtml,
+    "",
+    OWNER_STAFF,
+    mailHoursAgo(24 * 20),
+  );
+  mailSeedVersion(
+    MAIL_IDS.release,
+    2,
+    "What's new in Quantify Terminal for {{company | your desk}}",
+    releaseHtml,
+    "",
+    OWNER_STAFF,
+    mailHoursAgo(24 * 13),
+  );
+  mailSeedVersion(
+    MAIL_IDS.webinar,
+    1,
+    "Portfolio risk in the terminal — a 30-minute walkthrough",
+    '<p>Hi {{first_name | there}},</p>\n<p>On 14 October we walk through how desks like {{company | yours}} run portfolio risk end to end in the terminal: factor exposures, scenarios, and the reports compliance asks for.</p>\n<p><a href="https://quantifyterminal.com/events">Save a seat</a></p>\n<p>{{sender_name}}</p>',
+    "",
+    SALES_STAFF,
+    mailHoursAgo(24 * 3),
+  );
+  mailSeedVersion(
+    MAIL_IDS.roadmap,
+    1,
+    "Where Quantify Terminal goes next",
+    "<p>Hi {{first_name | there}},</p>\n<p>Three things are coming before the year ends, and we would like your view on the order.</p>\n<p>{{sender_name}}</p>",
+    "",
+    OWNER_STAFF,
+    mailHoursAgo(24),
+  );
+  mailSeedVersion(
+    MAIL_IDS.intro,
+    1,
+    "Quick question, {{first_name}}",
+    "",
+    "Hi {{first_name}},\n\nI run sales at Quantify Terminal. Desks like {{company | yours}} use it to move research, risk and reporting into one screen.\n\nWould it be useful to see how a fund your size sets it up?\n\n{{owner_name}}",
+    OWNER_STAFF,
+    mailHoursAgo(24 * 35),
+  );
+  mailSeedVersion(
+    MAIL_IDS.bump,
+    1,
+    "Following up",
+    "",
+    "Hi {{first_name}}, bumping this in case it got buried. Worth a short call?\n\n{{owner_name}}",
+    OWNER_STAFF,
+    mailHoursAgo(24 * 35),
+  );
+  mailSeedVersion(
+    MAIL_IDS.last,
+    1,
+    "Closing the loop",
+    "",
+    "Hi {{first_name}},\n\nI will stop here. If the timing is better next quarter, a one-line reply is all it takes.\n\n{{owner_name}}",
+    OWNER_STAFF,
+    mailHoursAgo(24 * 35),
+  );
+
+  mailSegments.push(
+    {
+      id: MAIL_IDS.ukCustomers,
+      name: "UK customers",
+      kind: "people",
+      conditions: ["lifecycle:is:customer", "country:is:United Kingdom"],
+      last_count: null,
+      last_evaluated_at: mailHoursAgo(26),
+      created_by: OWNER_STAFF,
+      created_at: mailHoursAgo(24 * 21),
+      archived_at: null,
+    },
+    {
+      id: MAIL_IDS.hedgeProspects,
+      name: "Hedge-fund prospects",
+      kind: "people",
+      conditions: ["lifecycle:is:prospect", "firm_type:is:Hedge fund"],
+      last_count: null,
+      last_evaluated_at: mailHoursAgo(50),
+      created_by: SALES_STAFF,
+      created_at: mailHoursAgo(24 * 18),
+      archived_at: null,
+    },
+    {
+      id: MAIL_IDS.newLeads,
+      name: "Leads this month",
+      kind: "leads",
+      conditions: ["created_days:lt:30"],
+      last_count: null,
+      last_evaluated_at: mailHoursAgo(4),
+      created_by: SALES_STAFF,
+      created_at: mailHoursAgo(24 * 9),
+      archived_at: null,
+    },
+  );
+  for (const segment of mailSegments)
+    segment.last_count = mailEvaluateSegment(
+      segment.kind,
+      mailParseConditions(segment.conditions, segment.kind).conditions,
+    ).length;
+
+  const customers = mailPeopleRecipients().filter(
+    (row) => row.lifecycle === "customer" && row.email,
+  );
+  const prospects = mailPeopleRecipients().filter(
+    (row) => row.lifecycle === "prospect" && row.email,
+  );
+  const campaign = (
+    id: string,
+    name: string,
+    templateId: string,
+    version: number,
+    topic: string,
+    audience: Record<string, unknown>,
+    state: string,
+    by: string,
+    hoursAgo: number,
+  ): MailCampaignRow => ({
+    id,
+    name,
+    sender_id: MAIL_IDS.news,
+    template_id: templateId,
+    template_version: version,
+    topic,
+    audience,
+    state,
+    scheduled_at: null,
+    send_anytime: false,
+    dry_run: false,
+    requires_approval: false,
+    approved_by: "",
+    approved_at: null,
+    pause_reason: "",
+    paused_at: null,
+    counts: mailEmptyCounts(),
+    started_at: null,
+    completed_at: null,
+    created_by: by,
+    created_at: mailHoursAgo(hoursAgo),
+    updated_at: mailHoursAgo(hoursAgo),
+  });
+
+  // September's release notes: sent twelve days ago to every paying customer.
+  const september = campaign(
+    MAIL_IDS.september,
+    "September release notes",
+    MAIL_IDS.release,
+    1,
+    "updates",
+    { kind: "companies", ids: [...new Set(customers.map((row) => row.company_id))] },
+    "completed",
+    OWNER_STAFF,
+    24 * 13,
+  );
+  Object.assign(september, { requires_approval: true, approved_by: ADMIN_STAFF_ID });
+  mailCampaigns.push(september);
+  customers.forEach((recipient, index) => {
+    const outcome =
+      index === 7
+        ? "hard_bounce"
+        : index === 19
+          ? "soft_bounce"
+          : index === 11 || index === 31
+            ? "unsubscribe"
+            : index === 4
+              ? "click_unsubscribe"
+              : index % 3 === 0
+                ? "click"
+                : "delivered";
+    mailSeedHistoricMessage(
+      september,
+      recipient,
+      mailSeedSentAt(9, mailZoneFor(recipient.country), index * 3),
+      outcome,
+      index,
+    );
+  });
+  september.counts.recipients = september.counts.sent;
+  september.counts.skipped = 2;
+  mailSeedCampaignTimes(september, "completed");
+
+  // October's release notes, mid-send: the news sender is warming up at 40 a day and no
+  // domain gets more than three a day, so part of the list waits for the next window.
+  const october = campaign(
+    MAIL_IDS.october,
+    "October release notes",
+    MAIL_IDS.release,
+    2,
+    "updates",
+    { kind: "segment", segment_id: MAIL_IDS.ukCustomers },
+    "running",
+    OWNER_STAFF,
+    24 * 2,
+  );
+  Object.assign(october, {
+    audience: { kind: "companies", ids: [...new Set(customers.map((row) => row.company_id))] },
+    requires_approval: true,
+    approved_by: ADMIN_STAFF_ID,
+  });
+  mailCampaigns.push(october);
+  const octoberEligible = customers.filter(
+    (row) =>
+      !mailSuppressionsFor(row.email, "updates", MAIL_IDS.news).length &&
+      mailConsent.get(mailNorm(row.email))?.marketing_state !== "unsubscribed",
+  );
+  const newsSender = mailSenders.find((row) => row.id === MAIL_IDS.news)!;
+  newsSender.daily_cap = 40;
+  const sentPerDay = new Map<string, number>();
+  const sentPerDomain = new Map<string, number>();
+  octoberEligible.forEach((recipient, index) => {
+    const zone = mailZoneFor(recipient.country);
+    const sentAt = mailSeedSentAt(
+      mailSeedDayBack(zone, 3 * octoberEligible.length),
+      zone,
+      index * 3,
+    );
+    const day = sentAt.slice(0, 10);
+    const domain = mailNorm(recipient.email).split("@")[1] ?? "";
+    const capped = (sentPerDay.get(day) ?? 0) >= newsSender.daily_cap;
+    const domainFull = (sentPerDomain.get(`${day}|${domain}`) ?? 0) >= MAIL_DOMAIN_DAILY_CAP;
+    if (!capped && !domainFull) {
+      sentPerDay.set(day, (sentPerDay.get(day) ?? 0) + 1);
+      sentPerDomain.set(`${day}|${domain}`, (sentPerDomain.get(`${day}|${domain}`) ?? 0) + 1);
+      const row = mailSeedHistoricMessage(
+        october,
+        recipient,
+        sentAt,
+        index % 4 === 0 ? "click" : "delivered",
+        index + 1,
+      );
+      row.subject = `What's new in Quantify Terminal for ${recipient.company_name || "your desk"}`;
+      return;
+    }
+    const nextDay = Date.parse(`${day}T00:00:00Z`) + 86_400_000;
+    mailMessages.push({
+      id: randomUUID(),
+      kind: "campaign",
+      campaign_id: october.id,
+      enrolment_id: "",
+      step_no: null,
+      sender_id: october.sender_id,
+      topic: "updates",
+      contact_kind: recipient.contact_kind,
+      contact_id: recipient.contact_id,
+      company_id: recipient.company_id,
+      email: recipient.email,
+      email_norm: mailNorm(recipient.email),
+      variables: mailVariables(recipient),
+      template_id: october.template_id,
+      template_version: 2,
+      state: "pending",
+      scheduled_at: mailIsoMs(mailNextSlotMs(Math.max(nextDay, Date.now()), zone)),
+      sent_at: null,
+      delivered_at: null,
+      first_clicked_at: null,
+      first_opened_at: null,
+      bounced_at: null,
+      complained_at: null,
+      unsubscribed_at: null,
+      provider_message_id: "",
+      provider_status: "",
+      subject: "",
+      in_reply_to: "",
+      skip_reason: "",
+      last_error: capped
+        ? "cap reached: sender"
+        : `${MAIL_DOMAIN_DAILY_CAP} to ${domain} today already`,
+      attempts: 0,
+      is_seed: false,
+    });
+  });
+  october.counts.recipients = octoberEligible.length;
+  october.counts.skipped = customers.length - octoberEligible.length;
+  mailSeedCampaignTimes(october, "");
+
+  // A webinar invitation the sales person drafted, waiting for a second owner or admin.
+  const webinar = campaign(
+    MAIL_IDS.webinarCampaign,
+    "Webinar: portfolio risk in the terminal",
+    MAIL_IDS.webinar,
+    1,
+    "events",
+    { kind: "segment", segment_id: MAIL_IDS.ukCustomers },
+    "review",
+    SALES_STAFF,
+    20,
+  );
+  webinar.requires_approval = true;
+  mailCampaigns.push(webinar);
+  mailMessages.push({
+    id: randomUUID(),
+    kind: "test",
+    campaign_id: "",
+    enrolment_id: "",
+    step_no: null,
+    sender_id: MAIL_IDS.news,
+    topic: "events",
+    contact_kind: "staff",
+    contact_id: "",
+    company_id: "",
+    email: "sales@hq.test",
+    email_norm: "sales@hq.test",
+    variables: {},
+    template_id: MAIL_IDS.webinar,
+    template_version: 1,
+    state: "sent",
+    scheduled_at: mailSeedSentAt(1, "Europe/London", 240),
+    sent_at: mailSeedSentAt(1, "Europe/London", 240),
+    delivered_at: null,
+    first_clicked_at: null,
+    first_opened_at: null,
+    bounced_at: null,
+    complained_at: null,
+    unsubscribed_at: null,
+    provider_message_id: "<mock-test-1@mail.test>",
+    provider_status: "sent",
+    subject: "[Test] Portfolio risk in the terminal — a 30-minute walkthrough",
+    in_reply_to: "",
+    skip_reason: "",
+    last_error: "",
+    attempts: 1,
+    is_seed: false,
+  });
+
+  // A draft nobody has tested yet.
+  mailCampaigns.push(
+    campaign(
+      MAIL_IDS.roadmapCampaign,
+      "Q4 roadmap preview",
+      MAIL_IDS.roadmap,
+      1,
+      "news",
+      { kind: "segment", segment_id: MAIL_IDS.ukCustomers },
+      "draft",
+      OWNER_STAFF,
+      6,
+    ),
+  );
+
+  // A prospect newsletter that paused itself after early hard bounces.
+  const newsletter = campaign(
+    MAIL_IDS.prospectNewsletter,
+    "Prospect newsletter — September",
+    MAIL_IDS.release,
+    1,
+    "news",
+    { kind: "segment", segment_id: MAIL_IDS.hedgeProspects },
+    "auto_paused",
+    SALES_STAFF,
+    24 * 6,
+  );
+  Object.assign(newsletter, {
+    approved_by: OWNER_STAFF,
+    pause_reason: "3 hard bounces in the first 9 sends",
+  });
+  mailCampaigns.push(newsletter);
+  prospects.slice(0, 12).forEach((recipient, index) => {
+    if (index < 9) {
+      const row = mailSeedHistoricMessage(
+        newsletter,
+        recipient,
+        mailSeedSentAt(4, mailZoneFor(recipient.country), index * 3),
+        index === 2 || index === 5 || index === 8 ? "hard_bounce" : "delivered",
+        index + 1,
+      );
+      row.subject = "What's new for " + (recipient.company_name || "your desk");
+    } else {
+      mailMessages.push({
+        id: randomUUID(),
+        kind: "campaign",
+        campaign_id: newsletter.id,
+        enrolment_id: "",
+        step_no: null,
+        sender_id: MAIL_IDS.news,
+        topic: "news",
+        contact_kind: recipient.contact_kind,
+        contact_id: recipient.contact_id,
+        company_id: recipient.company_id,
+        email: recipient.email,
+        email_norm: mailNorm(recipient.email),
+        variables: mailVariables(recipient),
+        template_id: MAIL_IDS.release,
+        template_version: 1,
+        state: "held",
+        scheduled_at: mailSeedSentAt(4, mailZoneFor(recipient.country), index * 3),
+        sent_at: null,
+        delivered_at: null,
+        first_clicked_at: null,
+        first_opened_at: null,
+        bounced_at: null,
+        complained_at: null,
+        unsubscribed_at: null,
+        provider_message_id: "",
+        provider_status: "",
+        subject: "",
+        in_reply_to: "",
+        skip_reason: "",
+        last_error: "",
+        attempts: 0,
+        is_seed: false,
+      });
+    }
+  });
+  newsletter.counts.recipients = 12;
+  mailSeedCampaignTimes(newsletter, "paused");
+
+  // The sales sequence, with people at every point of it.
+  mailSequences.push(
+    {
+      id: MAIL_IDS.fundIntro,
+      name: "Fund intro — four steps",
+      kind: "prospect",
+      sender_id: "",
+      state: "active",
+      cooling_days: 90,
+      recent_contact_days: 14,
+      company_limit: 2,
+      created_by: OWNER_STAFF,
+      created_at: mailHoursAgo(24 * 34),
+      updated_at: mailHoursAgo(24 * 10),
+    },
+    {
+      id: MAIL_IDS.renewal,
+      name: "Renewal check-in",
+      kind: "customer",
+      sender_id: MAIL_IDS.ownerSales,
+      state: "draft",
+      cooling_days: 180,
+      recent_contact_days: 7,
+      company_limit: 1,
+      created_by: OWNER_STAFF,
+      created_at: mailHoursAgo(24 * 2),
+      updated_at: mailHoursAgo(24 * 2),
+    },
+  );
+  mailSteps.set(MAIL_IDS.fundIntro, [
+    {
+      step_no: 1,
+      kind: "email",
+      delay_days: 0,
+      template_id: MAIL_IDS.intro,
+      template_version: 1,
+      thread: "new",
+      task_title: "",
+    },
+    {
+      step_no: 2,
+      kind: "email",
+      delay_days: 3,
+      template_id: MAIL_IDS.bump,
+      template_version: 1,
+      thread: "reply",
+      task_title: "",
+    },
+    {
+      step_no: 3,
+      kind: "task",
+      delay_days: 2,
+      template_id: "",
+      template_version: null,
+      thread: "new",
+      task_title: "Call them",
+    },
+    {
+      step_no: 4,
+      kind: "email",
+      delay_days: 4,
+      template_id: MAIL_IDS.last,
+      template_version: 1,
+      thread: "new",
+      task_title: "",
+    },
+  ]);
+  mailSteps.set(MAIL_IDS.renewal, [
+    {
+      step_no: 1,
+      kind: "email",
+      delay_days: 0,
+      template_id: MAIL_IDS.intro,
+      template_version: 1,
+      thread: "new",
+      task_title: "",
+    },
+    {
+      step_no: 2,
+      kind: "task",
+      delay_days: 5,
+      template_id: "",
+      template_version: null,
+      thread: "new",
+      task_title: "Call about the renewal",
+    },
+  ]);
+  const plan: Array<{
+    state: MailEnrolmentRow["state"];
+    step: number;
+    sentHoursAgo: number | null;
+    outcome?: string;
+    exit?: string;
+    pause?: string;
+  }> = [
+    { state: "active", step: 2, sentHoursAgo: 24 * 4 },
+    { state: "active", step: 2, sentHoursAgo: 24 * 3 },
+    { state: "active", step: 1, sentHoursAgo: 24 * 2 },
+    { state: "active", step: 3, sentHoursAgo: 24 * 3 },
+    { state: "active", step: 1, sentHoursAgo: null },
+    { state: "paused", step: 2, sentHoursAgo: 24 * 5, pause: "COMPANY_ENGAGED" },
+    {
+      state: "exited",
+      step: 2,
+      sentHoursAgo: 24 * 8,
+      outcome: "replied_positive",
+      exit: "REPLIED",
+    },
+    {
+      state: "exited",
+      step: 3,
+      sentHoursAgo: 24 * 12,
+      outcome: "meeting_booked",
+      exit: "MEETING_BOOKED",
+    },
+    { state: "completed", step: 4, sentHoursAgo: 24 * 16, exit: "COMPLETED" },
+    { state: "exited", step: 1, sentHoursAgo: 24 * 9, outcome: "bounced", exit: "HARD_BOUNCE" },
+  ];
+  prospects.slice(12, 12 + plan.length).forEach((recipient, index) => {
+    const entry = plan[index]!;
+    const enrolment: MailEnrolmentRow = {
+      id: `ea700000-0000-4000-8000-0000000000${(index + 1).toString().padStart(2, "0")}`,
+      sequence_id: MAIL_IDS.fundIntro,
+      contact_kind: "person",
+      contact_id: recipient.contact_id,
+      company_id: recipient.company_id,
+      email_norm: mailNorm(recipient.email),
+      owner_staff_id: index % 3 === 0 ? SALES_STAFF : OWNER_STAFF,
+      sender_id: index % 3 === 0 ? MAIL_IDS.salesSales : MAIL_IDS.ownerSales,
+      state: entry.state,
+      current_step: entry.step,
+      waiting_task_id: "",
+      exit_reason: entry.exit ?? "",
+      outcome: entry.outcome ?? "",
+      paused_until: entry.pause ? mailAddBusinessDays(now(), 2).slice(0, 10) : null,
+      pause_reason: entry.pause ?? "",
+      thread_subject: `Quick question, ${mailFirstName(recipient.full_name)}`,
+      thread_message_id: "",
+      enrolled_at: mailHoursAgo((entry.sentHoursAgo ?? 2) + 24 * (entry.step - 1) * 3 + 1),
+      enrolled_by: OWNER_STAFF,
+      last_sent_at: entry.sentHoursAgo === null ? null : mailHoursAgo(entry.sentHoursAgo),
+      exited_at: entry.exit ? mailHoursAgo((entry.sentHoursAgo ?? 0) - 20) : null,
+    };
+    mailEnrolments.push(enrolment);
+    for (let step = 1; step <= entry.step; step += 1) {
+      const definition = mailSteps.get(MAIL_IDS.fundIntro)![step - 1]!;
+      if (definition.kind !== "email") continue;
+      const isLast = step === entry.step;
+      const zone = mailZoneFor(recipient.country);
+      const daysBack = Math.max(
+        1,
+        Math.round((((entry.sentHoursAgo ?? 0) + (entry.step - step) * 72) / 24) * (5 / 7)),
+      );
+      const sentAt =
+        entry.sentHoursAgo === null && isLast
+          ? null
+          : mailSeedSentAt(daysBack, zone, 30 + index * 7 + step);
+      mailProviderCounter += 1;
+      const providerId = `<mock-${mailProviderCounter}@mail.test>`;
+      if (step === 1 && sentAt) enrolment.thread_message_id = providerId;
+      const bounced = entry.exit === "HARD_BOUNCE" && isLast;
+      mailMessages.push({
+        id: randomUUID(),
+        kind: "sequence",
+        campaign_id: "",
+        enrolment_id: enrolment.id,
+        step_no: step,
+        sender_id: enrolment.sender_id,
+        topic: "sales",
+        contact_kind: "person",
+        contact_id: recipient.contact_id,
+        company_id: recipient.company_id,
+        email: recipient.email,
+        email_norm: mailNorm(recipient.email),
+        variables: {
+          ...mailVariables(recipient),
+          owner_name: mailStaffName(enrolment.owner_staff_id),
+        },
+        template_id: definition.template_id,
+        template_version: 1,
+        state: sentAt === null ? "pending" : bounced ? "hard_bounced" : "delivered",
+        scheduled_at: sentAt ?? mailIsoMs(mailNextSlotMs(Date.now(), zone)),
+        sent_at: sentAt,
+        delivered_at: sentAt && !bounced ? sentAt : null,
+        first_clicked_at: null,
+        first_opened_at: null,
+        bounced_at: bounced ? sentAt : null,
+        complained_at: null,
+        unsubscribed_at: null,
+        provider_message_id: sentAt ? providerId : "",
+        provider_status: sentAt ? (bounced ? "hard_bounce" : "delivered") : "",
+        subject: sentAt
+          ? step === 1
+            ? enrolment.thread_subject
+            : definition.thread === "reply"
+              ? `Re: ${enrolment.thread_subject}`
+              : step === 4
+                ? "Closing the loop"
+                : "Following up"
+          : "",
+        in_reply_to: definition.thread === "reply" ? enrolment.thread_message_id : "",
+        skip_reason: "",
+        last_error: "",
+        attempts: sentAt ? 1 : 0,
+        is_seed: false,
+      });
+      if (bounced && sentAt)
+        mailSuppress(
+          mailNorm(recipient.email),
+          "hard_bounce",
+          "webhook:brevo",
+          "550 5.1.1 user unknown",
+          "",
+          mailIsoMs(Date.parse(sentAt) + 120_000),
+        );
+    }
+    const sentTimes = mailMessages
+      .filter((row) => row.enrolment_id === enrolment.id && row.sent_at)
+      .map((row) => Date.parse(row.sent_at!))
+      .sort((a, b) => a - b);
+    const firstSent = sentTimes[0];
+    const lastSent = sentTimes[sentTimes.length - 1];
+    enrolment.enrolled_at = mailIsoMs((firstSent ?? Date.now() - 2 * 3_600_000) - 3_600_000);
+    enrolment.last_sent_at = lastSent === undefined ? null : mailIsoMs(lastSent);
+    enrolment.exited_at =
+      entry.exit && lastSent !== undefined
+        ? mailIsoMs(Math.min(lastSent + 20 * 3_600_000, Date.now() - 3_600_000))
+        : null;
+    if (entry.state === "active" && lastSent !== undefined) {
+      const steps = mailSteps.get(MAIL_IDS.fundIntro)!;
+      const current = steps[entry.step - 1]!;
+      const next = current.kind === "task" ? current : steps[entry.step];
+      if (next) mailStageStep(enrolment, next, mailIsoMs(lastSent));
+      const task = tasks.find((row) => row.id === enrolment.waiting_task_id);
+      if (task) task.created_at = mailIsoMs(lastSent);
+    }
+  });
+
+  // By hand, and consent recorded with its basis.
+  mailSuppress(
+    "former.analyst@example-fund.com",
+    "manual",
+    `admin:${OWNER_STAFF}`,
+    "Left the fund; the firm asked us to remove the address",
+    OWNER_STAFF,
+  );
+  const firstCustomer = customers[2];
+  if (firstCustomer) {
+    mailConsent.set(mailNorm(firstCustomer.email), {
+      email_norm: mailNorm(firstCustomer.email),
+      marketing_state: "subscribed",
+      topics_off: ["events"],
+      sales_stop: false,
+      lawful_basis: "consent",
+      source: "early_access_form",
+      timezone: "Europe/London",
+      updated_at: mailHoursAgo(24 * 30),
+    });
+  }
+}
+
+function mailCampaignFields(
+  body: Record<string, unknown>,
+  existing: MailCampaignRow | undefined,
+):
+  | {
+      fields: Pick<
+        MailCampaignRow,
+        | "name"
+        | "sender_id"
+        | "template_id"
+        | "template_version"
+        | "topic"
+        | "audience"
+        | "send_anytime"
+        | "dry_run"
+      >;
+    }
+  | { error: { status: number; body: unknown } } {
+  const name = String(body.name ?? existing?.name ?? "")
+    .trim()
+    .slice(0, 160);
+  if (!name) return { error: refuse(400, "malformed_request", { name: "name it" }) };
+  const senderId = String(body.sender_id ?? existing?.sender_id ?? "");
+  if (!mailSenders.some((row) => row.id === senderId && row.active))
+    return { error: refuse(400, "malformed_request", { sender_id: "an active sender" }) };
+  const templateId = String(body.template_id ?? existing?.template_id ?? "");
+  const template = mailTemplates.find((row) => row.id === templateId);
+  if (!template || template.archived_at || template.kind !== "campaign")
+    return { error: refuse(400, "malformed_request", { template_id: "a live campaign template" }) };
+  const topic = String(body.topic ?? existing?.topic ?? "updates");
+  if (!MAIL_MARKETING_TOPICS.includes(topic))
+    return {
+      error: refuse(400, "malformed_request", {
+        topic: `one of ${MAIL_MARKETING_TOPICS.join(", ")}`,
+      }),
+    };
+  let audience = existing?.audience ?? {};
+  if ("audience" in body || !existing) {
+    const raw = (body.audience ?? {}) as Record<string, unknown>;
+    const kind = String(raw.kind ?? "");
+    if (["people", "leads", "companies"].includes(kind)) {
+      const ids = Array.isArray(raw.ids) ? raw.ids.map(String).filter(Boolean) : [];
+      if (!ids.length)
+        return { error: refuse(400, "malformed_request", { audience: "choose at least one" }) };
+      audience = { kind, ids: ids.slice(0, 5000) };
+    } else if (kind === "segment") {
+      const segmentId = String(raw.segment_id ?? "");
+      if (!mailSegments.some((row) => row.id === segmentId))
+        return { error: refuse(400, "malformed_request", { audience: "unknown segment" }) };
+      audience = { kind, segment_id: segmentId };
+    } else if (kind === "csv") {
+      const rows = Array.isArray(raw.rows) ? raw.rows : [];
+      if (!rows.length)
+        return { error: refuse(400, "malformed_request", { audience: "the CSV has no rows" }) };
+      if (rows.length > 2000)
+        return { error: refuse(400, "malformed_request", { audience: "at most 2000 rows" }) };
+      audience = { kind, rows, label: String(raw.label ?? "").slice(0, 120) };
+    } else {
+      return {
+        error: refuse(400, "malformed_request", {
+          audience: "kind is people, leads, companies, segment or csv",
+        }),
+      };
+    }
+  }
+  return {
+    fields: {
+      name,
+      sender_id: senderId,
+      template_id: templateId,
+      template_version: template.current_version,
+      topic,
+      audience,
+      send_anytime: Boolean(body.send_anytime ?? existing?.send_anytime ?? false),
+      dry_run: Boolean(body.dry_run ?? existing?.dry_run ?? false),
+    },
+  };
+}
+/** The mock's stop tokens are `mock-<message id>`; the service's are signed. */
+function mailMessageForToken(token: string): MailMessageRow | undefined {
+  const id = token.startsWith("mock-") ? token.slice(5) : "";
+  return id ? mailMessages.find((row) => row.id === id) : undefined;
+}
+function mailUnsubscribeView(message: MailMessageRow) {
+  const consent = mailConsent.get(message.email_norm);
+  const sales = message.topic === "sales";
+  return {
+    email: mailMask(message.email_norm),
+    kind: sales ? "sales" : "marketing",
+    topic: message.topic,
+    topic_label: MAIL_TOPICS[message.topic] ?? "",
+    marketing_state: consent?.marketing_state ?? "unknown",
+    sales_stop: consent?.sales_stop ?? false,
+    topics: MAIL_MARKETING_TOPICS.map((key) => ({
+      key,
+      label: MAIL_TOPICS[key]!,
+      off:
+        Boolean(consent?.topics_off.includes(key)) || consent?.marketing_state === "unsubscribed",
+    })),
+  };
+}
+
+/** pause / resume / cancel share one handler, as the service's three routes share one module. */
+function mailCampaignControl(op: "pause" | "resume" | "cancel"): Handler {
+  return ({ headers, params, body }) => {
+    const found = caller(headers)!;
+    const row = mailCampaigns.find((candidate) => candidate.id === params.campaign_id);
+    if (!row) return refuse(404, "not_found");
+    const note = String(body.note ?? "")
+      .trim()
+      .slice(0, 400);
+    if (op === "pause") {
+      if (!["scheduled", "running"].includes(row.state))
+        return refuse(400, "malformed_request", { state: `${row.state} cannot pause` });
+      let held = 0;
+      for (const message of mailMessages)
+        if (message.campaign_id === row.id && ["pending", "retry"].includes(message.state)) {
+          message.state = "held";
+          held += 1;
+        }
+      Object.assign(row, {
+        state: "paused",
+        pause_reason: note || "paused by hand",
+        paused_at: now(),
+        updated_at: now(),
+      });
+      audit("mail.campaign_paused", found.member.id, "mail_campaign", row.id, note, { held });
+      return ok({ state: row.state, held });
+    }
+    if (op === "resume") {
+      if (!["paused", "auto_paused"].includes(row.state))
+        return refuse(400, "malformed_request", { state: `${row.state} is not paused` });
+      let released = 0;
+      for (const message of mailMessages)
+        if (message.campaign_id === row.id && message.state === "held") {
+          message.state = "pending";
+          released += 1;
+        }
+      Object.assign(row, {
+        state: "running",
+        pause_reason: "",
+        paused_at: null,
+        updated_at: now(),
+      });
+      audit("mail.campaign_resumed", found.member.id, "mail_campaign", row.id, note, { released });
+      mailRunWorker();
+      return ok({ state: row.state, released });
+    }
+    if (["completed", "cancelled"].includes(row.state))
+      return refuse(400, "malformed_request", { state: `already ${row.state}` });
+    let cancelled = 0;
+    for (const message of mailMessages)
+      if (message.campaign_id === row.id && ["pending", "retry", "held"].includes(message.state)) {
+        message.state = "cancelled";
+        message.skip_reason = "CAMPAIGN_CANCELLED";
+        cancelled += 1;
+      }
+    Object.assign(row, {
+      state: "cancelled",
+      pause_reason: note,
+      completed_at: now(),
+      updated_at: now(),
+    });
+    audit("mail.campaign_cancelled", found.member.id, "mail_campaign", row.id, note, { cancelled });
+    return ok({ state: row.state, cancelled });
+  };
+}
+
+routes.push(
+  // --- outbound mail -------------------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/mail/overview",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const mayAll = (CAPABILITIES[found.member.role] ?? []).includes("mail:send");
+      const byState = (state: string) => mailCampaigns.filter((row) => row.state === state).length;
+      const live = mailEnrolments.filter((row) => row.state === "active" || row.state === "paused");
+      const awaiting = live.filter(
+        (row) =>
+          mailEnrolmentView(row).awaiting_reply &&
+          (mayAll || row.owner_staff_id === found.member.id),
+      ).length;
+      const week = Date.now() - 7 * 86_400_000;
+      return ok({
+        sending_enabled: mailSettings.sending_enabled,
+        paused_reason: mailSettings.sending_enabled ? "" : mailSettings.paused_reason,
+        last_worker_at: mailSettings.last_worker_at || null,
+        campaigns: {
+          running: byState("running"),
+          scheduled: byState("scheduled"),
+          review: byState("review"),
+          approved: byState("approved"),
+          auto_paused: byState("auto_paused") + byState("paused"),
+          draft: byState("draft"),
+        },
+        sequences: {
+          active_enrolments: live.filter((row) => row.state === "active").length,
+          paused_enrolments: live.filter((row) => row.state === "paused").length,
+          awaiting_reply: awaiting,
+        },
+        today: {
+          sent: mailSentToday(),
+          global_cap: mailSettings.global_daily_cap,
+          hour_sent: mailSentThisHour(),
+          hourly_cap: mailSettings.hourly_cap,
+        },
+        suppressions_7d: mailSuppressions.filter(
+          (row) => !row.released_at && Date.parse(row.created_at) >= week,
+        ).length,
+        health_30d: mailTotals(Date.now() - 30 * 86_400_000),
+        senders: mailSenders.map(mailSenderView),
+        postal_address_set: Boolean(mailSettings.postal_address),
+        webhook_configured: mailSettings.webhook_configured,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/senders",
+    auth: true,
+    capability: "crm:read",
+    handler: () =>
+      ok({
+        senders: mailSenders.map(mailSenderView),
+        default_from_email: "support@quantifyterminal.com",
+        default_from_name: "Quantify Terminal",
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/senders/save",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const senderId = String(body.sender_id ?? "");
+      const existing = senderId ? mailSenders.find((row) => row.id === senderId) : undefined;
+      if (senderId && !existing) return refuse(404, "not_found");
+      const fromEmail = mailNorm(body.from_email ?? existing?.from_email);
+      if (!mailValidEmail(fromEmail))
+        return refuse(400, "malformed_request", { from_email: "a valid address" });
+      const kind = String(body.kind ?? existing?.kind ?? "marketing");
+      if (kind !== "marketing" && kind !== "sales")
+        return refuse(400, "malformed_request", { kind: "marketing or sales" });
+      const staffId = String(body.staff_id ?? existing?.staff_id ?? "") || "";
+      if (kind === "sales" && !staffId)
+        return refuse(400, "malformed_request", {
+          staff_id: "a sales identity belongs to a person",
+        });
+      const cap = body.daily_cap ?? existing?.daily_cap ?? 50;
+      if (typeof cap !== "number" || !Number.isInteger(cap) || cap < 1 || cap > 10_000)
+        return refuse(400, "malformed_request", { daily_cap: "1 to 10000" });
+      if (mailSenders.some((row) => row.from_email === fromEmail && row.id !== senderId))
+        return refuse(400, "malformed_request", { from_email: "already a sender" });
+      const fields = {
+        from_email: fromEmail,
+        from_name: String(body.from_name ?? existing?.from_name ?? "")
+          .trim()
+          .slice(0, 120),
+        reply_to: mailNorm(body.reply_to ?? existing?.reply_to ?? ""),
+        kind: kind as MailSenderRow["kind"],
+        staff_id: staffId,
+        daily_cap: cap,
+        verified: Boolean(body.verified ?? existing?.verified ?? false),
+        active: Boolean(body.active ?? existing?.active ?? true),
+      };
+      let row = existing;
+      if (row) Object.assign(row, fields);
+      else {
+        row = { id: randomUUID(), created_at: now(), ...fields };
+        mailSenders.push(row);
+      }
+      audit("mail.sender_saved", found.member.id, "mail_sender", row.id, "", {
+        from_email: fromEmail,
+        verified: fields.verified,
+      });
+      return ok({ sender: mailSenderView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/templates",
+    auth: true,
+    capability: "crm:read",
+    handler: () =>
+      ok({
+        templates: [...mailTemplates]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(mailTemplateView),
+        variables: MAIL_KNOWN_VARS,
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/templates/save",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const templateId = String(body.template_id ?? "");
+      const existing = templateId ? mailTemplates.find((row) => row.id === templateId) : undefined;
+      if (templateId && !existing) return refuse(404, "not_found");
+      const name = String(body.name ?? existing?.name ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!name) return refuse(400, "malformed_request", { name: "name it" });
+      const kind = String(body.kind ?? existing?.kind ?? "campaign");
+      if (kind !== "campaign" && kind !== "sequence")
+        return refuse(400, "malformed_request", { kind: "campaign or sequence" });
+      const subject = String(body.subject ?? "")
+        .trim()
+        .slice(0, 400);
+      const bodyHtml = String(body.body_html ?? "");
+      const bodyText = String(body.body_text ?? "");
+      if (!subject) return refuse(400, "malformed_request", { subject: "a subject line" });
+      if (kind === "sequence" && !bodyText)
+        return refuse(400, "malformed_request", { body_text: "a sequence template is plain text" });
+      if (!bodyHtml && !bodyText)
+        return refuse(400, "malformed_request", { body_html: "write the message" });
+      const { unknown } = mailAnalyse(subject, bodyHtml, bodyText);
+      if (unknown.length)
+        return refuse(400, "malformed_request", {
+          tokens: `unknown: ${unknown.join(", ")}; known: ${MAIL_KNOWN_VARS.join(", ")}`,
+        });
+      if (
+        mailTemplates.some(
+          (row) => row.name.toLowerCase() === name.toLowerCase() && row.id !== templateId,
+        )
+      )
+        return refuse(400, "malformed_request", { name: "another template has this name" });
+      let row = existing;
+      if (row) {
+        row.name = name;
+        row.current_version += 1;
+      } else {
+        row = {
+          id: randomUUID(),
+          name,
+          kind: kind as MailTemplateRow["kind"],
+          current_version: 1,
+          created_by: found.member.id,
+          created_at: now(),
+          archived_at: null,
+        };
+        mailTemplates.push(row);
+      }
+      mailSeedVersion(
+        row.id,
+        row.current_version,
+        subject,
+        bodyHtml,
+        bodyText,
+        found.member.id,
+        now(),
+      );
+      audit("mail.template_saved", found.member.id, "mail_template", row.id, "", {
+        name,
+        version: row.current_version,
+      });
+      return ok({ template: mailTemplateView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/templates/{template_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params }) => {
+      const row = mailTemplates.find((candidate) => candidate.id === params.template_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        template: mailTemplateView(row),
+        versions: mailVersions
+          .filter((version) => version.template_id === row.id)
+          .sort((a, b) => b.version - a.version)
+          .map((version) => ({
+            version: version.version,
+            subject: version.subject,
+            created_at: version.created_at,
+            created_by: mailPerson(version.created_by),
+            content_hash: version.content_hash,
+          })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/templates/{template_id}/preview",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailTemplates.find((candidate) => candidate.id === params.template_id);
+      if (!row) return refuse(404, "not_found");
+      const version = mailVersionOf(
+        row.id,
+        typeof body.version === "number" ? body.version : undefined,
+      );
+      if (!version) return refuse(404, "not_found");
+      const kind = String(body.contact_kind ?? "");
+      const contactId = String(body.contact_id ?? "");
+      const person =
+        kind === "person" ? people.find((candidate) => candidate.id === contactId) : undefined;
+      const lead =
+        kind === "lead" ? leads.find((candidate) => candidate.id === contactId) : undefined;
+      const variables: Record<string, string> = person
+        ? mailVariables(mailPersonRecipient(person))
+        : lead
+          ? mailVariables(mailLeadRecipient(lead))
+          : {
+              first_name: "Ada",
+              last_name: "Lovelace",
+              full_name: "Ada Lovelace",
+              email: "ada@example.com",
+              company: "Example Capital",
+              title: "Portfolio Manager",
+              country: "United Kingdom",
+            };
+      variables.sender_name = "Quantify Terminal";
+      variables.sender_email = "news@mail.quantifyterminal.com";
+      variables.owner_name = found.member.display_name;
+      const rendered = mailRenderMessage(
+        version,
+        variables,
+        row.kind === "sequence" ? "sales" : String(body.topic ?? "updates"),
+        "00000000-0000-4000-8000-000000000000",
+      );
+      if ("missing" in rendered)
+        return ok({ ok_render: false, missing: rendered.missing, variables });
+      return ok({
+        ok_render: true,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        variables,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/templates/{template_id}/archive",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const row = mailTemplates.find((candidate) => candidate.id === params.template_id);
+      if (!row) return refuse(404, "not_found");
+      const restore = Boolean(body.restore);
+      row.archived_at = restore ? null : now();
+      audit("mail.template_archived", caller(headers)!.member.id, "mail_template", row.id, "", {
+        restored: restore,
+      });
+      return ok({ archived: !restore });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/segments",
+    auth: true,
+    capability: "crm:read",
+    handler: () =>
+      ok({
+        segments: [...mailSegments]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(mailSegmentView),
+        fields: {
+          people: Object.entries(MAIL_PEOPLE_FIELDS).map(([key, label]) => ({ key, label })),
+          leads: Object.entries(MAIL_LEAD_FIELDS).map(([key, label]) => ({ key, label })),
+        },
+        ops: MAIL_OPS,
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/segments/save",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const segmentId = String(body.segment_id ?? "");
+      const existing = segmentId ? mailSegments.find((row) => row.id === segmentId) : undefined;
+      if (segmentId && !existing) return refuse(404, "not_found");
+      const name = String(body.name ?? existing?.name ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!name) return refuse(400, "malformed_request", { name: "name it" });
+      const kind = String(body.kind ?? existing?.kind ?? "people");
+      if (kind !== "people" && kind !== "leads")
+        return refuse(400, "malformed_request", { kind: "people or leads" });
+      const { conditions, errors } = mailParseConditions(body.conditions ?? [], kind);
+      if (Object.keys(errors).length) return refuse(400, "malformed_request", errors);
+      const serialised = conditions.map(
+        (condition) => `${condition.field}:${condition.op}:${condition.value}`,
+      );
+      const count = mailEvaluateSegment(kind, conditions).length;
+      let row = existing;
+      if (row)
+        Object.assign(row, {
+          name,
+          kind,
+          conditions: serialised,
+          last_count: count,
+          last_evaluated_at: now(),
+        });
+      else {
+        row = {
+          id: randomUUID(),
+          name,
+          kind: kind as MailSegmentRow["kind"],
+          conditions: serialised,
+          last_count: count,
+          last_evaluated_at: now(),
+          created_by: found.member.id,
+          created_at: now(),
+          archived_at: null,
+        };
+        mailSegments.push(row);
+      }
+      audit("mail.segment_saved", found.member.id, "mail_segment", row.id, "", { name, count });
+      return ok({ segment: mailSegmentView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/segments/preview",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ body }) => {
+      const kind = String(body.kind ?? "people");
+      if (kind !== "people" && kind !== "leads")
+        return refuse(400, "malformed_request", { kind: "people or leads" });
+      const { conditions, errors } = mailParseConditions(body.conditions ?? [], kind);
+      if (Object.keys(errors).length) return refuse(400, "malformed_request", errors);
+      const decided = mailDecide(
+        mailEvaluateSegment(kind, conditions),
+        String(body.topic ?? "updates"),
+        "",
+        [],
+      );
+      return ok({ conditions, ...mailSummarise(decided) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/segments/{segment_id}/archive",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const row = mailSegments.find((candidate) => candidate.id === params.segment_id);
+      if (!row) return refuse(404, "not_found");
+      const restore = Boolean(body.restore);
+      row.archived_at = restore ? null : now();
+      audit("mail.segment_archived", caller(headers)!.member.id, "mail_segment", row.id, "", {
+        restored: restore,
+      });
+      return ok({ archived: !restore });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/campaigns",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers }) => {
+      mailRunWorker();
+      const role = caller(headers)!.member.role;
+      return ok({
+        campaigns: [...mailCampaigns]
+          .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+          .map(mailCampaignView),
+        topics: MAIL_MARKETING_TOPICS.map((key) => ({ key, label: MAIL_TOPICS[key]! })),
+        may_send: (CAPABILITIES[role] ?? []).includes("mail:send"),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const checked = mailCampaignFields(body, undefined);
+      if ("error" in checked) return checked.error;
+      const row: MailCampaignRow = {
+        id: randomUUID(),
+        state: "draft",
+        scheduled_at: null,
+        requires_approval: false,
+        approved_by: "",
+        approved_at: null,
+        pause_reason: "",
+        paused_at: null,
+        counts: mailEmptyCounts(),
+        started_at: null,
+        completed_at: null,
+        created_by: found.member.id,
+        created_at: now(),
+        updated_at: now(),
+        ...checked.fields,
+      };
+      mailCampaigns.push(row);
+      audit("mail.campaign_created", found.member.id, "mail_campaign", row.id, "", {
+        name: row.name,
+      });
+      return ok({ campaign: mailCampaignView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/campaigns/{campaign_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      mailRunWorker();
+      const row = mailCampaigns.find((candidate) => candidate.id === params.campaign_id);
+      if (!row) return refuse(404, "not_found");
+      const messages = mailMessages.filter((message) => message.campaign_id === row.id);
+      const byState: Record<string, number> = {};
+      const skippedBy: Record<string, number> = {};
+      for (const message of messages) {
+        byState[message.state] = (byState[message.state] ?? 0) + 1;
+        if (message.state === "skipped")
+          skippedBy[message.skip_reason] = (skippedBy[message.skip_reason] ?? 0) + 1;
+      }
+      const maySend = (CAPABILITIES[found.member.role] ?? []).includes("mail:send");
+      const payload: Record<string, unknown> = {
+        campaign: mailCampaignView(row),
+        messages_by_state: byState,
+        skipped_by_reason: skippedBy,
+        messages: [...messages]
+          .sort((a, b) => (b.sent_at ?? b.scheduled_at).localeCompare(a.sent_at ?? a.scheduled_at))
+          .slice(0, 100)
+          .map((message) => mailMessageView(message)),
+        may_send: maySend,
+        may_approve: maySend && row.created_by !== found.member.id,
+      };
+      if (["draft", "review", "approved"].includes(row.state)) {
+        const summary = mailCampaignPreview(row);
+        payload.preview = summary;
+        payload.checklist = mailChecklist(row, summary.eligible, summary.skipped);
+      }
+      return ok(payload);
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/update",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const row = mailCampaigns.find((candidate) => candidate.id === params.campaign_id);
+      if (!row) return refuse(404, "not_found");
+      if (!["draft", "review", "approved"].includes(row.state))
+        return refuse(400, "malformed_request", { state: "only a draft can change" });
+      const checked = mailCampaignFields(body, row);
+      if ("error" in checked) return checked.error;
+      Object.assign(row, checked.fields, {
+        state: "draft",
+        requires_approval: false,
+        approved_by: "",
+        approved_at: null,
+        updated_at: now(),
+      });
+      audit("mail.campaign_updated", caller(headers)!.member.id, "mail_campaign", row.id, "", {});
+      return ok({ campaign: mailCampaignView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/preview",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params }) => {
+      const row = mailCampaigns.find((candidate) => candidate.id === params.campaign_id);
+      if (!row) return refuse(404, "not_found");
+      const summary = mailCampaignPreview(row);
+      return ok({
+        ...summary,
+        checklist: mailChecklist(row, summary.eligible, summary.skipped),
+        approval_threshold: mailSettings.approval_threshold,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/test",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailCampaigns.find((candidate) => candidate.id === params.campaign_id);
+      if (!row) return refuse(404, "not_found");
+      const to = mailNorm(body.to_email || found.member.email);
+      const allowed = new Set([
+        found.member.email.toLowerCase(),
+        ...mailSettings.seed_addresses,
+        ...staff.filter((member) => member.is_active).map((member) => member.email.toLowerCase()),
+      ]);
+      if (!allowed.has(to))
+        return refuse(400, "malformed_request", {
+          to_email: "a colleague's address or a seed inbox",
+        });
+      const version = mailVersionOf(row.template_id, row.template_version);
+      if (!version)
+        return refuse(400, "malformed_request", { campaign: "sender or template gone" });
+      const messageId = randomUUID();
+      const rendered = mailRenderMessage(
+        version,
+        {
+          first_name: "Ada",
+          full_name: "Ada Lovelace",
+          company: "Example Capital",
+          sender_name: "Quantify Terminal",
+          email: to,
+        },
+        row.topic,
+        messageId,
+      );
+      if ("missing" in rendered)
+        return refuse(400, "malformed_request", {
+          template: `missing token ${rendered.missing} for the sample contact`,
+        });
+      mailProviderCounter += 1;
+      mailMessages.push({
+        id: messageId,
+        kind: "test",
+        campaign_id: "",
+        enrolment_id: "",
+        step_no: null,
+        sender_id: row.sender_id,
+        topic: row.topic,
+        contact_kind: "staff",
+        contact_id: "",
+        company_id: "",
+        email: to,
+        email_norm: to,
+        variables: {},
+        template_id: row.template_id,
+        template_version: row.template_version,
+        state: "sent",
+        scheduled_at: now(),
+        sent_at: now(),
+        delivered_at: null,
+        first_clicked_at: null,
+        first_opened_at: null,
+        bounced_at: null,
+        complained_at: null,
+        unsubscribed_at: null,
+        provider_message_id: `<mock-${mailProviderCounter}@mail.test>`,
+        provider_status: "sent",
+        subject: `[Test] ${rendered.subject}`,
+        in_reply_to: "",
+        skip_reason: "",
+        last_error: "",
+        attempts: 1,
+        is_seed: false,
+      });
+      audit("mail.test_sent", found.member.id, "mail_campaign", row.id, "", { to: mailMask(to) });
+      return ok({ status: "sent", message_id: messageId, error_code: "" });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/submit",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const row = mailCampaigns.find((candidate) => candidate.id === params.campaign_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.state !== "draft")
+        return refuse(400, "malformed_request", { state: `already ${row.state}` });
+      const summary = mailCampaignPreview(row);
+      const blocking = mailChecklist(row, summary.eligible, summary.skipped).filter(
+        (item) => item.blocking && !item.ok && item.key !== "approval",
+      );
+      if (blocking.length)
+        return refuse(400, "malformed_request", {
+          checklist: blocking.map((item) => item.key).join(", "),
+        });
+      const requires = summary.eligible >= mailSettings.approval_threshold || summary.has_customers;
+      Object.assign(row, {
+        state: requires ? "review" : "approved",
+        requires_approval: requires,
+        updated_at: now(),
+      });
+      audit("mail.campaign_submitted", found.member.id, "mail_campaign", row.id, "", {
+        eligible: summary.eligible,
+        requires_approval: requires,
+      });
+      return ok({
+        state: row.state,
+        requires_approval: requires,
+        eligible: summary.eligible,
+        skipped: summary.skipped,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/approve",
+    auth: true,
+    capability: "mail:send",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailCampaigns.find((candidate) => candidate.id === params.campaign_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.state !== "review")
+        return refuse(400, "malformed_request", { state: `${row.state}, not in review` });
+      if (row.created_by === found.member.id)
+        return refuse(403, "forbidden", { reason: "own-request" });
+      if (String(body.decision ?? "approve") === "decline") {
+        Object.assign(row, { state: "draft", requires_approval: false, updated_at: now() });
+        audit(
+          "mail.campaign_declined",
+          found.member.id,
+          "mail_campaign",
+          row.id,
+          String(body.note ?? ""),
+          {},
+        );
+        return ok({ state: "draft" });
+      }
+      Object.assign(row, {
+        state: "approved",
+        approved_by: found.member.id,
+        approved_at: now(),
+        updated_at: now(),
+      });
+      audit(
+        "mail.campaign_approved",
+        found.member.id,
+        "mail_campaign",
+        row.id,
+        String(body.note ?? ""),
+        {},
+      );
+      return ok({ state: "approved" });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/schedule",
+    auth: true,
+    capability: "mail:send",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailCampaigns.find((candidate) => candidate.id === params.campaign_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.state !== "approved")
+        return refuse(400, "malformed_request", { state: `${row.state}, not approved` });
+      const raw = String(body.scheduled_at ?? "").trim();
+      const start = raw ? new Date(raw) : new Date();
+      if (Number.isNaN(start.getTime()))
+        return refuse(400, "malformed_request", { scheduled_at: "an ISO moment" });
+      if (start.getTime() > Date.now() + 30 * 86_400_000)
+        return refuse(400, "malformed_request", { scheduled_at: "within 30 days" });
+      const summary = mailCampaignPreview(row);
+      const blocking = mailChecklist(row, summary.eligible, summary.skipped).filter(
+        (item) => item.blocking && !item.ok,
+      );
+      if (blocking.length)
+        return refuse(400, "malformed_request", {
+          checklist: blocking.map((item) => item.key).join(", "),
+        });
+      const outcome = mailEnqueue(row, start.toISOString().replace(/\.\d{3}Z$/, "Z"));
+      audit("mail.campaign_scheduled", found.member.id, "mail_campaign", row.id, "", outcome);
+      mailRunWorker();
+      return ok(outcome);
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/pause",
+    auth: true,
+    capability: "mail:send",
+    handler: mailCampaignControl("pause"),
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/resume",
+    auth: true,
+    capability: "mail:send",
+    handler: mailCampaignControl("resume"),
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/campaigns/{campaign_id}/cancel",
+    auth: true,
+    capability: "mail:send",
+    handler: mailCampaignControl("cancel"),
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/sequences",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers }) =>
+      ok({
+        sequences: [...mailSequences]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(mailSequenceView),
+        outcomes: Object.entries(MAIL_OUTCOMES).map(([key, label]) => ({ key, label })),
+        may_send: (CAPABILITIES[caller(headers)!.member.role] ?? []).includes("mail:send"),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/sequences/save",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const sequenceId = String(body.sequence_id ?? "");
+      const existing = sequenceId ? mailSequences.find((row) => row.id === sequenceId) : undefined;
+      if (sequenceId && !existing) return refuse(404, "not_found");
+      const name = String(body.name ?? existing?.name ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!name) return refuse(400, "malformed_request", { name: "name it" });
+      const kind = String(body.kind ?? existing?.kind ?? "prospect");
+      if (kind !== "prospect" && kind !== "customer")
+        return refuse(400, "malformed_request", { kind: "prospect or customer" });
+      const steps: MailStepRow[] = [];
+      if ("steps" in body || !existing) {
+        const raw = Array.isArray(body.steps) ? body.steps : [];
+        if (!raw.length) return refuse(400, "malformed_request", { steps: "at least one step" });
+        if (raw.length > 8) return refuse(400, "malformed_request", { steps: "at most 8 steps" });
+        for (const [index, item] of raw.entries()) {
+          const step = item as Record<string, unknown>;
+          const stepKind = String(step.kind ?? "email");
+          const delay = Number(step.delay_days ?? 0);
+          if (index === 0 && stepKind !== "email")
+            return refuse(400, "malformed_request", {
+              "steps[0].kind": "the first step is an email",
+            });
+          if (stepKind === "email") {
+            const template = mailTemplates.find((row) => row.id === String(step.template_id ?? ""));
+            if (!template || template.archived_at || template.kind !== "sequence")
+              return refuse(400, "malformed_request", {
+                [`steps[${index}].template_id`]: "a live sequence template",
+              });
+            steps.push({
+              step_no: index + 1,
+              kind: "email",
+              delay_days: index === 0 ? 0 : delay,
+              template_id: template.id,
+              template_version: template.current_version,
+              thread: index === 0 ? "new" : step.thread === "new" ? "new" : "reply",
+              task_title: "",
+            });
+          } else {
+            const title = String(step.task_title ?? "")
+              .trim()
+              .slice(0, 200);
+            if (!title)
+              return refuse(400, "malformed_request", {
+                [`steps[${index}].task_title`]: "say what to do",
+              });
+            steps.push({
+              step_no: index + 1,
+              kind: "task",
+              delay_days: delay,
+              template_id: "",
+              template_version: null,
+              thread: "new",
+              task_title: title,
+            });
+          }
+        }
+      }
+      const fields = {
+        name,
+        kind: kind as MailSequenceRow["kind"],
+        sender_id: String(body.sender_id ?? existing?.sender_id ?? "") || "",
+        cooling_days: Number(body.cooling_days ?? existing?.cooling_days ?? 90),
+        recent_contact_days: Number(
+          body.recent_contact_days ?? existing?.recent_contact_days ?? 14,
+        ),
+        company_limit: Number(body.company_limit ?? existing?.company_limit ?? 2),
+        updated_at: now(),
+      };
+      let row = existing;
+      if (row) Object.assign(row, fields);
+      else {
+        row = {
+          id: randomUUID(),
+          state: "draft",
+          created_by: found.member.id,
+          created_at: now(),
+          ...fields,
+        };
+        mailSequences.push(row);
+      }
+      if (steps.length) mailSteps.set(row.id, steps);
+      audit("mail.sequence_saved", found.member.id, "mail_sequence", row.id, "", {
+        name,
+        steps: steps.length,
+      });
+      return ok({ sequence: mailSequenceView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/sequences/{sequence_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, params }) => {
+      mailRunWorker();
+      const row = mailSequences.find((candidate) => candidate.id === params.sequence_id);
+      if (!row) return refuse(404, "not_found");
+      const steps = mailSteps.get(row.id) ?? [];
+      const enrolments = mailEnrolments.filter((candidate) => candidate.sequence_id === row.id);
+      const perStep = steps.map((step) => {
+        const messages = mailMessages.filter(
+          (message) =>
+            message.step_no === step.step_no &&
+            enrolments.some((enrolment) => enrolment.id === message.enrolment_id),
+        );
+        return {
+          step_no: step.step_no,
+          scheduled: messages.filter((message) =>
+            ["pending", "retry", "claimed", "held"].includes(message.state),
+          ).length,
+          sent: messages.filter(
+            (message) => MAIL_SENT_LIKE.includes(message.state) || message.state === "delivered",
+          ).length,
+          delivered: messages.filter((message) => message.delivered_at).length,
+          bounced: messages.filter((message) =>
+            ["hard_bounced", "soft_bounced"].includes(message.state),
+          ).length,
+          clicked: messages.filter((message) => message.first_clicked_at).length,
+          skipped: messages.filter((message) => message.state === "skipped").length,
+        };
+      });
+      return ok({
+        sequence: mailSequenceView(row),
+        enrolments: [...enrolments]
+          .sort((a, b) => b.enrolled_at.localeCompare(a.enrolled_at))
+          .map(mailEnrolmentView),
+        per_step: perStep,
+        may_send: (CAPABILITIES[caller(headers)!.member.role] ?? []).includes("mail:send"),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/sequences/{sequence_id}/state",
+    auth: true,
+    capability: "mail:send",
+    handler: ({ headers, params, body }) => {
+      const row = mailSequences.find((candidate) => candidate.id === params.sequence_id);
+      if (!row) return refuse(404, "not_found");
+      const state = String(body.state ?? "");
+      if (!["active", "paused", "archived"].includes(state))
+        return refuse(400, "malformed_request", { state: "active, paused or archived" });
+      if (state === "active" && !(mailSteps.get(row.id) ?? []).length)
+        return refuse(400, "malformed_request", { steps: "add steps first" });
+      let ended = 0;
+      if (state === "archived") {
+        for (const enrolment of mailEnrolments.filter(
+          (candidate) =>
+            candidate.sequence_id === row.id && ["active", "paused"].includes(candidate.state),
+        )) {
+          mailExit(enrolment, "MANUAL", "stop", caller(headers)!.member.id, "sequence archived");
+          ended += 1;
+        }
+      }
+      row.state = state as MailSequenceRow["state"];
+      row.updated_at = now();
+      audit("mail.sequence_state", caller(headers)!.member.id, "mail_sequence", row.id, "", {
+        state,
+        ended,
+      });
+      return ok({ state, ended });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/sequences/{sequence_id}/enrol/preview",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailSequences.find((candidate) => candidate.id === params.sequence_id);
+      if (!row) return refuse(404, "not_found");
+      const contacts = Array.isArray(body.contacts)
+        ? (body.contacts as Array<{ kind: string; id: string }>).slice(0, 200)
+        : [];
+      if (!contacts.length)
+        return refuse(400, "malformed_request", { contacts: "choose at least one person or lead" });
+      const verdicts = mailEnrolVerdicts(
+        row,
+        contacts,
+        found.member,
+        (CAPABILITIES[found.member.role] ?? []).includes("mail:send"),
+      ).map(mailPublicVerdict);
+      return ok({
+        verdicts,
+        will_enrol: verdicts.filter((entry) => entry.allowed).length,
+        will_skip: verdicts.filter((entry) => !entry.allowed).length,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/sequences/{sequence_id}/enrol",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailSequences.find((candidate) => candidate.id === params.sequence_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.state !== "active")
+        return refuse(400, "malformed_request", { state: "the sequence is not active" });
+      const contacts = Array.isArray(body.contacts)
+        ? (body.contacts as Array<{ kind: string; id: string }>).slice(0, 200)
+        : [];
+      if (!contacts.length)
+        return refuse(400, "malformed_request", { contacts: "choose at least one person or lead" });
+      const verdicts = mailEnrolVerdicts(
+        row,
+        contacts,
+        found.member,
+        (CAPABILITIES[found.member.role] ?? []).includes("mail:send"),
+      );
+      const first = (mailSteps.get(row.id) ?? [])[0];
+      const enrolled: string[] = [];
+      const shown = verdicts.map((entry) => {
+        const view: Record<string, unknown> = mailPublicVerdict(entry);
+        if (entry.allowed && entry.recipient && entry.sender && first) {
+          const enrolment: MailEnrolmentRow = {
+            id: randomUUID(),
+            sequence_id: row.id,
+            contact_kind: entry.recipient.contact_kind as "person" | "lead",
+            contact_id: entry.recipient.contact_id,
+            company_id: entry.recipient.company_id,
+            email_norm: mailNorm(entry.recipient.email),
+            owner_staff_id: found.member.id,
+            sender_id: entry.sender.id,
+            state: "active",
+            current_step: 0,
+            waiting_task_id: "",
+            exit_reason: "",
+            outcome: "",
+            paused_until: null,
+            pause_reason: "",
+            thread_subject: "",
+            thread_message_id: "",
+            enrolled_at: now(),
+            enrolled_by: found.member.id,
+            last_sent_at: null,
+            exited_at: null,
+          };
+          mailEnrolments.push(enrolment);
+          mailStageStep(enrolment, first, mailTomorrowNine());
+          enrolled.push(enrolment.id);
+          view.enrolment_id = enrolment.id;
+        }
+        return view;
+      });
+      audit("mail.enrolled", found.member.id, "mail_sequence", row.id, "", {
+        enrolled: enrolled.length,
+      });
+      return ok({ enrolled: enrolled.length, enrolment_ids: enrolled, verdicts: shown });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/enrolments/{enrolment_id}/outcome",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailEnrolments.find((candidate) => candidate.id === params.enrolment_id);
+      if (!row) return refuse(404, "not_found");
+      if (
+        row.owner_staff_id !== found.member.id &&
+        !(CAPABILITIES[found.member.role] ?? []).includes("mail:send")
+      )
+        return refuse(403, "forbidden", { reason: "not-yours" });
+      if (!["active", "paused"].includes(row.state))
+        return refuse(400, "malformed_request", { state: `already ${row.state}` });
+      const outcome = String(body.outcome ?? "");
+      if (!(outcome in MAIL_OUTCOMES))
+        return refuse(400, "malformed_request", {
+          outcome: `one of ${Object.keys(MAIL_OUTCOMES).join(", ")}`,
+        });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      if (outcome === "out_of_office") {
+        const until = String(body.pause_until ?? "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(until) || until <= new Date().toISOString().slice(0, 10))
+          return refuse(400, "malformed_request", { pause_until: "a return date after today" });
+        Object.assign(row, { state: "paused", paused_until: until, pause_reason: "OUT_OF_OFFICE" });
+        for (const message of mailMessages)
+          if (message.enrolment_id === row.id && ["pending", "retry"].includes(message.state)) {
+            message.state = "cancelled";
+            message.skip_reason = "OUT_OF_OFFICE";
+          }
+        audit("mail.enrolment_outcome", found.member.id, "mail_enrolment", row.id, note, {
+          outcome,
+        });
+        return ok({ outcome, state: "paused", until });
+      }
+      mailExit(row, MAIL_OUTCOME_REASONS[outcome]!, outcome, found.member.id, note);
+      if (outcome === "unsubscribe") {
+        const existing = mailConsent.get(row.email_norm);
+        mailConsent.set(row.email_norm, {
+          email_norm: row.email_norm,
+          marketing_state: existing?.marketing_state ?? "unknown",
+          topics_off: existing?.topics_off ?? [],
+          sales_stop: true,
+          lawful_basis: existing?.lawful_basis ?? "",
+          source: `outcome:${found.member.id}`.slice(0, 60),
+          timezone: existing?.timezone ?? "",
+          updated_at: now(),
+        });
+      }
+      if (outcome === "bounced")
+        mailSuppress(
+          row.email_norm,
+          "hard_bounce",
+          `outcome:${found.member.id}`,
+          note,
+          found.member.id,
+        );
+      if (outcome === "replied_positive" || outcome === "meeting_booked")
+        mailPauseCompany(row.company_id, row.id);
+      if (row.contact_kind === "lead") {
+        const lead = leads.find((candidate) => candidate.id === row.contact_id);
+        if (
+          lead &&
+          (outcome === "replied_positive" || outcome === "meeting_booked") &&
+          ["new", "attempting"].includes(lead.stage)
+        )
+          lead.stage = "connected";
+        if (
+          lead &&
+          (outcome === "not_interested" || outcome === "wrong_person") &&
+          ["new", "attempting", "connected"].includes(lead.stage)
+        ) {
+          lead.stage = "disqualified";
+          lead.disqualify_reason = outcome === "not_interested" ? "not_a_fit" : "other";
+        }
+      }
+      audit("mail.enrolment_outcome", found.member.id, "mail_enrolment", row.id, note, { outcome });
+      return ok({ outcome, state: "exited", reason: MAIL_OUTCOME_REASONS[outcome] });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/enrolments/{enrolment_id}/resume",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const row = mailEnrolments.find((candidate) => candidate.id === params.enrolment_id);
+      if (!row) return refuse(404, "not_found");
+      if (
+        row.owner_staff_id !== found.member.id &&
+        !(CAPABILITIES[found.member.role] ?? []).includes("mail:send")
+      )
+        return refuse(403, "forbidden", { reason: "not-yours" });
+      if (row.state !== "paused")
+        return refuse(400, "malformed_request", { state: `${row.state}, not paused` });
+      Object.assign(row, { state: "active", paused_until: null, pause_reason: "" });
+      const steps = mailSteps.get(row.sequence_id) ?? [];
+      const sentSteps = new Set(
+        mailMessages
+          .filter((message) => message.enrolment_id === row.id && message.sent_at)
+          .map((message) => message.step_no),
+      );
+      const next = steps.find(
+        (step) => !sentSteps.has(step.step_no) && step.step_no >= Math.max(row.current_step, 1),
+      );
+      if (next) mailStageStep(row, next, now());
+      audit("mail.enrolment_resumed", found.member.id, "mail_enrolment", row.id, "", {});
+      return ok({ state: "active" });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/replies",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const mayAll = (CAPABILITIES[found.member.role] ?? []).includes("mail:send");
+      const rows = mailEnrolments
+        .filter(
+          (row) =>
+            (row.state === "active" || row.state === "paused") &&
+            (mayAll || row.owner_staff_id === found.member.id),
+        )
+        .map((row) => ({
+          ...mailEnrolmentView(row),
+          sequence_name:
+            mailSequences.find((sequence) => sequence.id === row.sequence_id)?.name ?? "",
+        }))
+        .filter((view) => view.awaiting_reply || view.state === "paused")
+        .sort((a, b) => String(a.last_sent_at ?? "").localeCompare(String(b.last_sent_at ?? "")));
+      return ok({
+        enrolments: rows,
+        outcomes: Object.entries(MAIL_OUTCOMES).map(([key, label]) => ({ key, label })),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/suppressions",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const needle = mailNorm(query.q);
+      const released = query.released === "1";
+      const rows = mailSuppressions
+        .filter(
+          (row) => (released || !row.released_at) && (!needle || row.email_norm.includes(needle)),
+        )
+        .map(mailSuppressionView);
+      const byReason: Record<string, number> = {};
+      for (const row of mailSuppressions)
+        if (!row.released_at) byReason[row.reason] = (byReason[row.reason] ?? 0) + 1;
+      return ok({
+        suppressions: rows,
+        by_reason: byReason,
+        reasons: [
+          "hard_bounce",
+          "complaint",
+          "unsubscribe",
+          "manual",
+          "invalid_address",
+          "provider_blocked",
+          "soft_bounce_limit",
+        ],
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/suppressions/add",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const norm = mailNorm(body.email);
+      if (!mailValidEmail(norm))
+        return refuse(400, "malformed_request", { email: "a valid address" });
+      const detail = String(body.detail ?? "")
+        .trim()
+        .slice(0, 400);
+      if (!detail) return refuse(400, "malformed_request", { detail: "say why" });
+      const row: MailSuppressionRow = {
+        id: randomUUID(),
+        email_norm: norm,
+        scope: "global",
+        scope_key: "",
+        reason: "manual",
+        source: `admin:${found.member.id}`,
+        detail,
+        created_at: now(),
+        created_by: found.member.id,
+        released_at: null,
+        released_by: "",
+        release_note: "",
+      };
+      mailSuppressions.unshift(row);
+      let cancelled = 0;
+      for (const message of mailMessages)
+        if (message.email_norm === norm && ["pending", "retry", "held"].includes(message.state)) {
+          message.state = "cancelled";
+          message.skip_reason = "SUPPRESSED";
+          cancelled += 1;
+        }
+      for (const enrolment of mailEnrolments)
+        if (enrolment.email_norm === norm && ["active", "paused"].includes(enrolment.state))
+          mailExit(enrolment, "MANUAL", "stop", found.member.id, detail);
+      audit("mail.suppression_added", found.member.id, "mail_suppression", row.id, detail, {
+        cancelled,
+      });
+      return ok({ suppression: mailSuppressionView(row), cancelled });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/suppressions/{suppression_id}/release",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailSuppressions.find((candidate) => candidate.id === params.suppression_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.released_at) return refuse(400, "malformed_request", { state: "already released" });
+      if (row.reason === "complaint" && found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      if (!note)
+        return refuse(400, "malformed_request", {
+          note: "say why mail may go to this address again",
+        });
+      Object.assign(row, { released_at: now(), released_by: found.member.id, release_note: note });
+      audit("mail.suppression_released", found.member.id, "mail_suppression", row.id, note, {});
+      return ok({ released: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/consent",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const norm = mailNorm(query.email);
+      if (!norm) return refuse(400, "malformed_request", { email: "which address" });
+      return ok({
+        consent: mailConsentView(norm),
+        topics: MAIL_MARKETING_TOPICS.map((key) => ({ key, label: MAIL_TOPICS[key]! })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/consent/set",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const norm = mailNorm(body.email);
+      if (!mailValidEmail(norm))
+        return refuse(400, "malformed_request", { email: "a valid address" });
+      const state = String(body.marketing_state ?? "unknown");
+      if (!["unknown", "subscribed", "unsubscribed"].includes(state))
+        return refuse(400, "malformed_request", {
+          marketing_state: "unknown, subscribed or unsubscribed",
+        });
+      const topics = Array.isArray(body.topics_off)
+        ? body.topics_off.map(String).filter((topic) => MAIL_MARKETING_TOPICS.includes(topic))
+        : [];
+      const row: MailConsentRow = {
+        email_norm: norm,
+        marketing_state: state as MailConsentRow["marketing_state"],
+        topics_off: [...new Set(topics)],
+        sales_stop: Boolean(body.sales_stop),
+        lawful_basis: String(body.lawful_basis ?? ""),
+        source: String(body.source ?? "manual").slice(0, 60),
+        timezone: String(body.timezone ?? "").trim(),
+        updated_at: now(),
+      };
+      mailConsent.set(norm, row);
+      if (row.sales_stop)
+        for (const enrolment of mailEnrolments)
+          if (enrolment.email_norm === norm && ["active", "paused"].includes(enrolment.state))
+            mailExit(enrolment, "UNSUBSCRIBED", "unsubscribe", found.member.id, "sales stop set");
+      audit("mail.consent_set", found.member.id, "mail_consent", norm, "", {});
+      return ok({ consent: mailConsentView(norm) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/settings/mail",
+    auth: true,
+    capability: "hq:admin",
+    handler: () =>
+      ok({
+        sending_enabled: mailSettings.sending_enabled,
+        global_daily_cap: mailSettings.global_daily_cap,
+        hourly_cap: mailSettings.hourly_cap,
+        frequency_cap_per_week: mailSettings.frequency_cap_per_week,
+        approval_threshold: mailSettings.approval_threshold,
+        bounce_pause_pct: mailSettings.bounce_pause_pct,
+        complaint_pause_pct: mailSettings.complaint_pause_pct,
+        window_start: mailSettings.window_start,
+        window_end: mailSettings.window_end,
+        fallback_timezone: mailSettings.fallback_timezone,
+        postal_address: mailSettings.postal_address,
+        seed_addresses: mailSettings.seed_addresses,
+        webhook_configured: mailSettings.webhook_configured,
+        paused_reason: mailSettings.paused_reason,
+        last_worker_at: mailSettings.last_worker_at || null,
+        provider_backoff_until: null,
+        webhook_url_shape: "https://<service>/api/v1/public/mail/events/<secret>",
+        unsubscribe_url_shape: `${PORTAL_ORIGIN}/u/<token>`,
+        provider_configured: true,
+        topics: Object.entries(MAIL_TOPICS).map(([key, label]) => ({ key, label })),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/mail/update",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const errors: Record<string, string> = {};
+      const next = { ...mailSettings };
+      for (const [name, low, high] of [
+        ["global_daily_cap", 0, 100_000],
+        ["hourly_cap", 1, 10_000],
+        ["frequency_cap_per_week", 0, 50],
+        ["approval_threshold", 0, 1_000_000],
+      ] as const) {
+        if (!(name in body)) continue;
+        const value = body[name];
+        if (typeof value !== "number" || !Number.isInteger(value) || value < low || value > high)
+          errors[name] = `a whole number from ${low} to ${high}`;
+        else next[name] = value;
+      }
+      for (const name of ["bounce_pause_pct", "complaint_pause_pct"] as const) {
+        if (!(name in body)) continue;
+        const value = body[name];
+        if (typeof value !== "number" || value < 0 || value > 100)
+          errors[name] = "a percentage from 0 to 100";
+        else next[name] = value;
+      }
+      for (const name of ["window_start", "window_end"] as const) {
+        if (!(name in body)) continue;
+        const value = String(body[name] ?? "");
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) errors[name] = "HH:MM, 24-hour";
+        else next[name] = value;
+      }
+      if (("window_start" in body || "window_end" in body) && next.window_start >= next.window_end)
+        errors.window_end = "after the start";
+      if ("fallback_timezone" in body)
+        next.fallback_timezone = String(body.fallback_timezone ?? "UTC").trim() || "UTC";
+      if ("postal_address" in body)
+        next.postal_address = String(body.postal_address ?? "")
+          .trim()
+          .slice(0, 400);
+      if ("seed_addresses" in body) {
+        const raw = Array.isArray(body.seed_addresses)
+          ? body.seed_addresses.map(mailNorm).filter(Boolean)
+          : [];
+        if (raw.length > 5 || raw.some((item) => !mailValidEmail(item)))
+          errors.seed_addresses = "up to five valid addresses";
+        else next.seed_addresses = [...new Set(raw)];
+      }
+      if ("sending_enabled" in body) {
+        next.sending_enabled = Boolean(body.sending_enabled);
+        if (next.sending_enabled) next.paused_reason = "";
+      }
+      if (Object.keys(errors).length) return refuse(400, "malformed_request", errors);
+      Object.assign(mailSettings, next);
+      audit("mail.settings_updated", found.member.id, "settings", "mail", "", {
+        fields: Object.keys(body),
+      });
+      return ok({ settings: { ...mailSettings } });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/mail/webhook/rotate",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers }) => {
+      mailSettings.webhook_configured = true;
+      audit("mail.webhook_rotated", caller(headers)!.member.id, "settings", "mail", "", {});
+      return ok({
+        webhook_url: `https://account.example.test/api/v1/public/mail/events/${randomUUID().replace(/-/g, "")}`,
+        shown_once: ["webhook_url"],
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/worker/run",
+    auth: true,
+    capability: "mail:send",
+    handler: ({ headers }) => {
+      const report = mailRunWorker();
+      audit("mail.worker_run", caller(headers)!.member.id, "settings", "mail", "", report);
+      return ok({ report });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/report",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const days = Math.max(7, Math.min(90, Number(query.days ?? 30) || 30));
+      const perDay: Array<{ day: string; sent: number }> = [];
+      for (let offset = 13; offset >= 0; offset -= 1) {
+        const day = new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
+        perDay.push({
+          day,
+          sent: mailMessages.filter(
+            (row) => row.kind !== "test" && !row.is_seed && row.sent_at?.startsWith(day),
+          ).length,
+        });
+      }
+      const byReason: Record<string, number> = {};
+      for (const row of mailSuppressions)
+        if (!row.released_at) byReason[row.reason] = (byReason[row.reason] ?? 0) + 1;
+      const consent = { subscribed: 0, unknown: 0, unsubscribed: 0, sales_stop: 0 };
+      for (const row of mailConsent.values()) {
+        consent[row.marketing_state] += 1;
+        if (row.sales_stop) consent.sales_stop += 1;
+      }
+      return ok({
+        days,
+        totals: mailTotals(Date.now() - days * 86_400_000),
+        per_day: perDay,
+        campaigns: mailCampaigns
+          .filter((row) => row.state !== "draft")
+          .sort((a, b) =>
+            String(b.started_at ?? b.updated_at).localeCompare(
+              String(a.started_at ?? a.updated_at),
+            ),
+          )
+          .map(mailCampaignView),
+        sequences: mailSequences.map((sequence) => {
+          const enrolments = mailEnrolments.filter((row) => row.sequence_id === sequence.id);
+          const exits: Record<string, number> = {};
+          for (const row of enrolments)
+            if (row.exit_reason) exits[row.exit_reason] = (exits[row.exit_reason] ?? 0) + 1;
+          return {
+            sequence_id: sequence.id,
+            name: sequence.name,
+            state: sequence.state,
+            enrolled: enrolments.length,
+            active: enrolments.filter((row) => row.state === "active").length,
+            replied: enrolments.filter((row) => row.outcome === "replied_positive").length,
+            meetings: enrolments.filter(
+              (row) => row.outcome === "meeting_booked" || row.exit_reason === "MEETING_BOOKED",
+            ).length,
+            exits,
+          };
+        }),
+        caps_today: {
+          global: { sent: mailSentToday(), cap: mailSettings.global_daily_cap },
+          hour: {
+            sent: mailSentThisHour(),
+            cap: mailSettings.hourly_cap,
+          },
+          senders: mailSenders.map((row) => ({
+            ...mailSenderView(row),
+            sent_today: mailMessages.filter(
+              (message) =>
+                message.sender_id === row.id &&
+                message.kind !== "test" &&
+                message.sent_at?.startsWith(new Date().toISOString().slice(0, 10)),
+            ).length,
+          })),
+        },
+        suppressions_by_reason: byReason,
+        consent,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/messages/{message_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params }) => {
+      const row = mailMessages.find((candidate) => candidate.id === params.message_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        message: mailMessageView(row),
+        events: mailEvents
+          .filter((event) => event.message_id === row.id)
+          .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at)),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/history",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const norm = mailNorm(query.email);
+      if (!norm) return refuse(400, "malformed_request", { email: "which address" });
+      return ok({
+        email: norm,
+        consent: mailConsentView(norm),
+        suppressions: mailSuppressions
+          .filter((row) => row.email_norm === norm)
+          .map(mailSuppressionView),
+        messages: mailMessages
+          .filter((row) => row.email_norm === norm)
+          .sort((a, b) => (b.sent_at ?? b.scheduled_at).localeCompare(a.sent_at ?? a.scheduled_at))
+          .slice(0, 200)
+          .map((row) => mailMessageView(row)),
+        enrolments: mailEnrolments
+          .filter((row) => row.email_norm === norm)
+          .map((row) => ({
+            enrolment_id: row.id,
+            sequence_id: row.sequence_id,
+            state: row.state,
+            outcome: row.outcome,
+            exit_reason: row.exit_reason,
+            enrolled_at: row.enrolled_at,
+          })),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "public/mail/unsubscribe/{token}",
+    handler: ({ params }) => {
+      const message = mailMessageForToken(String(params.token ?? ""));
+      if (!message) return refuse(404, "not_found");
+      return ok(mailUnsubscribeView(message));
+    },
+  },
+  {
+    method: "POST",
+    pattern: "public/mail/unsubscribe",
+    handler: ({ body }) => {
+      const message = mailMessageForToken(String(body.token ?? ""));
+      if (!message) return refuse(404, "not_found");
+      const mode = String(body.mode ?? "one_click");
+      if (!["one_click", "all", "topics", "sales"].includes(mode))
+        return refuse(400, "malformed_request", { mode: "one of one_click, all, topics, sales" });
+      const norm = message.email_norm;
+      const existing = mailConsent.get(norm);
+      const consent: MailConsentRow = existing
+        ? { ...existing }
+        : {
+            email_norm: norm,
+            marketing_state: "unknown",
+            topics_off: [],
+            sales_stop: false,
+            lawful_basis: "",
+            source: "",
+            timezone: "",
+            updated_at: now(),
+          };
+      let cancelled = 0;
+      if (message.topic === "sales" || mode === "sales") {
+        consent.sales_stop = true;
+        for (const enrolment of mailEnrolments)
+          if (enrolment.email_norm === norm && ["active", "paused"].includes(enrolment.state))
+            mailExit(enrolment, "UNSUBSCRIBED", "unsubscribe", "", "the stop link");
+      } else if (mode === "topics") {
+        const chosen = Array.isArray(body.topics_off)
+          ? body.topics_off.map(String).filter((topic) => MAIL_MARKETING_TOPICS.includes(topic))
+          : [];
+        consent.topics_off = [...new Set(chosen)];
+        if (chosen.length >= MAIL_MARKETING_TOPICS.length) consent.marketing_state = "unsubscribed";
+        else if (consent.marketing_state === "unsubscribed") consent.marketing_state = "subscribed";
+      } else {
+        consent.marketing_state = "unsubscribed";
+        mailSuppress(
+          norm,
+          "unsubscribe",
+          mode === "one_click" ? "one_click" : "landing_page",
+          mode,
+        );
+        for (const row of mailMessages)
+          if (
+            row.email_norm === norm &&
+            row.kind === "campaign" &&
+            ["pending", "retry", "held"].includes(row.state)
+          ) {
+            row.state = "cancelled";
+            row.skip_reason = "UNSUBSCRIBED";
+            cancelled += 1;
+          }
+      }
+      consent.updated_at = now();
+      consent.source = mode === "one_click" ? "one_click" : "landing_page";
+      mailConsent.set(norm, consent);
+      if (!message.unsubscribed_at) {
+        message.unsubscribed_at = now();
+        const campaign = mailCampaigns.find((row) => row.id === message.campaign_id);
+        if (campaign && !message.is_seed) campaign.counts.unsubscribed += 1;
+      }
+      audit("mail.unsubscribed", null, "mail_message", message.id, "", { mode });
+      return ok({ ...mailUnsubscribeView(message), done: true, cancelled });
+    },
+  },
+);
+
 seedTeam();
 seedOpenReview();
 seedPeopleOps();
@@ -10681,6 +15433,7 @@ seedViews();
 seedPasskeys();
 seedApprovals();
 seedSecurityEvents();
+seedMail();
 
 function accessView(row: AccessRow) {
   const todayIso = today();
@@ -12014,7 +16767,7 @@ const server = createServer((request, response) => {
     });
     // The mock consent screen: approve at once and send the browser back to the portal.
     if (request.method === "GET" && route === "mock/consent") {
-      const back = new URL("http://127.0.0.1:3000/admin/integrations/calendar/callback");
+      const back = new URL(`${PORTAL_ORIGIN}/admin/integrations/calendar/callback`);
       back.searchParams.set("code", "mock-code");
       back.searchParams.set("state", query.state ?? "");
       response.writeHead(302, { location: back.toString() }).end();
@@ -12047,6 +16800,7 @@ function resetWorld() {
   seedPasskeys();
   seedApprovals();
   seedSecurityEvents();
+  seedMail();
   seedSla();
   resetDeskRules();
   seedSources();

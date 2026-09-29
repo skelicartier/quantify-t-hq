@@ -13,7 +13,8 @@ const PUBLIC_EXACT = new Set([
   "/reset-password",
 ]);
 
-const PUBLIC_PREFIXES = ["/verify/"];
+// "/u/": the recipient's stop page and the one-click endpoint mailbox providers POST to.
+const PUBLIC_PREFIXES = ["/verify/", "/u/"];
 
 export function isPublicPath(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;

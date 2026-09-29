@@ -26,6 +26,22 @@ const WIDTHS = [
 
 type Shot = { name: string; path: string; ready?: string };
 
+/** Records the mock seeds for mail (`MAIL_IDS` in scripts/mock-hq-api.ts). */
+const MAIL = {
+  september: "ea400000-0000-4000-8000-000000000001",
+  october: "ea400000-0000-4000-8000-000000000002",
+  webinar: "ea400000-0000-4000-8000-000000000003",
+  roadmap: "ea400000-0000-4000-8000-000000000004",
+  newsletter: "ea400000-0000-4000-8000-000000000005",
+  releaseTemplate: "ea200000-0000-4000-8000-000000000001",
+  fundIntro: "ea500000-0000-4000-8000-000000000001",
+  // Three September messages whose footer links the public page is walked with: one only
+  // looked at, one unsubscribed by its button, one by the mailbox's one-click POST.
+  stopLooked: "ea600000-0000-4000-8000-000000000001",
+  stopPressed: "ea600000-0000-4000-8000-000000000002",
+  stopOneClick: "ea600000-0000-4000-8000-000000000003",
+};
+
 const SIGNED_IN_PAGES: Shot[] = [
   { name: "home", path: "/home", ready: "main#main-content" },
   { name: "support-queue", path: "/support", ready: ".desk" },
@@ -128,6 +144,48 @@ const SIGNED_IN_PAGES: Shot[] = [
   },
   { name: "admin-audit", path: "/admin/audit", ready: "main#main-content" },
   { name: "me-security", path: "/me/security", ready: "main#main-content" },
+  // Outbound mail: every tab, and a campaign in each state the seed holds.
+  { name: "mail", path: "/mail", ready: ".stat-grid" },
+  { name: "mail-campaigns", path: "/mail/campaigns", ready: ".data-table" },
+  { name: "mail-campaign-new", path: "/mail/campaigns/new", ready: ".campaign-form" },
+  { name: "mail-campaign-sending", path: `/mail/campaigns/${MAIL.october}`, ready: ".rhead" },
+  {
+    name: "mail-campaign-recipients",
+    path: `/mail/campaigns/${MAIL.october}?tab=recipients`,
+    ready: ".data-table",
+  },
+  { name: "mail-campaign-sent", path: `/mail/campaigns/${MAIL.september}`, ready: ".rhead" },
+  { name: "mail-campaign-paused", path: `/mail/campaigns/${MAIL.newsletter}`, ready: ".rhead" },
+  {
+    name: "mail-campaign-draft-preview",
+    path: `/mail/campaigns/${MAIL.roadmap}?tab=preview`,
+    ready: ".mail-preview",
+  },
+  { name: "mail-templates", path: "/mail/templates", ready: ".data-table" },
+  {
+    name: "mail-template",
+    path: `/mail/templates/${MAIL.releaseTemplate}`,
+    ready: ".mail-preview",
+  },
+  { name: "mail-template-new", path: "/mail/templates/new", ready: ".template-form" },
+  { name: "mail-segments", path: "/mail/segments", ready: ".data-table" },
+  { name: "mail-sequences", path: "/mail/sequences", ready: ".data-table" },
+  { name: "mail-sequence", path: `/mail/sequences/${MAIL.fundIntro}`, ready: ".data-table" },
+  {
+    name: "mail-sequence-steps",
+    path: `/mail/sequences/${MAIL.fundIntro}?tab=steps`,
+    ready: "main#main-content",
+  },
+  {
+    name: "mail-sequence-results",
+    path: `/mail/sequences/${MAIL.fundIntro}?tab=results`,
+    ready: "main#main-content",
+  },
+  { name: "mail-sequence-new", path: "/mail/sequences/new", ready: ".sequence-editor" },
+  { name: "mail-replies", path: "/mail/replies", ready: "main#main-content" },
+  { name: "mail-suppressions", path: "/mail/suppressions", ready: ".data-table" },
+  { name: "mail-reports", path: "/mail/reports", ready: ".data-table" },
+  { name: "mail-settings", path: "/mail/settings", ready: ".record-layout" },
 ];
 
 let failures = 0;
@@ -160,7 +218,11 @@ async function assertNoOverflow(page: Page, name: string) {
 }
 
 async function assertAccessible(page: Page, name: string) {
-  const results = await new AxeBuilder({ page }).analyze();
+  // The mail preview is a sandboxed frame with no scripts allowed — by design, it holds
+  // an email's HTML. axe injects itself into every frame, the sandbox refuses it, and
+  // each refusal is a console error the page never caused; the frame's own title is
+  // checked by the unit tests, its contents are the email and not the portal.
+  const results = await new AxeBuilder({ page }).exclude(".mail-preview__frame").analyze();
   const serious = results.violations.filter(
     (violation) => violation.impact === "serious" || violation.impact === "critical",
   );
@@ -254,11 +316,15 @@ async function captureInteractions(page: Page, folder: string) {
   await page.screenshot({ path: `${OUT}/${folder}/admin-key-minted.png`, fullPage: true });
   console.log(`  ✓ ${folder}/admin-key-minted`);
 
+  await captureMailFlows(page, folder);
+
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
   await page.fill("#export-reason", "Screenshot run check");
+  // A fresh dev server compiles the export route on this first request (14 s seen after a
+  // cache reset); the product's answer is fast once warm, the wait covers the tool.
   const [download] = await Promise.all([
-    page.waitForEvent("download", { timeout: 15_000 }),
+    page.waitForEvent("download", { timeout: 60_000 }),
     page.locator("button", { hasText: "Download CSV" }).click(),
   ]);
   const name = download.suggestedFilename();
@@ -303,6 +369,117 @@ async function captureInteractions(page: Page, folder: string) {
   await assertAccessible(page, `${folder}/lead-anonymised`);
   await page.screenshot({ path: `${OUT}/${folder}/lead-anonymised.png`, fullPage: true });
   console.log(`  ✓ ${folder}/lead-anonymised`);
+}
+
+/**
+ * Mail, end to end through the server actions and the mock's rules: a colleague's
+ * campaign approved (the sudo window is open) and started, the owner's own draft tested
+ * and submitted (it then waits for someone else), a segment checked, a sequence's
+ * enrolment checked. Later passes find the work done and only look.
+ */
+async function captureMailFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/mail/campaigns/${MAIL.webinar}`, { waitUntil: "networkidle" });
+  if ((await page.locator("button", { hasText: "Approve" }).count()) > 0) {
+    await page.locator("button", { hasText: "Approve" }).click();
+    await page.waitForSelector("button:has-text('Start sending')", { timeout: 15_000 });
+  }
+  if ((await page.locator("button", { hasText: "Start sending" }).count()) > 0) {
+    await page.locator("button", { hasText: "Start sending" }).click();
+    await page.waitForSelector("button:has-text('Pause')", { timeout: 15_000 });
+  }
+  const webinarState = (await page.locator(".rhead__status").innerText()).trim();
+  if (!/Sending|Sent/.test(webinarState)) {
+    report(`${folder}/mail-campaign-started`, `the approved campaign reads "${webinarState}"`);
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await assertNoOverflow(page, `${folder}/mail-campaign-started`);
+  await assertAccessible(page, `${folder}/mail-campaign-started`);
+  await page.screenshot({ path: `${OUT}/${folder}/mail-campaign-started.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/mail-campaign-started`);
+
+  await page.goto(`${BASE}/mail/campaigns/${MAIL.roadmap}`, { waitUntil: "networkidle" });
+  if ((await page.locator("button", { hasText: "Send me a test" }).count()) > 0) {
+    await page.locator("button", { hasText: "Send me a test" }).click();
+    await page.waitForSelector("button:has-text('Submit'):not([disabled])", { timeout: 15_000 });
+    await page.locator("button", { hasText: "Submit" }).click();
+    await page.waitForSelector(".record-banners", { timeout: 15_000 });
+  }
+  if ((await page.locator(".callout__title", { hasText: "Waiting for approval" }).count()) === 0) {
+    report(
+      `${folder}/mail-campaign-submitted`,
+      "the owner's own draft is not waiting for someone else",
+    );
+  }
+  await assertAccessible(page, `${folder}/mail-campaign-submitted`);
+  await page.screenshot({ path: `${OUT}/${folder}/mail-campaign-submitted.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/mail-campaign-submitted`);
+
+  await page.goto(`${BASE}/mail/segments`, { waitUntil: "networkidle" });
+  await page.locator("button", { hasText: "Check who matches" }).click();
+  await page.waitForSelector(".segment-result", { timeout: 15_000 });
+  await assertNoOverflow(page, `${folder}/mail-segment-checked`);
+  await assertAccessible(page, `${folder}/mail-segment-checked`);
+  await page.screenshot({ path: `${OUT}/${folder}/mail-segment-checked.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/mail-segment-checked`);
+
+  await page.goto(`${BASE}/mail/sequences/${MAIL.fundIntro}?tab=enrol`, {
+    waitUntil: "networkidle",
+  });
+  const boxes = page.locator(".audience-pick__list input[type=checkbox]");
+  for (let index = 0; index < Math.min(4, await boxes.count()); index += 1) {
+    await boxes.nth(index).check();
+  }
+  await page.locator("button", { hasText: "Check who it takes" }).click();
+  await page.waitForSelector(".verdicts", { timeout: 15_000 });
+  await assertNoOverflow(page, `${folder}/mail-enrol-checked`);
+  await assertAccessible(page, `${folder}/mail-enrol-checked`);
+  await page.screenshot({ path: `${OUT}/${folder}/mail-enrol-checked.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/mail-enrol-checked`);
+}
+
+/**
+ * The recipient's side, signed out: the stop page as it opens, a link that names
+ * nothing, the button pressed, and the mailbox's RFC 8058 one-click POST — checked by
+ * reading the stop back from the service, not by trusting the 200.
+ */
+async function captureUnsubscribe(page: Page, folder: string) {
+  await capture(page, folder, {
+    name: "unsubscribe",
+    path: `/u/mock-${MAIL.stopLooked}`,
+    ready: ".unsub",
+  });
+  await capture(page, folder, {
+    name: "unsubscribe-invalid",
+    path: "/u/mock-00000000-0000-4000-8000-000000000000",
+  });
+  await page.goto(`${BASE}/u/mock-${MAIL.stopPressed}`, { waitUntil: "networkidle" });
+  if ((await page.locator("button", { hasText: "Unsubscribe from everything" }).count()) > 0) {
+    await page.locator("button", { hasText: "Unsubscribe from everything" }).click();
+    await page.waitForSelector("h1:has-text('You are unsubscribed'), .form-sent", {
+      timeout: 15_000,
+    });
+  }
+  await assertNoOverflow(page, `${folder}/unsubscribe-done`);
+  await assertAccessible(page, `${folder}/unsubscribe-done`);
+  await page.screenshot({ path: `${OUT}/${folder}/unsubscribe-done.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/unsubscribe-done`);
+
+  const oneClick = await fetch(`${BASE}/u/mock-${MAIL.stopOneClick}/one-click`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "List-Unsubscribe=One-Click",
+  });
+  const readBack = (await fetch(
+    `http://127.0.0.1:7071/api/v1/public/mail/unsubscribe/mock-${MAIL.stopOneClick}`,
+  ).then((response) => response.json())) as { marketing_state?: string };
+  if (oneClick.status !== 200 || readBack.marketing_state !== "unsubscribed") {
+    report(
+      `${folder}/unsubscribe-one-click`,
+      `POST answered ${oneClick.status}; the address reads "${readBack.marketing_state}"`,
+    );
+  } else {
+    console.log(`  ✓ ${folder}/unsubscribe-one-click`);
+  }
 }
 
 /**
@@ -358,6 +535,7 @@ async function run(browser: Browser) {
       name: "verify-missing",
       path: "/verify/QT-2026-0001",
     });
+    await captureUnsubscribe(page, `${viewport.name}/auth`);
 
     // The two-step and the code screen, mid-flow.
     await page.goto(`${BASE}/login`, { waitUntil: "networkidle" });

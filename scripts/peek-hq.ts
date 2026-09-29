@@ -41,7 +41,7 @@ for (const path of paths.length ? paths : ["/home"]) {
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     if (overflow > 1) console.log(`    overflow: ${overflow}px`);
-    const results = await new AxeBuilder({ page }).analyze();
+    const results = await new AxeBuilder({ page }).exclude(".mail-preview__frame").analyze();
     for (const violation of results.violations) {
       if (violation.impact !== "serious" && violation.impact !== "critical") continue;
       for (const node of violation.nodes) {

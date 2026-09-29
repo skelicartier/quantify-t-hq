@@ -20,6 +20,8 @@ type Fixture = {
   ids: Record<string, string>;
   owner: Record<string, unknown>;
   intern: Record<string, unknown>;
+  /** Reads made without a session: the recipient's stop page. */
+  anonymous?: Record<string, unknown>;
 };
 
 const FIXTURE_FILE = resolve(
@@ -35,7 +37,11 @@ const shared = vi.hoisted(() => {
     process.cwd(),
     "../Quantify Terminal/tests/fixtures/hq_payload_samples.json",
   );
-  const state: { role: "owner" | "intern"; fixture: Fixture | null; hits: string[] } = {
+  const state: {
+    role: "owner" | "intern" | "anonymous";
+    fixture: Fixture | null;
+    hits: string[];
+  } = {
     role: "owner",
     fixture: null,
     hits: [],
@@ -80,6 +86,7 @@ import * as home from "@/lib/api/home";
 import * as integrations from "@/lib/api/integrations";
 import * as approvals from "@/lib/api/approvals";
 import * as keys from "@/lib/api/keys";
+import * as mail from "@/lib/api/mail";
 import * as meetings from "@/lib/api/meetings";
 import * as reports from "@/lib/api/reports";
 import * as revenue from "@/lib/api/revenue";
@@ -103,6 +110,22 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/audit", () => staff.searchAudit(token, {}, { limit: 50, offset: 0 })],
   ["hq/api-keys", () => keys.readApiKeys(token)],
   ["hq/approvals", () => approvals.readApprovals(token)],
+  ["hq/mail/overview", () => mail.readMailOverview(token)],
+  ["hq/mail/senders", () => mail.readSenders(token)],
+  ["hq/mail/templates", () => mail.readTemplates(token)],
+  ["hq/mail/templates/{template_id}", () => mail.readTemplate(token, ids.mail_template_id!)],
+  ["hq/mail/segments", () => mail.readSegments(token)],
+  ["hq/mail/campaigns", () => mail.readCampaigns(token)],
+  ["hq/mail/campaigns/{campaign_id}", () => mail.readCampaign(token, ids.mail_campaign_id!)],
+  ["hq/mail/sequences", () => mail.readSequences(token)],
+  ["hq/mail/sequences/{sequence_id}", () => mail.readSequence(token, ids.mail_sequence_id!)],
+  ["hq/mail/replies", () => mail.readReplies(token)],
+  ["hq/mail/suppressions", () => mail.readSuppressions(token)],
+  ["hq/mail/consent", () => mail.readConsent(token, ids.mail_email!)],
+  ["hq/mail/report", () => mail.readMailReport(token, 30)],
+  ["hq/mail/messages/{message_id}", () => mail.readMessage(token, ids.mail_message_id!)],
+  ["hq/mail/history", () => mail.readMailHistory(token, ids.mail_email!)],
+  ["hq/settings/mail", () => mail.readMailSettings(token)],
   ["hq/tickets", () => tickets.readQueue(token, {})],
   ["hq/tickets/{ticket_id}", () => tickets.readTicket(token, ids.ticket_id!)],
   ["hq/tickets/{ticket_id}/context", () => tickets.readTicketContext(token, ids.ticket_id!)],
@@ -165,6 +188,13 @@ describe("every portal read parses the service's own payload", () => {
         await expect(read()).resolves.toBeTruthy();
       });
     }
+  });
+
+  describe.skipIf(!fixture?.anonymous)("without a session", () => {
+    it("public/mail/unsubscribe/{token}", async () => {
+      shared.role = "anonymous";
+      await expect(mail.readUnsubscribe(ids.unsubscribe_token!)).resolves.toBeTruthy();
+    });
   });
 
   describe.skipIf(!fixture)("as the intern", () => {

@@ -1,3 +1,4 @@
+import { RecordMail } from "@/components/mail/record-mail";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -50,6 +51,7 @@ const ROLE_LABELS: Record<string, string> = {
 const TABS = [
   { key: "activity", label: "Activity" },
   { key: "tasks", label: "Tasks" },
+  { key: "mail", label: "Mail" },
   { key: "history", label: "History" },
 ];
 
@@ -186,6 +188,7 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
           { ...TABS[0]!, count: activities.length },
           { ...TABS[1]!, count: openTasks.length },
           TABS[2]!,
+          TABS[3]!,
         ]}
         current={tab}
         label="Person sections"
@@ -284,6 +287,20 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
           </RecordSection>
         )}
         {tab === "tasks" && tasks}
+        {tab === "mail" && (
+          <RecordSection id="person-mail" title="Mail">
+            <RecordMail
+              token={context.token}
+              kind="person"
+              contactId={person.person_id}
+              email={person.email}
+              returnPath={`${base}?tab=mail`}
+              canWrite={canWrite}
+              now={now}
+              full
+            />
+          </RecordSection>
+        )}
         {tab === "history" && (
           <RecordSection id="person-history" title="History">
             <RecordHistory

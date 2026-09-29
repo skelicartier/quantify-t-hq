@@ -289,6 +289,14 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
         ]}
         actions={
           <>
+            {canWrite && people.some((person) => person.email && !person.do_not_contact) && (
+              <Link
+                className="btn btn--small"
+                href={`/mail/campaigns/new?companies=${company.company_id}`}
+              >
+                Email everyone here
+              </Link>
+            )}
             {canDeal && openStages.length > 0 && (
               <Popover align="start" label="Open a deal" variant="primary" width="wide">
                 <DealCreateForm

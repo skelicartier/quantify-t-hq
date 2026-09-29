@@ -11,6 +11,8 @@ describe("default-deny route policy", () => {
       "/forgot-password",
       "/reset-password",
       "/verify/QT-2026-0001",
+      "/u/dTEBfb56jBDzRbafTujEGst",
+      "/u/dTEBfb56jBDzRbafTujEGst/one-click",
     ]) {
       expect(isPublicPath(path)).toBe(true);
     }
@@ -25,6 +27,9 @@ describe("default-deny route policy", () => {
       "/verify",
       "/loginx",
       "/me/security",
+      "/u",
+      "/mail",
+      "/mail/campaigns",
     ]) {
       expect(isPublicPath(path)).toBe(false);
     }

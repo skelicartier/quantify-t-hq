@@ -50,7 +50,7 @@ export const dynamic = "force-dynamic";
 
 type OwedRow = {
   key: string;
-  kind: "Lead" | "Ticket" | "Task" | "Meeting" | "Deal" | "Renewal";
+  kind: "Lead" | "Ticket" | "Task" | "Meeting" | "Deal" | "Renewal" | "Mail";
   href: string;
   title: string;
   sub: string;
@@ -167,6 +167,28 @@ export default async function HomePage() {
           </span>
         ),
         urgency: overdue ? 1 : renewal.renewal.status === "at_risk" ? 2 : 3,
+      });
+    }
+    if (home.mail && home.mail.awaiting_reply > 0) {
+      owed.push({
+        key: "mail:replies",
+        kind: "Mail",
+        href: "/mail/replies",
+        title: `${home.mail.awaiting_reply} ${home.mail.awaiting_reply === 1 ? "sequence reply" : "sequence replies"} to record`,
+        sub: "Check your inbox and say what happened; the sequence stops.",
+        status: <span className="due due--today">Today</span>,
+        urgency: 2,
+      });
+    }
+    if (home.mail && home.mail.awaiting_approval > 0) {
+      owed.push({
+        key: "mail:approval",
+        kind: "Mail",
+        href: "/mail/campaigns?view=waiting",
+        title: `${home.mail.awaiting_approval} ${home.mail.awaiting_approval === 1 ? "campaign waits" : "campaigns wait"} for approval`,
+        sub: "A second owner or admin approves a send to fifty or more, or to customers.",
+        status: <span className="due due--today">Approve</span>,
+        urgency: 2,
       });
     }
     owed.sort((a, b) => a.urgency - b.urgency);
@@ -329,6 +351,22 @@ export default async function HomePage() {
                       ))}
                     </ol>
                   )}
+                </section>
+              )}
+              {home.mail && (
+                <section className="briefing__block" aria-labelledby="mail-title">
+                  <div className="briefing__head">
+                    <h2 id="mail-title">Mail</h2>
+                    <Link className="briefing__more" href="/mail">
+                      Open mail
+                    </Link>
+                  </div>
+                  <p className="briefing__clear">
+                    {home.mail.sending_enabled
+                      ? `${home.mail.sent_today} of ${home.mail.daily_cap} sent today; ${home.mail.running} ${home.mail.running === 1 ? "campaign" : "campaigns"} sending.`
+                      : "Sending is switched off."}
+                    {home.mail.paused > 0 && ` ${home.mail.paused} paused.`}
+                  </p>
                 </section>
               )}
               {home.security && (
