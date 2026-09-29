@@ -4220,6 +4220,22 @@
     display: contents;
   }
 
+  .auth__passkey {
+    margin-bottom: 16px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .auth__passkey-or {
+    margin: 0;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
   .policy-list {
     margin: 0;
     padding: 0;

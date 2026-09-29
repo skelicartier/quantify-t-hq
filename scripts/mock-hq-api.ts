@@ -964,7 +964,11 @@ const routes: Array<{
         return refuse(401, "unauthenticated");
       const kind = member.enrolled ? "totp" : "enroll";
       void headers;
-      return ok({ mfa: kind, pending_token: mintPending(member.id, kind) });
+      return ok({
+        mfa: kind,
+        pending_token: mintPending(member.id, kind),
+        passkeys: member.enrolled && passkeys.some((row) => row.staff_id === member.id),
+      });
     },
   },
   {
@@ -985,6 +989,65 @@ const routes: Array<{
       if (!member) return refuse(401, "unauthenticated");
       if (!RECOVERY_CODES.includes(String(body.recovery_code ?? "")))
         return refuse(401, "unauthenticated");
+      return ok(mintSession(member, clientAddress(headers), clientAgent(headers)));
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/auth/passkey/options",
+    handler: ({ body }) => {
+      const member = pendingFor(String(body.pending_token ?? ""), "totp");
+      if (!member) return refuse(401, "unauthenticated");
+      const mine = passkeys.filter((row) => row.staff_id === member.id);
+      if (!mine.length)
+        return refuse(400, "malformed_request", {
+          reason: "no passkey on this account; use the code",
+        });
+      return ok({
+        ...mintPasskeyChallenge(member.id),
+        rp_id: "localhost",
+        allow_credentials: mine.map((row) => ({
+          type: "public-key",
+          id: row.credential_id,
+          transports: row.transports,
+        })),
+        user_verification: "preferred",
+        timeout_ms: 60_000,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/auth/passkey",
+    handler: ({ body, headers }) => {
+      const member = pendingFor(String(body.pending_token ?? ""), "totp");
+      if (!member) return refuse(401, "unauthenticated");
+      const challenge = passkeyChallenges.get(String(body.challenge_token ?? ""));
+      if (!challenge || challenge.staffId !== member.id) {
+        console.log("[mock-hq] passkey refused: unknown or foreign challenge");
+        return refuse(401, "unauthenticated");
+      }
+      const row = passkeys.find(
+        (candidate) =>
+          candidate.credential_id === String(body.credential_id ?? "") &&
+          candidate.staff_id === member.id,
+      );
+      if (!row) {
+        console.log(
+          `[mock-hq] passkey refused: no credential ${String(body.credential_id ?? "")} for this account`,
+        );
+        return refuse(401, "unauthenticated");
+      }
+      if (!body.client_data_json || !body.authenticator_data || !body.signature) {
+        console.log("[mock-hq] passkey refused: assertion fields missing");
+        return refuse(401, "unauthenticated");
+      }
+      passkeyChallenges.delete(String(body.challenge_token ?? ""));
+      row.last_used_at = now();
+      audit("auth.login", member.id, "staff", member.id, "", {
+        factor: "passkey",
+        passkey_id: row.id,
+      });
       return ok(mintSession(member, clientAddress(headers), clientAgent(headers)));
     },
   },
@@ -1134,6 +1197,108 @@ const routes: Array<{
       }
       audit("auth.password_changed", found.member.id, "staff", found.member.id);
       return ok({ changed: true, other_sessions_revoked: revoked });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/passkeys",
+    auth: true,
+    handler: ({ headers }) => {
+      const me = caller(headers)!.member.id;
+      return ok({
+        passkeys: passkeys.filter((row) => row.staff_id === me).map(passkeyView),
+        limit: 10,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/passkeys/register/options",
+    auth: true,
+    sudo: true,
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const mine = passkeys.filter((row) => row.staff_id === found.member.id);
+      if (mine.length >= 10)
+        return refuse(400, "malformed_request", { reason: "at most 10 passkeys" });
+      return ok({
+        ...mintPasskeyChallenge(found.member.id),
+        rp: { id: "localhost", name: "Quantify HQ" },
+        user: {
+          id: Buffer.from(found.member.id).toString("base64url"),
+          name: found.member.email,
+          display_name: found.member.display_name,
+        },
+        pub_key_cred_params: [
+          { type: "public-key", alg: -7 },
+          { type: "public-key", alg: -257 },
+        ],
+        exclude_credentials: mine.map((row) => ({ type: "public-key", id: row.credential_id })),
+        authenticator_selection: { residentKey: "preferred", userVerification: "preferred" },
+        attestation: "none",
+        timeout_ms: 60_000,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/passkeys/register",
+    auth: true,
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const challenge = passkeyChallenges.get(String(body.challenge_token ?? ""));
+      if (!challenge || challenge.staffId !== found.member.id)
+        return refuse(401, "unauthenticated");
+      if (!body.client_data_json || !body.attestation_object)
+        return refuse(400, "malformed_request", { credential: "no credential was attested" });
+      passkeyChallenges.delete(String(body.challenge_token ?? ""));
+      const credentialId = credentialIdFromAttestation(String(body.attestation_object));
+      if (!credentialId)
+        return refuse(400, "malformed_request", {
+          credential: "the attestation object could not be read",
+        });
+      if (passkeys.some((row) => row.credential_id === credentialId))
+        return refuse(400, "malformed_request", {
+          credential: "this passkey is already registered",
+        });
+      const row: PasskeyRow = {
+        id: randomUUID(),
+        staff_id: found.member.id,
+        credential_id: credentialId,
+        label:
+          String(body.label ?? "")
+            .trim()
+            .slice(0, 80) || "Passkey",
+        transports: Array.isArray(body.transports) ? body.transports.map(String).slice(0, 6) : [],
+        created_at: now(),
+        last_used_at: null,
+      };
+      passkeys.push(row);
+      audit("auth.passkey_added", found.member.id, "staff", found.member.id, "", {
+        passkey_id: row.id,
+        label: row.label,
+      });
+      return ok({ passkey: passkeyView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/passkeys/{passkey_id}/delete",
+    auth: true,
+    sudo: true,
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const index = passkeys.findIndex(
+        (row) => row.id === params.passkey_id && row.staff_id === found.member.id,
+      );
+      if (index < 0) return refuse(404, "not_found");
+      const [row] = passkeys.splice(index, 1);
+      audit("auth.passkey_removed", found.member.id, "staff", found.member.id, "", {
+        passkey_id: row!.id,
+        label: row!.label,
+      });
+      return ok({ deleted: true });
     },
   },
   {
@@ -2004,6 +2169,136 @@ type SavedViewRow = {
   updated_at: string;
 };
 const savedViews: SavedViewRow[] = [];
+
+type PasskeyRow = {
+  id: string;
+  staff_id: string;
+  credential_id: string;
+  label: string;
+  transports: string[];
+  created_at: string;
+  last_used_at: string | null;
+};
+const passkeys: PasskeyRow[] = [];
+const passkeyChallenges = new Map<string, { staffId: string; challenge: string }>();
+
+function seedPasskeys() {
+  passkeys.length = 0;
+  passkeyChallenges.clear();
+  passkeys.push({
+    id: "pk000000-0000-4000-8000-000000000001",
+    staff_id: OWNER_STAFF,
+    credential_id: "bW9jay1jcmVkZW50aWFsLW93bmVyLWxhcHRvcA",
+    label: "Owner's laptop",
+    transports: ["internal", "hybrid"],
+    created_at: agoIso(24 * 30),
+    last_used_at: agoIso(24 * 2),
+  });
+}
+
+function passkeyView(row: PasskeyRow) {
+  return {
+    passkey_id: row.id,
+    label: row.label,
+    transports: row.transports,
+    created_at: row.created_at,
+    last_used_at: row.last_used_at,
+  };
+}
+
+/**
+ * Just enough CBOR to read an attestation object: the mock cannot verify a passkey, but
+ * it does record the credential id the authenticator actually made, so a later sign-in
+ * with that authenticator finds it — as the service would.
+ */
+function cborDecode(bytes: Uint8Array): unknown {
+  let offset = 0;
+  const readLength = (info: number): number => {
+    if (info < 24) return info;
+    if (info === 24) return bytes[offset++]!;
+    if (info === 25) {
+      const value = (bytes[offset]! << 8) | bytes[offset + 1]!;
+      offset += 2;
+      return value;
+    }
+    if (info === 26) {
+      const value =
+        bytes[offset]! * 2 ** 24 +
+        (bytes[offset + 1]! << 16) +
+        (bytes[offset + 2]! << 8) +
+        bytes[offset + 3]!;
+      offset += 4;
+      return value;
+    }
+    throw new Error("cbor: unsupported length");
+  };
+  const item = (): unknown => {
+    const initial = bytes[offset++]!;
+    const major = initial >> 5;
+    const info = initial & 0x1f;
+    switch (major) {
+      case 0:
+        return readLength(info);
+      case 1:
+        return -1 - readLength(info);
+      case 2: {
+        const length = readLength(info);
+        const value = bytes.slice(offset, offset + length);
+        offset += length;
+        return value;
+      }
+      case 3: {
+        const length = readLength(info);
+        const value = new TextDecoder().decode(bytes.slice(offset, offset + length));
+        offset += length;
+        return value;
+      }
+      case 4: {
+        const length = readLength(info);
+        const out: unknown[] = [];
+        for (let index = 0; index < length; index += 1) out.push(item());
+        return out;
+      }
+      case 5: {
+        const length = readLength(info);
+        const out: Record<string, unknown> = {};
+        for (let index = 0; index < length; index += 1) {
+          const key = item();
+          out[String(key)] = item();
+        }
+        return out;
+      }
+      default:
+        throw new Error("cbor: unsupported major type");
+    }
+  };
+  return item();
+}
+
+/** The credential id an attestation object carries; null when it cannot be read. */
+function credentialIdFromAttestation(attestationObject: string): string | null {
+  try {
+    const decoded = cborDecode(
+      new Uint8Array(Buffer.from(attestationObject, "base64url")),
+    ) as Record<string, unknown>;
+    const authData = decoded["authData"];
+    if (!(authData instanceof Uint8Array) || authData.length < 55) return null;
+    if (!(authData[32]! & 0x40)) return null; // no attested credential data
+    const length = (authData[53]! << 8) | authData[54]!;
+    const id = authData.slice(55, 55 + length);
+    if (id.length !== length || length === 0) return null;
+    return Buffer.from(id).toString("base64url");
+  } catch {
+    return null;
+  }
+}
+
+function mintPasskeyChallenge(staffId: string) {
+  const challenge = randomUUID().replace(/-/g, "");
+  const token = `mock-webauthn-${randomUUID()}`;
+  passkeyChallenges.set(token, { staffId, challenge });
+  return { challenge, challenge_token: token };
+}
 const preferences = new Map<string, string>(); // `${staffId}\u0000${key}`
 
 function seedViews() {
@@ -9835,6 +10130,7 @@ seedTeam();
 seedOpenReview();
 seedPeopleOps();
 seedViews();
+seedPasskeys();
 
 function accessView(row: AccessRow) {
   const todayIso = today();
@@ -11198,6 +11494,7 @@ function resetWorld() {
   seedOpenReview();
   seedPeopleOps();
   seedViews();
+  seedPasskeys();
   seedSla();
   resetDeskRules();
   seedSources();

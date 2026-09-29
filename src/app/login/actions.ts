@@ -34,7 +34,9 @@ export async function login(_previous: AuthFormState, formData: FormData): Promi
   } catch (error) {
     return { status: "error", message: refusalMessage(error) };
   }
-  await setPendingCookie(pending.mfa === "enroll" ? "enroll" : "totp", pending.pending_token);
+  await setPendingCookie(pending.mfa === "enroll" ? "enroll" : "totp", pending.pending_token, {
+    passkeys: pending.passkeys === true,
+  });
   redirect(
     pending.mfa === "enroll"
       ? `/login/enroll?next=${encodeURIComponent(next)}`
@@ -159,4 +161,54 @@ export async function signOutAction(): Promise<void> {
   }
   await clearSessionCookie();
   redirect("/login");
+}
+
+/**
+ * The browser asks for the passkey challenge before it asks the authenticator. Called
+ * from the client, so it answers with a plain result rather than throwing.
+ */
+export async function passkeyOptionsAction(): Promise<
+  | {
+      ok: true;
+      options: Omit<authApi.AssertionOptionsPayload, "ok" | "challenge_token">;
+      challenge_token: string;
+    }
+  | { ok: false; message: string }
+> {
+  await requireSameOriginServerAction();
+  const pending = await readPendingCookie();
+  if (!pending || pending.kind !== "totp") {
+    return { ok: false, message: "This sign-in step has expired. Start again." };
+  }
+  try {
+    const { challenge_token, ...options } = await authApi.passkeyOptions(pending.token);
+    return { ok: true, options, challenge_token };
+  } catch (error) {
+    return { ok: false, message: refusalMessage(error) };
+  }
+}
+
+/** Step two by passkey: the authenticator's answer opens the session, as a code would. */
+export async function verifyPasskey(formData: FormData): Promise<void> {
+  await requireSameOriginServerAction(formData);
+  const pending = await readPendingCookie();
+  if (!pending || pending.kind !== "totp") {
+    redirect("/login?notice=step-expired");
+  }
+  const next = sanitizeNextPath(fieldValue(formData, "next", 512));
+  let session: authApi.MintedSession;
+  try {
+    session = await authApi.signInWithPasskey(pending.token, {
+      challenge_token: fieldValue(formData, "challenge_token", 2_000),
+      credential_id: fieldValue(formData, "credential_id", 2_000),
+      client_data_json: fieldValue(formData, "client_data_json", 8_000),
+      authenticator_data: fieldValue(formData, "authenticator_data", 8_000),
+      signature: fieldValue(formData, "signature", 4_000),
+    });
+  } catch {
+    redirect(`/login/verify?notice=passkey-refused&next=${encodeURIComponent(next)}`);
+  }
+  await clearPendingCookie();
+  await setSessionCookie(session.token);
+  redirect(next);
 }

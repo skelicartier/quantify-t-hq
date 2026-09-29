@@ -16,7 +16,13 @@ import { RowAction } from "@/components/ui/row-action";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { acknowledgePolicyAction } from "@/app/(portal)/team/actions";
-import { listSessions } from "@/lib/api/auth";
+import {
+  deletePasskeyAction,
+  passkeyRegisterOptionsAction,
+  registerPasskeyAction,
+} from "@/app/(portal)/me/security/actions";
+import { listPasskeys, listSessions, type Passkey } from "@/lib/api/auth";
+import { AddPasskeyForm } from "@/components/me/passkeys-form";
 import { readPolicies, type PolicyState } from "@/lib/api/team";
 import { formatDate } from "@/lib/format";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
@@ -49,6 +55,13 @@ export default async function SecurityPage() {
     ? (formatAbsolute(context.me.sudo_until).split(", ")[1] ?? null)
     : null;
   const live = (sessions ?? []).filter((session) => session.live);
+  let passkeys: Passkey[] | null = null;
+  try {
+    passkeys = (await listPasskeys(context.token)).passkeys;
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
   let policies: PolicyState[] | null = null;
   try {
     policies = (await readPolicies(context.token)).policies;
@@ -121,6 +134,65 @@ export default async function SecurityPage() {
       <Section id="password" title="Password">
         <Card>
           <PasswordForm action={changePasswordAction} />
+        </Card>
+      </Section>
+      <Section
+        id="passkeys"
+        title="Passkeys"
+        description="A passkey on this device or your phone can stand in for the authenticator code at sign-in. The code and your recovery codes keep working."
+      >
+        <Card>
+          {passkeys === null ? (
+            <Callout tone="danger" compact>
+              Passkeys could not be read just now. This is a read failure, not an empty list.
+            </Callout>
+          ) : passkeys.length === 0 ? (
+            <p className="muted">No passkey yet.</p>
+          ) : (
+            <ul className="policy-list">
+              {passkeys.map((passkey) => (
+                <li key={passkey.passkey_id} className="policy">
+                  <div className="policy__main">
+                    <span className="policy__title">{passkey.label || "Passkey"}</span>
+                    <span className="policy__meta">
+                      Added <Timestamp value={passkey.created_at} mode="date" />
+                      {passkey.last_used_at ? (
+                        <>
+                          {" · last used "}
+                          <Timestamp value={passkey.last_used_at} mode="relative" />
+                        </>
+                      ) : (
+                        " · not used yet"
+                      )}
+                    </span>
+                  </div>
+                  <RowAction
+                    action={deletePasskeyAction}
+                    fields={{ passkey_id: passkey.passkey_id }}
+                    buttons={[
+                      {
+                        label: "Remove",
+                        className: "btn btn--small btn--ghost",
+                        pendingLabel: "Removing…",
+                      },
+                    ]}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+          <SudoGate
+            action={confirmSudoAction}
+            fresh={context.me.sudo_fresh}
+            untilLabel={untilLabel}
+            returnPath="/me/security"
+            purpose="Adding or removing a passkey needs a fresh code from your authenticator app."
+          />
+          <AddPasskeyForm
+            fetchOptions={passkeyRegisterOptionsAction}
+            save={registerPasskeyAction}
+            disabled={!context.me.sudo_fresh}
+          />
         </Card>
       </Section>
       <Section id="recovery" title="Recovery codes">

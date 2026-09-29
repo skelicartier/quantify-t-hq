@@ -12,6 +12,8 @@ const okEnvelope = z.object({ ok: z.literal(true) });
 export const pendingSchema = okEnvelope.extend({
   mfa: z.enum(["totp", "enroll"]),
   pending_token: z.string().min(1),
+  /** A passkey may stand in for the code; absent from an older service. */
+  passkeys: z.boolean().optional(),
 });
 export type PendingLogin = z.infer<typeof pendingSchema>;
 
@@ -158,4 +160,101 @@ export function changePassword(token: string, currentPassword: string, newPasswo
     token,
     body: { current_password: currentPassword, new_password: newPassword },
   });
+}
+
+// --- passkeys ---------------------------------------------------------------------------
+
+export const assertionOptionsSchema = okEnvelope.extend({
+  challenge: z.string(),
+  challenge_token: z.string(),
+  rp_id: z.string(),
+  allow_credentials: z.array(
+    z.object({ type: z.string(), id: z.string(), transports: z.array(z.string()) }),
+  ),
+  user_verification: z.string(),
+  timeout_ms: z.number(),
+});
+export type AssertionOptionsPayload = z.infer<typeof assertionOptionsSchema>;
+
+/** What the browser needs to ask the authenticator, for the account the pending token names. */
+export function passkeyOptions(pendingToken: string) {
+  return postHqJson("hq/auth/passkey/options", assertionOptionsSchema, {
+    body: { pending_token: pendingToken },
+  });
+}
+
+export function signInWithPasskey(
+  pendingToken: string,
+  input: {
+    challenge_token: string;
+    credential_id: string;
+    client_data_json: string;
+    authenticator_data: string;
+    signature: string;
+  },
+) {
+  return postHqJson("hq/auth/passkey", sessionSchema, {
+    body: { pending_token: pendingToken, ...input },
+  });
+}
+
+export const passkeySchema = z.object({
+  passkey_id: z.string(),
+  label: z.string(),
+  transports: z.array(z.string()),
+  created_at: z.string().nullable(),
+  last_used_at: z.string().nullable(),
+});
+export type Passkey = z.infer<typeof passkeySchema>;
+
+export function listPasskeys(token: string) {
+  return fetchHqJson(
+    "hq/passkeys",
+    okEnvelope.extend({ passkeys: z.array(passkeySchema), limit: z.number() }),
+    { token },
+  );
+}
+
+export const creationOptionsSchema = okEnvelope.extend({
+  challenge: z.string(),
+  challenge_token: z.string(),
+  rp: z.object({ id: z.string(), name: z.string() }),
+  user: z.object({ id: z.string(), name: z.string(), display_name: z.string() }),
+  pub_key_cred_params: z.array(z.object({ type: z.string(), alg: z.number() })),
+  exclude_credentials: z.array(z.object({ type: z.string(), id: z.string() })),
+  authenticator_selection: z.object({ residentKey: z.string(), userVerification: z.string() }),
+  attestation: z.string(),
+  timeout_ms: z.number(),
+});
+export type CreationOptionsPayload = z.infer<typeof creationOptionsSchema>;
+
+export function passkeyRegisterOptions(token: string) {
+  return postHqJson("hq/passkeys/register/options", creationOptionsSchema, { token, body: {} });
+}
+
+export function registerPasskey(
+  token: string,
+  input: {
+    challenge_token: string;
+    label: string;
+    client_data_json: string;
+    attestation_object: string;
+    transports: string[];
+  },
+) {
+  return postHqJson("hq/passkeys/register", okEnvelope.extend({ passkey: passkeySchema }), {
+    token,
+    body: input,
+  });
+}
+
+export function deletePasskey(token: string, passkeyId: string) {
+  return postHqJson(
+    `hq/passkeys/${passkeyId}/delete`,
+    okEnvelope.extend({ deleted: z.boolean() }),
+    {
+      token,
+      body: {},
+    },
+  );
 }

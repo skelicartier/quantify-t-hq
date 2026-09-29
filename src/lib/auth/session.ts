@@ -53,15 +53,27 @@ export async function clearSessionCookie(): Promise<void> {
 
 export type PendingKind = "totp" | "enroll";
 
-export async function setPendingCookie(kind: PendingKind, token: string): Promise<void> {
+export type PendingStep = {
+  kind: PendingKind;
+  token: string;
+  /** The account holds a passkey, so the code step may offer it. */
+  passkeys?: boolean;
+};
+
+export async function setPendingCookie(
+  kind: PendingKind,
+  token: string,
+  options: { passkeys?: boolean } = {},
+): Promise<void> {
   const store = await cookies();
-  store.set(HQ_PENDING_COOKIE, JSON.stringify({ kind, token }), {
+  const value: PendingStep = { kind, token, ...(options.passkeys ? { passkeys: true } : {}) };
+  store.set(HQ_PENDING_COOKIE, JSON.stringify(value), {
     ...baseAttributes(),
     maxAge: PENDING_MAX_AGE_SECONDS,
   });
 }
 
-export async function readPendingCookie(): Promise<{ kind: PendingKind; token: string } | null> {
+export async function readPendingCookie(): Promise<PendingStep | null> {
   try {
     const store = await cookies();
     const raw = store.get(HQ_PENDING_COOKIE)?.value;
@@ -74,7 +86,8 @@ export async function readPendingCookie(): Promise<{ kind: PendingKind; token: s
         (parsed as { kind?: unknown }).kind === "enroll") &&
       typeof (parsed as { token?: unknown }).token === "string"
     ) {
-      return parsed as { kind: PendingKind; token: string };
+      const step = parsed as PendingStep;
+      return { kind: step.kind, token: step.token, passkeys: step.passkeys === true };
     }
     return null;
   } catch {
