@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Field, Input } from "@/components/ui/field";
+import { Field, Input, Select } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { AttemptField } from "@/components/ui/attempt-field";
 import type { SlaRow } from "@/lib/api/settings";
@@ -179,6 +179,192 @@ export function NewSourceForm({ action }: { action: Action }) {
       </Field>
       <Button type="submit" size="small" variant="primary" disabled={isPending}>
         {isPending ? "Adding…" : "Add source"}
+      </Button>
+      <FormFeedback state={state} sentLabel="Added." />
+    </form>
+  );
+}
+
+type PlanRowProps = {
+  action: Action;
+  plan: {
+    key: string;
+    name: string;
+    unit_amount: number;
+    currency: string;
+    billing_cadence: string;
+    min_seats: number;
+  };
+  archived: boolean;
+};
+
+/** A plan on the price list: renamed or repriced in place, archived out of the pickers, or restored. */
+export function PlanRowForm({ action, plan, archived }: PlanRowProps) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  const id = `plan-${plan.key}`;
+  const off = isPending || archived;
+  return (
+    <form className="plan-row" action={formAction}>
+      <AttemptField state={state} />
+      <input type="hidden" name="key" value={plan.key} />
+      <label className="sr-only" htmlFor={`${id}-name`}>
+        Name of {plan.key}
+      </label>
+      <Input
+        id={`${id}-name`}
+        name="name"
+        defaultValue={plan.name}
+        maxLength={80}
+        required
+        disabled={off}
+      />
+      <label className="plan-row__field">
+        <span className="sr-only">Price per seat per month</span>
+        <Input
+          id={`${id}-amount`}
+          name="unit_amount"
+          type="number"
+          min={0.01}
+          step={0.01}
+          defaultValue={plan.unit_amount}
+          required
+          disabled={off}
+        />
+      </label>
+      <Input
+        id={`${id}-currency`}
+        name="currency"
+        defaultValue={plan.currency}
+        maxLength={3}
+        pattern="[A-Za-z]{3}"
+        aria-label="Currency"
+        disabled={off}
+      />
+      <Select
+        id={`${id}-cadence`}
+        name="billing_cadence"
+        defaultValue={plan.billing_cadence}
+        aria-label="Billed"
+        disabled={off}
+      >
+        <option value="monthly">Monthly</option>
+        <option value="annual">Annually</option>
+      </Select>
+      <Input
+        id={`${id}-seats`}
+        name="min_seats"
+        type="number"
+        min={1}
+        step={1}
+        defaultValue={plan.min_seats}
+        aria-label="Minimum seats"
+        disabled={off}
+      />
+      <span className="plan-row__key mono">{plan.key}</span>
+      <div className="source-row__actions">
+        {archived ? (
+          <Button
+            type="submit"
+            size="small"
+            variant="ghost"
+            name="archived"
+            value="false"
+            disabled={isPending}
+          >
+            Restore
+          </Button>
+        ) : (
+          <>
+            <Button type="submit" size="small" disabled={isPending}>
+              Save
+            </Button>
+            <Button
+              type="submit"
+              size="small"
+              variant="ghost"
+              name="archived"
+              value="true"
+              disabled={isPending}
+            >
+              Archive
+            </Button>
+          </>
+        )}
+      </div>
+      <FormFeedback state={state} />
+    </form>
+  );
+}
+
+export function NewPlanForm({ action }: { action: Action }) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  return (
+    <form className="stack-form" action={formAction} key={state.sentAt ?? "new"}>
+      <AttemptField state={state} />
+      <Field id="plan-new-name" label="Name" hint="As it reads on a contract: “Professional desk”.">
+        <Input id="plan-new-name" name="name" maxLength={80} required disabled={isPending} />
+      </Field>
+      <div className="form-row">
+        <Field id="plan-new-amount" label="Per seat, per month">
+          <Input
+            id="plan-new-amount"
+            name="unit_amount"
+            type="number"
+            min={0.01}
+            step={0.01}
+            required
+            disabled={isPending}
+          />
+        </Field>
+        <Field id="plan-new-currency" label="Currency">
+          <Input
+            id="plan-new-currency"
+            name="currency"
+            defaultValue="USD"
+            maxLength={3}
+            pattern="[A-Za-z]{3}"
+            disabled={isPending}
+          />
+        </Field>
+      </div>
+      <div className="form-row">
+        <Field id="plan-new-cadence" label="Billed">
+          <Select
+            id="plan-new-cadence"
+            name="billing_cadence"
+            defaultValue="monthly"
+            disabled={isPending}
+          >
+            <option value="monthly">Monthly</option>
+            <option value="annual">Annually</option>
+          </Select>
+        </Field>
+        <Field id="plan-new-seats" label="Minimum seats">
+          <Input
+            id="plan-new-seats"
+            name="min_seats"
+            type="number"
+            min={1}
+            step={1}
+            defaultValue={1}
+            disabled={isPending}
+          />
+        </Field>
+      </div>
+      <Field id="plan-new-key" label="Key" hint="Lowercase, e.g. pro. Fixed once added.">
+        <Input
+          id="plan-new-key"
+          name="key"
+          pattern="[a-z][a-z0-9_]{1,31}"
+          maxLength={32}
+          required
+          autoCapitalize="none"
+          spellCheck={false}
+          disabled={isPending}
+        />
+      </Field>
+      <Button type="submit" size="small" variant="primary" disabled={isPending}>
+        {isPending ? "Adding…" : "Add plan"}
       </Button>
       <FormFeedback state={state} sentLabel="Added." />
     </form>

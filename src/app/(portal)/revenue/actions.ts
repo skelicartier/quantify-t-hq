@@ -43,6 +43,8 @@ export async function createContractAction(
   };
   const dealId = fieldValue(formData, "deal_id", 64);
   if (dealId) input.deal_id = dealId;
+  const planKey = fieldValue(formData, "plan_key", 32).trim();
+  if (planKey) input.plan_key = planKey;
   let contractId: string;
   try {
     contractId = (await revenueApi.createContract(context.token, input)).contract.contract_id;
@@ -139,6 +141,7 @@ export async function updateContractAction(
   const input: Record<string, string> = {};
   for (const [name, limit] of [
     ["plan_name", 80],
+    ["plan_key", 32],
     ["seats", 6],
     ["billing_cadence", 10],
     ["renews_on", 10],

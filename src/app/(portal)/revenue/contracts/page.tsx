@@ -13,7 +13,7 @@ import { Stat, StatGrid } from "@/components/ui/stat";
 import { StatusPill } from "@/components/ui/status-pill";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { readCompanies } from "@/lib/api/crm";
+import { readCompanies, readCrmSettings, type Plan } from "@/lib/api/crm";
 import { readContracts, type ContractsPage } from "@/lib/api/revenue";
 import { isoDay } from "@/lib/crm/dates";
 import { CONTRACT_STATE_LABELS, contractStateTone } from "@/lib/crm/vocabulary";
@@ -83,12 +83,14 @@ export default async function ContractsIndexPage({ searchParams }: ContractsPage
   }
   const canWrite = hasCapability(context, "revenue:write");
   let companies: { id: string; label: string }[] = [];
+  let plans: Plan[] = [];
   if (canWrite) {
     try {
       companies = (await readCompanies(context.token)).companies.map((company) => ({
         id: company.company_id,
         label: company.name,
       }));
+      plans = (await readCrmSettings(context.token)).plans;
     } catch (error) {
       if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
         throw error;
@@ -127,6 +129,7 @@ export default async function ContractsIndexPage({ searchParams }: ContractsPage
                     companies={companies}
                     today={today}
                     prefill={prefill}
+                    plans={plans}
                   />
                 </div>
               </details>

@@ -31,6 +31,14 @@ export function updateSla(token: string, input: Record<string, unknown>) {
   );
 }
 
+export function updatePlan(token: string, input: Record<string, unknown>) {
+  return postHqJson(
+    "hq/settings/plans/update",
+    okEnvelope.extend({ updated: z.boolean(), key: z.string() }),
+    { token, body: input },
+  );
+}
+
 export function updateSource(token: string, input: Record<string, unknown>) {
   return postHqJson(
     "hq/settings/sources/update",

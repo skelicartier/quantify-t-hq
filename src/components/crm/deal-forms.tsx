@@ -7,10 +7,19 @@ import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { AttemptField } from "@/components/ui/attempt-field";
 import type { DealSummary } from "@/lib/api/crm";
+import { formatMoney, formatMrr } from "@/lib/format";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 import { LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
+export type PlanOption = {
+  key: string;
+  name: string;
+  unit_amount: number;
+  currency: string;
+  min_seats: number;
+};
+
 type StageOption = { key: string; label: string };
 type PersonOption = { person_id: string; label: string };
 
@@ -20,18 +29,51 @@ export function DealCreateForm({
   stages,
   people,
   defaultDue,
+  plans = [],
 }: {
   action: Action;
   companyId: string;
   stages: readonly StageOption[];
   people: readonly PersonOption[];
   defaultDue: string;
+  plans?: readonly PlanOption[] | undefined;
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  const [planKey, setPlanKey] = useState("");
+  const [seats, setSeats] = useState(1);
+  const plan = plans.find((candidate) => candidate.key === planKey);
+  const pricedSeats = plan ? Math.max(seats, plan.min_seats) : seats;
+  const priced = plan ? Math.round(plan.unit_amount * pricedSeats * 100) / 100 : null;
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
       <AttemptField state={state} />
       <input type="hidden" name="company_id" value={companyId} />
+      {plans.length > 0 && (
+        <Field
+          id="deal-plan"
+          label="Plan"
+          hint={
+            plan
+              ? `${pricedSeats} × ${formatMoney(plan.unit_amount, plan.currency)} = ${formatMrr(priced, plan.currency)}${plan.min_seats > 1 && seats < plan.min_seats ? ` (${plan.min_seats} seats minimum)` : ""}`
+              : "Price it from the list, or type a value below."
+          }
+        >
+          <Select
+            id="deal-plan"
+            name="plan_key"
+            value={planKey}
+            onChange={(event) => setPlanKey(event.target.value)}
+            disabled={isPending}
+          >
+            <option value="">No plan — typed value</option>
+            {plans.map((candidate) => (
+              <option key={candidate.key} value={candidate.key}>
+                {candidate.name} · {formatMoney(candidate.unit_amount, candidate.currency)} a seat
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
       <Field id="deal-name" label="Deal name" hint="Leave empty for “Firm — new business”.">
         <Input id="deal-name" name="name" maxLength={200} disabled={isPending} />
       </Field>
@@ -45,16 +87,30 @@ export function DealCreateForm({
             ))}
           </Select>
         </Field>
-        <Field id="deal-mrr" label="Monthly value (USD)">
-          <Input
-            id="deal-mrr"
-            name="mrr_amount"
-            type="number"
-            min={0}
-            step={1}
-            inputMode="numeric"
-            disabled={isPending}
-          />
+        <Field
+          id="deal-mrr"
+          label={plan ? `Monthly value (${plan.currency})` : "Monthly value (USD)"}
+        >
+          {plan ? (
+            <Input
+              key="priced"
+              id="deal-mrr"
+              value={priced === null ? "" : String(priced)}
+              readOnly
+              disabled
+            />
+          ) : (
+            <Input
+              key="typed"
+              id="deal-mrr"
+              name="mrr_amount"
+              type="number"
+              min={0}
+              step={1}
+              inputMode="numeric"
+              disabled={isPending}
+            />
+          )}
         </Field>
       </div>
       <div className="form-row">
@@ -65,7 +121,8 @@ export function DealCreateForm({
             type="number"
             min={1}
             step={1}
-            defaultValue={1}
+            value={seats}
+            onChange={(event) => setSeats(Math.max(1, Math.round(Number(event.target.value) || 1)))}
             disabled={isPending}
           />
         </Field>

@@ -6748,6 +6748,52 @@
     color: var(--muted);
   }
 
+  /* --- The price list ----------------------------------------------------------------- */
+  .plan-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .plan-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1.4fr) 110px 70px 120px 80px minmax(60px, 0.6fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .plan-row--head {
+    padding-bottom: 2px;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .plan-row__key {
+    color: var(--quiet);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .plan-row .callout {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: 900px) {
+    .plan-row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .plan-row--head {
+      display: none;
+    }
+    .plan-row .source-row__actions {
+      grid-column: 1 / -1;
+    }
+  }
+
   /* --- Favourites: a star in the record head, a group at the top of the rail --------- */
   .fav-star {
     display: inline-flex;

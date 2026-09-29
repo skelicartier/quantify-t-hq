@@ -22,7 +22,8 @@ import {
 } from "@/components/ui/record-shell";
 import { StatusPill } from "@/components/ui/status-pill";
 import { hasCapability, requireStaff } from "@/lib/access/core";
-import { HqApiRequestError } from "@/lib/api/core";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { readCrmSettings, type Plan } from "@/lib/api/crm";
 import { readContract, type ContractDetail } from "@/lib/api/revenue";
 import { isoDay } from "@/lib/crm/dates";
 import {
@@ -90,6 +91,13 @@ export default async function ContractPage({ params }: ContractPageProps) {
   }
   const { contract, movements } = detail;
   const canWrite = hasCapability(context, "revenue:write");
+  let plans: Plan[] = [];
+  try {
+    plans = (await readCrmSettings(context.token)).plans;
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
   const active = contract.state === "active";
   // Notice usually runs to the end of the month.
   const monthEnd = new Date(
@@ -149,8 +157,30 @@ export default async function ContractPage({ params }: ContractPageProps) {
               </Property>
               <InlineField
                 {...inline}
-                name="plan_name"
+                name="plan_key"
                 label="Plan"
+                type="select"
+                value={contract.plan_key}
+                options={[
+                  { value: "", label: "Not on the price list" },
+                  ...plans.map((plan) => ({
+                    value: plan.key,
+                    label: `${plan.name} · ${formatMoney(plan.unit_amount, plan.currency)} a seat`,
+                  })),
+                ]}
+                display={
+                  contract.plan_key
+                    ? (plans.find((plan) => plan.key === contract.plan_key)?.name ??
+                        contract.plan_name) ||
+                      contract.plan_key
+                    : contract.plan_name || "Not on the price list"
+                }
+                readOnly={!canWrite || !active || plans.length === 0}
+              />
+              <InlineField
+                {...inline}
+                name="plan_name"
+                label="Plan name"
                 value={contract.plan_name}
                 placeholder="e.g. Professional desk"
               />

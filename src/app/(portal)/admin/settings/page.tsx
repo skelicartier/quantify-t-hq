@@ -1,6 +1,16 @@
-import { updateSlaAction, updateSourceAction } from "@/app/(portal)/admin/actions";
+import {
+  updatePlanAction,
+  updateSlaAction,
+  updateSourceAction,
+} from "@/app/(portal)/admin/actions";
 import { AdminTabs } from "@/components/admin/admin-tabs";
-import { NewSourceForm, SlaRowForm, SourceRowForm } from "@/components/admin/settings-forms";
+import {
+  NewPlanForm,
+  NewSourceForm,
+  PlanRowForm,
+  SlaRowForm,
+  SourceRowForm,
+} from "@/components/admin/settings-forms";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
@@ -42,11 +52,65 @@ export default async function SettingsPage() {
       <PageHeader
         eyebrow="Admin"
         title="Settings"
-        description="The reply times the desk is held to, and the sources a lead can come from."
+        description="The price list, the reply times the desk is held to, and the sources a lead can come from."
         actions={<AdminTabs current="/admin/settings" />}
       />
       <div className="record-layout">
         <div className="record-layout__main">
+          <section className="record-section" aria-labelledby="settings-plans">
+            <h2 className="record-section__title" id="settings-plans">
+              Price list
+            </h2>
+            <p className="page-note">
+              A plan is a name and a price per seat per month. A deal or a contract that names one
+              is priced from its seats, so the board and the ledger agree with the list. A price
+              change applies from now on; nothing already recorded moves.
+            </p>
+            {crm === null ? (
+              <Callout tone="danger" role="alert">
+                The price list could not be read just now. Nothing was changed.
+              </Callout>
+            ) : crm.plans.length === 0 && crm.archived_plans.length === 0 ? (
+              <p className="side-quiet">No plans yet. Add the first one from the panel.</p>
+            ) : (
+              <>
+                <div className="plan-rows">
+                  <div className="plan-row plan-row--head" aria-hidden="true">
+                    <span>Plan</span>
+                    <span>Per seat / month</span>
+                    <span>Currency</span>
+                    <span>Billed</span>
+                    <span>Min seats</span>
+                    <span>Key</span>
+                    <span />
+                  </div>
+                  {crm.plans.map((plan) => (
+                    <PlanRowForm
+                      key={plan.key}
+                      action={updatePlanAction}
+                      plan={plan}
+                      archived={false}
+                    />
+                  ))}
+                </div>
+                {crm.archived_plans.length > 0 && (
+                  <>
+                    <h3 className="eyebrow source-rows__title">Archived</h3>
+                    <div className="plan-rows">
+                      {crm.archived_plans.map((plan) => (
+                        <PlanRowForm
+                          key={plan.key}
+                          action={updatePlanAction}
+                          plan={plan}
+                          archived
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </section>
           <section className="record-section" aria-labelledby="settings-sla">
             <h2 className="record-section__title" id="settings-sla">
               Reply targets
@@ -116,6 +180,9 @@ export default async function SettingsPage() {
           </section>
         </div>
         <aside className="record-layout__side">
+          <Card title="Add a plan" titleAs="h3">
+            <NewPlanForm action={updatePlanAction} />
+          </Card>
           <Card title="Add a source" titleAs="h3">
             <NewSourceForm action={updateSourceAction} />
           </Card>

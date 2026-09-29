@@ -111,6 +111,8 @@ export const dealSummarySchema = z.object({
   /** Money is null for a role that cannot read revenue; the pipeline itself is not. */
   mrr_amount: z.number().nullable(),
   currency: z.string(),
+  /** The price-list plan that priced it, when one did. */
+  plan_key: z.string(),
   seats: z.number(),
   win_probability: z.number(),
   weighted_mrr: z.number().nullable(),
@@ -347,7 +349,21 @@ export const pipelineStageSchema = z.object({
 });
 export type PipelineStage = z.infer<typeof pipelineStageSchema>;
 
+export const planSchema = z.object({
+  key: z.string(),
+  name: z.string(),
+  /** Per seat, per month, in the plan's currency. */
+  unit_amount: z.number(),
+  currency: z.string(),
+  billing_cadence: z.string(),
+  min_seats: z.number(),
+  archived: z.boolean(),
+});
+export type Plan = z.infer<typeof planSchema>;
+
 const crmSettingsSchema = okEnvelope.extend({
+  plans: z.array(planSchema),
+  archived_plans: z.array(planSchema),
   pipeline: z.array(pipelineStageSchema),
   sources: z.array(z.object({ key: z.string(), label: z.string() })),
   archived_sources: z.array(z.object({ key: z.string(), label: z.string() })),

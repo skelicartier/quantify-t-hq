@@ -113,6 +113,7 @@ function contract(over: Partial<Contract> & { contract_id: string }): Contract {
     company_name: over.contract_id,
     deal_id: "",
     plan_name: "Desk",
+    plan_key: "",
     seats: 1,
     mrr_amount: 199,
     currency: "USD",

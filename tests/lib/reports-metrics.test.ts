@@ -13,6 +13,7 @@ function deal(over: Partial<DealSummary> & { deal_id: string }): DealSummary {
     status: "won",
     mrr_amount: 1000,
     currency: "USD",
+    plan_key: "",
     seats: 1,
     win_probability: 100,
     weighted_mrr: 1000,

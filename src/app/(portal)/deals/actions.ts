@@ -55,6 +55,8 @@ export async function createDealAction(
   if (mrr !== undefined) input.mrr_amount = mrr;
   const person = fieldValue(formData, "primary_person_id", 64);
   if (person) input.primary_person_id = person;
+  const planKey = fieldValue(formData, "plan_key", 32).trim();
+  if (planKey) input.plan_key = planKey;
   let dealId: string;
   try {
     dealId = (await dealsApi.createDeal(context.token, input)).deal.deal_id;
@@ -136,6 +138,7 @@ export async function updateDealAction(
     input.primary_person_id = fieldValue(formData, "primary_person_id", 64);
   }
   if (formData.has("currency")) input.currency = fieldValue(formData, "currency", 3).toUpperCase();
+  if (formData.has("plan_key")) input.plan_key = fieldValue(formData, "plan_key", 32).trim();
   try {
     await dealsApi.updateDeal(context.token, dealId, input);
   } catch (error) {

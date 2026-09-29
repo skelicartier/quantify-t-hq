@@ -1652,6 +1652,8 @@ type DealRow = {
   status: string;
   mrr_amount: number;
   currency: string;
+  /** The price-list plan that priced it, when one did. */
+  plan_key?: string;
   seats: number;
   expected_close_date: string;
   next_step: string;
@@ -2356,6 +2358,76 @@ function seedSources() {
 }
 seedSources();
 
+/** The price list: the mock's own rates, not the product's. */
+type PlanRow = {
+  key: string;
+  name: string;
+  unit_amount: number;
+  currency: string;
+  billing_cadence: string;
+  min_seats: number;
+  archived: boolean;
+};
+const PLAN_SEED: ReadonlyArray<Omit<PlanRow, "archived">> = [
+  {
+    key: "desk",
+    name: "Desk",
+    unit_amount: 199,
+    currency: "USD",
+    billing_cadence: "monthly",
+    min_seats: 1,
+  },
+  {
+    key: "pro",
+    name: "Professional desk",
+    unit_amount: 199,
+    currency: "USD",
+    billing_cadence: "monthly",
+    min_seats: 2,
+  },
+  {
+    key: "team",
+    name: "Team",
+    unit_amount: 169,
+    currency: "USD",
+    billing_cadence: "annual",
+    min_seats: 5,
+  },
+  {
+    key: "enterprise",
+    name: "Enterprise desk",
+    unit_amount: 149,
+    currency: "USD",
+    billing_cadence: "annual",
+    min_seats: 20,
+  },
+];
+const PLAN_KEY_BY_NAME: Record<string, string> = Object.fromEntries(
+  PLAN_SEED.map((plan) => [plan.name, plan.key]),
+);
+const plans: PlanRow[] = [];
+function seedPlans() {
+  plans.length = 0;
+  for (const plan of PLAN_SEED) plans.push({ ...plan, archived: false });
+}
+seedPlans();
+function planView(plan: PlanRow) {
+  return {
+    key: plan.key,
+    name: plan.name,
+    unit_amount: plan.unit_amount,
+    currency: plan.currency,
+    billing_cadence: plan.billing_cadence,
+    min_seats: plan.min_seats,
+    archived: plan.archived,
+  };
+}
+/** Mirrors crm_routes.active_plan_or_refuse. */
+function activePlan(key: string): PlanRow | null {
+  const plan = plans.find((row) => row.key === key);
+  return plan && !plan.archived ? plan : null;
+}
+
 /** Mirrors crm_routes._check_source: a new choice must be a live source. */
 function sourceRefusal(key: string, current = "") {
   if (!key || key === current) return null;
@@ -2603,6 +2675,7 @@ function dealSummary(row: DealRow) {
     status: row.status,
     mrr_amount: row.mrr_amount,
     currency: row.currency,
+    plan_key: row.plan_key ?? "",
     seats: row.seats,
     win_probability: probability,
     weighted_mrr: Math.round(row.mrr_amount * probability) / 100,
@@ -3461,6 +3534,12 @@ routes.push(
       if (!stage || stage.outcome)
         return refuse(400, "malformed_request", { stage_key: "not an open pipeline stage" });
       const found = caller(headers);
+      const planKey = String(body.plan_key ?? "").trim();
+      const plan = planKey ? activePlan(planKey) : null;
+      if (planKey && !plan)
+        return refuse(400, "malformed_request", { plan_key: "not a plan on the price list" });
+      const askedSeats = Number(body.seats ?? 1) || 1;
+      const seats = plan ? Math.max(askedSeats, plan.min_seats) : askedSeats;
       const row: DealRow = {
         id: randomUUID(),
         name: String(body.name ?? "").trim() || `${company.name} — new business`,
@@ -3468,9 +3547,12 @@ routes.push(
         primary_person_id: String(body.primary_person_id ?? ""),
         stage_key: stageKey,
         status: "open",
-        mrr_amount: Number(body.mrr_amount ?? 0) || 0,
-        currency: String(body.currency ?? "USD") || "USD",
-        seats: Number(body.seats ?? 1) || 1,
+        mrr_amount: plan
+          ? Math.round(plan.unit_amount * seats * 100) / 100
+          : Number(body.mrr_amount ?? 0) || 0,
+        currency: plan ? plan.currency : String(body.currency ?? "USD") || "USD",
+        plan_key: planKey,
+        seats,
         expected_close_date: String(body.expected_close_date ?? ""),
         next_step: nextStep,
         next_step_due: nextStepDue,
@@ -3551,6 +3633,19 @@ routes.push(
       if ("name" in body) row.name = String(body.name ?? "").trim() || row.name;
       if ("mrr_amount" in body) row.mrr_amount = Number(body.mrr_amount ?? 0) || 0;
       if ("seats" in body) row.seats = Math.max(Number(body.seats ?? 1) || 1, 1);
+      if ("plan_key" in body) {
+        const planKey = String(body.plan_key ?? "").trim();
+        row.plan_key = planKey;
+        if (planKey) {
+          const plan = activePlan(planKey);
+          if (!plan)
+            return refuse(400, "malformed_request", { plan_key: "not a plan on the price list" });
+          row.seats = Math.max(row.seats, plan.min_seats);
+          row.currency = plan.currency;
+          if (!("mrr_amount" in body))
+            row.mrr_amount = Math.round(plan.unit_amount * row.seats * 100) / 100;
+        }
+      }
       if ("expected_close_date" in body)
         row.expected_close_date = String(body.expected_close_date ?? "");
       if ("next_step" in body || "next_step_due" in body) {
@@ -3833,6 +3928,8 @@ routes.push(
     capability: "crm:read",
     handler: () =>
       ok({
+        plans: plans.filter((row) => !row.archived).map(planView),
+        archived_plans: plans.filter((row) => row.archived).map(planView),
         pipeline: stagePayload(),
         sources: sources
           .filter((row) => !row.archived)
@@ -3990,6 +4087,72 @@ routes.push(
         return refuse(400, "malformed_request", { reason: "nothing to change" });
       }
       audit("settings.source_updated", caller(headers)?.member.id ?? null, "lead_source", key);
+      return ok({ updated: true, key });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/plans/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const key = String(body.key ?? "").trim();
+      if (!/^[a-z][a-z0-9_]{1,31}$/.test(key))
+        return refuse(400, "malformed_request", { key: "a short lowercase slug" });
+      const existing = plans.find((row) => row.key === key);
+      const fields: Partial<PlanRow> = {};
+      if ("name" in body) {
+        const name = String(body.name ?? "")
+          .trim()
+          .slice(0, 80);
+        if (!name) return refuse(400, "malformed_request", { name: "cannot be empty" });
+        fields.name = name;
+      }
+      if ("unit_amount" in body) {
+        const amount = Math.round(Number(body.unit_amount) * 100) / 100;
+        if (!(amount >= 0.01 && amount <= 1_000_000))
+          return refuse(400, "malformed_request", { unit_amount: "between 0.01 and 1,000,000" });
+        fields.unit_amount = amount;
+      }
+      if ("currency" in body) {
+        const currency = String(body.currency ?? "")
+          .trim()
+          .toUpperCase();
+        if (!/^[A-Z]{3}$/.test(currency))
+          return refuse(400, "malformed_request", { currency: "a three-letter code" });
+        fields.currency = currency;
+      }
+      if ("billing_cadence" in body) {
+        const cadence = String(body.billing_cadence ?? "");
+        if (cadence !== "monthly" && cadence !== "annual")
+          return refuse(400, "malformed_request", { billing_cadence: "monthly or annual" });
+        fields.billing_cadence = cadence;
+      }
+      if ("min_seats" in body) {
+        const minSeats = Number(body.min_seats);
+        if (!Number.isInteger(minSeats) || minSeats < 1 || minSeats > 100_000)
+          return refuse(400, "malformed_request", { min_seats: "1 to 100,000" });
+        fields.min_seats = minSeats;
+      }
+      if ("archived" in body) fields.archived = body.archived === true;
+      if (!existing) {
+        if (!fields.name || fields.unit_amount === undefined)
+          return refuse(400, "malformed_request", { name: "a new plan needs a name and a price" });
+        plans.push({
+          key,
+          name: fields.name,
+          unit_amount: fields.unit_amount,
+          currency: fields.currency ?? "USD",
+          billing_cadence: fields.billing_cadence ?? "monthly",
+          min_seats: fields.min_seats ?? 1,
+          archived: false,
+        });
+      } else if (Object.keys(fields).length > 0) {
+        Object.assign(existing, fields);
+      } else {
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
+      }
+      audit("settings.plan_updated", caller(headers)?.member.id ?? null, "plan", key);
       return ok({ updated: true, key });
     },
   },
@@ -4863,6 +5026,7 @@ type ContractRow = {
   company_id: string;
   deal_id: string;
   plan_name: string;
+  plan_key?: string;
   seats: number;
   mrr_cents: number;
   currency: string;
@@ -6589,6 +6753,7 @@ function seedBook() {
       company_id: companyId,
       deal_id: dealId,
       plan_name: firm.plan,
+      plan_key: PLAN_KEY_BY_NAME[firm.plan] ?? "",
       seats: firm.seats,
       mrr_cents: currentCents,
       currency: "USD",
@@ -6685,6 +6850,7 @@ function seedBook() {
       status: lost ? "lost" : "open",
       mrr_amount: prospect.mrr,
       currency: "USD",
+      plan_key: PLAN_KEY_BY_NAME[prospect.plan] ?? "",
       seats: prospect.seats,
       expected_close_date: lost
         ? dayOffset(-lost[0])
@@ -6728,6 +6894,7 @@ function contractView(row: ContractRow) {
     company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
     deal_id: row.deal_id,
     plan_name: row.plan_name,
+    plan_key: row.plan_key ?? "",
     seats: row.seats,
     mrr_amount: money(row.mrr_cents),
     currency: row.currency,
@@ -6832,10 +6999,18 @@ routes.push(
     handler: ({ body, headers }) => {
       const company = companies.find((row) => row.id === String(body.company_id ?? ""));
       if (!company) return refuse(400, "malformed_request", { company_id: "no such company" });
-      const cents = Math.round(Number(body.mrr_amount ?? 0) * 100);
+      const planKey = String(body.plan_key ?? "").trim();
+      const plan = planKey ? activePlan(planKey) : null;
+      if (planKey && !plan)
+        return refuse(400, "malformed_request", { plan_key: "not a plan on the price list" });
+      const planSeats = Math.max(Number(body.seats ?? 1) || 1, plan?.min_seats ?? 1);
+      const cents =
+        plan && !String(body.mrr_amount ?? "").trim()
+          ? Math.round(plan.unit_amount * planSeats * 100)
+          : Math.round(Number(body.mrr_amount ?? 0) * 100);
       if (!(cents > 0))
         return refuse(400, "malformed_request", { mrr_amount: "a contract is paid for" });
-      const currency = String(body.currency ?? "USD").toUpperCase() || "USD";
+      const currency = plan ? plan.currency : String(body.currency ?? "USD").toUpperCase() || "USD";
       if (!/^[A-Z]{3}$/.test(currency))
         return refuse(400, "malformed_request", { currency: "a three-letter code" });
       const startsOn = String(body.starts_on ?? "");
@@ -6852,11 +7027,12 @@ routes.push(
         id: randomUUID(),
         company_id: company.id,
         deal_id: String(body.deal_id ?? ""),
-        plan_name: String(body.plan_name ?? ""),
-        seats: Math.max(1, Number(body.seats ?? 1) || 1),
+        plan_name: String(body.plan_name ?? "") || plan?.name || "",
+        plan_key: planKey,
+        seats: plan ? planSeats : Math.max(1, Number(body.seats ?? 1) || 1),
         mrr_cents: cents,
         currency,
-        billing_cadence: String(body.billing_cadence ?? "monthly"),
+        billing_cadence: String(body.billing_cadence ?? "") || plan?.billing_cadence || "monthly",
         starts_on: startsOn,
         term_months: termMonths,
         renews_on: addMonths(startsOn, termMonths),
@@ -6912,6 +7088,17 @@ routes.push(
       let changed = false;
       if ("plan_name" in body) {
         row.plan_name = String(body.plan_name ?? "");
+        changed = true;
+      }
+      if ("plan_key" in body) {
+        const planKey = String(body.plan_key ?? "").trim();
+        if (planKey) {
+          const plan = activePlan(planKey);
+          if (!plan)
+            return refuse(400, "malformed_request", { plan_key: "not a plan on the price list" });
+          row.plan_name = plan.name;
+        }
+        row.plan_key = planKey;
         changed = true;
       }
       if ("notes" in body) {
@@ -8482,6 +8669,7 @@ function resetWorld() {
   seedTeam();
   seedSla();
   seedSources();
+  seedPlans();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;
   for (const member of staff) {

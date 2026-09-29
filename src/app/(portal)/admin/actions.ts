@@ -427,6 +427,42 @@ export async function updateSlaAction(
   return { status: "sent", message: "Saved.", sentAt: Date.now() };
 }
 
+export async function updatePlanAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/settings");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const input: Record<string, unknown> = { key: fieldValue(formData, "key", 32).trim() };
+  for (const [name, limit] of [
+    ["name", 80],
+    ["unit_amount", 16],
+    ["currency", 3],
+    ["billing_cadence", 10],
+    ["min_seats", 6],
+  ] as const) {
+    if (formData.has(name)) {
+      const value = fieldValue(formData, name, limit).trim();
+      if (value) input[name] = name === "currency" ? value.toUpperCase() : value;
+    }
+  }
+  const archived = fieldValue(formData, "archived", 5);
+  if (archived === "true") input.archived = true;
+  if (archived === "false") input.archived = false;
+  try {
+    await settingsApi.updatePlan(context.token, input);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/admin/settings");
+  return {
+    status: "sent",
+    message: archived === "true" ? "Archived." : archived === "false" ? "Restored." : "Saved.",
+    sentAt: Date.now(),
+  };
+}
+
 export async function updateSourceAction(
   _previous: ActionState,
   formData: FormData,

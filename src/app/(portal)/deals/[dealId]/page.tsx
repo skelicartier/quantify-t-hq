@@ -36,6 +36,7 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readDeal, type DealDetail } from "@/lib/api/deals";
 import { readContracts } from "@/lib/api/revenue";
+import { readCrmSettings, type Plan } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS, sourceLabel, stageLabel } from "@/lib/crm/vocabulary";
@@ -72,6 +73,13 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
     throw error;
   }
   const names = await directoryOrNull(context.token);
+  let plans: Plan[] = [];
+  try {
+    plans = (await readCrmSettings(context.token)).plans;
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
   // A won deal points at its contract; offer to record one until it exists.
   let contractId: string | null = null;
   let contractChecked = false;
@@ -188,7 +196,7 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
         actions={
           open && canDeal ? (
             <>
-              <Popover label="Move stage" variant="primary" width="wide">
+              <Popover align="start" label="Move stage" variant="primary" width="wide">
                 <DealStageForm
                   action={moveDealStageAction}
                   deal={deal}
@@ -196,7 +204,7 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
                   defaultDue={isoDayPlus(now, 3)}
                 />
               </Popover>
-              <Popover label="Close" width="wide">
+              <Popover align="start" label="Close" width="wide">
                 <p className="muted" style={{ marginBottom: 10 }}>
                   Final. A loss records its reason.
                 </p>
@@ -296,6 +304,26 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
                 ]}
                 display={deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned"}
                 readOnly={!canDeal || names === null}
+              />
+              <InlineField
+                {...inline}
+                name="plan_key"
+                label="Plan"
+                type="select"
+                value={deal.plan_key}
+                options={[
+                  { value: "", label: "No plan — typed value" },
+                  ...plans.map((plan) => ({
+                    value: plan.key,
+                    label: `${plan.name} · ${formatMoney(plan.unit_amount, plan.currency)} a seat`,
+                  })),
+                ]}
+                display={
+                  deal.plan_key
+                    ? (plans.find((plan) => plan.key === deal.plan_key)?.name ?? deal.plan_key)
+                    : "No plan"
+                }
+                readOnly={!canDeal || plans.length === 0}
               />
               <InlineField
                 {...inline}

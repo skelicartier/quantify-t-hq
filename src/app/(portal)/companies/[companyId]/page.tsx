@@ -270,7 +270,7 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
         actions={
           <>
             {canDeal && openStages.length > 0 && (
-              <Popover label="Open a deal" variant="primary" width="wide">
+              <Popover align="start" label="Open a deal" variant="primary" width="wide">
                 <DealCreateForm
                   action={createDealAction}
                   companyId={company.company_id}
@@ -280,11 +280,12 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                     label: person.full_name || person.email,
                   }))}
                   defaultDue={isoDayPlus(now, 3)}
+                  plans={settings?.plans ?? []}
                 />
               </Popover>
             )}
             {canWrite && (
-              <Popover label="Add person">
+              <Popover align="start" label="Add person">
                 <PersonCreateForm
                   action={createPersonAction}
                   companies={[]}

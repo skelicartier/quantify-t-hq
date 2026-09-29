@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { CANCEL_REASON_LABELS } from "@/lib/crm/vocabulary";
+import { formatMoney, formatMrr } from "@/lib/format";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -21,18 +22,35 @@ export type ContractPrefill = {
   seats?: string;
 };
 
+export type ContractPlanOption = {
+  key: string;
+  name: string;
+  unit_amount: number;
+  currency: string;
+  billing_cadence: string;
+  min_seats: number;
+};
+
 export function ContractCreateForm({
   action,
   companies,
   today,
   prefill = {},
+  plans = [],
 }: {
   action: Action;
   companies: readonly Option[];
   today: string;
   prefill?: ContractPrefill;
+  plans?: readonly ContractPlanOption[] | undefined;
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  const [planKey, setPlanKey] = useState("");
+  const [seats, setSeats] = useState(Math.max(1, Number(prefill.seats ?? 1) || 1));
+  const [cadence, setCadence] = useState("monthly");
+  const plan = plans.find((candidate) => candidate.key === planKey);
+  const pricedSeats = plan ? Math.max(seats, plan.min_seats) : seats;
+  const priced = plan ? Math.round(plan.unit_amount * pricedSeats * 100) / 100 : null;
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
       <AttemptField state={state} />
@@ -53,36 +71,91 @@ export function ContractCreateForm({
           ))}
         </Select>
       </Field>
-      <Field id="contract-plan" label="Plan">
-        <Input
-          id="contract-plan"
-          name="plan_name"
-          maxLength={80}
-          placeholder="e.g. Professional desk"
-          disabled={isPending}
-        />
-      </Field>
-      <div className="form-row">
-        <Field id="contract-mrr" label="Monthly value">
-          <Input
-            id="contract-mrr"
-            name="mrr_amount"
-            type="number"
-            min={0.01}
-            step={0.01}
-            required
-            defaultValue={prefill.mrr_amount}
+      {plans.length > 0 && (
+        <Field
+          id="contract-plan-key"
+          label="From the price list"
+          hint={
+            plan
+              ? `${pricedSeats} × ${formatMoney(plan.unit_amount, plan.currency)} = ${formatMrr(priced, plan.currency)}, billed ${plan.billing_cadence === "annual" ? "annually" : "monthly"}`
+              : "Pick a plan to price it from the seats, or type the agreement below."
+          }
+        >
+          <Select
+            id="contract-plan-key"
+            name="plan_key"
+            value={planKey}
+            onChange={(event) => {
+              const chosen = plans.find((candidate) => candidate.key === event.target.value);
+              setPlanKey(event.target.value);
+              if (chosen) setCadence(chosen.billing_cadence);
+            }}
             disabled={isPending}
-          />
-        </Field>
-        <Field id="contract-currency" label="Currency">
-          <Select id="contract-currency" name="currency" defaultValue="USD" disabled={isPending}>
-            {CURRENCIES.map((currency) => (
-              <option key={currency} value={currency}>
-                {currency}
+          >
+            <option value="">No plan — typed agreement</option>
+            {plans.map((candidate) => (
+              <option key={candidate.key} value={candidate.key}>
+                {candidate.name} · {formatMoney(candidate.unit_amount, candidate.currency)} a seat
               </option>
             ))}
           </Select>
+        </Field>
+      )}
+      <Field id="contract-plan" label="Plan name">
+        {plan ? (
+          <Input key="plan-named" id="contract-plan" value={plan.name} readOnly disabled />
+        ) : (
+          <Input
+            key="plan-typed"
+            id="contract-plan"
+            name="plan_name"
+            maxLength={80}
+            placeholder="e.g. Professional desk"
+            disabled={isPending}
+          />
+        )}
+      </Field>
+      <div className="form-row">
+        <Field id="contract-mrr" label="Monthly value">
+          {plan ? (
+            <Input
+              id="contract-mrr"
+              value={priced === null ? "" : String(priced)}
+              readOnly
+              disabled
+            />
+          ) : (
+            <Input
+              key="typed"
+              id="contract-mrr"
+              name="mrr_amount"
+              type="number"
+              min={0.01}
+              step={0.01}
+              required
+              defaultValue={prefill.mrr_amount}
+              disabled={isPending}
+            />
+          )}
+        </Field>
+        <Field id="contract-currency" label="Currency">
+          {plan ? (
+            <Input
+              key="currency-fixed"
+              id="contract-currency"
+              value={plan.currency}
+              readOnly
+              disabled
+            />
+          ) : (
+            <Select id="contract-currency" name="currency" defaultValue="USD" disabled={isPending}>
+              {CURRENCIES.map((currency) => (
+                <option key={currency} value={currency}>
+                  {currency}
+                </option>
+              ))}
+            </Select>
+          )}
         </Field>
       </div>
       <div className="form-row">
@@ -93,7 +166,8 @@ export function ContractCreateForm({
             type="number"
             min={1}
             step={1}
-            defaultValue={prefill.seats ?? "1"}
+            value={seats}
+            onChange={(event) => setSeats(Math.max(1, Math.round(Number(event.target.value) || 1)))}
             disabled={isPending}
           />
         </Field>
@@ -101,7 +175,8 @@ export function ContractCreateForm({
           <Select
             id="contract-cadence"
             name="billing_cadence"
-            defaultValue="monthly"
+            value={cadence}
+            onChange={(event) => setCadence(event.target.value)}
             disabled={isPending}
           >
             <option value="monthly">Monthly</option>

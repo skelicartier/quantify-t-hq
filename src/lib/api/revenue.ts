@@ -12,6 +12,7 @@ export const contractSchema = z.object({
   company_name: z.string(),
   deal_id: z.string(),
   plan_name: z.string(),
+  plan_key: z.string(),
   seats: z.number(),
   mrr_amount: z.number(),
   currency: z.string(),
