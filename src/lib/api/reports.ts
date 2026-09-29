@@ -76,6 +76,19 @@ const weeklySchema = okEnvelope.extend({
     movements: z.record(z.string(), z.number()),
   }),
   losses_last_90_days: z.array(countSchema),
+  /** The support desk's week; null until the desk runs on the database. */
+  desk: z
+    .object({
+      opened: z.number(),
+      answered: z.number(),
+      median_first_reply_minutes: z.number().nullable(),
+      replies_sent: z.number(),
+      resolved: z.number(),
+      resolved_on_first_reply: z.number(),
+      resolved_after_reopen: z.number(),
+      open_now: z.number(),
+    })
+    .nullable(),
   generated_at: z.string().nullable(),
 });
 export type WeeklyReport = z.infer<typeof weeklySchema>;

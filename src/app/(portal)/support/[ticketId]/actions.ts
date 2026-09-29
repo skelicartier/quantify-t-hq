@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
@@ -113,4 +114,65 @@ export async function manageTicketAction(
   revalidatePath(`/support/${ticketId}`);
   revalidatePath("/support");
   return { status: "sent", message: null, sentAt: Date.now() };
+}
+
+/** Follow or unfollow: `following` is "1" to watch, anything else to stop. */
+export async function followTicketAction(
+  _previous: DeskActionState,
+  formData: FormData,
+): Promise<DeskActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/support");
+  if (!hasCapability(context, "tickets:read")) {
+    return { status: "error", message: "Your role cannot read the desk." };
+  }
+  const ticketId = fieldValue(formData, "ticket_id", 64);
+  const following = fieldValue(formData, "following", 4) === "1";
+  try {
+    await ticketsApi.followTicket(context.token, ticketId, following);
+  } catch (error) {
+    return deskRefusal(error);
+  }
+  revalidatePath(`/support/${ticketId}`);
+  revalidatePath("/support");
+  return { status: "sent", message: null, sentAt: Date.now() };
+}
+
+/**
+ * Merge this conversation into another. On success the desk opens the conversation that
+ * carries on, because the one just folded is now resolved and tagged `merged`.
+ */
+export async function mergeTicketAction(
+  _previous: DeskActionState,
+  formData: FormData,
+): Promise<DeskActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/support");
+  if (!hasCapability(context, "tickets:manage")) {
+    return { status: "error", message: "Your role cannot run the queue." };
+  }
+  const ticketId = fieldValue(formData, "ticket_id", 64);
+  const into = fieldValue(formData, "into", 64).trim();
+  if (!into) return { status: "error", message: "Say which conversation to keep." };
+  if (into === ticketId) {
+    return { status: "error", message: "A conversation cannot be merged into itself." };
+  }
+  try {
+    await ticketsApi.mergeTicket(context.token, ticketId, into);
+  } catch (error) {
+    if (error instanceof HqApiRequestError && error.status === 404) {
+      return { status: "error", message: "No conversation has that id." };
+    }
+    if (error instanceof HqApiRequestError && error.code === "malformed_request") {
+      return {
+        status: "error",
+        message: "Not merged: a resolved conversation cannot be folded, or be folded into.",
+      };
+    }
+    return deskRefusal(error);
+  }
+  revalidatePath(`/support/${ticketId}`);
+  revalidatePath(`/support/${into}`);
+  revalidatePath("/support");
+  redirect(`/support/${into}`);
 }

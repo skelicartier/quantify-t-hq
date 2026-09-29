@@ -3964,6 +3964,16 @@
     display: contents;
   }
 
+  .convo-head__followers {
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  .btn--follow-on {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
   .desk__thread .thread {
     flex: 1 1 auto;
     margin: 0;

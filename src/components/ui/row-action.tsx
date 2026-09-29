@@ -9,6 +9,8 @@ import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state
 type RowButton = {
   label: string;
   className: string;
+  /** For a keyboard shortcut that clicks this button. */
+  id?: string;
   /** Submitted as `name=value` so one form can carry several decisions. */
   name?: string;
   value?: string;
@@ -43,6 +45,7 @@ export function RowAction({ action, fields, buttons, className, sentLabel }: Row
         <button
           key={`${button.name ?? "submit"}:${button.value ?? button.label}`}
           type="submit"
+          id={button.id}
           className={button.className}
           name={button.name}
           value={button.value}

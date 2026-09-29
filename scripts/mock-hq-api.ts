@@ -207,6 +207,12 @@ type TicketRow = {
   linked_issue_url: string;
   tags: string[];
   messages: Message[];
+  /** Staff ids watching the thread without owning it. */
+  followers: string[];
+  /** Times the thread left Resolved — a desk reopen or the customer writing again. */
+  reopened_count: number;
+  resolved_at: string | null;
+  first_replied_at: string | null;
 };
 
 type Pending = { staffId: string; kind: "totp" | "enroll"; expires: number };
@@ -498,6 +504,17 @@ function makeTicket(
       },
       ...(input.messages ?? []),
     ],
+    followers: input.followers ?? [],
+    reopened_count: input.reopened_count ?? 0,
+    resolved_at:
+      input.resolved_at ??
+      (input.status === "resolved" ? (input.updated_at ?? input.opened) : null),
+    first_replied_at:
+      input.first_replied_at ??
+      (input.messages ?? []).find(
+        (message) => message.author === "staff" && message.visibility === "public",
+      )?.at ??
+      null,
   };
 }
 
@@ -542,6 +559,7 @@ function seedTickets() {
       assignee_staff_id: "aa000000-0000-4000-8000-00000000000d",
       staff_last_read_at: hoursAgo(20),
       updated_at: hoursAgo(20),
+      followers: ["aa000000-0000-4000-8000-00000000000a", "aa000000-0000-4000-8000-00000000000d"],
       messages: [
         {
           id: messageId(),
@@ -577,6 +595,7 @@ function seedTickets() {
       body: "New phone, old authenticator gone. How do I get back in?",
       opened: hoursAgo(120),
       status: "resolved",
+      reopened_count: 1,
       assignee_name: "The Owner",
       assignee_staff_id: "aa000000-0000-4000-8000-00000000000a",
       staff_last_read_at: hoursAgo(118),
@@ -671,7 +690,7 @@ function slaFor(row: TicketRow): {
   };
 }
 
-function ticketSummary(row: TicketRow) {
+function ticketSummary(row: TicketRow, viewer = "") {
   const pub = publicMessages(row);
   const last = pub[pub.length - 1];
   const snoozed = Boolean(row.snoozed_until && new Date(row.snoozed_until).getTime() > Date.now());
@@ -699,13 +718,16 @@ function ticketSummary(row: TicketRow) {
       lastCustomer && (!row.staff_last_read_at || row.staff_last_read_at < lastCustomer.at),
     ),
     linked_issue_url: row.linked_issue_url,
+    reopened_count: row.reopened_count,
+    followers: [...row.followers].sort(),
+    following: Boolean(viewer) && row.followers.includes(viewer),
     sla: slaFor(row),
   };
 }
 
-function ticketView(row: TicketRow) {
+function ticketView(row: TicketRow, viewer = "") {
   return {
-    ...ticketSummary(row),
+    ...ticketSummary(row, viewer),
     app_version: row.app_version,
     platform: row.platform,
     messages: row.messages.map((message) => ({
@@ -1234,9 +1256,11 @@ const routes: Array<{
     pattern: "hq/tickets",
     auth: true,
     capability: "tickets:read",
-    handler: ({ query }) => {
-      const summaries = tickets.map(ticketSummary);
+    handler: ({ query, headers }) => {
+      const viewer = caller(headers)!.member.id;
+      const summaries = tickets.map((row) => ticketSummary(row, viewer));
       const visible = summaries.filter((summary) => {
+        if (query.following && !summary.following) return false;
         if (query.status === "snoozed") {
           if (!summary.snoozed) return false;
         } else if (query.status) {
@@ -1333,10 +1357,15 @@ const routes: Array<{
             at: opened,
           },
         ],
+        followers: [],
+        reopened_count: 0,
+        resolved_at: null,
+        // The desk wrote first, so the first reply is the opening message.
+        first_replied_at: opened,
       };
       tickets.push(row);
       audit("ticket.opened", found.member.id, "ticket", row.id);
-      return ok({ ticket: ticketView(row) });
+      return ok({ ticket: ticketView(row, found.member.id) });
     },
   },
   {
@@ -1344,11 +1373,11 @@ const routes: Array<{
     pattern: "hq/tickets/{ticket_id}",
     auth: true,
     capability: "tickets:read",
-    handler: ({ params }) => {
+    handler: ({ params, headers }) => {
       const row = tickets.find((ticket) => ticket.id === params.ticket_id);
       if (!row) return refuse(404, "not_found");
       row.staff_last_read_at = now();
-      return ok({ ticket: ticketView(row) });
+      return ok({ ticket: ticketView(row, caller(headers)!.member.id) });
     },
   },
   {
@@ -1409,8 +1438,9 @@ const routes: Array<{
       row.status = "pending";
       row.updated_at = at;
       row.staff_last_read_at = at;
+      if (!row.first_replied_at) row.first_replied_at = at;
       audit("ticket.replied", found.member.id, "ticket", row.id);
-      return ok({ ticket: ticketView(row) });
+      return ok({ ticket: ticketView(row, found.member.id) });
     },
   },
   {
@@ -1436,7 +1466,7 @@ const routes: Array<{
       });
       row.updated_at = at;
       audit("ticket.noted", found.member.id, "ticket", row.id);
-      return ok({ ticket: ticketView(row) });
+      return ok({ ticket: ticketView(row, found.member.id) });
     },
   },
   {
@@ -1471,6 +1501,9 @@ const routes: Array<{
         const status = String(body.status);
         if (!["open", "pending", "resolved"].includes(status))
           return refuse(400, "malformed_request");
+        // As the service: leaving Resolved is a reopen; resolving again moves the stamp.
+        if (row.status === "resolved" && status !== "resolved") row.reopened_count += 1;
+        if (status === "resolved" && row.status !== "resolved") row.resolved_at = now();
         row.status = status as TicketRow["status"];
         row.messages.push({
           id: messageId(),
@@ -1506,7 +1539,77 @@ const routes: Array<{
       }
       row.updated_at = now();
       audit("ticket.managed", found.member.id, "ticket", row.id);
-      return ok({ ticket: ticketView(row) });
+      return ok({ ticket: ticketView(row, found.member.id) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/tickets/{ticket_id}/follow",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = tickets.find((ticket) => ticket.id === params.ticket_id);
+      if (!row) return refuse(404, "not_found");
+      const following = body.following === true;
+      row.followers = row.followers.filter((id) => id !== found.member.id);
+      if (following) row.followers.push(found.member.id);
+      audit(following ? "ticket.followed" : "ticket.unfollowed", found.member.id, "ticket", row.id);
+      return ok({ ticket: ticketView(row, found.member.id) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/tickets/{ticket_id}/merge",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const duplicate = tickets.find((ticket) => ticket.id === params.ticket_id);
+      if (!duplicate) return refuse(404, "not_found");
+      const into = String(body.into ?? "").trim();
+      if (!into || into === duplicate.id) return refuse(400, "malformed_request");
+      const kept = tickets.find((ticket) => ticket.id === into);
+      if (!kept) return refuse(404, "not_found");
+      if (duplicate.status === "resolved" || kept.status === "resolved")
+        return refuse(400, "malformed_request");
+      const at = now();
+      const priorityRank: Record<string, number> = { low: 0, normal: 1, high: 2, urgent: 3 };
+      kept.messages = [...kept.messages, ...duplicate.messages].sort((a, b) =>
+        a.at.localeCompare(b.at),
+      );
+      kept.messages.push({
+        id: messageId(),
+        author: "system",
+        author_id: "",
+        author_name: found.member.display_name,
+        visibility: "internal",
+        body: `Merged ${duplicate.id} (${duplicate.subject.slice(0, 80)}) into this conversation`,
+        at,
+      });
+      kept.tags = [...new Set([...kept.tags, ...duplicate.tags])].sort();
+      if (priorityRank[duplicate.priority]! > priorityRank[kept.priority]!)
+        kept.priority = duplicate.priority;
+      if (duplicate.status === "open") kept.status = "open";
+      kept.followers = [...new Set([...kept.followers, ...duplicate.followers])];
+      kept.updated_at = at;
+      duplicate.messages.push({
+        id: messageId(),
+        author: "system",
+        author_id: "",
+        author_name: found.member.display_name,
+        visibility: "internal",
+        body: `Merged into ${kept.id}`,
+        at,
+      });
+      duplicate.status = "resolved";
+      duplicate.resolved_at = at;
+      duplicate.snoozed_until = null;
+      duplicate.tags = [...new Set([...duplicate.tags, "merged"])].sort();
+      duplicate.updated_at = at;
+      audit("ticket.merged_into", found.member.id, "ticket", duplicate.id, "", { other: kept.id });
+      audit("ticket.merged_from", found.member.id, "ticket", kept.id, "", { other: duplicate.id });
+      return ok({ ticket: ticketView(kept, found.member.id) });
     },
   },
   {
@@ -2877,7 +2980,7 @@ routes.push(
       if (capabilities.includes("tickets:read")) {
         // As the service counts: open-like and not snoozed; totals over the whole
         // list, the top five only for the card's rows.
-        const summaries = tickets.map(ticketSummary);
+        const summaries = tickets.map((row) => ticketSummary(row));
         const openLike = summaries.filter(
           (summary) => ["open", "pending"].includes(summary.status) && !summary.snoozed,
         );
@@ -7713,6 +7816,41 @@ routes.push(
               Date.now() - Date.parse(row.closed_at) <= 90 * 86_400_000,
           ),
         ),
+        desk: (() => {
+          const staffPublic = (row: TicketRow) =>
+            row.messages.filter(
+              (message) => message.author === "staff" && message.visibility === "public",
+            );
+          const opened = tickets.filter((row) => within(row.created_at));
+          const waits = opened
+            .filter((row) => row.first_replied_at)
+            .map((row) => (Date.parse(row.first_replied_at!) - Date.parse(row.created_at)) / 60_000)
+            .sort((a, b) => a - b);
+          const resolved = tickets.filter(
+            (row) => row.status === "resolved" && within(row.resolved_at),
+          );
+          return {
+            opened: opened.length,
+            answered: waits.length,
+            median_first_reply_minutes:
+              waits.length === 0
+                ? null
+                : Math.round(
+                    waits.length % 2
+                      ? waits[(waits.length - 1) / 2]!
+                      : (waits[waits.length / 2 - 1]! + waits[waits.length / 2]!) / 2,
+                  ),
+            replies_sent: tickets.reduce(
+              (sum, row) => sum + staffPublic(row).filter((message) => within(message.at)).length,
+              0,
+            ),
+            resolved: resolved.length,
+            resolved_on_first_reply: resolved.filter((row) => staffPublic(row).length === 1).length,
+            resolved_after_reopen: resolved.filter((row) => row.reopened_count > 0).length,
+            open_now: tickets.filter((row) => row.status === "open" || row.status === "pending")
+              .length,
+          };
+        })(),
         generated_at: now(),
       });
     },

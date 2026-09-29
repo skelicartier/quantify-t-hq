@@ -154,6 +154,12 @@ export function Shortcuts({ capabilities }: { capabilities: readonly string[] })
                 </dt>
                 <dd>Tags, snooze</dd>
               </div>
+              <div>
+                <dt>
+                  <kbd className="keycap">o</kbd>
+                </dt>
+                <dd>Follow or unfollow</dd>
+              </div>
             </dl>
           </section>
           <section aria-labelledby="shortcuts-list">

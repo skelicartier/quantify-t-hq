@@ -29,6 +29,7 @@ type Shot = { name: string; path: string; ready?: string };
 const SIGNED_IN_PAGES: Shot[] = [
   { name: "home", path: "/home", ready: "main#main-content" },
   { name: "support-queue", path: "/support", ready: ".desk" },
+  { name: "support-following", path: "/support?view=all&following=1", ready: ".desk" },
   {
     name: "support-ticket",
     path: "/support/sup_00000000000000000004",

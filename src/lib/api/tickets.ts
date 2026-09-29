@@ -35,6 +35,11 @@ export const ticketSummarySchema = z.object({
   last_at: z.string(),
   unread: z.boolean(),
   linked_issue_url: z.string(),
+  /** How many times this thread left Resolved — by a reopen on the desk or a customer writing again. */
+  reopened_count: z.number(),
+  /** Staff watching the thread without owning it; the customer never sees this. */
+  followers: z.array(z.string()),
+  following: z.boolean(),
   sla: slaSchema,
 });
 export type TicketSummary = z.infer<typeof ticketSummarySchema>;
@@ -111,6 +116,7 @@ export const savedRepliesSchema = okEnvelope.extend({
 export type SavedReply = z.infer<typeof savedRepliesSchema>["replies"][number];
 
 export type QueueFilters = {
+  following?: string;
   status?: string;
   priority?: string;
   assignee?: string;
@@ -154,6 +160,22 @@ export type ManageChanges = {
 
 export function manageTicket(token: string, ticketId: string, changes: ManageChanges) {
   return postHqJson(`hq/tickets/${ticketId}/manage`, ticketEnvelope, { token, body: changes });
+}
+
+/** Watch a conversation (or stop): the same route with `following` true or false. */
+export function followTicket(token: string, ticketId: string, following: boolean) {
+  return postHqJson(`hq/tickets/${ticketId}/follow`, ticketEnvelope, {
+    token,
+    body: { following },
+  });
+}
+
+/** Fold this conversation into `into`; the response is the conversation that carries on. */
+export function mergeTicket(token: string, ticketId: string, into: string) {
+  return postHqJson(`hq/tickets/${ticketId}/merge`, ticketEnvelope, {
+    token,
+    body: { into },
+  });
 }
 
 export function openTicket(

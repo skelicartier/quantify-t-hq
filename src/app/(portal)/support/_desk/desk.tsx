@@ -1,10 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { manageTicketAction, sendMessage } from "@/app/(portal)/support/[ticketId]/actions";
+import {
+  followTicketAction,
+  manageTicketAction,
+  mergeTicketAction,
+  sendMessage,
+} from "@/app/(portal)/support/[ticketId]/actions";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { Composer } from "@/components/support/composer";
 import { DeskKeys } from "@/components/support/desk-keys";
+import { MergeForm } from "@/components/support/merge-form";
 import { SlaChip } from "@/components/support/sla-chip";
 import { TicketControls } from "@/components/support/ticket-controls";
 import { Callout } from "@/components/ui/callout";
@@ -33,6 +39,8 @@ export type DeskFilters = {
   view: string;
   sla: string;
   assignee: string;
+  /** "1" to show only the conversations this person follows. */
+  following: string;
   q: string;
 };
 
@@ -58,6 +66,24 @@ function statusTone(ticket: TicketSummary): "attention" | "live" | "neutral" {
   return "neutral";
 }
 
+/** "Followed by A, B" when the names are known, else how many. */
+function followersLine(
+  followers: readonly string[],
+  teammates: readonly { staff_id: string; display_name: string }[],
+  self: { staff_id: string; display_name: string },
+): string {
+  const names = followers.map((id) => {
+    if (id === self.staff_id) return "you";
+    return teammates.find((member) => member.staff_id === id)?.display_name ?? null;
+  });
+  if (names.every((name) => name !== null)) {
+    return `Followed by ${names.join(", ")}`;
+  }
+  const others = followers.filter((id) => id !== self.staff_id).length;
+  if (others === 0) return "Followed by you";
+  return `Followed by ${names.includes("you") ? "you and " : ""}${others} ${others === 1 ? "other" : "others"}`;
+}
+
 function initials(name: string): string {
   const parts = name.split(/\s+/).filter(Boolean);
   return `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}`.toUpperCase() || "?";
@@ -73,6 +99,7 @@ function queueHref(
   if (next.view && next.view !== "open") query.set("view", next.view);
   if (next.sla) query.set("sla", next.sla);
   if (next.assignee) query.set("assignee", next.assignee);
+  if (next.following) query.set("following", "1");
   if (next.q) query.set("q", next.q);
   const base = selected ? `/support/${selected}` : "/support";
   const rendered = query.toString();
@@ -103,6 +130,7 @@ export async function Desk({ context, filters, selected }: DeskProps) {
       status: view.status,
       sla: filters.sla,
       assignee: filters.assignee === "mine" ? context.me.staff.staff_id : filters.assignee,
+      following: filters.following,
       q: filters.q,
     });
   } catch (error) {
@@ -206,6 +234,7 @@ export async function Desk({ context, filters, selected }: DeskProps) {
             {filters.view !== "open" && <input type="hidden" name="view" value={filters.view} />}
             {filters.sla && <input type="hidden" name="sla" value={filters.sla} />}
             {filters.assignee && <input type="hidden" name="assignee" value={filters.assignee} />}
+            {filters.following && <input type="hidden" name="following" value="1" />}
             <label className="sr-only" htmlFor="desk-q">
               Search the queue
             </label>
@@ -250,6 +279,15 @@ export async function Desk({ context, filters, selected }: DeskProps) {
             >
               Mine
             </Link>
+            <Link
+              href={queueHref(filters, selected, {
+                following: filters.following ? "" : "1",
+                view: filters.following ? filters.view : "all",
+              })}
+              aria-current={filters.following ? "page" : undefined}
+            >
+              Following
+            </Link>
           </div>
         </header>
         <div className="desk__queue-meta">
@@ -267,7 +305,7 @@ export async function Desk({ context, filters, selected }: DeskProps) {
           </Callout>
         ) : queue.tickets.length === 0 ? (
           <p className="desk__empty">
-            {filters.q || filters.sla || filters.assignee
+            {filters.q || filters.sla || filters.assignee || filters.following
               ? "No conversation matches these filters."
               : view.key === "open"
                 ? "Nothing needs an answer."
@@ -383,6 +421,17 @@ export async function Desk({ context, filters, selected }: DeskProps) {
                   }
                 />
                 <SlaChip sla={ticket.sla} />
+                {ticket.reopened_count > 0 && (
+                  <StatusPill
+                    value="reopened"
+                    label={
+                      ticket.reopened_count === 1
+                        ? "Reopened once"
+                        : `Reopened ${ticket.reopened_count} times`
+                    }
+                    tone="attention"
+                  />
+                )}
                 <span className="convo-head__assignee">
                   {ticket.assignee_name ? ticket.assignee_name : "Unassigned"}
                 </span>
@@ -391,46 +440,77 @@ export async function Desk({ context, filters, selected }: DeskProps) {
                     {tag}
                   </span>
                 ))}
+                {ticket.followers.length > 0 && (
+                  <span className="convo-head__followers">
+                    {followersLine(ticket.followers, teammates, self)}
+                  </span>
+                )}
               </div>
-              {canManage && (
-                <div className="convo-head__actions">
-                  {!ticket.assignee_staff_id && (
-                    <RowAction
-                      action={manageTicketAction}
-                      fields={{ ticket_id: ticket.id, assignee_staff_id: self.staff_id }}
-                      buttons={[
-                        { label: "Take it", className: "btn btn--small", pendingLabel: "Taking…" },
-                      ]}
-                    />
-                  )}
-                  {ticket.status !== "resolved" && (
-                    <RowAction
-                      action={manageTicketAction}
-                      fields={{ ticket_id: ticket.id, snoozed_until: inADay }}
-                      buttons={[{ label: "Snooze a day", className: "btn btn--small btn--ghost" }]}
-                    />
-                  )}
-                  {ticket.status !== "resolved" ? (
-                    <RowAction
-                      action={manageTicketAction}
-                      fields={{ ticket_id: ticket.id, status: "resolved" }}
-                      buttons={[
-                        {
-                          label: "Resolve",
-                          className: "btn btn--small btn--primary",
-                          pendingLabel: "Resolving…",
-                        },
-                      ]}
-                    />
-                  ) : (
-                    <RowAction
-                      action={manageTicketAction}
-                      fields={{ ticket_id: ticket.id, status: "open" }}
-                      buttons={[{ label: "Reopen", className: "btn btn--small" }]}
-                    />
-                  )}
-                </div>
-              )}
+              <div className="convo-head__actions">
+                <RowAction
+                  action={followTicketAction}
+                  fields={{ ticket_id: ticket.id, following: ticket.following ? "0" : "1" }}
+                  buttons={[
+                    {
+                      id: "ticket-follow",
+                      label: ticket.following ? "Following" : "Follow",
+                      className: ticket.following
+                        ? "btn btn--small btn--follow-on"
+                        : "btn btn--small btn--ghost",
+                      ariaPressed: ticket.following,
+                      ariaLabel: ticket.following
+                        ? "Stop following this conversation"
+                        : "Follow this conversation",
+                      pendingLabel: ticket.following ? "Leaving…" : "Following…",
+                    },
+                  ]}
+                />
+                {canManage && (
+                  <>
+                    {!ticket.assignee_staff_id && (
+                      <RowAction
+                        action={manageTicketAction}
+                        fields={{ ticket_id: ticket.id, assignee_staff_id: self.staff_id }}
+                        buttons={[
+                          {
+                            label: "Take it",
+                            className: "btn btn--small",
+                            pendingLabel: "Taking…",
+                          },
+                        ]}
+                      />
+                    )}
+                    {ticket.status !== "resolved" && (
+                      <RowAction
+                        action={manageTicketAction}
+                        fields={{ ticket_id: ticket.id, snoozed_until: inADay }}
+                        buttons={[
+                          { label: "Snooze a day", className: "btn btn--small btn--ghost" },
+                        ]}
+                      />
+                    )}
+                    {ticket.status !== "resolved" ? (
+                      <RowAction
+                        action={manageTicketAction}
+                        fields={{ ticket_id: ticket.id, status: "resolved" }}
+                        buttons={[
+                          {
+                            label: "Resolve",
+                            className: "btn btn--small btn--primary",
+                            pendingLabel: "Resolving…",
+                          },
+                        ]}
+                      />
+                    ) : (
+                      <RowAction
+                        action={manageTicketAction}
+                        fields={{ ticket_id: ticket.id, status: "open" }}
+                        buttons={[{ label: "Reopen", className: "btn btn--small" }]}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
             </header>
             <ol className="thread" aria-label="Messages">
               {ticket.messages.map((message) => (
@@ -513,6 +593,18 @@ export async function Desk({ context, filters, selected }: DeskProps) {
               </Property>
             )}
           </Properties>
+          {canManage && ticket.status !== "resolved" && (
+            <section className="props" aria-label="Merge">
+              <h2 className="props__title">Duplicate?</h2>
+              <MergeForm
+                ticketId={ticket.id}
+                candidates={(firmContext?.related_tickets ?? [])
+                  .filter((related) => related.status !== "resolved")
+                  .map((related) => ({ id: related.id, subject: related.subject }))}
+                action={mergeTicketAction}
+              />
+            </section>
+          )}
           {firmContext !== null && firmContext.related_tickets.length > 0 && (
             <section className="props" aria-label="Also from this account">
               <h2 className="props__title">Also from this account</h2>
@@ -558,6 +650,7 @@ export function deskFilters(
     assignee: ["unassigned", "mine"].includes(first(parameters.assignee))
       ? first(parameters.assignee)
       : "",
+    following: first(parameters.following) === "1" ? "1" : "",
     q: first(parameters.q).slice(0, 120),
   };
 }

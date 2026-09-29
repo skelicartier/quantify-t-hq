@@ -297,6 +297,57 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                 ))}
               </ul>
             </Card>
+
+            <Card
+              title="Support desk"
+              titleAs="h2"
+              description="Counted from the conversations, not a survey."
+            >
+              {report.desk === null ? (
+                <p className="table-sub">
+                  The desk is not on the database yet, so its week cannot be counted.
+                </p>
+              ) : (
+                <ul className="report-facts">
+                  <li>
+                    <span>Opened</span>
+                    <strong>{report.desk.opened}</strong>
+                  </li>
+                  <li>
+                    <span>Median first reply</span>
+                    <strong>
+                      {report.desk.median_first_reply_minutes === null
+                        ? "—"
+                        : formatWait(report.desk.median_first_reply_minutes)}
+                    </strong>
+                  </li>
+                  <li>
+                    <span>Replies sent</span>
+                    <strong>{report.desk.replies_sent}</strong>
+                  </li>
+                  <li>
+                    <span>Resolved</span>
+                    <strong>{report.desk.resolved}</strong>
+                  </li>
+                  <li>
+                    <span>Resolved on the first reply</span>
+                    <strong>{report.desk.resolved_on_first_reply}</strong>
+                  </li>
+                  <li>
+                    <span>Resolved after a reopen</span>
+                    <strong
+                      className={report.desk.resolved_after_reopen > 0 ? "num--down" : undefined}
+                    >
+                      {report.desk.resolved_after_reopen}
+                    </strong>
+                  </li>
+                  <li>
+                    <span>Open now</span>
+                    <strong>{report.desk.open_now}</strong>
+                  </li>
+                </ul>
+              )}
+            </Card>
           </div>
 
           <section className="record-section report-section" aria-labelledby="report-quarter">
