@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readMe, type HqMe } from "@/lib/api/auth";
+import { devAutologinPersona } from "@/lib/auth/dev-bypass";
 import { readSessionToken } from "@/lib/auth/session";
 
 /**
@@ -40,6 +41,8 @@ export async function requireStaff(nextPath: string): Promise<StaffContext> {
   const state = await currentStaff();
   if (state === "signed-out") {
     const next = nextPath && nextPath !== "/" ? `?next=${encodeURIComponent(nextPath)}` : "";
+    // Development only: a stale cookie (the mock restarted) signs straight back in.
+    if (devAutologinPersona()) redirect(`/dev/signin${next}`);
     redirect(`/login${next}`);
   }
   if (state === "unavailable") {
