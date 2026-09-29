@@ -126,6 +126,8 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/mail/messages/{message_id}", () => mail.readMessage(token, ids.mail_message_id!)],
   ["hq/mail/history", () => mail.readMailHistory(token, ids.mail_email!)],
   ["hq/settings/mail", () => mail.readMailSettings(token)],
+  ["hq/mail/lists", () => mail.readLists(token)],
+  ["hq/mail/lists/{list_id}", () => mail.readList(token, ids.mail_list_id!)],
   ["hq/tickets", () => tickets.readQueue(token, {})],
   ["hq/tickets/{ticket_id}", () => tickets.readTicket(token, ids.ticket_id!)],
   ["hq/tickets/{ticket_id}/context", () => tickets.readTicketContext(token, ids.ticket_id!)],

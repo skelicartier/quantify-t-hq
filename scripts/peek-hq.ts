@@ -17,7 +17,7 @@ mkdirSync(outDir, { recursive: true });
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width, height: 900 } });
 const page = await context.newPage();
-await page.goto(`${BASE}/login`, { waitUntil: "networkidle" });
+await page.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
 await page.fill("#email", email);
 await page.fill("#password", "password-123");
 await page.click("button[type=submit]");

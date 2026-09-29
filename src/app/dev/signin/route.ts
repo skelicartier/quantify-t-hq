@@ -26,7 +26,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const pending = await authApi.login(email, "password-123");
     if (pending.mfa !== "totp") {
       // An unenrolled persona goes through the real enrolment screens.
-      return NextResponse.redirect(new URL(`/login?next=${encodeURIComponent(next)}`, origin));
+      return NextResponse.redirect(
+        new URL(`/login?form=1&next=${encodeURIComponent(next)}`, origin),
+      );
     }
     const session = await authApi.verifyTotp(pending.pending_token, "000000");
     await setSessionCookie(session.token);

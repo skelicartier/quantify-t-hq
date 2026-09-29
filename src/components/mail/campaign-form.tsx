@@ -11,7 +11,7 @@ import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
 type Option = { id: string; name: string; sub: string };
-type AudienceKind = "segment" | "companies" | "people" | "leads" | "csv";
+type AudienceKind = "segment" | "list" | "companies" | "people" | "leads" | "csv";
 
 const CSV_FIELDS = [
   { key: "email", label: "Email", aliases: ["e-mail", "email address", "mail", "work email"] },
@@ -29,6 +29,7 @@ const CSV_FIELDS = [
 
 const KIND_LABELS: Record<AudienceKind, string> = {
   segment: "A saved segment",
+  list: "A saved list",
   companies: "Everyone at chosen companies",
   people: "Chosen people",
   leads: "Chosen leads",
@@ -43,6 +44,7 @@ export type CampaignInitial = {
   topic?: string;
   audience_kind?: AudienceKind;
   segment_id?: string;
+  list_id?: string;
   ids?: string[];
   send_anytime?: boolean;
   dry_run?: boolean;
@@ -59,6 +61,7 @@ export function CampaignForm({
   templates,
   topics,
   segments,
+  lists = [],
   companies,
   people,
   leads,
@@ -70,6 +73,7 @@ export function CampaignForm({
   templates: readonly { id: string; label: string }[];
   topics: readonly { key: string; label: string }[];
   segments: readonly { id: string; label: string }[];
+  lists?: readonly { id: string; label: string }[];
   companies: readonly Option[];
   people: readonly Option[];
   leads: readonly Option[];
@@ -82,6 +86,7 @@ export function CampaignForm({
   );
   const [chosen, setChosen] = useState<Record<AudienceKind, string[]>>({
     segment: [],
+    list: [],
     companies: initial.audience_kind === "companies" ? (initial.ids ?? []) : [],
     people: initial.audience_kind === "people" ? (initial.ids ?? []) : [],
     leads: initial.audience_kind === "leads" ? (initial.ids ?? []) : [],
@@ -268,6 +273,31 @@ export function CampaignForm({
           ) : (
             <p className="page-note">
               No segments yet. Build one under Segments, or choose people here.
+            </p>
+          ))}
+
+        {kind === "list" &&
+          (lists.length ? (
+            <Field
+              id="campaign-list"
+              label="List"
+              hint="Everyone on the list when the campaign is scheduled; its own columns can go in the copy as {{custom.column}}."
+            >
+              <Select
+                id="campaign-list"
+                name="list_id"
+                defaultValue={initial.list_id ?? lists[0]?.id ?? ""}
+              >
+                {lists.map((list) => (
+                  <option key={list.id} value={list.id}>
+                    {list.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ) : (
+            <p className="page-note">
+              No lists yet. Make one under Lists from a CSV, by hand or from the CRM.
             </p>
           ))}
 

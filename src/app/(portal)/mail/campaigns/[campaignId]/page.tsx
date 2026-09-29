@@ -41,6 +41,7 @@ import {
   SKIP_REASON_LABELS,
   previewTemplate,
   readCampaign,
+  readLists,
   readSegments,
   readSenders,
   readTemplates,
@@ -114,9 +115,12 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
   let rendered: Rendered | null = null;
   if (tab === "preview") {
     try {
+      const listId =
+        campaign.audience.kind === "list" ? String(campaign.audience.list_id ?? "") : "";
       rendered = await previewTemplate(context.token, campaign.template.template_id, {
         version: campaign.template.version,
         topic: campaign.topic,
+        ...(listId ? { list_id: listId } : {}),
       });
     } catch (error) {
       if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
@@ -131,9 +135,15 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
           readSegments(context.token),
           readCampaigns(context.token),
           audienceOptions(context.token),
+          readLists(context.token),
         ])
       : null;
-  const audience = campaign.audience as { kind?: string; ids?: string[]; segment_id?: string };
+  const audience = campaign.audience as {
+    kind?: string;
+    ids?: string[];
+    segment_id?: string;
+    list_id?: string;
+  };
 
   const actions = (
     <>
@@ -532,8 +542,9 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
               </Callout>
             )}
             <p className="page-note">
-              Rendered for a sample recipient. Each real recipient gets their own name, firm and
-              stop link.
+              {campaign.audience.kind === "list"
+                ? "Rendered for the list's first member. Each recipient gets their own name, firm, columns and stop link."
+                : "Rendered for a sample recipient. Each real recipient gets their own name, firm and stop link."}
             </p>
           </RecordSection>
         )}
@@ -560,6 +571,9 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
                 id: row.segment_id,
                 label: `${row.name} · ${row.last_count ?? 0} ${row.kind}`,
               }))}
+            lists={editData[5].lists
+              .filter((row) => !row.archived_at)
+              .map((row) => ({ id: row.list_id, label: `${row.name} · ${row.members} people` }))}
             companies={editData[4].companies}
             people={editData[4].people}
             leads={editData[4].leads}
@@ -573,10 +587,12 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
               audience.kind === "people" ||
               audience.kind === "leads" ||
               audience.kind === "companies" ||
-              audience.kind === "csv"
+              audience.kind === "csv" ||
+              audience.kind === "list"
                 ? { audience_kind: audience.kind }
                 : {}),
               ...(audience.segment_id ? { segment_id: audience.segment_id } : {}),
+              ...(audience.list_id ? { list_id: audience.list_id } : {}),
               ...(audience.ids ? { ids: audience.ids } : {}),
               send_anytime: campaign.send_anytime,
               dry_run: campaign.dry_run,

@@ -10829,7 +10829,9 @@ const MAIL_LEAD_FIELDS: Record<string, string> = {
   last_emailed_days: "Days since last email",
 };
 const MAIL_OPS = ["is", "not", "has", "gt", "lt", "empty", "set"];
-const MAIL_TOKEN = /\{\{\s*([a-z][a-z0-9_]*)\s*(?:\|\s*([^}]*?)\s*)?\}\}/g;
+const MAIL_TOKEN = /\{\{\s*([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)?)\s*(?:\|\s*([^}]*?)\s*)?\}\}/g;
+/** mail_templates.CUSTOM_PREFIX: a list's own columns, {{custom.fund_size}}. */
+const MAIL_CUSTOM = "custom.";
 
 type MailSenderRow = {
   id: string;
@@ -11044,6 +11046,7 @@ type MailRecipient = {
   role_category: string;
   firm_type: string;
   customer_since: string | null;
+  custom?: Record<string, string>;
 };
 type MailVerdict = { allowed: boolean; reason: string; detail: string };
 
@@ -11134,7 +11137,10 @@ function mailAnalyse(...parts: string[]): { required: string[]; unknown: string[
   for (const part of parts) {
     for (const match of (part ?? "").matchAll(MAIL_TOKEN)) {
       const name = match[1]!;
-      if (!MAIL_KNOWN_VARS.includes(name)) {
+      const known =
+        MAIL_KNOWN_VARS.includes(name) ||
+        (name.startsWith(MAIL_CUSTOM) && name.length > MAIL_CUSTOM.length);
+      if (!known) {
         if (!unknown.includes(name)) unknown.push(name);
         continue;
       }
@@ -11321,6 +11327,9 @@ function mailVariables(recipient: MailRecipient): Record<string, string> {
     company: recipient.company_name,
     title: recipient.title,
     country: recipient.country,
+    ...Object.fromEntries(
+      Object.entries(recipient.custom ?? {}).map(([key, value]) => [`${MAIL_CUSTOM}${key}`, value]),
+    ),
   };
 }
 
@@ -11514,6 +11523,7 @@ function mailResolveAudience(audience: Record<string, unknown>): MailRecipient[]
       mailParseConditions(segment.conditions, segment.kind).conditions,
     );
   }
+  if (kind === "list") return mailListRecipients(String(audience.list_id ?? ""));
   if (kind === "csv") {
     return (Array.isArray(audience.rows) ? audience.rows : []).map((raw) => {
       const row = raw as Record<string, string>;
@@ -11554,6 +11564,10 @@ function mailDescribeAudience(audience: Record<string, unknown>): string {
   }
   if (kind === "csv")
     return `${Array.isArray(audience.rows) ? audience.rows.length : 0} rows from ${String(audience.label ?? "") || "a CSV"}`;
+  if (kind === "list") {
+    const listRow = mailLists.find((row) => row.id === String(audience.list_id ?? ""));
+    return listRow ? `list “${listRow.name}”` : "a mailing list";
+  }
   return "nobody yet";
 }
 function mailDecide(
@@ -13754,6 +13768,525 @@ function seedMail() {
       updated_at: mailHoursAgo(24 * 30),
     });
   }
+  seedMailLists();
+}
+
+// -- mailing lists (mirrors account_api/hq/mail_lists.py) -------------------------------------
+type MailListRow = {
+  id: string;
+  name: string;
+  description: string;
+  columns: string[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+};
+type MailListMemberRow = {
+  id: string;
+  list_id: string;
+  email: string;
+  email_norm: string;
+  first_name: string;
+  last_name: string;
+  company: string;
+  title: string;
+  country: string;
+  fields: Record<string, string>;
+  person_id: string;
+  source: "csv" | "manual" | "crm";
+  basis: "consent" | "legitimate_interest";
+  added_by: string;
+  added_at: string;
+  updated_at: string;
+};
+const mailLists: MailListRow[] = [];
+const mailListMembers: MailListMemberRow[] = [];
+const MAIL_LIST_MAX = 20_000;
+const MAIL_LIST_IMPORT_MAX = 5_000;
+const MAIL_LIST_COLUMNS_MAX = 20;
+const MAIL_LIST_STANDARD = ["email", "first_name", "last_name", "company", "title", "country"];
+
+function mailColumnKey(raw: unknown): string {
+  let text = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40)
+    .replace(/_+$/g, "");
+  if (/^[0-9]/.test(text)) text = `c_${text}`;
+  return text;
+}
+function mailListCleanRow(raw: Record<string, unknown>) {
+  const email = String(raw.email ?? "")
+    .trim()
+    .slice(0, 254);
+  const norm = mailNorm(email);
+  if (!norm) return { reason: "NO_EMAIL" as const };
+  if (!mailValidEmail(norm)) return { reason: "INVALID_EMAIL" as const };
+  let first = String(raw.first_name ?? "").trim();
+  let last = String(raw.last_name ?? "").trim();
+  if (!first && !last) {
+    const parts = String(raw.full_name ?? raw.name ?? "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    first = parts[0] ?? "";
+    last = parts.slice(1).join(" ");
+  }
+  const fields: Record<string, string> = {};
+  const extra = raw.fields;
+  if (extra && typeof extra === "object") {
+    for (const [key, value] of Object.entries(extra as Record<string, unknown>)) {
+      const clean = mailColumnKey(key);
+      const text = String(value ?? "")
+        .trim()
+        .slice(0, 500);
+      if (
+        clean &&
+        !MAIL_LIST_STANDARD.includes(clean) &&
+        clean !== "full_name" &&
+        clean !== "name" &&
+        text
+      )
+        fields[clean] = text;
+    }
+  }
+  return {
+    member: {
+      email,
+      email_norm: norm,
+      first_name: first.slice(0, 80),
+      last_name: last.slice(0, 80),
+      company: String(raw.company ?? raw.company_name ?? "")
+        .trim()
+        .slice(0, 200),
+      title: String(raw.title ?? "")
+        .trim()
+        .slice(0, 120),
+      country: String(raw.country ?? "")
+        .trim()
+        .slice(0, 60),
+      fields,
+    },
+  };
+}
+function mailPersonByEmail(norm: string): PersonRow | undefined {
+  return people.find((row) => !row.archived && mailNorm(row.email) === norm);
+}
+function mailListAdd(
+  listRow: MailListRow,
+  rows: Array<Record<string, unknown>>,
+  source: MailListMemberRow["source"],
+  basis: MailListMemberRow["basis"],
+  updateExisting: boolean,
+  actorId: string,
+) {
+  const existing = new Map(
+    mailListMembers.filter((row) => row.list_id === listRow.id).map((row) => [row.email_norm, row]),
+  );
+  const columnsAdded: string[] = [];
+  const columnsDropped: string[] = [];
+  const seen = new Set<string>();
+  const skipped: Array<{ row: number; email: string; reason: string }> = [];
+  let skippedCount = 0;
+  let added = 0;
+  let updated = 0;
+  let unchanged = 0;
+  let room = MAIL_LIST_MAX - existing.size;
+  const newlyAdded: MailListMemberRow[] = [];
+  const skip = (row: number, email: string, reason: string) => {
+    skippedCount += 1;
+    if (skipped.length < 200) skipped.push({ row, email: email.slice(0, 254), reason });
+  };
+  rows.forEach((raw, index) => {
+    const rowNo = index + 1;
+    const cleaned = mailListCleanRow(raw);
+    if (!("member" in cleaned)) {
+      skip(rowNo, String(raw.email ?? ""), cleaned.reason);
+      return;
+    }
+    const member = cleaned.member;
+    if (seen.has(member.email_norm)) {
+      skip(rowNo, member.email, "DUPLICATE_IN_FILE");
+      return;
+    }
+    seen.add(member.email_norm);
+    for (const key of Object.keys(member.fields)) {
+      if (listRow.columns.includes(key)) continue;
+      if (listRow.columns.length < MAIL_LIST_COLUMNS_MAX) {
+        listRow.columns.push(key);
+        columnsAdded.push(key);
+      } else {
+        delete member.fields[key];
+        if (!columnsDropped.includes(key)) columnsDropped.push(key);
+      }
+    }
+    const person = mailPersonByEmail(member.email_norm);
+    const current = existing.get(member.email_norm);
+    if (current) {
+      if (!updateExisting) {
+        unchanged += 1;
+        return;
+      }
+      let changed = false;
+      for (const name of [
+        "email",
+        "first_name",
+        "last_name",
+        "company",
+        "title",
+        "country",
+      ] as const) {
+        if (member[name] && member[name] !== current[name]) {
+          current[name] = member[name];
+          changed = true;
+        }
+      }
+      const merged = { ...current.fields, ...member.fields };
+      if (JSON.stringify(merged) !== JSON.stringify(current.fields)) {
+        current.fields = merged;
+        changed = true;
+      }
+      if (person && current.person_id !== person.id) {
+        current.person_id = person.id;
+        changed = true;
+      }
+      if (changed) {
+        current.updated_at = now();
+        updated += 1;
+      } else unchanged += 1;
+      return;
+    }
+    if (room <= 0) {
+      skip(rowNo, member.email, "LIST_FULL");
+      return;
+    }
+    room -= 1;
+    const row: MailListMemberRow = {
+      id: randomUUID(),
+      list_id: listRow.id,
+      ...member,
+      person_id: person?.id ?? "",
+      source,
+      basis,
+      added_by: actorId,
+      added_at: now(),
+      updated_at: now(),
+    };
+    mailListMembers.push(row);
+    newlyAdded.push(row);
+    existing.set(row.email_norm, row);
+    added += 1;
+  });
+  listRow.updated_at = now();
+  let consentRecorded = 0;
+  if (basis === "consent") {
+    for (const row of newlyAdded) {
+      if (mailConsent.has(row.email_norm)) continue;
+      mailConsent.set(row.email_norm, {
+        email_norm: row.email_norm,
+        marketing_state: "subscribed",
+        topics_off: [],
+        sales_stop: false,
+        lawful_basis: "consent",
+        source: `list:${listRow.name}`.slice(0, 60),
+        timezone: "",
+        updated_at: now(),
+      });
+      consentRecorded += 1;
+    }
+  }
+  return {
+    added,
+    updated,
+    unchanged,
+    skipped,
+    skipped_count: skippedCount,
+    consent_recorded: consentRecorded,
+    columns_added: columnsAdded,
+    columns_dropped: columnsDropped,
+    rows: rows.length,
+  };
+}
+function mailListRecipients(listId: string): MailRecipient[] {
+  return mailListMembers
+    .filter((row) => row.list_id === listId)
+    .map((member) => {
+      const full = [member.first_name, member.last_name].filter(Boolean).join(" ");
+      const person =
+        people.find((row) => row.id === member.person_id && !row.archived) ??
+        mailPersonByEmail(member.email_norm);
+      const recipient: MailRecipient = person
+        ? mailPersonRecipient(person)
+        : {
+            contact_kind: "list",
+            contact_id: member.id,
+            company_id: "",
+            email: member.email,
+            full_name: full,
+            title: member.title,
+            company_name: member.company,
+            country: member.country,
+            lifecycle: "",
+            do_not_contact: false,
+            owner_staff_id: "",
+            source: "",
+            stage: "",
+            created_at: null,
+            domain: "",
+            role_category: "",
+            firm_type: "",
+            customer_since: null,
+          };
+      if (person) {
+        recipient.full_name = recipient.full_name || full;
+        recipient.title = recipient.title || member.title;
+        recipient.company_name = recipient.company_name || member.company;
+        recipient.country = recipient.country || member.country;
+      }
+      recipient.custom = { ...member.fields };
+      return recipient;
+    });
+}
+function mailListStatuses(listId: string): Map<string, MailVerdict> {
+  const members = mailListMembers.filter((row) => row.list_id === listId);
+  const decided = mailDecide(mailListRecipients(listId), "updates", "", []);
+  return new Map(members.map((member, index) => [member.id, decided[index]!.verdict]));
+}
+function mailListView(row: MailListRow) {
+  return {
+    list_id: row.id,
+    name: row.name,
+    description: row.description,
+    columns: [...row.columns],
+    members: mailListMembers.filter((member) => member.list_id === row.id).length,
+    created_by: row.created_by ? mailPerson(row.created_by) : null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    archived_at: row.archived_at,
+  };
+}
+function mailListMemberView(row: MailListMemberRow, verdict: MailVerdict | undefined) {
+  return {
+    member_id: row.id,
+    email: row.email,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    full_name: [row.first_name, row.last_name].filter(Boolean).join(" "),
+    company: row.company,
+    title: row.title,
+    country: row.country,
+    fields: { ...row.fields },
+    person_id: row.person_id || null,
+    person_name: people.find((person) => person.id === row.person_id)?.full_name ?? "",
+    source: row.source,
+    basis: row.basis,
+    added_at: row.added_at,
+    status: !verdict || verdict.allowed ? "ok" : verdict.reason,
+    status_detail: !verdict || verdict.allowed ? "" : verdict.detail,
+  };
+}
+function mailCampaignsUsingList(listId: string, states: readonly string[]) {
+  return mailCampaigns.filter(
+    (row) =>
+      states.includes(row.state) &&
+      row.audience.kind === "list" &&
+      String(row.audience.list_id ?? "") === listId,
+  );
+}
+/** A made-up contact has no list columns: show where each would go, as [column]. */
+function mailCustomPlaceholders(variables: Record<string, string>, version: MailVersionRow) {
+  for (const part of [version.subject, version.body_html, version.body_text]) {
+    for (const match of (part ?? "").matchAll(MAIL_TOKEN)) {
+      const name = match[1]!;
+      if (name.startsWith(MAIL_CUSTOM) && !String(variables[name] ?? "").trim())
+        variables[name] = `[${name.slice(MAIL_CUSTOM.length)}]`;
+    }
+  }
+}
+const MAIL_LIST_IDS = {
+  webinar: "ea800000-0000-4000-8000-000000000001",
+  berlin: "ea800000-0000-4000-8000-000000000002",
+  followUpTemplate: "ea200000-0000-4000-8000-000000000007",
+  followUpCampaign: "ea400000-0000-4000-8000-000000000006",
+};
+/** Two demo lists: a webinar's sign-ups (from a CSV, with its own columns) and a conference's contacts. */
+function seedMailLists() {
+  mailLists.length = 0;
+  mailListMembers.length = 0;
+  const invented = [
+    ["Hannah", "Okafor"],
+    ["Tom", "Whitfield"],
+    ["Priya", "Raman"],
+    ["Lukas", "Brandt"],
+    ["Sofia", "Marchetti"],
+    ["James", "Holloway"],
+    ["Mei", "Tanaka"],
+    ["Oliver", "Grant"],
+  ] as const;
+  const firms = companies.filter((row) => !row.archived && row.domain);
+  const customersWithPeople = mailPeopleRecipients().filter(
+    (row) => row.lifecycle === "customer" && row.email,
+  );
+  const prospectsWithPeople = mailPeopleRecipients().filter(
+    (row) => row.lifecycle === "prospect" && row.email,
+  );
+  const unsubscribed = customersWithPeople.find(
+    (row) => mailConsent.get(mailNorm(row.email))?.marketing_state === "unsubscribed",
+  );
+  const webinar: MailListRow = {
+    id: MAIL_LIST_IDS.webinar,
+    name: "Webinar sign-ups — portfolio risk",
+    description: "Registered for the 14 October walkthrough, from the registration form's CSV.",
+    columns: [],
+    created_by: SALES_STAFF,
+    created_at: mailHoursAgo(24 * 3),
+    updated_at: mailHoursAgo(24 * 3),
+    archived_at: null,
+  };
+  mailLists.push(webinar);
+  const sizes = ["$2.1bn", "$640m", "$12bn", "$380m", "$5.4bn", "$1.2bn", "$900m", "$27bn"];
+  const regions = ["EMEA", "Americas", "APAC", "EMEA", "EMEA", "Americas", "APAC", "EMEA"];
+  const questions = [
+    "How do scenario runs handle FX exposure?",
+    "Can risk reports go straight to our compliance team?",
+    "Does the factor model cover Asian small caps?",
+    "",
+    "How long does onboarding take for a 12-person desk?",
+    "Can we bring our own benchmarks?",
+    "",
+    "Is there an API for the risk numbers?",
+  ];
+  const webinarRows: Array<Record<string, unknown>> = [
+    ...customersWithPeople.slice(0, 5).map((row, index) => ({
+      email: row.email,
+      full_name: row.full_name,
+      company: row.company_name,
+      fields: { "Fund size": sizes[index], Region: regions[index], Question: questions[index] },
+    })),
+    ...invented.slice(0, 5).map(([first, last], index) => {
+      const firm = firms[(index * 7 + 3) % firms.length]!;
+      return {
+        email: `${first.toLowerCase()}.${last.toLowerCase()}@${firm.domain}`,
+        first_name: first,
+        last_name: last,
+        company: firm.name,
+        country: firm.country,
+        fields: {
+          "Fund size": sizes[(index + 5) % sizes.length],
+          Region: regions[(index + 5) % regions.length],
+          Question: questions[(index + 5) % questions.length],
+        },
+      };
+    }),
+    ...(unsubscribed
+      ? [
+          {
+            email: unsubscribed.email,
+            full_name: unsubscribed.full_name,
+            company: unsubscribed.company_name,
+            fields: { Region: "EMEA" },
+          },
+        ]
+      : []),
+  ];
+  mailListAdd(webinar, webinarRows, "csv", "consent", false, SALES_STAFF);
+  const berlin: MailListRow = {
+    id: MAIL_LIST_IDS.berlin,
+    name: "SuperReturn Berlin — met at the stand",
+    description:
+      "Business cards and badge scans from the conference, added by hand and from the CRM.",
+    columns: [],
+    created_by: OWNER_STAFF,
+    created_at: mailHoursAgo(24 * 9),
+    updated_at: mailHoursAgo(24 * 8),
+    archived_at: null,
+  };
+  mailLists.push(berlin);
+  mailListAdd(
+    berlin,
+    prospectsWithPeople.slice(0, 6).map((row) => ({
+      email: row.email,
+      full_name: row.full_name,
+      company: row.company_name,
+      title: row.title,
+      country: row.country,
+    })),
+    "crm",
+    "legitimate_interest",
+    false,
+    OWNER_STAFF,
+  );
+  const germanFirm = firms.find((row) => row.country === "Germany") ?? firms[0]!;
+  mailListAdd(
+    berlin,
+    invented.slice(5).map(([first, last], index) => ({
+      email: `${first.toLowerCase()}.${last.toLowerCase()}@${(index === 0 ? germanFirm : firms[(index * 11 + 5) % firms.length]!).domain}`,
+      first_name: first,
+      last_name: last,
+      company: (index === 0 ? germanFirm : firms[(index * 11 + 5) % firms.length]!).name,
+      country: index === 0 ? "Germany" : "",
+      fields: {
+        "Met by": index === 1 ? "Sales Person" : "The Owner",
+        Interest: index === 2 ? "Risk" : "Research",
+      },
+    })),
+    "manual",
+    "legitimate_interest",
+    false,
+    OWNER_STAFF,
+  );
+  // Spread the join dates over the days the lists were built.
+  mailListMembers.forEach((row, index) => {
+    const base = row.list_id === MAIL_LIST_IDS.webinar ? 24 * 3 : 24 * 8.5;
+    row.added_at = mailHoursAgo(base - index * 0.3);
+    row.updated_at = row.added_at;
+  });
+  // A draft follow-up to the webinar list that uses its columns.
+  mailTemplates.push({
+    id: MAIL_LIST_IDS.followUpTemplate,
+    name: "Webinar follow-up",
+    kind: "campaign",
+    current_version: 1,
+    created_by: SALES_STAFF,
+    created_at: mailHoursAgo(20),
+    archived_at: null,
+  });
+  mailSeedVersion(
+    MAIL_LIST_IDS.followUpTemplate,
+    1,
+    "Your question from the walkthrough",
+    "<p>Hi {{first_name | there}},</p>\n<p>Thanks for joining the portfolio-risk walkthrough. You asked: <em>{{custom.question | how the terminal fits your desk}}</em></p>\n<p>For a {{custom.fund_size | fund}} book in {{custom.region | your region}}, the short answer is in the recording, and I am happy to show it on your own positions.</p>\n<p>{{sender_name}}</p>",
+    "",
+    SALES_STAFF,
+    mailHoursAgo(20),
+  );
+  mailCampaigns.push({
+    id: MAIL_LIST_IDS.followUpCampaign,
+    name: "Webinar follow-up",
+    sender_id: MAIL_IDS.news,
+    template_id: MAIL_LIST_IDS.followUpTemplate,
+    template_version: 1,
+    topic: "events",
+    audience: { kind: "list", list_id: MAIL_LIST_IDS.webinar },
+    state: "draft",
+    scheduled_at: null,
+    send_anytime: false,
+    dry_run: false,
+    requires_approval: false,
+    approved_by: "",
+    approved_at: null,
+    pause_reason: "",
+    paused_at: null,
+    counts: mailEmptyCounts(),
+    started_at: null,
+    completed_at: null,
+    created_by: SALES_STAFF,
+    created_at: mailHoursAgo(19),
+    updated_at: mailHoursAgo(19),
+  });
 }
 
 function mailCampaignFields(
@@ -13813,10 +14346,17 @@ function mailCampaignFields(
       if (rows.length > 2000)
         return { error: refuse(400, "malformed_request", { audience: "at most 2000 rows" }) };
       audience = { kind, rows, label: String(raw.label ?? "").slice(0, 120) };
+    } else if (kind === "list") {
+      const listRow = mailLists.find((row) => row.id === String(raw.list_id ?? ""));
+      if (!listRow)
+        return { error: refuse(400, "malformed_request", { audience: "unknown list" }) };
+      if (listRow.archived_at)
+        return { error: refuse(400, "malformed_request", { audience: "that list is archived" }) };
+      audience = { kind, list_id: listRow.id };
     } else {
       return {
         error: refuse(400, "malformed_request", {
-          audience: "kind is people, leads, companies, segment or csv",
+          audience: "kind is people, leads, companies, segment, csv or list",
         }),
       };
     }
@@ -14235,22 +14775,26 @@ routes.push(
         kind === "person" ? people.find((candidate) => candidate.id === contactId) : undefined;
       const lead =
         kind === "lead" ? leads.find((candidate) => candidate.id === contactId) : undefined;
+      const firstMember = body.list_id ? mailListRecipients(String(body.list_id))[0] : undefined;
       const variables: Record<string, string> = person
         ? mailVariables(mailPersonRecipient(person))
         : lead
           ? mailVariables(mailLeadRecipient(lead))
-          : {
-              first_name: "Ada",
-              last_name: "Lovelace",
-              full_name: "Ada Lovelace",
-              email: "ada@example.com",
-              company: "Example Capital",
-              title: "Portfolio Manager",
-              country: "United Kingdom",
-            };
+          : firstMember
+            ? mailVariables(firstMember)
+            : {
+                first_name: "Ada",
+                last_name: "Lovelace",
+                full_name: "Ada Lovelace",
+                email: "ada@example.com",
+                company: "Example Capital",
+                title: "Portfolio Manager",
+                country: "United Kingdom",
+              };
       variables.sender_name = "Quantify Terminal";
       variables.sender_email = "news@mail.quantifyterminal.com";
       variables.owner_name = found.member.display_name;
+      if (!body.contact_id && !body.list_id) mailCustomPlaceholders(variables, version);
       const rendered = mailRenderMessage(
         version,
         variables,
@@ -14282,6 +14826,433 @@ routes.push(
         restored: restore,
       });
       return ok({ archived: !restore });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/lists",
+    auth: true,
+    capability: "crm:read",
+    handler: () =>
+      ok({
+        lists: mailLists
+          .map(mailListView)
+          .sort(
+            (a, b) =>
+              Number(Boolean(a.archived_at)) - Number(Boolean(b.archived_at)) ||
+              a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+          ),
+        limits: {
+          members: MAIL_LIST_MAX,
+          import_rows: MAIL_LIST_IMPORT_MAX,
+          columns: MAIL_LIST_COLUMNS_MAX,
+        },
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/lists/save",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const listId = String(body.list_id ?? "");
+      const existing = listId ? mailLists.find((row) => row.id === listId) : undefined;
+      if (listId && !existing) return refuse(404, "not_found");
+      const name = String(body.name ?? existing?.name ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!name) return refuse(400, "malformed_request", { name: "name the list" });
+      if (
+        mailLists.some(
+          (row) =>
+            !row.archived_at && row.name.toLowerCase() === name.toLowerCase() && row.id !== listId,
+        )
+      )
+        return refuse(400, "malformed_request", { name: "another list has this name" });
+      const description = String(body.description ?? existing?.description ?? "")
+        .trim()
+        .slice(0, 400);
+      let row = existing;
+      if (row) Object.assign(row, { name, description, updated_at: now() });
+      else {
+        row = {
+          id: randomUUID(),
+          name,
+          description,
+          columns: [],
+          created_by: found.member.id,
+          created_at: now(),
+          updated_at: now(),
+          archived_at: null,
+        };
+        mailLists.push(row);
+      }
+      audit("mail.list_saved", found.member.id, "mail_list", row.id, "", {
+        name,
+        created: !existing,
+      });
+      return ok({ list: mailListView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mail/lists/{list_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params, query }) => {
+      const row = mailLists.find((candidate) => candidate.id === params.list_id);
+      if (!row) return refuse(404, "not_found");
+      const needle = String(query.q ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 120);
+      const statusFilter = String(query.status ?? "");
+      const offset = Math.max(0, Number.parseInt(String(query.offset ?? "0"), 10) || 0);
+      const limit = Math.min(
+        200,
+        Math.max(1, Number.parseInt(String(query.limit ?? "100"), 10) || 100),
+      );
+      const verdicts = mailListStatuses(row.id);
+      const views = mailListMembers
+        .filter((member) => member.list_id === row.id)
+        .map((member) => mailListMemberView(member, verdicts.get(member.id)));
+      const byReason: Record<string, number> = {};
+      let eligible = 0;
+      for (const view of views) {
+        if (view.status === "ok") eligible += 1;
+        else byReason[view.status] = (byReason[view.status] ?? 0) + 1;
+      }
+      const matching = views.filter(
+        (view) =>
+          (!needle ||
+            [
+              view.email,
+              view.full_name,
+              view.company,
+              view.title,
+              view.country,
+              ...Object.values(view.fields),
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(needle)) &&
+          (statusFilter !== "ok" || view.status === "ok") &&
+          (statusFilter !== "blocked" || view.status !== "ok"),
+      );
+      const campaigns = mailCampaignsUsingList(row.id, [
+        "draft",
+        "review",
+        "approved",
+        "scheduled",
+        "running",
+        "paused",
+        "auto_paused",
+        "completed",
+      ]);
+      return ok({
+        list: mailListView(row),
+        members: matching.slice(offset, offset + limit),
+        total: matching.length,
+        offset,
+        limit,
+        counts: {
+          members: views.length,
+          eligible,
+          blocked: views.length - eligible,
+          by_reason: Object.fromEntries(
+            Object.entries(byReason).sort(([a], [b]) => a.localeCompare(b)),
+          ),
+        },
+        campaigns: campaigns.map((item) => ({
+          campaign_id: item.id,
+          name: item.name,
+          state: item.state,
+        })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/lists/{list_id}/import",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailLists.find((candidate) => candidate.id === params.list_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.archived_at)
+        return refuse(400, "malformed_request", {
+          list: "this list is archived; restore it first",
+        });
+      const rows = Array.isArray(body.rows) ? (body.rows as Array<Record<string, unknown>>) : [];
+      if (!rows.length) return refuse(400, "malformed_request", { rows: "no rows" });
+      if (rows.length > MAIL_LIST_IMPORT_MAX)
+        return refuse(400, "malformed_request", {
+          rows: `at most ${MAIL_LIST_IMPORT_MAX} rows a request; send the file in parts`,
+        });
+      const basis = String(body.basis ?? "legitimate_interest");
+      if (basis !== "consent" && basis !== "legitimate_interest")
+        return refuse(400, "malformed_request", { basis: "consent or legitimate_interest" });
+      const result = mailListAdd(
+        row,
+        rows,
+        "csv",
+        basis,
+        Boolean(body.update_existing),
+        found.member.id,
+      );
+      audit("mail.list_imported", found.member.id, "mail_list", row.id, "", {
+        rows: result.rows,
+        added: result.added,
+        updated: result.updated,
+        skipped_count: result.skipped_count,
+      });
+      return ok(result);
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/lists/{list_id}/members/add",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailLists.find((candidate) => candidate.id === params.list_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.archived_at)
+        return refuse(400, "malformed_request", {
+          list: "this list is archived; restore it first",
+        });
+      const basis = String(body.basis ?? "legitimate_interest");
+      if (basis !== "consent" && basis !== "legitimate_interest")
+        return refuse(400, "malformed_request", { basis: "consent or legitimate_interest" });
+      const refused: Array<{ row: number; email: string; reason: string }> = [];
+      let rows: Array<Record<string, unknown>>;
+      let source: MailListMemberRow["source"];
+      if (body.member && typeof body.member === "object") {
+        const cleaned = mailListCleanRow(body.member as Record<string, unknown>);
+        if (!("member" in cleaned))
+          return refuse(400, "malformed_request", {
+            email: cleaned.reason === "INVALID_EMAIL" ? "a valid address" : "an address is needed",
+          });
+        rows = [body.member as Record<string, unknown>];
+        source = "manual";
+      } else if (Array.isArray(body.contacts) && body.contacts.length) {
+        rows = [];
+        source = "crm";
+        (body.contacts as Array<{ kind: string; id: string }>)
+          .slice(0, 2000)
+          .forEach((contact, index) => {
+            const person =
+              contact.kind === "person" ? people.find((item) => item.id === contact.id) : undefined;
+            const lead =
+              contact.kind === "lead" ? leads.find((item) => item.id === contact.id) : undefined;
+            if (!person && !lead) {
+              refused.push({ row: index + 1, email: "", reason: "NOT_FOUND" });
+              return;
+            }
+            const company = person
+              ? companies.find((item) => item.id === person.company_id)
+              : undefined;
+            const parts = String((person ?? lead)!.full_name ?? "")
+              .split(/\s+/)
+              .filter(Boolean);
+            rows.push({
+              email: (person ?? lead)!.email,
+              first_name: parts[0] ?? "",
+              last_name: parts.slice(1).join(" "),
+              company: company?.name ?? lead?.company_name ?? "",
+              title: person?.title ?? "",
+              country: company?.country ?? "",
+            });
+          });
+      } else {
+        return refuse(400, "malformed_request", { member: "a person to add, or CRM contacts" });
+      }
+      const result = mailListAdd(
+        row,
+        rows,
+        source,
+        basis,
+        Boolean(body.update_existing ?? source === "manual"),
+        found.member.id,
+      );
+      if (refused.length) {
+        result.skipped = [...refused, ...result.skipped];
+        result.skipped_count += refused.length;
+      }
+      audit("mail.list_members_added", found.member.id, "mail_list", row.id, "", {
+        source,
+        added: result.added,
+      });
+      return ok(result);
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/lists/{list_id}/members/remove",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const row = mailLists.find((candidate) => candidate.id === params.list_id);
+      if (!row) return refuse(404, "not_found");
+      const ids = new Set(Array.isArray(body.member_ids) ? body.member_ids.map(String) : []);
+      if (!ids.size) return refuse(400, "malformed_request", { member_ids: "choose at least one" });
+      let removed = 0;
+      for (let index = mailListMembers.length - 1; index >= 0; index -= 1) {
+        const member = mailListMembers[index]!;
+        if (member.list_id === row.id && ids.has(member.id)) {
+          mailListMembers.splice(index, 1);
+          removed += 1;
+        }
+      }
+      row.updated_at = now();
+      audit("mail.list_members_removed", caller(headers)!.member.id, "mail_list", row.id, "", {
+        removed,
+      });
+      return ok({ removed });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/lists/{list_id}/members/{member_id}/update",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const row = mailLists.find((candidate) => candidate.id === params.list_id);
+      if (!row) return refuse(404, "not_found");
+      const member = mailListMembers.find(
+        (candidate) => candidate.id === params.member_id && candidate.list_id === row.id,
+      );
+      if (!member) return refuse(404, "not_found");
+      let changed = false;
+      for (const [name, limit] of [
+        ["first_name", 80],
+        ["last_name", 80],
+        ["company", 200],
+        ["title", 120],
+        ["country", 60],
+      ] as const) {
+        if (name in body) {
+          member[name] = String(body[name] ?? "")
+            .trim()
+            .slice(0, limit);
+          changed = true;
+        }
+      }
+      if ("fields" in body) {
+        const raw = body.fields as Record<string, unknown>;
+        if (!raw || typeof raw !== "object")
+          return refuse(400, "malformed_request", { fields: "an object of column → value" });
+        const merged = { ...member.fields };
+        for (const [key, value] of Object.entries(raw)) {
+          const clean = mailColumnKey(key);
+          if (!row.columns.includes(clean))
+            return refuse(400, "malformed_request", {
+              fields: `${key} is not one of this list's columns`,
+            });
+          const text = String(value ?? "")
+            .trim()
+            .slice(0, 500);
+          if (text) merged[clean] = text;
+          else delete merged[clean];
+        }
+        member.fields = merged;
+        changed = true;
+      }
+      if (!changed) return refuse(400, "malformed_request", { reason: "nothing to change" });
+      member.updated_at = now();
+      audit("mail.list_member_updated", caller(headers)!.member.id, "mail_list", row.id, "", {
+        member_id: member.id,
+      });
+      return ok({ member: mailListMemberView(member, undefined) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/lists/{list_id}/archive",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const row = mailLists.find((candidate) => candidate.id === params.list_id);
+      if (!row) return refuse(404, "not_found");
+      const restore = Boolean(body.restore);
+      if (!restore) {
+        const waiting = mailCampaignsUsingList(row.id, [
+          "draft",
+          "review",
+          "approved",
+          "scheduled",
+        ]);
+        if (waiting.length)
+          return refuse(400, "malformed_request", {
+            list: `used by ${waiting
+              .slice(0, 3)
+              .map((item) => item.name)
+              .join(", ")}; change or cancel those campaigns first`,
+          });
+      }
+      row.archived_at = restore ? null : now();
+      row.updated_at = now();
+      audit("mail.list_archived", caller(headers)!.member.id, "mail_list", row.id, "", {
+        restored: restore,
+      });
+      return ok({ archived: !restore });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/lists/{list_id}/export",
+    auth: true,
+    capability: "crm:export",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const row = mailLists.find((candidate) => candidate.id === params.list_id);
+      if (!row) return refuse(404, "not_found");
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say what the export is for" });
+      const verdicts = mailListStatuses(row.id);
+      const members = mailListMembers.filter((member) => member.list_id === row.id);
+      const cell = (value: string) => {
+        const text = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+      };
+      const lines = [
+        [...MAIL_LIST_STANDARD, ...row.columns, "status", "source", "basis", "added_at"].join(","),
+      ];
+      for (const member of members) {
+        const view = mailListMemberView(member, verdicts.get(member.id));
+        lines.push(
+          [
+            view.email,
+            view.first_name,
+            view.last_name,
+            view.company,
+            view.title,
+            view.country,
+            ...row.columns.map((column) => view.fields[column] ?? ""),
+            view.status === "ok" ? "can be mailed" : view.status.toLowerCase(),
+            view.source,
+            view.basis,
+            view.added_at,
+          ]
+            .map((value) => cell(String(value ?? "")))
+            .join(","),
+        );
+      }
+      audit("export.created", caller(headers)!.member.id, "mail_list", row.id, reason, {
+        rows: members.length,
+      });
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+      return ok({
+        filename: `hq-list-${mailColumnKey(row.name) || "list"}-${stamp}.csv`,
+        rows: members.length,
+        csv: `${lines.join("\r\n")}\r\n`,
+      });
     },
   },
   {
@@ -14537,18 +15508,21 @@ routes.push(
       if (!version)
         return refuse(400, "malformed_request", { campaign: "sender or template gone" });
       const messageId = randomUUID();
-      const rendered = mailRenderMessage(
-        version,
-        {
-          first_name: "Ada",
-          full_name: "Ada Lovelace",
-          company: "Example Capital",
-          sender_name: "Quantify Terminal",
-          email: to,
-        },
-        row.topic,
-        messageId,
-      );
+      const listFirst =
+        row.audience.kind === "list"
+          ? mailListRecipients(String(row.audience.list_id ?? ""))[0]
+          : undefined;
+      const testVariables: Record<string, string> = listFirst
+        ? { ...mailVariables(listFirst), sender_name: "Quantify Terminal", email: to }
+        : {
+            first_name: "Ada",
+            full_name: "Ada Lovelace",
+            company: "Example Capital",
+            sender_name: "Quantify Terminal",
+            email: to,
+          };
+      mailCustomPlaceholders(testVariables, version);
+      const rendered = mailRenderMessage(version, testVariables, row.topic, messageId);
       if ("missing" in rendered)
         return refuse(400, "malformed_request", {
           template: `missing token ${rendered.missing} for the sample contact`,

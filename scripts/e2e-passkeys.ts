@@ -35,7 +35,7 @@ await cdp.send("WebAuthn.addVirtualAuthenticator", {
 await fetch("http://127.0.0.1:7071/api/v1/mock/reset", { method: "POST" });
 
 async function passwordStep(email = "owner@hq.test") {
-  await page.goto(`${BASE}/login`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
   await page.fill("#email", email);
   await page.fill("#password", "password-123");
   await page.click("button[type=submit]");

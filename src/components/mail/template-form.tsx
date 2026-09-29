@@ -174,6 +174,13 @@ export function TemplateForm({
         A token with no fallback (<code>{"{{first_name}}"}</code>) is required: anyone without it is
         skipped rather than greeted with a gap. Write <code>{"{{first_name | there}}"}</code> to
         fall back.
+        {kind === "campaign" && (
+          <>
+            {" "}
+            A campaign to a list can also use the list&rsquo;s own columns:{" "}
+            <code>{"{{custom.fund_size}}"}</code> for a column called &ldquo;Fund size&rdquo;.
+          </>
+        )}
       </p>
       <div className="form-actions">
         <Button type="submit" variant="primary" disabled={isPending}>

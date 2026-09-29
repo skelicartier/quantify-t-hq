@@ -321,6 +321,214 @@ export async function archiveSegmentAction(
   return sent("Done.");
 }
 
+// --- mailing lists -------------------------------------------------------------------------
+
+const LIST_STANDARD = ["first_name", "last_name", "company", "title", "country"] as const;
+
+function listRowFrom(formData: FormData): mailApi.ListRow {
+  const row: mailApi.ListRow = { email: fieldValue(formData, "email", 254).trim() };
+  for (const name of LIST_STANDARD) {
+    const value = fieldValue(formData, name, 200).trim();
+    if (value) row[name] = value;
+  }
+  const fields: Record<string, string> = {};
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("field:") || typeof value !== "string") continue;
+    const text = value.trim().slice(0, 500);
+    if (text) fields[key.slice(6)] = text;
+  }
+  if (Object.keys(fields).length) row.fields = fields;
+  return row;
+}
+
+function basisOf(formData: FormData): string {
+  return fieldValue(formData, "basis", 24) === "consent" ? "consent" : "legitimate_interest";
+}
+
+export async function saveListAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/lists");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const listId = fieldValue(formData, "list_id", 64);
+  let saved: string;
+  try {
+    saved = (
+      await mailApi.saveList(context.token, {
+        ...(listId ? { list_id: listId } : {}),
+        name: fieldValue(formData, "name", 120).trim(),
+        description: fieldValue(formData, "description", 400).trim(),
+      })
+    ).list.list_id;
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refresh("/mail/lists", `/mail/lists/${saved}`);
+  if (!listId) redirect(`/mail/lists/${saved}?tab=import`);
+  return sent("Saved.");
+}
+
+/**
+ * One part of an import. The browser reads the file, maps its columns and sends the rows
+ * in parts of at most a thousand, calling this once per part; the page refreshes at the end.
+ */
+export async function importListAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/lists");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const rows = jsonField<mailApi.ListRow[]>(formData, "rows_json", 4_000_000) ?? [];
+  if (!rows.length) return { status: "error", message: "No rows to send." };
+  try {
+    const result = await mailApi.importListRows(
+      context.token,
+      fieldValue(formData, "list_id", 64),
+      {
+        rows,
+        basis: basisOf(formData),
+        update_existing: formData.get("update_existing") === "on",
+        label: fieldValue(formData, "label", 120),
+      },
+    );
+    return sent(null, { detail: JSON.stringify(result) });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+export async function addListMemberAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/lists");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const listId = fieldValue(formData, "list_id", 64);
+  const member = listRowFrom(formData);
+  if (!member.email) return { status: "error", message: "An email address is needed." };
+  try {
+    const result = await mailApi.addListMembers(context.token, listId, {
+      member,
+      basis: basisOf(formData),
+    });
+    refresh("/mail/lists", `/mail/lists/${listId}`);
+    return sent(
+      result.added
+        ? `${member.email} is on the list.`
+        : result.updated
+          ? `${member.email} was on the list already; their details are updated.`
+          : `${member.email} was on the list already.`,
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+export async function addListContactsAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/lists");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const listId = fieldValue(formData, "list_id", 64);
+  const contacts =
+    jsonField<{ kind: "person" | "lead"; id: string }[]>(formData, "contacts_json", 200_000) ?? [];
+  if (!contacts.length) return { status: "error", message: "Choose at least one person or lead." };
+  try {
+    const result = await mailApi.addListMembers(context.token, listId, {
+      contacts,
+      basis: basisOf(formData),
+    });
+    refresh("/mail/lists", `/mail/lists/${listId}`);
+    return sent(
+      `Added ${result.added}; ${result.unchanged + result.updated} already on the list; ${result.skipped_count} skipped.`,
+      { detail: JSON.stringify(result) },
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+export async function updateListMemberAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/lists");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const listId = fieldValue(formData, "list_id", 64);
+  const input: Record<string, unknown> = {};
+  for (const name of LIST_STANDARD) input[name] = fieldValue(formData, name, 200).trim();
+  // Every column the form showed is sent, so emptying one clears it.
+  const fields: Record<string, string> = {};
+  for (const [key, value] of formData.entries()) {
+    if (key.startsWith("field:") && typeof value === "string") fields[key.slice(6)] = value.trim();
+  }
+  if (Object.keys(fields).length) input.fields = fields;
+  try {
+    await mailApi.updateListMember(
+      context.token,
+      listId,
+      fieldValue(formData, "member_id", 64),
+      input,
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refresh(`/mail/lists/${listId}`);
+  return sent("Saved.");
+}
+
+export async function removeListMembersAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/lists");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const listId = fieldValue(formData, "list_id", 64);
+  // Ticked rows arrive as repeated `member_id` fields; a script may send a JSON list instead.
+  const ticked = formData.getAll("member_id").map(String).filter(Boolean);
+  const ids = ticked.length
+    ? ticked
+    : (jsonField<string[]>(formData, "member_ids_json", 1_000_000) ?? []);
+  if (!ids.length) return { status: "error", message: "Choose who to take off the list." };
+  try {
+    const result = await mailApi.removeListMembers(context.token, listId, ids);
+    refresh("/mail/lists", `/mail/lists/${listId}`);
+    return sent(
+      `${result.removed} taken off the list. Anything recorded about their addresses (a stop, a bounce, consent) stays.`,
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+export async function archiveListAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/lists");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const listId = fieldValue(formData, "list_id", 64);
+  const restore = fieldValue(formData, "restore", 4) === "1";
+  try {
+    await mailApi.archiveList(context.token, listId, restore);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refresh("/mail/lists", `/mail/lists/${listId}`);
+  return sent(
+    restore ? "Restored." : "Archived. Nobody can be added and no new campaign can use it.",
+  );
+}
+
 // --- campaigns ---------------------------------------------------------------------------
 
 function campaignInput(formData: FormData): Record<string, unknown> | ActionState {
@@ -334,6 +542,8 @@ function campaignInput(formData: FormData): Record<string, unknown> | ActionStat
   } else if (kind === "csv") {
     const rows = jsonField<Record<string, string>[]>(formData, "csv_rows", 2_000_000) ?? [];
     audience = { kind, rows, label: fieldValue(formData, "csv_label", 120) };
+  } else if (kind === "list") {
+    audience = { kind, list_id: fieldValue(formData, "list_id", 64) };
   } else {
     return { status: "error", message: "Choose who it goes to." };
   }

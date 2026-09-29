@@ -73,7 +73,7 @@ A `ListView` is: toolbar → table → selection bar.
 - **Table:** sticky quiet header with sort chevrons; 36px rows; text left, numbers and
   money right in tabular figures; status as a dot-and-word pill; the row's title is the
   link; secondary text 11.5px under it; row hover reveals actions on the right; the
-  focused row has a ring, the selected row a tint and a 2px amber edge.
+  focused row has a ring, the selected row a tint.
 - **Selection bar:** replaces the toolbar in place with the count and the bulk actions.
 - **Keyboard:** `j`/`k` move, `Enter` opens, `x` toggles selection, `Escape` clears.
 - **Empty and failed:** an empty state names the next act; a failed read is a callout.
@@ -131,6 +131,6 @@ accent series, muted comparison series, tabular axis labels, a legend in words.
 
 ## 11. What is never done
 
-Vendor or provider names in copy. Colour as the only signal. Truncated data columns
+Vendor or provider names in copy. A coloured bar or rule down one side of anything — a nav item, a row, a card, a note, a banner: a state is a tint, a full thin border, a pill or words. Colour as the only signal. Truncated data columns
 (only a declared prose column may elide, with the full text a hover away). A figure the
 role may not see rendered as 0. An empty list standing in for a failed read.

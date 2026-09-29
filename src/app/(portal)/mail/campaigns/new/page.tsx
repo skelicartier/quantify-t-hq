@@ -4,7 +4,7 @@ import { MailTabs } from "@/components/mail/mail-tabs";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { hasCapability, requireStaff } from "@/lib/access/core";
-import { readCampaigns, readSegments, readSenders, readTemplates } from "@/lib/api/mail";
+import { readCampaigns, readLists, readSegments, readSenders, readTemplates } from "@/lib/api/mail";
 import { audienceOptions } from "@/lib/mail/options";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -34,12 +34,13 @@ export default async function NewCampaignPage({ searchParams }: NewCampaignProps
     );
   }
   const parameters = await searchParams;
-  const [senders, templates, segments, topics, options] = await Promise.all([
+  const [senders, templates, segments, topics, options, lists] = await Promise.all([
     readSenders(context.token),
     readTemplates(context.token),
     readSegments(context.token),
     readCampaigns(context.token),
     audienceOptions(context.token),
+    readLists(context.token),
   ]);
   const initial: CampaignInitial = {};
   for (const kind of ["people", "leads", "companies"] as const) {
@@ -53,6 +54,11 @@ export default async function NewCampaignPage({ searchParams }: NewCampaignProps
   if (segment) {
     initial.audience_kind = "segment";
     initial.segment_id = segment;
+  }
+  const list = firstSearchValue(parameters.list);
+  if (list) {
+    initial.audience_kind = "list";
+    initial.list_id = list;
   }
   return (
     <>
@@ -85,6 +91,9 @@ export default async function NewCampaignPage({ searchParams }: NewCampaignProps
               id: row.segment_id,
               label: `${row.name} · ${row.last_count ?? 0} ${row.kind}`,
             }))}
+          lists={lists.lists
+            .filter((row) => !row.archived_at)
+            .map((row) => ({ id: row.list_id, label: `${row.name} · ${row.members} people` }))}
           companies={options.companies}
           people={options.people}
           leads={options.leads}

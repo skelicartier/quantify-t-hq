@@ -19,6 +19,9 @@ import {
   templateSchema,
   unsubscribeViewSchema,
   verdictSchema,
+  mailListSchema,
+  listMemberSchema,
+  listImportResultSchema,
 } from "@/lib/api/mail-schema";
 
 export * from "@/lib/api/mail-schema";
@@ -109,6 +112,137 @@ export function pauseSender(
   );
 }
 
+// --- mailing lists ------------------------------------------------------------------------
+
+export function readLists(token: string) {
+  return fetchHqJson(
+    "hq/mail/lists",
+    okEnvelope.extend({
+      lists: z.array(mailListSchema),
+      limits: z.object({ members: z.number(), import_rows: z.number(), columns: z.number() }),
+    }),
+    { token },
+  );
+}
+
+export function saveList(
+  token: string,
+  input: { list_id?: string; name: string; description: string },
+) {
+  return postHqJson("hq/mail/lists/save", okEnvelope.extend({ list: mailListSchema }), {
+    token,
+    body: input,
+  });
+}
+
+export function readList(
+  token: string,
+  listId: string,
+  query: { q?: string; status?: string; offset?: number; limit?: number } = {},
+) {
+  const params: Record<string, string> = {};
+  if (query.q) params.q = query.q;
+  if (query.status) params.status = query.status;
+  if (query.offset) params.offset = String(query.offset);
+  if (query.limit) params.limit = String(query.limit);
+  return fetchHqJson(
+    `hq/mail/lists/${listId}`,
+    okEnvelope.extend({
+      list: mailListSchema,
+      members: z.array(listMemberSchema),
+      total: z.number(),
+      offset: z.number(),
+      limit: z.number(),
+      counts: z.object({
+        members: z.number(),
+        eligible: z.number(),
+        blocked: z.number(),
+        by_reason: z.record(z.string(), z.number()),
+      }),
+      campaigns: z.array(
+        z.object({ campaign_id: z.string(), name: z.string(), state: z.string() }),
+      ),
+    }),
+    { token, query: params },
+  );
+}
+
+export type ListRow = {
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  full_name?: string;
+  company?: string;
+  title?: string;
+  country?: string;
+  fields?: Record<string, string>;
+};
+
+export function importListRows(
+  token: string,
+  listId: string,
+  input: { rows: ListRow[]; basis: string; update_existing: boolean; label: string },
+) {
+  return postHqJson(`hq/mail/lists/${listId}/import`, okEnvelope.merge(listImportResultSchema), {
+    token,
+    body: input,
+  });
+}
+
+export function addListMembers(
+  token: string,
+  listId: string,
+  input:
+    | { member: ListRow; basis: string }
+    | { contacts: { kind: "person" | "lead"; id: string }[]; basis: string },
+) {
+  return postHqJson(
+    `hq/mail/lists/${listId}/members/add`,
+    okEnvelope.merge(listImportResultSchema),
+    { token, body: input },
+  );
+}
+
+export function updateListMember(
+  token: string,
+  listId: string,
+  memberId: string,
+  input: Record<string, unknown>,
+) {
+  return postHqJson(
+    `hq/mail/lists/${listId}/members/${memberId}/update`,
+    okEnvelope.extend({ member: listMemberSchema }),
+    { token, body: input },
+  );
+}
+
+export function removeListMembers(token: string, listId: string, memberIds: string[]) {
+  return postHqJson(
+    `hq/mail/lists/${listId}/members/remove`,
+    okEnvelope.extend({ removed: z.number() }),
+    { token, body: { member_ids: memberIds } },
+  );
+}
+
+export function archiveList(token: string, listId: string, restore: boolean) {
+  return postHqJson(
+    `hq/mail/lists/${listId}/archive`,
+    okEnvelope.extend({ archived: z.boolean() }),
+    {
+      token,
+      body: { restore },
+    },
+  );
+}
+
+export function exportList(token: string, listId: string, reason: string) {
+  return postHqJson(
+    `hq/mail/lists/${listId}/export`,
+    okEnvelope.extend({ filename: z.string(), rows: z.number(), csv: z.string() }),
+    { token, body: { reason } },
+  );
+}
+
 // --- templates ----------------------------------------------------------------------------
 
 export function readTemplates(token: string) {
@@ -163,7 +297,14 @@ export type RenderedPreview = z.infer<typeof renderedSchema>;
 export function previewTemplate(
   token: string,
   templateId: string,
-  input: { contact_kind?: string; contact_id?: string; version?: number; topic?: string },
+  input: {
+    contact_kind?: string;
+    contact_id?: string;
+    /** A list campaign previews as the list's first member. */
+    list_id?: string;
+    version?: number;
+    topic?: string;
+  },
 ) {
   return postHqJson(`hq/mail/templates/${templateId}/preview`, renderedSchema, {
     token,

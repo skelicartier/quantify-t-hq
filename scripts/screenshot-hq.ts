@@ -34,6 +34,9 @@ const MAIL = {
   roadmap: "ea400000-0000-4000-8000-000000000004",
   newsletter: "ea400000-0000-4000-8000-000000000005",
   releaseTemplate: "ea200000-0000-4000-8000-000000000001",
+  webinarList: "ea800000-0000-4000-8000-000000000001",
+  berlinList: "ea800000-0000-4000-8000-000000000002",
+  followUp: "ea400000-0000-4000-8000-000000000006",
   fundIntro: "ea500000-0000-4000-8000-000000000001",
   // Three September messages whose footer links the public page is walked with: one only
   // looked at, one unsubscribed by its button, one by the mailbox's one-click POST.
@@ -169,6 +172,25 @@ const SIGNED_IN_PAGES: Shot[] = [
   },
   { name: "mail-template-new", path: "/mail/templates/new", ready: ".template-form" },
   { name: "mail-segments", path: "/mail/segments", ready: ".data-table" },
+  { name: "mail-lists", path: "/mail/lists", ready: ".data-table" },
+  { name: "mail-list", path: `/mail/lists/${MAIL.webinarList}`, ready: ".data-table" },
+  { name: "mail-list-berlin", path: `/mail/lists/${MAIL.berlinList}`, ready: ".data-table" },
+  {
+    name: "mail-list-import",
+    path: `/mail/lists/${MAIL.webinarList}?tab=import`,
+    ready: ".list-import",
+  },
+  { name: "mail-list-add", path: `/mail/lists/${MAIL.webinarList}?tab=add`, ready: ".enrol-panel" },
+  {
+    name: "mail-list-settings",
+    path: `/mail/lists/${MAIL.webinarList}?tab=settings`,
+    ready: "main#main-content",
+  },
+  {
+    name: "mail-list-campaign-preview",
+    path: `/mail/campaigns/${MAIL.followUp}?tab=preview`,
+    ready: ".mail-preview",
+  },
   { name: "mail-sequences", path: "/mail/sequences", ready: ".data-table" },
   { name: "mail-sequence", path: `/mail/sequences/${MAIL.fundIntro}`, ready: ".data-table" },
   {
@@ -445,6 +467,64 @@ async function captureMailFlows(page: Page, folder: string) {
     .waitFor({ timeout: 15_000 });
   console.log(`  ✓ ${folder}/mail-sender-paused`);
 
+  // A list, end to end: made, filled from a file (a bad address and an extra column
+  // included), one person added by hand, one taken off. Later passes find it made.
+  await page.goto(`${BASE}/mail/lists`, { waitUntil: "networkidle" });
+  const existing = page.locator("a.table-title", { hasText: "Harness list" });
+  if ((await existing.count()) > 0) {
+    await existing.first().click();
+    await page.waitForSelector(".rhead", { timeout: 15_000 });
+  } else {
+    await page.locator("summary", { hasText: "New list" }).click();
+    await page.fill("#list-name", "Harness list");
+    await page.locator("button", { hasText: "Create list" }).click();
+    await page.waitForURL("**/mail/lists/*?tab=import", { timeout: 15_000 });
+  }
+  const listUrl = page.url().split("?")[0]!;
+  await page.goto(`${listUrl}?tab=import`, { waitUntil: "networkidle" });
+  await page.setInputFiles("#list-csv", {
+    name: "harness.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(
+      [
+        "Email,First name,Last name,Company,Fund size,Region",
+        "ada@harness.example,Ada,Lovelace,Analytical Capital,$2bn,EMEA",
+        "grace@harness.example,Grace,Hopper,Navy Partners,$500m,Americas",
+        "not-an-address,Nobody,Here,,,",
+      ].join("\n"),
+    ),
+  });
+  await page.locator("button", { hasText: /^Add \d+ rows to the list$/ }).click();
+  await page.waitForSelector(".list-import__result", { timeout: 20_000 });
+  // The result is below the fold; a full-page capture taken scrolled draws the sticky
+  // head mid-image.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await assertNoOverflow(page, `${folder}/mail-list-imported`);
+  await assertAccessible(page, `${folder}/mail-list-imported`);
+  await page.screenshot({ path: `${OUT}/${folder}/mail-list-imported.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/mail-list-imported`);
+  await page.goto(`${listUrl}?tab=add`, { waitUntil: "networkidle" });
+  await page.fill("#add-email", `hand-${folder.replace(/\W+/g, "-")}@harness.example`);
+  await page.fill("#add-first_name", "Hand");
+  await page.locator("button", { hasText: "Add to the list" }).first().click();
+  await page.waitForSelector(".form-sent", { timeout: 15_000 });
+  await page.goto(listUrl, { waitUntil: "networkidle" });
+  const before = await page
+    .locator(".list-bar ~ * input[name=member_id], input[name=member_id]")
+    .count();
+  // A confirm the page raises; tolerant of a handler another pass left waiting.
+  page.once("dialog", (dialog) => void dialog.accept().catch(() => undefined));
+  await page.locator("input[name=member_id]").first().check();
+  await page.locator("button", { hasText: "Remove ticked" }).click();
+  await page.waitForSelector(".list-remove .form-sent", { timeout: 15_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  const after = await page.locator("input[name=member_id]").count();
+  if (after !== before - 1)
+    report(`${folder}/mail-list-removed`, `${before} rows before, ${after} after`);
+  await assertAccessible(page, `${folder}/mail-list-removed`);
+  await page.screenshot({ path: `${OUT}/${folder}/mail-list-removed.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/mail-list-removed`);
+
   await page.goto(`${BASE}/mail/sequences/${MAIL.fundIntro}?tab=enrol`, {
     waitUntil: "networkidle",
   });
@@ -539,7 +619,7 @@ async function run(browser: Browser) {
 
     // Signed-out surfaces first.
     mkdirSync(`${OUT}/${viewport.name}/auth`, { recursive: true });
-    await capture(page, `${viewport.name}/auth`, { name: "login", path: "/login" });
+    await capture(page, `${viewport.name}/auth`, { name: "login", path: "/login?form=1" });
     await capture(page, `${viewport.name}/auth`, {
       name: "forgot-password",
       path: "/forgot-password",
@@ -561,7 +641,7 @@ async function run(browser: Browser) {
     await captureUnsubscribe(page, `${viewport.name}/auth`);
 
     // The two-step and the code screen, mid-flow.
-    await page.goto(`${BASE}/login`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
     await page.fill("#email", "owner@hq.test");
     await page.fill("#password", "password-123");
     await page.click("button[type=submit]");
@@ -593,7 +673,7 @@ async function run(browser: Browser) {
     });
     const intern = await internContext.newPage();
     watchConsole(intern);
-    await intern.goto(`${BASE}/login`, { waitUntil: "networkidle" });
+    await intern.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
     await intern.fill("#email", "intern@hq.test");
     await intern.fill("#password", "password-123");
     await intern.click("button[type=submit]");
@@ -626,7 +706,7 @@ async function run(browser: Browser) {
       viewport: { width: viewport.width, height: viewport.height },
     });
     const enrollPage = await enrollContext.newPage();
-    await enrollPage.goto(`${BASE}/login`, { waitUntil: "networkidle" });
+    await enrollPage.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
     await enrollPage.fill(
       "#email",
       viewport.name === "desktop" ? "newbie@hq.test" : "newbie2@hq.test",

@@ -314,6 +314,68 @@ export const unsubscribeViewSchema = z.object({
 });
 export type UnsubscribeView = z.infer<typeof unsubscribeViewSchema>;
 
+// --- mailing lists -------------------------------------------------------------------------
+
+export const mailListSchema = z.object({
+  list_id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  /** The list's own columns beyond the standard ones; templates use {{custom.<key>}}. */
+  columns: z.array(z.string()),
+  members: z.number(),
+  created_by: z.object({ staff_id: z.string(), name: z.string() }).nullable(),
+  created_at: z.string().nullable(),
+  updated_at: z.string().nullable(),
+  archived_at: z.string().nullable(),
+});
+export type MailList = z.infer<typeof mailListSchema>;
+
+export const listMemberSchema = z.object({
+  member_id: z.string(),
+  email: z.string(),
+  first_name: z.string(),
+  last_name: z.string(),
+  full_name: z.string(),
+  company: z.string(),
+  title: z.string(),
+  country: z.string(),
+  fields: z.record(z.string(), z.string()),
+  person_id: z.string().nullable(),
+  person_name: z.string(),
+  source: z.enum(["csv", "manual", "crm"]),
+  basis: z.enum(["consent", "legitimate_interest"]),
+  added_at: z.string().nullable(),
+  /** "ok" when a product-update campaign could mail them today; else the reason it could not. */
+  status: z.string(),
+  status_detail: z.string(),
+});
+export type ListMember = z.infer<typeof listMemberSchema>;
+
+export const listImportResultSchema = z.object({
+  added: z.number(),
+  updated: z.number(),
+  unchanged: z.number(),
+  skipped: z.array(z.object({ row: z.number(), email: z.string(), reason: z.string() })),
+  skipped_count: z.number(),
+  consent_recorded: z.number(),
+  columns_added: z.array(z.string()),
+  columns_dropped: z.array(z.string()),
+  rows: z.number(),
+});
+export type ListImportResult = z.infer<typeof listImportResultSchema>;
+
+/** mail_lists.MAX_MEMBERS: the most people one list holds. */
+export const LIST_MAX_MEMBERS = 20_000;
+
+/** Why a row of a list import was not taken. */
+export const IMPORT_SKIP_LABELS: Record<string, string> = {
+  NO_EMAIL: "No address",
+  INVALID_EMAIL: "Not a valid address",
+  DUPLICATE_IN_FILE: "Twice in the file",
+  LIST_FULL: "The list is full",
+  NOT_FOUND: "Record not found",
+};
+
 /** Why a recipient was not sent a message, in words a colleague would use. */
 export const SKIP_REASON_LABELS: Record<string, string> = {
   NO_EMAIL: "No address",
