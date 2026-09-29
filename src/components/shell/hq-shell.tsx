@@ -5,6 +5,7 @@ import { CommandPalette } from "@/components/shell/command-palette";
 import { ContextBar } from "@/components/shell/context-bar";
 import { Rail } from "@/components/shell/rail";
 import type { ShellIdentity } from "@/components/shell/shell-types";
+import { PreferencesHydrator } from "@/components/shell/preferences-hydrator";
 import { Shortcuts } from "@/components/shell/shortcuts";
 import { ThemeScope } from "@/components/shell/theme-scope";
 import { DEFAULT_HQ_THEME } from "@/lib/theme";
@@ -16,6 +17,8 @@ type HqShellProps = {
   signOutAction: () => Promise<void>;
   theme?: HqTheme | undefined;
   themeAction?: ((formData: FormData) => Promise<void>) | undefined;
+  /** The account's display preferences, brought onto this device on load. */
+  preferences?: Readonly<Record<string, string>> | undefined;
   children: ReactNode;
 };
 
@@ -30,10 +33,14 @@ export function HqShell({
   signOutAction,
   theme = DEFAULT_HQ_THEME,
   themeAction,
+  preferences,
   children,
 }: HqShellProps) {
   return (
     <ThemeScope section="hq" theme={theme} action={themeAction}>
+      {preferences && Object.keys(preferences).length > 0 && (
+        <PreferencesHydrator preferences={preferences} />
+      )}
       <Rail identity={identity} capabilities={capabilities} signOutAction={signOutAction} />
       <div className="shell__body">
         <ContextBar />

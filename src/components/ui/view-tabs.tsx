@@ -1,70 +1,21 @@
-"use client";
-
 import Link from "next/link";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+
+import { deleteViewAction, saveViewAction } from "@/app/(portal)/_actions/views";
+import { SaveViewForm } from "@/components/ui/save-view-form";
+import { RowAction } from "@/components/ui/row-action";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { readViews, type SavedView } from "@/lib/api/views";
 
 /**
  * Saved views: a name for a combination of filters, sort and view that a person keeps
- * coming back to. A view is nothing but the list's URL query, so sharing one is sharing
- * a link; the names live on this device only. The built-in filter strips stay the way to
- * browse; this row is for the combinations they cannot express in one click.
+ * coming back to. A view is nothing but the list's URL query, kept with the account —
+ * private, or shared so it sits on everyone's tabs for this list. The built-in filter
+ * strips stay the way to browse; this row is for the combinations they cannot express in
+ * one click.
  */
 
-type SavedView = { name: string; query: string };
-
-const EVENT = "hq-views-change";
-
-function storageKey(listKey: string): string {
-  return `hq-views:${listKey}`;
-}
-
-function readViews(listKey: string): string {
-  try {
-    return window.localStorage.getItem(storageKey(listKey)) ?? "[]";
-  } catch {
-    return "[]";
-  }
-}
-
-function parseViews(raw: string): SavedView[] {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (entry): entry is SavedView =>
-          typeof entry === "object" &&
-          entry !== null &&
-          typeof (entry as SavedView).name === "string" &&
-          typeof (entry as SavedView).query === "string",
-      )
-      .slice(0, 20);
-  } catch {
-    return [];
-  }
-}
-
-function writeViews(listKey: string, views: readonly SavedView[]) {
-  try {
-    if (views.length) window.localStorage.setItem(storageKey(listKey), JSON.stringify(views));
-    else window.localStorage.removeItem(storageKey(listKey));
-  } catch {
-    // Without storage the view lasts for the page; the URL still works.
-  }
-  window.dispatchEvent(new Event(EVENT));
-}
-
-function subscribe(onChange: () => void) {
-  window.addEventListener(EVENT, onChange);
-  window.addEventListener("storage", onChange);
-  return () => {
-    window.removeEventListener(EVENT, onChange);
-    window.removeEventListener("storage", onChange);
-  };
-}
-
 /** Query strings compare by their sorted parameters, so `?a=1&b=2` equals `?b=2&a=1`. */
-function normalise(query: string): string {
+export function normaliseQuery(query: string): string {
   const params = new URLSearchParams(query);
   return [...params.entries()]
     .filter(([, value]) => value !== "")
@@ -73,114 +24,83 @@ function normalise(query: string): string {
     .join("&");
 }
 
-export function ViewTabs({
+export async function ViewTabs({
+  token,
   listKey,
   basePath,
   currentQuery,
+  canShare = true,
 }: {
+  token: string;
   listKey: string;
   basePath: string;
   /** The list's current query string, without the leading `?`. */
   currentQuery: string;
+  canShare?: boolean;
 }) {
-  const raw = useSyncExternalStore(
-    subscribe,
-    () => readViews(listKey),
-    () => "[]",
-  );
-  const views = parseViews(raw);
-  const current = normalise(currentQuery);
-  const [naming, setNaming] = useState(false);
-  const [name, setName] = useState("");
-  const nameRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (naming) nameRef.current?.focus();
-  }, [naming]);
-  const matches = views.find((view) => normalise(view.query) === current);
-  const save = () => {
-    const trimmed = name.trim().slice(0, 40);
-    if (!trimmed || !current) return;
-    const rest = views.filter((view) => view.name !== trimmed);
-    writeViews(listKey, [...rest, { name: trimmed, query: current }]);
-    setName("");
-    setNaming(false);
-  };
-  const remove = (viewName: string) => {
-    writeViews(
-      listKey,
-      views.filter((view) => view.name !== viewName),
-    );
-  };
-
-  if (views.length === 0 && !current) return null;
+  let views: SavedView[] | null = null;
+  try {
+    views = (await readViews(token, listKey)).views;
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
+  const current = normaliseQuery(currentQuery);
+  const list = views ?? [];
+  const matches = list.find((view) => normaliseQuery(view.query) === current);
+  if (list.length === 0 && !current && views !== null) return null;
 
   return (
     <div className="views" aria-label="Saved views">
-      {views.length > 0 && (
+      {views === null && <span className="views__note">Saved views could not be read.</span>}
+      {list.length > 0 && (
         <ul className="views__list">
-          {views.map((view) => (
-            <li key={view.name} className="views__item">
+          {list.map((view) => (
+            <li key={view.view_id} className="views__item">
               <Link
                 className="views__tab"
                 href={view.query ? `${basePath}?${view.query}` : basePath}
-                aria-current={matches?.name === view.name ? "page" : undefined}
+                aria-current={matches?.view_id === view.view_id ? "page" : undefined}
+                title={
+                  view.shared
+                    ? view.mine
+                      ? "Shared with the team"
+                      : "A colleague's shared view"
+                    : "Only you see this view"
+                }
               >
                 {view.name}
+                {view.shared && (
+                  <span className="views__shared" aria-label="shared with the team">
+                    ·team
+                  </span>
+                )}
               </Link>
-              <button
-                type="button"
-                className="views__remove"
-                onClick={() => remove(view.name)}
-                aria-label={`Forget the view ${view.name}`}
-              >
-                ×
-              </button>
+              {view.mine && (
+                <RowAction
+                  action={deleteViewAction}
+                  fields={{ view_id: view.view_id, base_path: basePath }}
+                  buttons={[
+                    {
+                      label: "×",
+                      className: "views__remove",
+                      ariaLabel: `Forget the view ${view.name}`,
+                    },
+                  ]}
+                />
+              )}
             </li>
           ))}
         </ul>
       )}
-      {current && !matches && !naming && (
-        <button type="button" className="btn btn--small btn--ghost" onClick={() => setNaming(true)}>
-          Save this view
-        </button>
-      )}
-      {naming && (
-        <form
-          className="views__save"
-          onSubmit={(event) => {
-            event.preventDefault();
-            save();
-          }}
-        >
-          <input
-            className="input input--small"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                setNaming(false);
-                setName("");
-              }
-            }}
-            placeholder="Name this view"
-            maxLength={40}
-            aria-label="View name"
-            ref={nameRef}
-          />
-          <button type="submit" className="btn btn--small btn--primary" disabled={!name.trim()}>
-            Save
-          </button>
-          <button
-            type="button"
-            className="btn btn--small btn--ghost"
-            onClick={() => {
-              setNaming(false);
-              setName("");
-            }}
-          >
-            Cancel
-          </button>
-        </form>
+      {current && !matches && (
+        <SaveViewForm
+          action={saveViewAction}
+          listKey={listKey}
+          basePath={basePath}
+          query={current}
+          canShare={canShare}
+        />
       )}
       {current && (
         <Link className="views__reset" href={basePath}>

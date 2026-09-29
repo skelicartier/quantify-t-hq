@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
+import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { PageHeader } from "@/components/shell/page-header";
 import { RevenueTabs } from "@/components/revenue/revenue-tabs";
@@ -253,6 +253,7 @@ export default async function RenewalsIndexPage({ searchParams }: RenewalsPagePr
                 kind="renewals"
                 noun={["renewal", "renewals"]}
                 action={bulkUpdateAction}
+                undoAction={bulkUndoAction}
                 fields={[
                   {
                     field: "status",

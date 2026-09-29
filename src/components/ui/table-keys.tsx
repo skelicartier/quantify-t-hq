@@ -6,7 +6,8 @@ import { isTypingTarget } from "@/components/shell/palette-bus";
 
 /**
  * `j`/`k` walk the rows of every list on the page, `Enter` opens the active row's
- * link, `x` toggles its selection, `Escape` clears. Mounted once per page by the table frame; the active row is
+ * link, `p` peeks at it (the row's `data-peek-href`), `x` toggles its selection, `Escape`
+ * closes a preview or clears. Mounted once per page by the table frame; the active row is
  * marked with `data-active` and styled by the table.
  */
 export function TableKeys() {
@@ -45,6 +46,18 @@ export function TableKeys() {
         if (link) {
           event.preventDefault();
           link.click();
+        }
+      } else if (event.key === "p" && active) {
+        const href = active.getAttribute("data-peek-href");
+        if (href) {
+          event.preventDefault();
+          window.location.assign(href);
+        }
+      } else if (event.key === "Escape" && document.querySelector("[data-peek-close]")) {
+        const close = document.querySelector<HTMLAnchorElement>("[data-peek-close-link]");
+        if (close) {
+          event.preventDefault();
+          close.click();
         }
       } else if (event.key === "x" && active) {
         const box = active.querySelector<HTMLInputElement>("input[data-select]");

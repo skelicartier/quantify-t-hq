@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 
 import { buttonClass } from "@/components/ui/button";
+import { syncPreference } from "@/lib/prefs/sync";
 
 /**
  * Which columns a table shows, chosen by the person and kept on their device. The first
@@ -35,6 +36,7 @@ function writeHidden(tableId: string, keys: readonly string[]) {
     // A per-device convenience: without storage the choice lasts for the page.
   }
   window.dispatchEvent(new Event(EVENT));
+  syncPreference(storageKey(tableId), keys.join(","));
 }
 
 function subscribe(onChange: () => void) {

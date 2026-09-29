@@ -1,12 +1,15 @@
 import Link from "next/link";
+import { Fragment } from "react";
 
 import { createCompanyAction } from "@/app/(portal)/companies/actions";
 import { CompanyCreateForm } from "@/components/crm/company-forms";
 import { LifecyclePill } from "@/components/crm/pills";
-import { bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
+import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
-import { DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
+import { CategoryRow, DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
+import { FilterBuilder } from "@/components/lists/filter-builder";
+import { PeekPane } from "@/components/lists/peek-pane";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FilterChips } from "@/components/ui/filter-chips";
 import { Popover } from "@/components/ui/popover";
@@ -20,6 +23,13 @@ import { readCompanies, type CompanyRow } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LIFECYCLES, LIFECYCLE_LABELS } from "@/lib/crm/vocabulary";
 import { formatMrrBy, sumMoneyByCurrency } from "@/lib/format";
+import {
+  applyFilters,
+  describeFilter,
+  parseFilters,
+  serializeFilter,
+  type FilterField,
+} from "@/lib/lists/filters";
 import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
@@ -38,6 +48,13 @@ const COLUMNS = [
   { key: "updated", sortable: true, label: "Updated" },
 ];
 
+const GROUPS: Record<string, string> = {
+  lifecycle: "Lifecycle",
+  type: "Type",
+  owner: "Owner",
+  country: "Country",
+};
+
 type CompaniesPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -51,16 +68,28 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
     firstSearchValue(parameters.sort),
     COLUMNS.map((column) => column.key),
   );
+  const group = GROUPS[firstSearchValue(parameters.group) ?? ""]
+    ? (firstSearchValue(parameters.group) ?? "")
+    : "";
+  const peek = firstSearchValue(parameters.peek) ?? "";
   const now = requestNow();
-  const query = { q, lifecycle, sort: serializeSort(sort) };
-  const listHref = (over: Partial<typeof query>) => {
+  const query = { q, lifecycle, sort: serializeSort(sort), group };
+  const filterParams = parameters.f;
+  const listHref = (over: Partial<typeof query>, filters?: readonly string[]) => {
     const next = new URLSearchParams();
     for (const [key, value] of Object.entries({ ...query, ...over }))
       if (value) next.set(key, value);
+    for (const condition of filters ?? rawFilters) next.append("f", condition);
     const rendered = next.toString();
     return rendered ? `/companies?${rendered}` : "/companies";
   };
+  const rawFilters =
+    filterParams === undefined ? [] : Array.isArray(filterParams) ? filterParams : [filterParams];
   const currentQuery = listHref({}).split("?")[1] ?? "";
+  const peekHref = (id: string) => {
+    const base = listHref({});
+    return `${base}${base.includes("?") ? "&" : "?"}peek=${id}`;
+  };
 
   let companies: CompanyRow[] | null = null;
   try {
@@ -71,7 +100,49 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
   }
   const names = await directoryOrNull(context.token);
   const canWrite = hasCapability(context, "crm:write");
-  const filtered = (companies ?? []).filter((row) => !lifecycle || row.lifecycle === lifecycle);
+  const filterFields: FilterField[] = [
+    {
+      key: "lifecycle",
+      label: "Lifecycle",
+      kind: "choice",
+      choices: LIFECYCLES.map((value) => ({ value, label: LIFECYCLE_LABELS[value] ?? value })),
+    },
+    { key: "type", label: "Type", kind: "text" },
+    { key: "country", label: "Country", kind: "text" },
+    { key: "domain", label: "Web domain", kind: "text" },
+    { key: "owner", label: "Owner", kind: "text" },
+    { key: "people", label: "People", kind: "number" },
+    { key: "deals", label: "Open deals", kind: "number" },
+    { key: "mrr", label: "MRR", kind: "number" },
+  ];
+  const conditions = parseFilters(filterParams, filterFields);
+  const readField = (row: CompanyRow, field: string): string | number | null => {
+    switch (field) {
+      case "lifecycle":
+        return row.lifecycle;
+      case "type":
+        return row.firm_type;
+      case "country":
+        return row.country;
+      case "domain":
+        return row.domain;
+      case "owner":
+        return row.owner_staff_id ? nameFor(names, row.owner_staff_id) : "";
+      case "people":
+        return row.people_count;
+      case "deals":
+        return row.open_deals;
+      case "mrr":
+        return row.mrr ? Object.values(row.mrr).reduce((sum, amount) => sum + amount, 0) : null;
+      default:
+        return null;
+    }
+  };
+  const filtered = applyFilters(
+    (companies ?? []).filter((row) => !lifecycle || row.lifecycle === lifecycle),
+    conditions,
+    readField,
+  );
   const visible = sortRows(filtered, sort, {
     company: (row) => row.name,
     lifecycle: (row) => LIFECYCLE_LABELS[row.lifecycle] ?? row.lifecycle,
@@ -98,6 +169,25 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
   const openDeals = (companies ?? []).reduce((sum, row) => sum + row.open_deals, 0);
 
   const lifecycleLink = (value: string) => listHref({ lifecycle: value });
+  const groupLabel = (row: CompanyRow): string => {
+    switch (group) {
+      case "lifecycle":
+        return LIFECYCLE_LABELS[row.lifecycle] ?? row.lifecycle;
+      case "type":
+        return row.firm_type || "Type not known";
+      case "owner":
+        return row.owner_staff_id ? nameFor(names, row.owner_staff_id) : "Unowned";
+      case "country":
+        return row.country || "Country not known";
+      default:
+        return "";
+    }
+  };
+  // Grouping is a category row before each run of the same label, in the current sort.
+  const grouped = group
+    ? [...visible].sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)))
+    : visible;
+  const columnCount = COLUMNS.length + (canWrite ? 1 : 0);
 
   return (
     <>
@@ -179,15 +269,62 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
                     },
                   ]
                 : []),
+              ...conditions.map((condition, index) => ({
+                key: `f-${index}`,
+                label: "Filter",
+                value: describeFilter(condition, filterFields),
+                removeHref: listHref(
+                  {},
+                  conditions.filter((_, other) => other !== index).map(serializeFilter),
+                ),
+              })),
+              ...(group
+                ? [
+                    {
+                      key: "group",
+                      label: "Grouped by",
+                      value: GROUPS[group] ?? group,
+                      removeHref: listHref({ group: "" }),
+                    },
+                  ]
+                : []),
             ]}
           />
-          <ViewTabs listKey="companies" basePath="/companies" currentQuery={currentQuery} />
+          <div className="list-tools" aria-label="List tools">
+            <FilterBuilder
+              fields={filterFields}
+              basePath="/companies"
+              currentQuery={currentQuery}
+            />
+            <nav className="list-tools__group" aria-label="Group rows">
+              <span className="list-tools__label">Group by</span>
+              <Link href={listHref({ group: "" })} aria-current={group === "" ? "page" : undefined}>
+                None
+              </Link>
+              {Object.entries(GROUPS).map(([key, label]) => (
+                <Link
+                  key={key}
+                  href={listHref({ group: key })}
+                  aria-current={group === key ? "page" : undefined}
+                >
+                  {label}
+                </Link>
+              ))}
+            </nav>
+          </div>
+          <ViewTabs
+            token={context.token}
+            listKey="companies"
+            basePath="/companies"
+            currentQuery={currentQuery}
+          />
           {canWrite && (
             <SelectionBar
               tableId={tableIdFor("Companies")}
               kind="companies"
               noun={["company", "companies"]}
               action={bulkUpdateAction}
+              undoAction={bulkUndoAction}
               fields={[
                 {
                   field: "owner_staff_id",
@@ -214,44 +351,65 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
             isEmpty={visible.length === 0}
             empty={
               <EmptyState
-                title={q || lifecycle ? "Nothing matches" : "No companies yet"}
+                title={q || lifecycle || conditions.length ? "Nothing matches" : "No companies yet"}
                 description={
-                  q || lifecycle
+                  q || lifecycle || conditions.length
                     ? "No company matches these filters."
                     : "Companies are created when a lead is qualified, or by hand with New company."
                 }
               />
             }
           >
-            {visible.map((row) => (
-              <tr key={row.company_id}>
-                {canWrite && <SelectCell id={row.company_id} label={row.name} />}
-                <td>
-                  <Link className="table-title" href={`/companies/${row.company_id}`}>
-                    {row.name}
-                  </Link>
-                  <span className="table-sub">{row.domain || "No domain"}</span>
-                </td>
-                <td>
-                  <LifecyclePill lifecycle={row.lifecycle} />
-                </td>
-                <td>{row.firm_type || <span className="table-sub">—</span>}</td>
-                <td className="data-table__num">{row.people_count}</td>
-                <td className="data-table__num">{row.open_deals}</td>
-                <td className="data-table__num">{formatMrrBy(row.mrr)}</td>
-                <td>
-                  {row.owner_staff_id ? (
-                    nameFor(names, row.owner_staff_id)
-                  ) : (
-                    <span className="table-sub">Unowned</span>
-                  )}
-                </td>
-                <td>
-                  <Timestamp value={row.updated_at} now={now} mode="relative" />
-                </td>
-              </tr>
+            {grouped.map((row, index) => (
+              <Fragment key={row.company_id}>
+                {group && (index === 0 || groupLabel(grouped[index - 1]!) !== groupLabel(row)) && (
+                  <CategoryRow
+                    span={columnCount}
+                    label={`${groupLabel(row)} · ${grouped.filter((other) => groupLabel(other) === groupLabel(row)).length}`}
+                  />
+                )}
+                <tr
+                  data-peek-href={peekHref(row.company_id)}
+                  data-active={peek === row.company_id ? "" : undefined}
+                >
+                  {canWrite && <SelectCell id={row.company_id} label={row.name} />}
+                  <td>
+                    <Link className="table-title" href={`/companies/${row.company_id}`}>
+                      {row.name}
+                    </Link>
+                    <span className="table-sub">{row.domain || "No domain"}</span>
+                  </td>
+                  <td>
+                    <LifecyclePill lifecycle={row.lifecycle} />
+                  </td>
+                  <td>{row.firm_type || <span className="table-sub">—</span>}</td>
+                  <td className="data-table__num">{row.people_count}</td>
+                  <td className="data-table__num">{row.open_deals}</td>
+                  <td className="data-table__num">{formatMrrBy(row.mrr)}</td>
+                  <td>
+                    {row.owner_staff_id ? (
+                      nameFor(names, row.owner_staff_id)
+                    ) : (
+                      <span className="table-sub">Unowned</span>
+                    )}
+                  </td>
+                  <td>
+                    <Timestamp value={row.updated_at} now={now} mode="relative" />
+                  </td>
+                </tr>
+              </Fragment>
             ))}
           </DataTable>
+          {peek && (
+            <PeekPane
+              kind="company"
+              id={peek}
+              token={context.token}
+              names={names}
+              closeHref={listHref({})}
+              now={now}
+            />
+          )}
         </>
       )}
     </>

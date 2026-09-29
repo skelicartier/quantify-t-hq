@@ -6,7 +6,7 @@ import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
-import { bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
+import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
 import { DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
 import { SelectionBar } from "@/components/ui/selection-bar";
 import { ViewTabs } from "@/components/ui/view-tabs";
@@ -85,6 +85,7 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
     return rendered ? `/deals?${rendered}` : "/deals";
   };
   const currentQuery = link({}).split("?")[1] ?? "";
+  const peek = firstSearchValue(parameters.peek) ?? "";
   const canMoveDeals = hasCapability(context, "deals:write");
   const rows = sortRows(
     (board?.columns ?? []).flatMap((column) => column.deals),
@@ -191,13 +192,19 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
             )
           ) : (
             <>
-              <ViewTabs listKey="deals" basePath="/deals" currentQuery={currentQuery} />
+              <ViewTabs
+                token={context.token}
+                listKey="deals"
+                basePath="/deals"
+                currentQuery={currentQuery}
+              />
               {canMoveDeals && (
                 <SelectionBar
                   tableId={tableIdFor("Deals")}
                   kind="deals"
                   noun={["deal", "deals"]}
                   action={bulkUpdateAction}
+                  undoAction={bulkUndoAction}
                   fields={[
                     {
                       field: "owner_staff_id",
@@ -227,6 +234,8 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
                 {rows.map((deal) => (
                   <tr
                     key={deal.deal_id}
+                    data-peek-href={`${link({})}${link({}).includes("?") ? "&" : "?"}peek=${deal.deal_id}`}
+                    data-active={peek === deal.deal_id ? "" : undefined}
                     className={deal.status === "open" ? undefined : "row--muted"}
                   >
                     {canMoveDeals && (

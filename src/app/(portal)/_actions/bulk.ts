@@ -4,9 +4,9 @@ import { revalidatePath } from "next/cache";
 
 import { hasCapability, requireStaff, type StaffContext } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { updateCompany, updateLead } from "@/lib/api/crm";
-import { updateDeal } from "@/lib/api/deals";
-import { RENEWAL_STATUSES, setRenewalForecast } from "@/lib/api/revenue";
+import { readCompany, readLead, updateCompany, updateLead } from "@/lib/api/crm";
+import { readDeal, updateDeal } from "@/lib/api/deals";
+import { RENEWAL_STATUSES, readContract, setRenewalForecast } from "@/lib/api/revenue";
 import { fieldValue } from "@/lib/auth/forms";
 import { LIFECYCLES } from "@/lib/crm/vocabulary";
 import type { ActionState } from "@/lib/forms/action-state";
@@ -29,9 +29,14 @@ type BulkSpec = {
     {
       valid: (value: string) => boolean;
       apply: (context: StaffContext, id: string, value: string) => Promise<unknown>;
+      /** The value before the change, so the bar can offer to put it back. */
+      before: (context: StaffContext, id: string) => Promise<string>;
     }
   >;
 };
+
+type UndoStep = { id: string; from: string };
+type UndoPlan = { kind: string; field: string; steps: UndoStep[] };
 
 const owner = {
   valid: (value: string) => value === "" || GUID.test(value),
@@ -45,10 +50,13 @@ const BULK: Record<string, BulkSpec> = {
       owner_staff_id: {
         ...owner,
         apply: (context, id, value) => updateCompany(context.token, id, { owner_staff_id: value }),
+        before: async (context, id) =>
+          (await readCompany(context.token, id)).company.owner_staff_id,
       },
       lifecycle: {
         valid: (value) => (LIFECYCLES as readonly string[]).includes(value),
         apply: (context, id, value) => updateCompany(context.token, id, { lifecycle: value }),
+        before: async (context, id) => (await readCompany(context.token, id)).company.lifecycle,
       },
     },
   },
@@ -59,6 +67,7 @@ const BULK: Record<string, BulkSpec> = {
       owner_staff_id: {
         ...owner,
         apply: (context, id, value) => updateLead(context.token, id, { owner_staff_id: value }),
+        before: async (context, id) => (await readLead(context.token, id)).lead.owner_staff_id,
       },
     },
   },
@@ -69,6 +78,7 @@ const BULK: Record<string, BulkSpec> = {
       owner_staff_id: {
         ...owner,
         apply: (context, id, value) => updateDeal(context.token, id, { owner_staff_id: value }),
+        before: async (context, id) => (await readDeal(context.token, id)).deal.owner_staff_id,
       },
     },
   },
@@ -79,6 +89,8 @@ const BULK: Record<string, BulkSpec> = {
       status: {
         valid: (value) => value === "" || (RENEWAL_STATUSES as readonly string[]).includes(value),
         apply: (context, id, value) => setRenewalForecast(context.token, id, { status: value }),
+        before: async (context, id) =>
+          (await readContract(context.token, id)).contract.renewal.status ?? "",
       },
     },
   },
@@ -112,9 +124,19 @@ export async function bulkUpdateAction(
 
   let done = 0;
   let refused = 0;
+  const steps: UndoStep[] = [];
   for (const id of ids) {
     try {
+      // The value before, read first, so the change can be put back by the same route.
+      let from = "";
+      try {
+        from = await field.before(context, id);
+      } catch (error) {
+        if (!(error instanceof HqApiRequestError || error instanceof HqApiUnavailableError))
+          throw error;
+      }
       await field.apply(context, id, value);
+      steps.push({ id, from });
       done += 1;
     } catch (error) {
       if (error instanceof HqApiRequestError || error instanceof HqApiUnavailableError) {
@@ -128,12 +150,67 @@ export async function bulkUpdateAction(
   if (done === 0) {
     return { status: "error", message: `None of the ${ids.length} changed; the service refused.` };
   }
+  const plan: UndoPlan = { kind, field: fieldValue(formData, "field", 40), steps };
   return {
     status: "sent",
     message:
       refused > 0
         ? `${done} changed, ${refused} refused by the service.`
         : `${done} ${done === 1 ? "row" : "rows"} changed.`,
+    sentAt: Date.now(),
+    detail: JSON.stringify(plan),
+  };
+}
+
+/** Put a bulk change back: every row gets its previous value through the same route. */
+export async function bulkUndoAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  let plan: UndoPlan;
+  try {
+    const parsed: unknown = JSON.parse(fieldValue(formData, "undo_json", 60_000) || "null");
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      typeof (parsed as UndoPlan).kind !== "string" ||
+      typeof (parsed as UndoPlan).field !== "string" ||
+      !Array.isArray((parsed as UndoPlan).steps)
+    )
+      throw new Error("not a plan");
+    plan = parsed as UndoPlan;
+  } catch {
+    return { status: "error", message: "Nothing to undo." };
+  }
+  const spec = BULK[plan.kind];
+  const field = spec?.fields[plan.field];
+  if (!spec || !field) return { status: "error", message: "That change cannot be undone here." };
+  const context = await requireStaff(spec.path);
+  if (!hasCapability(context, spec.capability)) {
+    return { status: "error", message: "Your role can read this list, not change it." };
+  }
+  let done = 0;
+  let refused = 0;
+  for (const step of plan.steps.slice(0, 200)) {
+    if (typeof step.id !== "string" || typeof step.from !== "string" || !field.valid(step.from)) {
+      refused += 1;
+      continue;
+    }
+    try {
+      await field.apply(context, step.id, step.from);
+      done += 1;
+    } catch (error) {
+      if (error instanceof HqApiRequestError || error instanceof HqApiUnavailableError)
+        refused += 1;
+      else throw error;
+    }
+  }
+  revalidatePath(spec.path);
+  if (done === 0) return { status: "error", message: "Nothing could be put back." };
+  return {
+    status: "sent",
+    message: refused > 0 ? `${done} put back, ${refused} refused.` : `${done} put back.`,
     sentAt: Date.now(),
   };
 }

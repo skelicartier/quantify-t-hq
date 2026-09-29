@@ -17,7 +17,7 @@ danger zone), with real TOTP sign-in. Two repositories:
 | Repo                                           | Path                                                                                                                        | What lives there                                                                                                                                                                                                                                            |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **HQ portal** (Next.js 16, TypeScript)         | `~/Documents/Projects/HQ Quantify Terminal` — GitHub `aaryansaroha98/quantify-t-hq`, branch `main`, pushed                  | UI, server actions, zod API clients (`src/lib/api/*`), the mock service (`scripts/mock-hq-api.ts`), the screenshot harness, `docs/DESIGN.md` (the UI contract), `docs/RESEARCH-2026-09-30.md` (the research), this file                                     |
-| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0023`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
+| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0024`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
 
 ## 2. Ground rules (do not relearn these)
 
@@ -30,7 +30,7 @@ danger zone), with real TOTP sign-in. Two repositories:
 - **The mock must mirror the real routes** (route names, methods, payload shapes): the
   route-parity and payload-contract tests enforce it. Any new route = service handler +
   test + mock handler + portal client, in that order.
-- **The harness is the gate** (`npm run check:hq-ui`, ~5 min, 212 screens, axe serious /
+- **The harness is the gate** (`npm run check:hq-ui`, ~5 min, 214 screens, axe serious /
   critical = 0, no horizontal overflow, no console errors). Never edit files while it runs.
   Restart the dev server after any `next build`. Restart the mock after a seed change.
 - Never name a data vendor in UI copy (copy-guard test). Tables never truncate data
@@ -109,11 +109,17 @@ rail identity menu lists them.
 | Security      | breached-password check (HIBP k-anonymity; fails open; `QT_HQ_BREACH_CHECK=0` off) on invite / reset / change; owner and admin sessions idle out at 15 min (`hq/me.session_policy`); a role change mails the person, a minted key mails every owner; migration 0021 gives intake keys `expires_at` (180 days or less), expired keys are refused, the offboarding checklist gains "rotate the keys"; the access review names orphans, shared accounts and money separation-of-duties conflicts; `POST hq/audit/export` hands back a signed JSONL copy (digest + HMAC, audited first; `scripts/verify_hq_audit_export.py` checks it); Integrations shows expiry and a "Lives for" picker, Audit an "Export a signed copy" block                                  | auth, admin, access review              | service `4b239cf`; HQ: the commit adding this            |
 | People ops    | migration 0022: manager / reporting line (no loops), probation end, emergency contact; asset register whose returns gate the offboarding step "Devices and materials returned"; versioned company policies acknowledged per version (publishing asks everyone again), acknowledged under My security, edited under Settings; training records with expiry; one-to-ones with actions (HR or the manager writes, the owner ticks); reminders within 60 days on the person and across the Team page                                                                                                                                                                                                                                                               | team, my security, settings             | service `ea4b7c7`; HQ: the commit adding this            |
 | CRM structure | migration 0023: parent companies (no loops; the record names its parent, lists children and rolls the group's MRR up); company and person merge (sudo: every reference moves, blanks fill, stricter do-not-contact wins, notes keep provenance, the duplicate is archived and its domain / address released); duplicate suggestions by legal-form-stripped name and by person name or address; CSV import for companies and people (read in the browser, mapped, ≤ 500 rows, each validated, known records skipped and named, counts audited with a reason); @mentions in notes (a row on Home until seen, and a mail); the stage funnel (entered / moved on / lost / still here / conversion / median days) and the pipeline over time from nightly snapshots | companies, people, reports, home        | service `531e7b6`, `3c779d2`; HQ: the commit adding this |
+| Lists         | migration 0024: saved views kept with the account (private or shared with the team, ≤ 20 per list per person, owner or admin edits) replace the per-device ones on companies / leads / deals; column and density preferences sync to the account and hydrate every device; a peek pane (`p` or `?peek=`) on companies, people and deals; undo for bulk changes (each row's previous value read first and put back through the same route); grouping (lifecycle / type / owner / country) and a filter builder (`f=field:op:value`, applied over every row, eight ops) on Companies                                                                                                                                                                             | companies, people, deals, leads, shell  | service `adc4e38`; HQ: the commit adding this            |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
-1. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
-   grouping, a filter builder. Saved views shared with the team (server-side).
+1. **Passkeys (WebAuthn) as a second factor** — M: registration under My security, sign-in
+   offering the passkey before the authenticator code, recovery unchanged. Then the
+   deliberately-left items below as the team asks for them.
+
+Lists items deliberately left: grouping and the filter builder on lists other than
+Companies (the same modules take one page each), keyboard reordering of columns, and
+saved views that carry a column set (a view is a query; columns are a preference).
 
 CRM items deliberately left: a three-way merge picker (three or more look-alikes are
 merged one at a time from the kept record), import of deals or contracts (money is typed
@@ -138,7 +144,7 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile) → apply migrations 0006–0023 and publish → move the desk onto SQL → Vercel
+Turnstile) → apply migrations 0006–0024 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
 Actions on the account fails every run in seconds with no runner (billing) — only the
@@ -148,22 +154,18 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of 2026-10-02, early hours.**
+**As of 2026-10-02, morning.**
 
-- HQ repo: `origin/main` HEAD carries the CRM structure wave (company Part of / Group /
-  Merge; person Merge; Companies → Import and Duplicates; `/companies/import`,
-  `/people/import`, `/companies/duplicates`; reports Pipeline over time and How the
-  stages convert; Home "You were mentioned"; the CSV reader `src/lib/crm/csv.ts` with its
-  test; the mock's merges, imports, duplicates, mentions, funnel, history and a seeded
-  child company + mention); working tree clean. Harness passed with 212 screens;
-  `~/Downloads/HQ Portal screenshots 2026-09-29` refreshed.
-- Product repo: HEAD `adc4e38` (CRM structure `531e7b6` + `3c779d2`, then the lists
-  wave's service side: migration 0024 `hq_saved_views` + `hq_preferences`, `view_routes.py`
-  — `hq/views`, `hq/views/save`, `hq/views/{id}/delete`, `hq/preferences`,
-  `hq/preferences/set`); 187 tests pass; not pushed. `docs/HQ_GO_LIVE.md` says 0006–0024.
-- Reports: the funnel table is a full-width scrolling section and the pipeline chart labels
-  month starts only, after a 13px phone overflow the harness caught.
-- **Next step:** §5 item 1, the lists wave's portal side — saved views read from and saved to
-  the service (shared with the team), column / density preferences synced to the account,
-  a peek pane on list rows (`?peek=`), undo for bulk changes, grouping and a filter builder
-  on the companies list; the mock mirrors `hq/views*` and `hq/preferences*`. Then passkeys.
+- HQ repo: HEAD carries the lists wave (server-backed `ViewTabs` + `SaveViewForm`,
+  `PreferencesHydrator` + `syncPreference`, `PeekPane`, `FilterBuilder`,
+  `src/lib/lists/filters.ts` with its test, bulk undo, grouping on Companies; the mock's
+  `hq/views*` and `hq/preferences*` with a seeded shared view). **The push to GitHub is
+  pending**: github.com was unreachable from this machine; run `git push origin main`
+  from the HQ repo. Harness passed with 214 screens; `~/Downloads/HQ Portal screenshots
+2026-09-29` refreshed.
+- Product repo: HEAD `adc4e38`; 187 tests pass; not pushed. `docs/HQ_GO_LIVE.md` says
+  0006–0024.
+- **Next step:** §5 item 1, passkeys (WebAuthn) as a second factor — service first
+  (`hq_passkeys` table, registration challenge / verify, sign-in assertion as an alternative
+  to the TOTP step, tests with a fixed test key), then the mock, then My security and the
+  sign-in flow.

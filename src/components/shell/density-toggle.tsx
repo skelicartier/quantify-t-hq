@@ -3,6 +3,8 @@
 import { Rows3, Rows4 } from "lucide-react";
 import { useEffect, useSyncExternalStore } from "react";
 
+import { syncPreference } from "@/lib/prefs/sync";
+
 const KEY = "hq-density";
 const EVENT = "hq-density-change";
 
@@ -43,6 +45,7 @@ export function DensityToggle() {
           // A private window keeps it for the page's lifetime only.
         }
         window.dispatchEvent(new Event(EVENT));
+        syncPreference(KEY, next);
       }}
     >
       {density === "compact" ? (

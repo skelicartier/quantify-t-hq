@@ -4,6 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 
 import { AttemptField } from "@/components/ui/attempt-field";
 import { FormFeedback } from "@/components/ui/form-feedback";
+import { RowAction } from "@/components/ui/row-action";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
 /**
@@ -27,12 +28,15 @@ export function SelectionBar({
   noun,
   fields,
   action,
+  undoAction,
 }: {
   tableId: string;
   kind: string;
   noun: [singular: string, plural: string];
   fields: readonly BulkField[];
   action: (previous: ActionState, formData: FormData) => Promise<ActionState>;
+  /** Puts the last change back; offered beside the outcome while the plan is fresh. */
+  undoAction?: ((previous: ActionState, formData: FormData) => Promise<ActionState>) | undefined;
 }) {
   const [count, setCount] = useState(0);
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
@@ -122,6 +126,20 @@ export function SelectionBar({
     return state.status === "sent" ? (
       <p className="selbar__done" role="status">
         {state.message}
+        {undoAction && state.detail && (
+          <RowAction
+            action={undoAction}
+            fields={{ undo_json: state.detail }}
+            buttons={[
+              {
+                label: "Undo",
+                className: "btn btn--small btn--ghost",
+                pendingLabel: "Putting back…",
+              },
+            ]}
+            className="selbar__undo"
+          />
+        )}
       </p>
     ) : null;
   }

@@ -1993,6 +1993,56 @@ type MentionRow = {
   seen_at: string | null;
 };
 const mentions: MentionRow[] = [];
+
+type SavedViewRow = {
+  id: string;
+  list_key: string;
+  name: string;
+  query: string;
+  shared: boolean;
+  owner_staff_id: string;
+  updated_at: string;
+};
+const savedViews: SavedViewRow[] = [];
+const preferences = new Map<string, string>(); // `${staffId}\u0000${key}`
+
+function seedViews() {
+  savedViews.length = 0;
+  preferences.clear();
+  savedViews.push(
+    {
+      id: "sv000000-0000-4000-8000-000000000001",
+      list_key: "companies",
+      name: "UK customers",
+      query: "lifecycle=customer&f=country%3Ais%3AUnited+Kingdom",
+      shared: true,
+      owner_staff_id: SALES_STAFF,
+      updated_at: agoIso(24 * 9),
+    },
+    {
+      id: "sv000000-0000-4000-8000-000000000002",
+      list_key: "deals",
+      name: "Stuck this quarter",
+      query: "sort=-days&view=table",
+      shared: false,
+      owner_staff_id: OWNER_STAFF,
+      updated_at: agoIso(24 * 3),
+    },
+  );
+}
+
+function viewView(row: SavedViewRow, viewer: string) {
+  return {
+    view_id: row.id,
+    list_key: row.list_key,
+    name: row.name,
+    query: row.query,
+    shared: row.shared,
+    owner_staff_id: row.owner_staff_id,
+    mine: row.owner_staff_id === viewer,
+    updated_at: row.updated_at,
+  };
+}
 type LeadRow = {
   id: string;
   source_key: string;
@@ -4162,6 +4212,166 @@ routes.push(
         companies: companyGroups.length,
         people: peopleGroups.length,
       });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/views",
+    auth: true,
+    handler: ({ headers, query }) => {
+      const me = caller(headers)!.member.id;
+      const listKey = String(query.list ?? "");
+      if (listKey && !/^[a-z][a-z0-9_-]{1,39}$/.test(listKey))
+        return refuse(400, "malformed_request", { list: "lowercase letters, digits, dashes" });
+      const rows = savedViews
+        .filter(
+          (row) =>
+            (!listKey || row.list_key === listKey) && (row.owner_staff_id === me || row.shared),
+        )
+        .sort(
+          (a, b) =>
+            Number(a.owner_staff_id !== me) - Number(b.owner_staff_id !== me) ||
+            a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+        );
+      return ok({ views: rows.map((row) => viewView(row, me)) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/views/save",
+    auth: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const me = found.member.id;
+      const isAdmin = (CAPABILITIES[found.member.role] ?? []).includes("hq:admin");
+      const cleanQuery = (value: unknown) => {
+        const text = String(value ?? "").trim();
+        if (text.length > 400) return null;
+        if (/[\n\r<>]/.test(text)) return null;
+        return text.replace(/^\?/, "");
+      };
+      const viewId = String(body.view_id ?? "").trim();
+      if (viewId) {
+        const row = savedViews.find((candidate) => candidate.id === viewId);
+        if (!row) return refuse(404, "not_found");
+        if (row.owner_staff_id !== me && !isAdmin)
+          return refuse(403, "forbidden", { reason: "not your view" });
+        let changed = false;
+        if ("name" in body) {
+          const name = String(body.name ?? "")
+            .trim()
+            .slice(0, 80);
+          if (!name) return refuse(400, "malformed_request", { name: "name the view" });
+          row.name = name;
+          changed = true;
+        }
+        if ("query" in body) {
+          const query = cleanQuery(body.query);
+          if (query === null) return refuse(400, "malformed_request", { query: "a query string" });
+          row.query = query;
+          changed = true;
+        }
+        if ("shared" in body) {
+          if (typeof body.shared !== "boolean")
+            return refuse(400, "malformed_request", { shared: "true or false" });
+          row.shared = body.shared;
+          changed = true;
+        }
+        if (!changed) return refuse(400, "malformed_request", { reason: "nothing to change" });
+        row.updated_at = now();
+        audit("view.updated", me, "saved_view", row.id);
+        return ok({ view: viewView(row, me) });
+      }
+      const listKey = String(body.list_key ?? "").trim();
+      if (!/^[a-z][a-z0-9_-]{1,39}$/.test(listKey))
+        return refuse(400, "malformed_request", { list_key: "lowercase letters, digits, dashes" });
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 80);
+      if (!name) return refuse(400, "malformed_request", { name: "name the view" });
+      const query = cleanQuery(body.query);
+      if (query === null) return refuse(400, "malformed_request", { query: "a query string" });
+      const mine = savedViews.filter(
+        (row) => row.list_key === listKey && row.owner_staff_id === me,
+      );
+      if (mine.length >= 20)
+        return refuse(400, "malformed_request", {
+          reason: "at most 20 views of one list per person",
+        });
+      if (mine.some((row) => row.name.toLowerCase() === name.toLowerCase()))
+        return refuse(400, "malformed_request", { name: "you already have a view with that name" });
+      const row: SavedViewRow = {
+        id: randomUUID(),
+        list_key: listKey,
+        name,
+        query,
+        shared: body.shared === true,
+        owner_staff_id: me,
+        updated_at: now(),
+      };
+      savedViews.push(row);
+      audit("view.saved", me, "saved_view", row.id, "", {
+        list_key: listKey,
+        name,
+        shared: row.shared,
+      });
+      return ok({ view: viewView(row, me) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/views/{view_id}/delete",
+    auth: true,
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const index = savedViews.findIndex((row) => row.id === params.view_id);
+      if (index < 0) return refuse(404, "not_found");
+      const row = savedViews[index]!;
+      if (
+        row.owner_staff_id !== found.member.id &&
+        !(CAPABILITIES[found.member.role] ?? []).includes("hq:admin")
+      )
+        return refuse(403, "forbidden", { reason: "not your view" });
+      savedViews.splice(index, 1);
+      audit("view.deleted", found.member.id, "saved_view", row.id, "", {
+        list_key: row.list_key,
+        name: row.name,
+      });
+      return ok({ deleted: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/preferences",
+    auth: true,
+    handler: ({ headers }) => {
+      const me = caller(headers)!.member.id;
+      const mine: Record<string, string> = {};
+      for (const [key, value] of preferences) {
+        const [owner, name] = key.split("\u0000") as [string, string];
+        if (owner === me) mine[name] = value;
+      }
+      return ok({ preferences: mine });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/preferences/set",
+    auth: true,
+    handler: ({ headers, body }) => {
+      const me = caller(headers)!.member.id;
+      const key = String(body.key ?? "").trim();
+      if (!/^[a-z][a-z0-9_.:-]{1,63}$/.test(key))
+        return refuse(400, "malformed_request", {
+          key: "lowercase letters, digits, dots, colons, dashes",
+        });
+      if (typeof body.value !== "string")
+        return refuse(400, "malformed_request", { value: "text" });
+      if (body.value.length > 2000)
+        return refuse(400, "malformed_request", { value: "at most 2000 characters" });
+      if (body.value === "") preferences.delete(`${me}\u0000${key}`);
+      else preferences.set(`${me}\u0000${key}`, body.value);
+      return ok({ key, value: body.value });
     },
   },
   {
@@ -9624,6 +9834,7 @@ function seedTeam() {
 seedTeam();
 seedOpenReview();
 seedPeopleOps();
+seedViews();
 
 function accessView(row: AccessRow) {
   const todayIso = today();
@@ -10986,6 +11197,7 @@ function resetWorld() {
   seedTeam();
   seedOpenReview();
   seedPeopleOps();
+  seedViews();
   seedSla();
   resetDeskRules();
   seedSources();

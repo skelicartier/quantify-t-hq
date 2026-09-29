@@ -4,6 +4,7 @@ import { createPersonAction } from "@/app/(portal)/people/actions";
 import { PersonCreateForm } from "@/components/crm/person-forms";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
+import { PeekPane } from "@/components/lists/peek-pane";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Popover } from "@/components/ui/popover";
@@ -32,7 +33,9 @@ type PeoplePageProps = {
 
 export default async function PeoplePage({ searchParams }: PeoplePageProps) {
   const context = await requireStaff("/people");
-  const q = firstSearchValue((await searchParams).q) ?? "";
+  const parameters = await searchParams;
+  const q = firstSearchValue(parameters.q) ?? "";
+  const peek = firstSearchValue(parameters.peek) ?? "";
   const now = requestNow();
 
   let people: Awaited<ReturnType<typeof readPeople>>["people"] | null = null;
@@ -105,7 +108,11 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
             }
           >
             {people.map((person) => (
-              <tr key={person.person_id}>
+              <tr
+                key={person.person_id}
+                data-peek-href={`/people?${new URLSearchParams({ ...(q ? { q } : {}), peek: person.person_id }).toString()}`}
+                data-active={peek === person.person_id ? "" : undefined}
+              >
                 <td>
                   <Link className="table-title" href={`/people/${person.person_id}`}>
                     {person.full_name || person.email}
@@ -140,6 +147,16 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
               </tr>
             ))}
           </DataTable>
+          {peek && (
+            <PeekPane
+              kind="person"
+              id={peek}
+              token={context.token}
+              names={null}
+              closeHref={q ? `/people?q=${encodeURIComponent(q)}` : "/people"}
+              now={now}
+            />
+          )}
         </>
       )}
     </>

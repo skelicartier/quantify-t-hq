@@ -31,6 +31,12 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "support-queue", path: "/support", ready: ".desk" },
   { name: "support-following", path: "/support?view=all&following=1", ready: ".desk" },
   { name: "companies-import", path: "/companies/import", ready: ".csv-import" },
+  { name: "companies-grouped", path: "/companies?group=lifecycle", ready: ".data-table" },
+  {
+    name: "companies-peek",
+    path: "/companies?peek=c0000000-0000-4000-8000-0000000000fe",
+    ready: ".peek",
+  },
   { name: "companies-duplicates", path: "/companies/duplicates", ready: "main#main-content" },
   {
     name: "support-ticket",

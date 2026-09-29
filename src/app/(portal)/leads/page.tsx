@@ -6,7 +6,7 @@ import { FirstReplyClock, LeadStagePill } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
-import { bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
+import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
 import { DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
 import { FilterChips } from "@/components/ui/filter-chips";
 import { SelectionBar } from "@/components/ui/selection-bar";
@@ -233,13 +233,19 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
                 : []),
             ]}
           />
-          <ViewTabs listKey="leads" basePath="/leads" currentQuery={currentQuery} />
+          <ViewTabs
+            token={context.token}
+            listKey="leads"
+            basePath="/leads"
+            currentQuery={currentQuery}
+          />
           {canWrite && (
             <SelectionBar
               tableId={tableIdFor("Leads")}
               kind="leads"
               noun={["lead", "leads"]}
               action={bulkUpdateAction}
+              undoAction={bulkUndoAction}
               fields={[
                 {
                   field: "owner_staff_id",

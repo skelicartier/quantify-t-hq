@@ -4,6 +4,8 @@ import { signOutAction } from "@/app/login/actions";
 import { setHqTheme } from "@/app/(portal)/actions";
 import { HqShell } from "@/components/shell/hq-shell";
 import { requireStaff } from "@/lib/access/core";
+import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { readPreferences } from "@/lib/api/views";
 import { DEV_PERSONAS, devAutologinPersona } from "@/lib/auth/dev-bypass";
 import { readHqTheme } from "@/lib/dal/theme";
 
@@ -18,10 +20,19 @@ function initialsOf(displayName: string, email: string): string {
 }
 
 export default async function PortalLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const { me } = await requireStaff("/home");
+  const { me, token } = await requireStaff("/home");
   const theme = await readHqTheme();
+  // The account's display preferences; a failed read leaves the device's own copy alone.
+  let preferences: Record<string, string> = {};
+  try {
+    preferences = (await readPreferences(token)).preferences;
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
   return (
     <HqShell
+      preferences={preferences}
       identity={{
         email: me.staff.email,
         displayName: me.staff.display_name || me.staff.email,
