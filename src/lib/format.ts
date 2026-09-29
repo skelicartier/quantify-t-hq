@@ -84,6 +84,47 @@ export function formatPercent(ratio: number | null | undefined): string {
   return `${Math.round(percent)}%`;
 }
 
+/**
+ * A change as a signed percentage with one decimal: `0.034` → "+3.4%", `-0.012` → "−1.2%",
+ * `0` → "0.0%". One decimal because growth is compared month to month, where whole
+ * points would hide the difference between a flat month and a good one.
+ */
+export function formatDeltaPercent(ratio: number | null | undefined): string {
+  if (typeof ratio !== "number" || !Number.isFinite(ratio)) return "—";
+  const percent = ratio * 100;
+  const rounded = Math.round(percent * 10) / 10;
+  if (rounded === 0) return "0.0%";
+  return `${rounded > 0 ? "+" : "−"}${Math.abs(rounded).toFixed(1)}%`;
+}
+
+/** A rate with one decimal and no sign: `0.0071` → "0.7%", `0.974` → "97.4%". */
+export function formatRatePercent(ratio: number | null | undefined): string {
+  if (typeof ratio !== "number" || !Number.isFinite(ratio)) return "—";
+  return `${(ratio * 100).toFixed(1)}%`;
+}
+
+/** "2026-01" → "Jan 26" at a year's turn, "2026-03" → "Mar": the label under a chart column. */
+export function formatMonthShort(month: string | null | undefined): string {
+  const match = /^(\d{4})-(\d{2})/.exec(month ?? "");
+  if (!match) return month ?? "—";
+  const name = MONTHS[Number(match[2]) - 1] ?? month ?? "—";
+  return match[2] === "01" ? `${name} ${match[1]!.slice(2)}` : name;
+}
+
+/** A multiple: `3.24` → "3.2×", `12` → "12.0×". */
+export function formatMultiple(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "—";
+  return `${value.toFixed(1)}×`;
+}
+
+/** "2026-03" → "Mar 2026"; anything else is returned as it came. */
+export function formatMonth(month: string | null | undefined): string {
+  const match = /^(\d{4})-(\d{2})/.exec(month ?? "");
+  if (!match) return month ?? "—";
+  const name = MONTHS[Number(match[2]) - 1];
+  return name ? `${name} ${match[1]}` : (month ?? "—");
+}
+
 /** 16384 → "16 KB", 1_048_576 → "1 MB". Binary units, at most one decimal. */
 export function formatBytes(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "Not available";

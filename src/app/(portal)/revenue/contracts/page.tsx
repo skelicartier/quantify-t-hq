@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { createContractAction } from "@/app/(portal)/revenue/actions";
+import { ColumnChart } from "@/components/charts/column-chart";
 import { PageHeader } from "@/components/shell/page-header";
 import { ContractCreateForm, type ContractPrefill } from "@/components/revenue/contract-forms";
 import { RevenueTabs } from "@/components/revenue/revenue-tabs";
@@ -16,8 +17,24 @@ import { readCompanies } from "@/lib/api/crm";
 import { readContracts, type ContractsPage } from "@/lib/api/revenue";
 import { isoDay } from "@/lib/crm/dates";
 import { CONTRACT_STATE_LABELS, contractStateTone } from "@/lib/crm/vocabulary";
-import { formatDate, formatMoney, formatMrr } from "@/lib/format";
+import {
+  formatDate,
+  formatMoney,
+  formatMonthShort,
+  formatMrr,
+  formatNumber,
+  formatPercent,
+  formatRatePercent,
+} from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
+import {
+  averageTenureMonths,
+  concentration,
+  logoChurn,
+  paying,
+  renewalsByMonth,
+  seatFigures,
+} from "@/lib/revenue/metrics";
 import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Contracts" };
@@ -81,6 +98,14 @@ export default async function ContractsIndexPage({ searchParams }: ContractsPage
   const others = Object.entries(page?.totals ?? {}).filter(
     ([currency, totals]) => currency !== "USD" && totals.mrr !== 0,
   );
+  // The book in figures: arithmetic on the rows of the table below.
+  const dollarRows = page ? page.contracts.filter((contract) => contract.currency === "USD") : [];
+  const book = page ? paying(page.contracts, "USD") : [];
+  const seats = seatFigures(book);
+  const spread = concentration(book);
+  const churn = logoChurn(dollarRows, today, 12);
+  const tenure = averageTenureMonths(book, today);
+  const renewals = renewalsByMonth(dollarRows, today, 6);
 
   return (
     <>
@@ -129,6 +154,47 @@ export default async function ContractsIndexPage({ searchParams }: ContractsPage
               value={usd ? formatMrr(usd.arpa, "USD") : "—"}
               text
               hint="Average"
+            />
+          </StatGrid>
+          <StatGrid columns={6} label="The book in US dollars">
+            <Stat label="Seats" value={formatNumber(seats.seats)} hint="Across paying contracts" />
+            <Stat
+              label="Per seat"
+              value={seats.perSeat === null ? "—" : formatMrr(seats.perSeat, "USD")}
+              text
+              hint="MRR ÷ seats"
+            />
+            <Stat
+              label="Billed annually"
+              value={seats.annualShare === null ? "—" : formatPercent(seats.annualShare)}
+              text
+              hint="Share of MRR paid up front"
+            />
+            <Stat
+              label="Average tenure"
+              value={tenure === null ? "—" : `${formatNumber(Math.round(tenure * 10) / 10)} months`}
+              text
+              hint="Since each contract began"
+            />
+            <Stat
+              label="Logo churn, 12 months"
+              value={formatRatePercent(churn.rate)}
+              text
+              hint={
+                churn.atStart === 0
+                  ? "No customers a year ago"
+                  : `${churn.churned} of the ${churn.atStart} paying a year ago`
+              }
+            />
+            <Stat
+              label="Largest customer"
+              value={spread.largest ? formatPercent(spread.largest.share) : "—"}
+              text
+              hint={
+                spread.largest
+                  ? `${spread.largest.name} · top ten ${formatPercent(spread.top10Share)}`
+                  : "No contracts yet"
+              }
             />
           </StatGrid>
           {others.length > 0 && (
@@ -194,6 +260,24 @@ export default async function ContractsIndexPage({ searchParams }: ContractsPage
               </DataTable>
             </div>
             <aside className="record-layout__side">
+              <Card
+                title="Renewals, next six months"
+                titleAs="h3"
+                description="Monthly value coming up for renewal, by the month it falls due."
+              >
+                <ColumnChart
+                  ariaLabel={`Monthly recurring revenue up for renewal in each of the next six months, ${formatMoney(
+                    renewals.reduce((sum, row) => sum + row.mrr, 0),
+                    "USD",
+                  )} in all.`}
+                  format={(value) => formatMoney(value, "USD")}
+                  columns={renewals.map((row) => ({
+                    label: formatMonthShort(row.month),
+                    value: row.mrr,
+                    hint: `${row.count} ${row.count === 1 ? "contract" : "contracts"}`,
+                  }))}
+                />
+              </Card>
               <Card title="Renewing in 90 days" titleAs="h3">
                 {page.renewing_soon.length === 0 ? (
                   <p className="side-quiet">No renewals due in the next 90 days.</p>

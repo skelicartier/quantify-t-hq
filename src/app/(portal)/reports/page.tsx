@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
+import { BarList } from "@/components/charts/bar-list";
+import { TrendChart } from "@/components/charts/trend-chart";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
@@ -9,8 +11,10 @@ import { DataTable } from "@/components/ui/data-table";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { readCrmSettings } from "@/lib/api/crm";
+import { readCrmSettings, type DealSummary } from "@/lib/api/crm";
+import { readDealsBoard } from "@/lib/api/deals";
 import { EXPORT_KINDS, readWeeklyReport, type WeeklyReport } from "@/lib/api/reports";
+import { readMrrBridge, type MrrBridge } from "@/lib/api/revenue";
 import {
   LOSS_REASON_LABELS,
   MOVEMENT_KIND_LABELS,
@@ -22,9 +26,17 @@ import {
   formatDate,
   formatMoney,
   formatMoneyBy,
+  formatMonth,
+  formatMonthShort,
+  formatMrr,
   formatMrrBy,
+  formatMultiple,
+  formatNumber,
+  formatPercent,
   formatWait,
 } from "@/lib/format";
+import { closedMetrics, pipelineCover } from "@/lib/reports/metrics";
+import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Weekly report" };
@@ -49,6 +61,10 @@ type ReportsPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
+function isReadFailure(error: unknown): boolean {
+  return error instanceof HqApiUnavailableError || error instanceof HqApiRequestError;
+}
+
 export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const context = await requireStaff("/reports");
   if (!hasCapability(context, "revenue:read")) {
@@ -62,6 +78,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const parameters = await searchParams;
   const week = firstSearchValue(parameters.week) ?? "";
   const exportOutcome = EXPORT_OUTCOMES[firstSearchValue(parameters.export) ?? ""];
+  const now = requestNow();
 
   let report: WeeklyReport | null = null;
   let refused = false;
@@ -69,20 +86,39 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
     report = await readWeeklyReport(context.token, /^\d{4}-W\d{2}$/.test(week) ? week : "");
   } catch (error) {
     if (error instanceof HqApiRequestError && error.status === 400) refused = true;
-    else if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
-      throw error;
+    else if (!isReadFailure(error)) throw error;
   }
+
+  // The quarter's closed deals and the year's MRR are read beside the week; each one
+  // that fails leaves its own card saying so, never a zero.
   let sourceNames = new Map<string, string>();
-  try {
-    sourceNames = sourceNamesFrom(await readCrmSettings(context.token));
-  } catch (error) {
-    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
-      throw error;
+  let wonDeals: DealSummary[] | null = null;
+  let lostDeals: DealSummary[] | null = null;
+  let bridge: MrrBridge | null = null;
+  const [settingsRead, wonRead, lostRead, bridgeRead] = await Promise.allSettled([
+    readCrmSettings(context.token),
+    readDealsBoard(context.token, "won"),
+    readDealsBoard(context.token, "lost"),
+    readMrrBridge(context.token, "USD", 12),
+  ]);
+  for (const read of [settingsRead, wonRead, lostRead, bridgeRead]) {
+    if (read.status === "rejected" && !isReadFailure(read.reason)) throw read.reason;
   }
+  if (settingsRead.status === "fulfilled") sourceNames = sourceNamesFrom(settingsRead.value);
+  if (wonRead.status === "fulfilled")
+    wonDeals = wonRead.value.columns.flatMap((column) => column.deals);
+  if (lostRead.status === "fulfilled")
+    lostDeals = lostRead.value.columns.flatMap((column) => column.deals);
+  if (bridgeRead.status === "fulfilled") bridge = bridgeRead.value;
+
+  const quarter = wonDeals && lostDeals ? closedMetrics(wonDeals, lostDeals, now, 90) : null;
+  const cover =
+    quarter && report ? pipelineCover(report.pipeline.open_mrr, quarter.monthlyWonMrr) : null;
   const canExport = hasCapability(context, "crm:export");
   const untilLabel = context.me.sudo_until
     ? (formatAbsolute(context.me.sudo_until).split(", ")[1] ?? null)
     : null;
+  const openUsd = report?.pipeline.open_mrr?.USD ?? 0;
 
   return (
     <>
@@ -260,6 +296,110 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                   </li>
                 ))}
               </ul>
+            </Card>
+          </div>
+
+          <section className="record-section report-section" aria-labelledby="report-quarter">
+            <h2 className="record-section__title" id="report-quarter">
+              Last 90 days · how the pipeline converts
+            </h2>
+            {quarter === null ? (
+              <Callout tone="attention" compact>
+                Closed deals could not be read just now, so the quarter&apos;s figures are missing —
+                a read failure, not a quiet quarter.
+              </Callout>
+            ) : (
+              <StatGrid columns={6} label="Closed deals, last ninety days">
+                <Stat
+                  label="Won"
+                  value={quarter.won}
+                  hint={quarter.wonMrr ? formatMrrBy(quarter.wonMrr) : "Money withheld"}
+                />
+                <Stat
+                  label="Lost"
+                  value={quarter.lost}
+                  hint={
+                    quarter.reasons[0]
+                      ? (LOSS_REASON_LABELS[quarter.reasons[0].reason] ?? quarter.reasons[0].reason)
+                      : "Nothing lost"
+                  }
+                />
+                <Stat
+                  label="Win rate"
+                  value={quarter.winRate === null ? "—" : formatPercent(quarter.winRate)}
+                  text
+                  hint={`${quarter.won + quarter.lost} closed`}
+                />
+                <Stat
+                  label="Median sales cycle"
+                  value={
+                    quarter.medianCycleDays === null
+                      ? "—"
+                      : `${formatNumber(Math.round(quarter.medianCycleDays))} days`
+                  }
+                  text
+                  hint={`Opened to won, ${quarter.cycleSample} ${quarter.cycleSample === 1 ? "deal" : "deals"}`}
+                />
+                <Stat
+                  label="Average won deal"
+                  value={formatMrrBy(quarter.averageWon)}
+                  text
+                  hint="Monthly value at close"
+                />
+                <Stat
+                  label="Pipeline cover"
+                  value={formatMultiple(cover)}
+                  text
+                  hint={
+                    quarter.monthlyWonMrr
+                      ? `vs ${formatMrrBy(quarter.monthlyWonMrr)} won a month`
+                      : "Needs a won deal"
+                  }
+                />
+              </StatGrid>
+            )}
+          </section>
+
+          <div className="chart-grid">
+            <Card
+              title="Pipeline by stage"
+              titleAs="h2"
+              description={`${report.pipeline.open_count} open · ${formatMrrBy(report.pipeline.open_mrr)} · ${formatMrrBy(report.pipeline.weighted)} weighted.`}
+            >
+              <BarList
+                label="Open pipeline by stage, in US dollars"
+                format={(value) => formatMrr(value, "USD")}
+                rows={report.pipeline.stages.map((stage) => ({
+                  key: stage.key,
+                  label: stage.label,
+                  value: stage.mrr.USD ?? 0,
+                  share: openUsd > 0 ? (stage.mrr.USD ?? 0) / openUsd : undefined,
+                  sub: `${stage.count} ${stage.count === 1 ? "deal" : "deals"} · ${formatMoneyBy(stage.weighted)} weighted`,
+                }))}
+              />
+            </Card>
+            <Card
+              title="MRR, last twelve months"
+              titleAs="h2"
+              description="Where the ledger stood at each month's end, in US dollars."
+            >
+              {bridge === null ? (
+                <Callout tone="attention" compact>
+                  Revenue could not be read just now — a read failure, not zero revenue.
+                </Callout>
+              ) : (
+                <TrendChart
+                  ariaLabel={`Monthly recurring revenue at each month's end over ${bridge.months.length} months, ending at ${formatMoney(bridge.current.mrr)}.`}
+                  format={(value) => formatMoney(value, "USD")}
+                  points={bridge.months.map((month) => ({
+                    label: formatMonthShort(month.month),
+                    title: month.partial
+                      ? `${formatMonth(month.month)} so far`
+                      : formatMonth(month.month),
+                    value: month.end,
+                  }))}
+                />
+              )}
             </Card>
           </div>
 
