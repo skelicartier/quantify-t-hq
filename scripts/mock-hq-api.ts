@@ -248,6 +248,26 @@ function audit(
   });
 }
 
+/** Mirrors audit.field_changes: what an update changed, value before and after, as text. */
+function changesBetween(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): Record<string, { from: string; to: string }> {
+  const text = (value: unknown) => {
+    if (value === null || value === undefined) return "";
+    const raw = typeof value === "object" ? JSON.stringify(value) : String(value);
+    return raw.length <= 200 ? raw : `${raw.slice(0, 199)}…`;
+  };
+  const changes: Record<string, { from: string; to: string }> = {};
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (["updated_at", "entered_stage_at", "last_activity_at"].includes(key)) continue;
+    const from = text(before[key]);
+    const to = text(after[key]);
+    if (from !== to) changes[key] = { from, to };
+  }
+  return changes;
+}
+
 function ok(payload: Record<string, unknown>) {
   return {
     status: 200,
@@ -3058,6 +3078,7 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = companies.find((company) => company.id === params.company_id);
       if (!row) return refuse(404, "not_found");
+      const before = { ...row };
       if ("source_key" in body) {
         const refusal = sourceRefusal(String(body.source_key ?? ""), row.source_key);
         if (refusal) return refusal;
@@ -3093,7 +3114,10 @@ routes.push(
       if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
       if ("archived" in body) row.archived = Boolean(body.archived);
       row.updated_at = now();
-      audit("company.updated", caller(headers)?.member.id ?? null, "company", row.id);
+      audit("company.updated", caller(headers)?.member.id ?? null, "company", row.id, "", {
+        fields: Object.keys(changesBetween(before, row)).sort(),
+        changes: changesBetween(before, row),
+      });
       return ok({ company: companyView(row) });
     },
   },
@@ -3191,6 +3215,7 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = people.find((person) => person.id === params.person_id);
       if (!row) return refuse(404, "not_found");
+      const before = { ...row };
       for (const name of [
         "full_name",
         "title",
@@ -3203,7 +3228,10 @@ routes.push(
       }
       if ("company_id" in body) row.company_id = String(body.company_id ?? "");
       if ("do_not_contact" in body) row.do_not_contact = Boolean(body.do_not_contact);
-      audit("person.updated", caller(headers)?.member.id ?? null, "person", row.id);
+      audit("person.updated", caller(headers)?.member.id ?? null, "person", row.id, "", {
+        fields: Object.keys(changesBetween(before, row)).sort(),
+        changes: changesBetween(before, row),
+      });
       return ok({ person: personView(row) });
     },
   },
@@ -3322,6 +3350,7 @@ routes.push(
       const row = leads.find((lead) => lead.id === params.lead_id);
       if (!row) return refuse(404, "not_found");
       if (row.anonymised_at) return refuse(400, "malformed_request", ANONYMISED);
+      const before = { ...row };
       const stage = String(body.stage ?? "");
       if (stage) {
         if (!["new", "attempting", "connected", "disqualified"].includes(stage))
@@ -3341,7 +3370,10 @@ routes.push(
       }
       if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
       row.updated_at = now();
-      audit("lead.updated", caller(headers)?.member.id ?? null, "lead", row.id);
+      audit("lead.updated", caller(headers)?.member.id ?? null, "lead", row.id, "", {
+        fields: Object.keys(changesBetween(before, row)).sort(),
+        changes: changesBetween(before, row),
+      });
       return ok({ lead: leadView(row) });
     },
   },
@@ -3660,6 +3692,7 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = deals.find((deal) => deal.id === params.deal_id);
       if (!row) return refuse(404, "not_found");
+      const before = { ...row };
       if ("stage_key" in body || "status" in body)
         return refuse(400, "malformed_request", {
           reason: "move stages via /stage, close via /close",
@@ -3695,7 +3728,10 @@ routes.push(
       if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
       if ("primary_person_id" in body) row.primary_person_id = String(body.primary_person_id ?? "");
       if ("notes" in body) row.notes = String(body.notes ?? "");
-      audit("deal.updated", caller(headers)?.member.id ?? null, "deal", row.id);
+      audit("deal.updated", caller(headers)?.member.id ?? null, "deal", row.id, "", {
+        fields: Object.keys(changesBetween(before, row)).sort(),
+        changes: changesBetween(before, row),
+      });
       return ok({ deal: withoutMoney(dealSummary(row), seesMoney(headers)) });
     },
   },
@@ -7309,6 +7345,7 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = contracts.find((contract) => contract.id === params.contract_id);
       if (!row) return refuse(404, "not_found");
+      const before = { ...row };
       let changed = false;
       if ("plan_name" in body) {
         row.plan_name = String(body.plan_name ?? "");
@@ -7365,7 +7402,10 @@ routes.push(
         }
       }
       if (!changed) return refuse(400, "malformed_request", { reason: "nothing to change" });
-      audit("contract.updated", caller(headers)?.member.id ?? null, "contract", row.id);
+      audit("contract.updated", caller(headers)?.member.id ?? null, "contract", row.id, "", {
+        fields: Object.keys(changesBetween(before, row)).sort(),
+        changes: changesBetween(before, row),
+      });
       return ok({ contract: contractView(row) });
     },
   },

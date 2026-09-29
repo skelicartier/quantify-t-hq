@@ -84,6 +84,11 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: ".record-layout",
   },
   { name: "revenue-renewals", path: "/revenue/renewals", ready: ".data-table" },
+  {
+    name: "company-history",
+    path: "/companies/c0000000-0000-4000-8000-000000000002?tab=history",
+    ready: ".record-layout",
+  },
   { name: "revenue-mrr", path: "/revenue/mrr", ready: ".bridge__svg" },
   { name: "reports", path: "/reports", ready: ".report-grid" },
   { name: "team", path: "/team", ready: ".data-table" },

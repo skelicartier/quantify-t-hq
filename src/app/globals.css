@@ -6748,6 +6748,47 @@
     color: var(--muted);
   }
 
+  /* --- Field history: what each update changed ------------------------------------------ */
+  .history-changes {
+    display: grid;
+    gap: 4px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12.5px;
+  }
+
+  .history-changes li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .history-changes__field {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .history-changes__from {
+    color: var(--muted);
+    text-decoration: line-through;
+    text-decoration-color: var(--line-strong);
+    overflow-wrap: anywhere;
+  }
+
+  .history-changes__arrow {
+    color: var(--quiet);
+  }
+
+  .history-changes__to {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
   /* --- The price list ----------------------------------------------------------------- */
   .plan-rows {
     display: flex;

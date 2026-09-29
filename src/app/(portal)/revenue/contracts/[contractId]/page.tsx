@@ -14,17 +14,21 @@ import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/data-table";
 import { InlineField } from "@/components/ui/inline-field";
+import { RecordHistory } from "@/components/crm/record-history";
 import {
   Properties,
   Property,
   RecordGrid,
   RecordHeader,
   RecordSection,
+  RecordTabs,
+  currentTab,
 } from "@/components/ui/record-shell";
 import { StatusPill } from "@/components/ui/status-pill";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, type Plan } from "@/lib/api/crm";
+import { directoryOrNull } from "@/lib/api/staff";
 import { readContract, type ContractDetail } from "@/lib/api/revenue";
 import { isoDay } from "@/lib/crm/dates";
 import {
@@ -37,6 +41,7 @@ import {
 } from "@/lib/crm/vocabulary";
 import { formatDate, formatMoney, formatMonthShort, formatMrr } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
+import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Contract" };
 export const dynamic = "force-dynamic";
@@ -69,10 +74,19 @@ function valueHistory(movements: ContractDetail["movements"], today: string): Tr
     });
 }
 
-type ContractPageProps = { params: Promise<{ contractId: string }> };
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "history", label: "History" },
+] as const;
 
-export default async function ContractPage({ params }: ContractPageProps) {
+type ContractPageProps = {
+  params: Promise<{ contractId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function ContractPage({ params, searchParams }: ContractPageProps) {
   const { contractId } = await params;
+  const tab = currentTab(firstSearchValue((await searchParams).tab), TABS);
   const context = await requireStaff(`/revenue/contracts/${contractId}`);
   if (!hasCapability(context, "revenue:read")) {
     return (
@@ -94,6 +108,7 @@ export default async function ContractPage({ params }: ContractPageProps) {
   }
   const { contract, movements } = detail;
   const canWrite = hasCapability(context, "revenue:write");
+  const names = await directoryOrNull(context.token);
   let plans: Plan[] = [];
   try {
     plans = (await readCrmSettings(context.token)).plans;
@@ -149,6 +164,12 @@ export default async function ContractPage({ params }: ContractPageProps) {
           Revenue continues until then; the churn is dated that day.
         </Callout>
       )}
+      <RecordTabs
+        base={`/revenue/contracts/${contract.contract_id}`}
+        tabs={TABS}
+        current={tab}
+        label="Contract sections"
+      />
       <RecordGrid
         side={
           <>
@@ -359,7 +380,19 @@ export default async function ContractPage({ params }: ContractPageProps) {
           </>
         }
       >
-        {history.length >= 2 && (
+        {tab === "history" && (
+          <RecordSection id="contract-changes" title="History">
+            <RecordHistory
+              token={context.token}
+              entityType="contract"
+              entityId={contract.contract_id}
+              names={names}
+              canRead={hasCapability(context, "audit:read")}
+              now={now}
+            />
+          </RecordSection>
+        )}
+        {tab === "overview" && history.length >= 2 && (
           <RecordSection id="contract-history" title="Monthly value over time">
             <TrendChart
               ariaLabel={`This contract's monthly value after each of ${history.length} movements, now ${formatMrr(contract.mrr_amount, contract.currency)}.`}
@@ -368,26 +401,30 @@ export default async function ContractPage({ params }: ContractPageProps) {
             />
           </RecordSection>
         )}
-        <RecordSection id="contract-movements" title="Revenue movements">
-          <DataTable caption="Revenue movements" columns={MOVEMENT_COLUMNS} scroll={false}>
-            {movements.map((movement, index) => (
-              <tr key={`${movement.effective_on}-${movement.kind}-${index}`}>
-                <td>
-                  {formatDate(movement.effective_on)}
-                  {movement.effective_on && movement.effective_on > today && (
-                    <span className="table-sub">Scheduled</span>
-                  )}
-                </td>
-                <td>{MOVEMENT_KIND_LABELS[movement.kind] ?? movement.kind}</td>
-                <td className={`data-table__num ${movement.amount < 0 ? "num--down" : "num--up"}`}>
-                  {movement.amount > 0 ? "+" : ""}
-                  {formatMoney(movement.amount, movement.currency)}
-                </td>
-                <td>{movement.note || <span className="table-sub">—</span>}</td>
-              </tr>
-            ))}
-          </DataTable>
-        </RecordSection>
+        {tab === "overview" && (
+          <RecordSection id="contract-movements" title="Revenue movements">
+            <DataTable caption="Revenue movements" columns={MOVEMENT_COLUMNS} scroll={false}>
+              {movements.map((movement, index) => (
+                <tr key={`${movement.effective_on}-${movement.kind}-${index}`}>
+                  <td>
+                    {formatDate(movement.effective_on)}
+                    {movement.effective_on && movement.effective_on > today && (
+                      <span className="table-sub">Scheduled</span>
+                    )}
+                  </td>
+                  <td>{MOVEMENT_KIND_LABELS[movement.kind] ?? movement.kind}</td>
+                  <td
+                    className={`data-table__num ${movement.amount < 0 ? "num--down" : "num--up"}`}
+                  >
+                    {movement.amount > 0 ? "+" : ""}
+                    {formatMoney(movement.amount, movement.currency)}
+                  </td>
+                  <td>{movement.note || <span className="table-sub">—</span>}</td>
+                </tr>
+              ))}
+            </DataTable>
+          </RecordSection>
+        )}
       </RecordGrid>
     </>
   );

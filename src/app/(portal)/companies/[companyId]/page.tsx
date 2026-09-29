@@ -10,6 +10,7 @@ import { updateCompanyAction } from "@/app/(portal)/companies/actions";
 import { createDealAction } from "@/app/(portal)/deals/actions";
 import { createPersonAction } from "@/app/(portal)/people/actions";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
+import { RecordHistory } from "@/components/crm/record-history";
 import { DealCreateForm } from "@/components/crm/deal-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { PersonCreateForm } from "@/components/crm/person-forms";
@@ -70,6 +71,7 @@ const TABS = [
   { key: "activity", label: "Activity" },
   { key: "deals", label: "Deals" },
   { key: "people", label: "People" },
+  { key: "history", label: "History" },
 ];
 
 type CompanyPageProps = {
@@ -303,6 +305,7 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
           { ...TABS[1]!, count: activities.length },
           { ...TABS[2]!, count: deals.length },
           { ...TABS[3]!, count: people.length },
+          TABS[4]!,
         ]}
         current={tab}
         label="Company sections"
@@ -462,6 +465,18 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
         {tab === "people" && (
           <RecordSection id="company-people" title="People">
             {peopleTable}
+          </RecordSection>
+        )}
+        {tab === "history" && (
+          <RecordSection id="company-history" title="History">
+            <RecordHistory
+              token={context.token}
+              entityType="company"
+              entityId={company.company_id}
+              names={names}
+              canRead={hasCapability(context, "audit:read")}
+              now={now}
+            />
           </RecordSection>
         )}
       </RecordGrid>

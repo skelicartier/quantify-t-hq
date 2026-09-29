@@ -13,6 +13,7 @@ import {
   updateNextStepAction,
 } from "@/app/(portal)/deals/actions";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
+import { RecordHistory } from "@/components/crm/record-history";
 import { DealCloseForm, DealStageForm, NextStepForm } from "@/components/crm/deal-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
@@ -50,6 +51,7 @@ export const dynamic = "force-dynamic";
 const TABS = [
   { key: "activity", label: "Activity" },
   { key: "history", label: "Stage history" },
+  { key: "changes", label: "Changes" },
   { key: "tasks", label: "Tasks" },
 ];
 
@@ -266,7 +268,8 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
         tabs={[
           { ...TABS[0]!, count: activities.length },
           { ...TABS[1]!, count: history.length },
-          { ...TABS[2]!, count: openTasks.length },
+          TABS[2]!,
+          { ...TABS[3]!, count: openTasks.length },
         ]}
         current={tab}
         label="Deal sections"
@@ -409,6 +412,18 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
                 </li>
               ))}
             </ol>
+          </RecordSection>
+        )}
+        {tab === "changes" && (
+          <RecordSection id="deal-changes" title="Changes">
+            <RecordHistory
+              token={context.token}
+              entityType="deal"
+              entityId={deal.deal_id}
+              names={names}
+              canRead={hasCapability(context, "audit:read")}
+              now={now}
+            />
           </RecordSection>
         )}
         {tab === "tasks" && tasks}

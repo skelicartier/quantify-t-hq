@@ -8,6 +8,7 @@ import {
 } from "@/app/(portal)/_actions/work";
 import { updatePersonAction } from "@/app/(portal)/people/actions";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
+import { RecordHistory } from "@/components/crm/record-history";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { LifecyclePill } from "@/components/crm/pills";
 import { TaskList } from "@/components/crm/task-list";
@@ -47,6 +48,7 @@ const ROLE_LABELS: Record<string, string> = {
 const TABS = [
   { key: "activity", label: "Activity" },
   { key: "tasks", label: "Tasks" },
+  { key: "history", label: "History" },
 ];
 
 type PersonPageProps = {
@@ -168,6 +170,7 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
         tabs={[
           { ...TABS[0]!, count: activities.length },
           { ...TABS[1]!, count: openTasks.length },
+          TABS[2]!,
         ]}
         current={tab}
         label="Person sections"
@@ -266,6 +269,18 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
           </RecordSection>
         )}
         {tab === "tasks" && tasks}
+        {tab === "history" && (
+          <RecordSection id="person-history" title="History">
+            <RecordHistory
+              token={context.token}
+              entityType="person"
+              entityId={person.person_id}
+              names={names}
+              canRead={hasCapability(context, "audit:read")}
+              now={now}
+            />
+          </RecordSection>
+        )}
       </RecordGrid>
     </>
   );

@@ -91,35 +91,33 @@ rail identity menu lists them.
 
 ### 2026-09-30 — the research-led waves (`docs/RESEARCH-2026-09-30.md`)
 
-| Wave           | What                                                                                                                                                                                                                                                                                                         | Where                                                                                                                       | Commits                                    |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| Lists          | sortable headers, `x` / shift-click selection with a bulk bar (owner, lifecycle), removable filter chips, per-device saved views; Won/Lost views open as a table                                                                                                                                             | companies, leads, deals                                                                                                     | HQ `b39dfbf`, `4586571`                    |
-| Analytics 2    | quarterly logo cohorts, expansion / contraction / churn / reactivation rates, net churn, GRR beside NRR, MRR lost by reason, per-customer trend                                                                                                                                                              | `/revenue/mrr`                                                                                                              | HQ `391d4ee`                               |
-| Desk & details | desk keys `r n a s p t z`, `{{first_name                                                                                                                                                                                                                                                                     | there}}`reply variables, favourites (star → rail), stakeholder coverage + single-threaded warning,`close_overdue` deal flag | desk, records, rail                        | HQ `e4aae34`; service `0ab9fc7` |
-| Price list     | `hq_plans` (migration 0017), `plan_key` on deals/contracts, `hq/settings/plans/update`, deals and contracts priced from seats × rate held to the plan's minimum; settings section; keyed inputs; record-head popovers open right                                                                             | settings, deal/contract forms and records                                                                                   | HQ `09b6a04`; service `caeefd2`, `59db2c8` |
-| Renewal ledger | migration 0018 (status / confidence / renews-at / note / recorded by), `hq/contracts/{id}/renewal`, `hq/revenue/renewals` (window, six-month due vs forecast roll-up, dates passed), Home renewals section; `/revenue/renewals` page with bulk expectation; contract Renewal properties; Home "Renewal" rows | revenue, home                                                                                                               | service `58e403e`; HQ: **see Checkpoint**  |
+| Wave           | What                                                                                                                                                                                                                                                                                                         | Where                                                                                                                       | Commits                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Lists          | sortable headers, `x` / shift-click selection with a bulk bar (owner, lifecycle), removable filter chips, per-device saved views; Won/Lost views open as a table                                                                                                                                             | companies, leads, deals                                                                                                     | HQ `b39dfbf`, `4586571`                               |
+| Analytics 2    | quarterly logo cohorts, expansion / contraction / churn / reactivation rates, net churn, GRR beside NRR, MRR lost by reason, per-customer trend                                                                                                                                                              | `/revenue/mrr`                                                                                                              | HQ `391d4ee`                                          |
+| Desk & details | desk keys `r n a s p t z`, `{{first_name                                                                                                                                                                                                                                                                     | there}}`reply variables, favourites (star → rail), stakeholder coverage + single-threaded warning,`close_overdue` deal flag | desk, records, rail                                   | HQ `e4aae34`; service `0ab9fc7` |
+| Price list     | `hq_plans` (migration 0017), `plan_key` on deals/contracts, `hq/settings/plans/update`, deals and contracts priced from seats × rate held to the plan's minimum; settings section; keyed inputs; record-head popovers open right                                                                             | settings, deal/contract forms and records                                                                                   | HQ `09b6a04`; service `caeefd2`, `59db2c8`            |
+| Renewal ledger | migration 0018 (status / confidence / renews-at / note / recorded by), `hq/contracts/{id}/renewal`, `hq/revenue/renewals` (window, six-month due vs forecast roll-up, dates passed), Home renewals section; `/revenue/renewals` page with bulk expectation; contract Renewal properties; Home "Renewal" rows | revenue, home                                                                                                               | service `58e403e`; HQ `9dd7ba4`                       |
+| Field history  | every update's audit row carries `changes` (value before → after, per field); a History tab on company, person and contract records and a Changes tab on deals, read from `hq/audit` for roles with `audit:read`                                                                                             | records                                                                                                                     | service `b91e82a`; HQ: the commit that added this row |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
-1. **Field history** on records (who changed what, when): the audit log already has
-   `deal.updated` etc. with field names; add old/new values in `detail`, a `History` tab
-   on company / deal / contract / person reading `hq/audit?entity_type=…&entity_id=…`. S–M.
-2. **Support desk**: followers (internal watchers), ticket merge, auto-nudge/close of
+1. **Support desk**: followers (internal watchers), ticket merge, auto-nudge/close of
    threads waiting on the customer (timer worker), SLA at-risk / breach notification to the
    assignee (mailer), fewest-open auto-assignment on create, quality metrics (reopens,
    resolved on first reply). S each; the worker and mail need the service's timers.
-3. **Security quick wins**: HIBP k-anonymity breached-password check on set / reset;
+2. **Security quick wins**: HIBP k-anonymity breached-password check on set / reset;
    15-minute idle for owner / admin; security-event emails (password change, authenticator
    reset, recovery-code use, role change, key created); API key `expires_at` (180 days) and
    rotate-on-offboarding checklist item; SoD rules and orphan-grant detection in the access
    review; signed JSONL audit export. Then passkeys (WebAuthn) as a second factor — M.
-4. **People-ops quick wins**: manager field and reporting line; asset register with return
+3. **People-ops quick wins**: manager field and reporting line; asset register with return
    gating the offboarding clock; versioned policy acknowledgements; date reminders
    (probation end, engagement end); training records; 1:1 action items; emergency contacts.
-5. **CRM**: CSV import with mapping / dedupe / summary; duplicate detection + merge;
+4. **CRM**: CSV import with mapping / dedupe / summary; duplicate detection + merge;
    parent / child companies; stage-conversion funnel and time-in-stage report from
    `hq_deal_stage_events`; comments with @mentions; pipeline snapshots (nightly job).
-6. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
+5. **Lists**: peek pane, undo for bulk changes, display preferences kept server-side,
    grouping, a filter builder. Saved views shared with the team (server-side).
 
 Deliberately **not** built, with the research's reasons: round-robin routing, CSAT
@@ -139,17 +137,13 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of 2026-09-30 evening.**
+**As of 2026-09-30, late evening.**
 
-- HQ repo: `origin/main` HEAD is the commit that added this file; it carries the renewal
-  ledger's portal side (`/revenue/renewals`, contract Renewal properties, Home "Renewal"
-  rows, bulk expectation, mock seed) and the working tree is clean. Harness passed with
-  202 screens.
-- Product repo: HEAD `58e403e` (renewal ledger service side; migration 0018), clean apart
-  from the four pre-existing files never to stage. 158 tests pass (`test_hq_api.py` +
-  sampler). Not pushed — the product repo stays local unless asked.
-- Mock and dev server run locally (`:7071`, `:3000`) with the renewal seed loaded;
-  `~/Downloads/HQ Portal screenshots 2026-09-29` holds the latest harness captures.
-- **Next step:** §5 item 1, field history — service first (old/new values in the audit
-  `detail` of every update route; a fake-gateway test), then the mock, then a History tab
-  on company / deal / contract / person records reading `hq/audit`.
+- HQ repo: `origin/main` HEAD carries field history (History / Changes tabs, `RecordHistory`,
+  the mock's `changesBetween`, a `company-history` harness screen); working tree clean.
+  Harness passed with 206 screens; `~/Downloads/HQ Portal screenshots 2026-09-29` refreshed.
+- Product repo: HEAD `b91e82a` (field history); 159 tests pass; not pushed.
+- **Next step:** §5 item 1, the support desk — followers, ticket merge, auto-nudge/close of
+  threads waiting on the customer (timer worker), SLA at-risk / breach notification to the
+  assignee, fewest-open assignment on create, reopen and resolved-on-first-reply metrics.
+  Service first (routes + worker + tests), then the mock, then the desk UI.
