@@ -49,7 +49,11 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
   const parameters = await searchParams;
   const requested = firstSearchValue(parameters.status) ?? "open";
   const status = STATUSES.some(([value]) => value === requested) ? requested : "open";
-  const view = firstSearchValue(parameters.view) === "table" ? "table" : "board";
+  // Won and Lost are lists, not a pipeline: they open as the table unless the board is asked for.
+  const defaultView = (forStatus: string) => (forStatus === "open" ? "board" : "table");
+  const requestedView = firstSearchValue(parameters.view);
+  const view =
+    requestedView === "table" || requestedView === "board" ? requestedView : defaultView(status);
   const now = requestNow();
   const today = isoDay(now);
 
@@ -67,7 +71,7 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
     const chosenStatus = next.status ?? status;
     const chosenView = next.view ?? view;
     if (chosenStatus !== "open") parameters.set("status", chosenStatus);
-    if (chosenView !== "board") parameters.set("view", chosenView);
+    if (chosenView !== defaultView(chosenStatus)) parameters.set("view", chosenView);
     const rendered = parameters.toString();
     return rendered ? `/deals?${rendered}` : "/deals";
   };
