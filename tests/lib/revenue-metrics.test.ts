@@ -109,6 +109,14 @@ describe("growth metrics", () => {
 
 function contract(over: Partial<Contract> & { contract_id: string }): Contract {
   return {
+    renewal: {
+      status: "",
+      confidence: null,
+      forecast_mrr: null,
+      note: "",
+      updated_at: null,
+      updated_by: "",
+    },
     company_id: over.contract_id,
     company_name: over.contract_id,
     deal_id: "",

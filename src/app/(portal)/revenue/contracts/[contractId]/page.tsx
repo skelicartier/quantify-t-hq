@@ -5,6 +5,7 @@ import {
   cancelContractAction,
   changePriceAction,
   updateContractAction,
+  updateRenewalAction,
 } from "@/app/(portal)/revenue/actions";
 import { TrendChart, type TrendPoint } from "@/components/charts/trend-chart";
 import { PageHeader } from "@/components/shell/page-header";
@@ -30,7 +31,9 @@ import {
   CANCEL_REASON_LABELS,
   CONTRACT_STATE_LABELS,
   MOVEMENT_KIND_LABELS,
+  RENEWAL_STATUS_LABELS,
   contractStateTone,
+  renewalStatusTone,
 } from "@/lib/crm/vocabulary";
 import { formatDate, formatMoney, formatMonthShort, formatMrr } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -242,6 +245,92 @@ export default async function ContractPage({ params }: ContractPageProps) {
                 placeholder="Who signs renewals, what was agreed…"
               />
             </Properties>
+            {active && (
+              <Properties title="Renewal">
+                <InlineField
+                  action={updateRenewalAction}
+                  idName="contract_id"
+                  id={contract.contract_id}
+                  readOnly={!canWrite}
+                  name="status"
+                  label="Expectation"
+                  type="select"
+                  value={contract.renewal.status}
+                  options={[
+                    { value: "", label: "Undecided" },
+                    { value: "commit", label: "Commit" },
+                    { value: "likely", label: "Likely" },
+                    { value: "at_risk", label: "At risk" },
+                    { value: "lost", label: "Lost" },
+                  ]}
+                  display={
+                    <StatusPill
+                      value={contract.renewal.status || "undecided"}
+                      label={
+                        RENEWAL_STATUS_LABELS[contract.renewal.status] ?? contract.renewal.status
+                      }
+                      tone={renewalStatusTone(contract.renewal.status)}
+                    />
+                  }
+                />
+                {contract.renewal.status && (
+                  <>
+                    <InlineField
+                      action={updateRenewalAction}
+                      idName="contract_id"
+                      id={contract.contract_id}
+                      readOnly={!canWrite}
+                      name="confidence"
+                      label="Confidence"
+                      type="number"
+                      value={
+                        contract.renewal.confidence === null
+                          ? ""
+                          : String(contract.renewal.confidence)
+                      }
+                      display={
+                        contract.renewal.confidence === null
+                          ? "—"
+                          : `${contract.renewal.confidence}%`
+                      }
+                    />
+                    <InlineField
+                      action={updateRenewalAction}
+                      idName="contract_id"
+                      id={contract.contract_id}
+                      readOnly={!canWrite}
+                      name="forecast_mrr"
+                      label="Renews at"
+                      type="number"
+                      value={
+                        contract.renewal.forecast_mrr === null
+                          ? ""
+                          : String(contract.renewal.forecast_mrr)
+                      }
+                      display={
+                        contract.renewal.forecast_mrr === null
+                          ? `${formatMrr(contract.mrr_amount, contract.currency)} (today's price)`
+                          : formatMrr(contract.renewal.forecast_mrr, contract.currency)
+                      }
+                    />
+                    <InlineField
+                      action={updateRenewalAction}
+                      idName="contract_id"
+                      id={contract.contract_id}
+                      readOnly={!canWrite}
+                      name="note"
+                      label="Why"
+                      type="textarea"
+                      value={contract.renewal.note}
+                      placeholder="What the customer said, and when"
+                    />
+                    <Property label="Recorded">
+                      {contract.renewal.updated_at ? formatDate(contract.renewal.updated_at) : "—"}
+                    </Property>
+                  </>
+                )}
+              </Properties>
+            )}
             {canWrite && active && (
               <>
                 <Card

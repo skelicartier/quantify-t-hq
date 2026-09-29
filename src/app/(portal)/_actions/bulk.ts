@@ -6,6 +6,7 @@ import { hasCapability, requireStaff, type StaffContext } from "@/lib/access/cor
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { updateCompany, updateLead } from "@/lib/api/crm";
 import { updateDeal } from "@/lib/api/deals";
+import { RENEWAL_STATUSES, setRenewalForecast } from "@/lib/api/revenue";
 import { fieldValue } from "@/lib/auth/forms";
 import { LIFECYCLES } from "@/lib/crm/vocabulary";
 import type { ActionState } from "@/lib/forms/action-state";
@@ -68,6 +69,16 @@ const BULK: Record<string, BulkSpec> = {
       owner_staff_id: {
         ...owner,
         apply: (context, id, value) => updateDeal(context.token, id, { owner_staff_id: value }),
+      },
+    },
+  },
+  renewals: {
+    capability: "revenue:write",
+    path: "/revenue/renewals",
+    fields: {
+      status: {
+        valid: (value) => value === "" || (RENEWAL_STATUSES as readonly string[]).includes(value),
+        apply: (context, id, value) => setRenewalForecast(context.token, id, { status: value }),
       },
     },
   },

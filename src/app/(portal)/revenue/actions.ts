@@ -158,3 +158,36 @@ export async function updateContractAction(
   refreshRevenue(contractId);
   return { status: "sent", message: "Saved.", sentAt: Date.now() };
 }
+
+/**
+ * What we expect of a renewal: status, confidence, the value it renews at, a note.
+ * Single-field edits send only what changed; clearing the status clears the rest.
+ */
+export async function updateRenewalAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/revenue/renewals");
+  if (!hasCapability(context, "revenue:write")) return READ_ONLY;
+  const contractId = fieldValue(formData, "contract_id", 64);
+  const input: Record<string, string> = {};
+  for (const [name, limit] of [
+    ["status", 16],
+    ["confidence", 6],
+    ["forecast_mrr", 20],
+    ["note", 400],
+  ] as const) {
+    if (formData.has(name)) input[name] = fieldValue(formData, name, limit).trim();
+  }
+  if (Object.keys(input).length === 0) return { status: "error", message: "Nothing to save." };
+  try {
+    await revenueApi.setRenewalForecast(context.token, contractId, input);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refreshRevenue(contractId);
+  revalidatePath("/revenue/renewals");
+  revalidatePath("/home");
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}

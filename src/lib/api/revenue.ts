@@ -6,7 +6,22 @@ import { fetchHqJson, postHqJson } from "@/lib/api/core";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
 
+export const RENEWAL_STATUSES = ["commit", "likely", "at_risk", "lost"] as const;
+export type RenewalStatus = (typeof RENEWAL_STATUSES)[number];
+
+export const renewalSchema = z.object({
+  /** Empty when nobody has said what to expect. */
+  status: z.string(),
+  confidence: z.number().nullable(),
+  forecast_mrr: z.number().nullable(),
+  note: z.string(),
+  updated_at: z.string().nullable(),
+  updated_by: z.string(),
+});
+export type Renewal = z.infer<typeof renewalSchema>;
+
 export const contractSchema = z.object({
+  renewal: renewalSchema,
   contract_id: z.string(),
   company_id: z.string(),
   company_name: z.string(),
@@ -77,6 +92,46 @@ export type ContractDetail = z.infer<typeof contractDetailSchema>;
 
 export function readContract(token: string, contractId: string) {
   return fetchHqJson(`hq/contracts/${contractId}`, contractDetailSchema, { token });
+}
+
+export function setRenewalForecast(
+  token: string,
+  contractId: string,
+  input: Record<string, unknown>,
+) {
+  return postHqJson(`hq/contracts/${contractId}/renewal`, contractEnvelope, { token, body: input });
+}
+
+export const renewalRowSchema = contractSchema.extend({ weighted_mrr: z.number() });
+export type RenewalRow = z.infer<typeof renewalRowSchema>;
+
+const renewalRollupSchema = z.object({
+  due_count: z.number(),
+  due_mrr: z.number(),
+  forecast_mrr: z.number(),
+  committed_mrr: z.number(),
+  at_risk_mrr: z.number(),
+  lost_mrr: z.number(),
+  undecided_count: z.number(),
+  undecided_mrr: z.number(),
+});
+
+const renewalsSchema = okEnvelope.extend({
+  currency: z.string(),
+  window_days: z.number(),
+  today: z.string(),
+  renewals: z.array(renewalRowSchema),
+  months: z.array(renewalRollupSchema.extend({ month: z.string() })),
+  totals: renewalRollupSchema.extend({ overdue_count: z.number(), overdue_mrr: z.number() }),
+  statuses: z.array(z.string()),
+});
+export type RenewalsPage = z.infer<typeof renewalsSchema>;
+
+export function readRenewals(token: string, days = 120, currency = "USD") {
+  return fetchHqJson("hq/revenue/renewals", renewalsSchema, {
+    token,
+    query: { days: String(days), currency },
+  });
 }
 
 const contractEnvelope = okEnvelope.extend({ contract: contractSchema });

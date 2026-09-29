@@ -204,6 +204,22 @@ export const RESPONSE_LABELS: Record<string, string> = {
   needs_action: "No reply",
 };
 
+export const RENEWAL_STATUS_LABELS: Record<string, string> = {
+  "": "Undecided",
+  commit: "Commit",
+  likely: "Likely",
+  at_risk: "At risk",
+  lost: "Lost",
+};
+
+export function renewalStatusTone(status: string): PillTone {
+  if (status === "commit") return "live";
+  if (status === "likely") return "neutral";
+  if (status === "at_risk") return "attention";
+  if (status === "lost") return "danger";
+  return "attention";
+}
+
 export const CANCEL_REASON_LABELS: Record<string, string> = {
   price: "Price",
   missing_feature: "Missing a feature",

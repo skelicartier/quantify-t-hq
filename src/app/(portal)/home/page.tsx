@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 
 type OwedRow = {
   key: string;
-  kind: "Lead" | "Ticket" | "Task" | "Meeting" | "Deal";
+  kind: "Lead" | "Ticket" | "Task" | "Meeting" | "Deal" | "Renewal";
   href: string;
   title: string;
   sub: string;
@@ -116,6 +116,26 @@ export default async function HomePage() {
           />
         ),
         urgency: deal.flags.includes("no_next_step") ? 2 : 3,
+      });
+    }
+    for (const renewal of home.renewals?.renewals ?? []) {
+      const overdue = renewal.renews_in_days !== null && renewal.renews_in_days < 0;
+      owed.push({
+        key: `renewal:${renewal.contract_id}`,
+        kind: "Renewal",
+        href: `/revenue/contracts/${renewal.contract_id}`,
+        title: renewal.company_name || "Contract",
+        sub: `${formatMrr(renewal.mrr_amount, renewal.currency)} · ${renewal.plan_name || "plan"}`,
+        status: (
+          <span className={overdue ? "due due--overdue" : "due due--today"}>
+            {overdue
+              ? "Renewal date passed"
+              : renewal.renewal.status === "at_risk"
+                ? `At risk · ${renewal.renews_in_days}d`
+                : `Undecided · ${renewal.renews_in_days}d`}
+          </span>
+        ),
+        urgency: overdue ? 1 : renewal.renewal.status === "at_risk" ? 2 : 3,
       });
     }
     owed.sort((a, b) => a.urgency - b.urgency);

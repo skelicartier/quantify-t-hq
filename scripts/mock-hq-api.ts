@@ -2938,6 +2938,40 @@ routes.push(
           deals: flagged.slice(0, 5).map((view) => withoutMoney(view, money)),
         };
       }
+      if (capabilities.includes("revenue:read")) {
+        const todayIso = today();
+        const daysUntil = (day: string) =>
+          Math.round((Date.parse(day) - Date.parse(todayIso)) / 86_400_000);
+        const soon = contracts.filter(
+          (row) =>
+            contractState(row) === "active" &&
+            row.renews_on !== null &&
+            daysUntil(row.renews_on) <= 60,
+        );
+        const owed = soon
+          .filter(
+            (row) =>
+              (row.renews_on ?? "") < todayIso ||
+              !row.renewal_status ||
+              row.renewal_status === "at_risk",
+          )
+          .sort((a, b) => (a.renews_on ?? "").localeCompare(b.renews_on ?? ""));
+        payload.renewals = {
+          due_60_count: soon.length,
+          due_60_mrr: money(
+            soon
+              .filter((row) => row.currency === "USD")
+              .reduce((sum, row) => sum + row.mrr_cents, 0),
+          ),
+          undecided_count: soon.filter((row) => !row.renewal_status).length,
+          at_risk_count: soon.filter((row) => row.renewal_status === "at_risk").length,
+          overdue_count: soon.filter((row) => (row.renews_on ?? "") < todayIso).length,
+          renewals: owed.slice(0, 5).map((row) => ({
+            ...contractView(row),
+            weighted_mrr: money(renewalWeightedCents(row)),
+          })),
+        };
+      }
       return ok(payload);
     },
   },
@@ -5021,12 +5055,26 @@ routes.push(
 // sign, the bridge sums one currency in cents, the churn is dated the last day of service.
 // =====================================================================================
 
+type RenewalStatus = "" | "commit" | "likely" | "at_risk" | "lost";
+const RENEWAL_STATUSES: RenewalStatus[] = ["commit", "likely", "at_risk", "lost"];
+const RENEWAL_DEFAULT_CONFIDENCE: Record<string, number> = {
+  commit: 90,
+  likely: 70,
+  at_risk: 30,
+  lost: 0,
+};
 type ContractRow = {
   id: string;
   company_id: string;
   deal_id: string;
   plan_name: string;
   plan_key?: string;
+  renewal_status?: RenewalStatus;
+  renewal_confidence?: number | null;
+  renewal_forecast_cents?: number | null;
+  renewal_note?: string;
+  renewal_updated_at?: string | null;
+  renewal_updated_by?: string;
   seats: number;
   mrr_cents: number;
   currency: string;
@@ -5192,6 +5240,8 @@ type BookCustomer = {
   churned?: [number, string];
   /** The deal that won the contract, when the firm came through the pipeline. */
   won?: { entered: number; stages: string[] };
+  /** What we expect of the coming renewal: [status, confidence, note, forecast dollars?]. */
+  renewal?: [RenewalStatus, number, string, number?];
 };
 
 const BOOK: BookCustomer[] = [
@@ -5212,6 +5262,7 @@ const BOOK: BookCustomer[] = [
       [540, 2442, "London macro desk: 30 seats on Enterprise desk"],
       [300, 4470, "Firm-wide agreement: 60 seats"],
     ],
+    renewal: ["commit", 95, "Procurement confirmed the renewal in September; seats unchanged."],
   },
   {
     n: 2,
@@ -5226,6 +5277,7 @@ const BOOK: BookCustomer[] = [
     start: 640,
     contact: ["Dana Whitfield", "Platform Engineering Lead", "champion"],
     changes: [[420, 2235, "Second pod group: 15 more seats"]],
+    renewal: ["commit", 90, "Platform lead wants the same 45 seats; legal review in hand."],
   },
   {
     n: 3,
@@ -5281,6 +5333,7 @@ const BOOK: BookCustomer[] = [
     start: 330,
     contact: ["Fiona Macrae", "Investment Operations Director", "champion"],
     changes: [[90, 745, "Five seats for the emerging markets team"]],
+    renewal: ["likely", 70, "Waiting on the investment operations budget round."],
   },
   {
     n: 7,
@@ -5392,6 +5445,7 @@ const BOOK: BookCustomer[] = [
     mrr: 2028,
     start: 340,
     contact: ["Tom Nakamura", "Portfolio Manager", "champion"],
+    renewal: ["likely", 75, "Positive check-in; a second pod may join."],
   },
   {
     n: 15,
@@ -5405,6 +5459,7 @@ const BOOK: BookCustomer[] = [
     mrr: 1521,
     start: 300,
     contact: ["Priya Venkataraman", "Risk Manager", "user"],
+    renewal: ["likely", 70, "Renewal conversation booked for next month."],
   },
   {
     n: 16,
@@ -5418,6 +5473,7 @@ const BOOK: BookCustomer[] = [
     mrr: 1690,
     start: 290,
     contact: ["Luca Ferrari", "Head of Research", "decision_maker"],
+    renewal: ["commit", 85, "Verbal yes from the head of research.", 1859],
   },
   {
     n: 17,
@@ -5617,6 +5673,7 @@ const BOOK: BookCustomer[] = [
     start: 350,
     contact: ["William Grant", "Head of Research", "decision_maker"],
     changes: [[140, 199, "Fourth seat"]],
+    renewal: ["commit", 90, "Research head signed off; invoice to follow."],
   },
   {
     n: 32,
@@ -5630,6 +5687,7 @@ const BOOK: BookCustomer[] = [
     mrr: 597,
     start: 310,
     contact: ["Matthias Keller", "Investment Advisor", "user"],
+    renewal: ["at_risk", 35, "Champion moved teams; new sponsor not yet met."],
   },
   {
     n: 33,
@@ -5708,6 +5766,7 @@ const BOOK: BookCustomer[] = [
     mrr: 398,
     start: 360,
     contact: ["Anna Kowalski", "Senior Economist", "user"],
+    renewal: ["at_risk", 40, "Budget review this quarter; one of two users left."],
   },
   {
     n: 39,
@@ -5817,6 +5876,7 @@ const BOOK: BookCustomer[] = [
     mrr: 199,
     start: 300,
     contact: ["Sam Whitaker", "Research Analyst", "user"],
+    renewal: ["lost", 0, "Moving to an in-house tool at the end of the term."],
   },
   {
     n: 47,
@@ -6754,6 +6814,17 @@ function seedBook() {
       deal_id: dealId,
       plan_name: firm.plan,
       plan_key: PLAN_KEY_BY_NAME[firm.plan] ?? "",
+      ...(firm.renewal && !churnedOn
+        ? {
+            renewal_status: firm.renewal[0],
+            renewal_confidence: firm.renewal[1],
+            renewal_note: firm.renewal[2],
+            renewal_forecast_cents:
+              firm.renewal[3] !== undefined ? Math.round(firm.renewal[3] * 100) : null,
+            renewal_updated_at: agoIso(24 * 6),
+            renewal_updated_by: owner,
+          }
+        : {}),
       seats: firm.seats,
       mrr_cents: currentCents,
       currency: "USD",
@@ -6887,8 +6958,48 @@ function contractState(row: ContractRow): string {
   return row.ends_on && row.ends_on > today() ? "ending" : "ended";
 }
 
+function renewalView(row: ContractRow) {
+  return {
+    status: row.renewal_status ?? "",
+    confidence: row.renewal_confidence ?? null,
+    forecast_mrr: row.renewal_forecast_cents != null ? money(row.renewal_forecast_cents) : null,
+    note: row.renewal_note ?? "",
+    updated_at: row.renewal_updated_at ?? null,
+    updated_by: row.renewal_updated_by ?? "",
+  };
+}
+/** Mirrors revenue_routes.renewal_weighted_mrr: forecast (or today's price) × confidence. */
+function renewalWeightedCents(row: ContractRow): number {
+  const status = row.renewal_status ?? "";
+  if (!status || status === "lost") return 0;
+  const confidence = row.renewal_confidence ?? RENEWAL_DEFAULT_CONFIDENCE[status] ?? 0;
+  const base = row.renewal_forecast_cents ?? row.mrr_cents;
+  return Math.round((base * confidence) / 100);
+}
+function renewalRollup(month: string, rows: ContractRow[]) {
+  const total = (subset: ContractRow[]) =>
+    money(subset.reduce((sum, row) => sum + row.mrr_cents, 0));
+  const undecided = rows.filter((row) => !row.renewal_status);
+  return {
+    month,
+    due_count: rows.length,
+    due_mrr: total(rows),
+    forecast_mrr: money(rows.reduce((sum, row) => sum + renewalWeightedCents(row), 0)),
+    committed_mrr: money(
+      rows
+        .filter((row) => row.renewal_status === "commit")
+        .reduce((sum, row) => sum + (row.renewal_forecast_cents ?? row.mrr_cents), 0),
+    ),
+    at_risk_mrr: total(rows.filter((row) => row.renewal_status === "at_risk")),
+    lost_mrr: total(rows.filter((row) => row.renewal_status === "lost")),
+    undecided_count: undecided.length,
+    undecided_mrr: total(undecided),
+  };
+}
+
 function contractView(row: ContractRow) {
   return {
+    renewal: renewalView(row),
     contract_id: row.id,
     company_id: row.company_id,
     company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
@@ -7074,6 +7185,119 @@ routes.push(
           .sort((a, b) => a.effective_on.localeCompare(b.effective_on))
           .map(movementView),
         cancel_reasons: CANCEL_REASONS,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/contracts/{contract_id}/renewal",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ params, body, headers }) => {
+      const row = contracts.find((contract) => contract.id === params.contract_id);
+      if (!row) return refuse(404, "not_found");
+      if (contractState(row) !== "active")
+        return refuse(400, "malformed_request", { status: "only an active contract renews" });
+      let changed = false;
+      if ("status" in body) {
+        const status = String(body.status ?? "").trim() as RenewalStatus;
+        if (status && !RENEWAL_STATUSES.includes(status))
+          return refuse(400, "malformed_request", {
+            status: "commit, likely, at_risk, lost, or empty",
+          });
+        row.renewal_status = status;
+        if (!status) {
+          row.renewal_confidence = null;
+          row.renewal_forecast_cents = null;
+          row.renewal_note = "";
+        } else if (row.renewal_confidence == null && !("confidence" in body)) {
+          row.renewal_confidence = RENEWAL_DEFAULT_CONFIDENCE[status] ?? null;
+        }
+        changed = true;
+      }
+      if ("confidence" in body && row.renewal_status) {
+        const raw = String(body.confidence ?? "").trim();
+        if (raw) {
+          const confidence = Number(raw);
+          if (!Number.isInteger(confidence) || confidence < 0 || confidence > 100)
+            return refuse(400, "malformed_request", { confidence: "0 to 100" });
+          row.renewal_confidence = confidence;
+        } else {
+          row.renewal_confidence = null;
+        }
+        changed = true;
+      }
+      if ("forecast_mrr" in body && row.renewal_status) {
+        const raw = String(body.forecast_mrr ?? "").trim();
+        if (raw) {
+          const cents = Math.round(Number(raw) * 100);
+          if (!(cents >= 0)) return refuse(400, "malformed_request", { forecast_mrr: "a price" });
+          row.renewal_forecast_cents = cents;
+        } else {
+          row.renewal_forecast_cents = null;
+        }
+        changed = true;
+      }
+      if ("note" in body && row.renewal_status) {
+        row.renewal_note = String(body.note ?? "")
+          .trim()
+          .slice(0, 400);
+        changed = true;
+      }
+      if (!changed) return refuse(400, "malformed_request", { reason: "nothing to change" });
+      row.renewal_updated_at = now();
+      row.renewal_updated_by = caller(headers)?.member.id ?? "";
+      audit("contract.renewal_forecast", caller(headers)?.member.id ?? null, "contract", row.id);
+      return ok({ contract: contractView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/revenue/renewals",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query }) => {
+      const windowDays = Math.max(1, Math.min(Number(query.days ?? 120) || 120, 730));
+      const currency = String(query.currency ?? "USD").toUpperCase();
+      const todayIso = today();
+      const daysUntil = (day: string) =>
+        Math.round((Date.parse(day) - Date.parse(todayIso)) / 86_400_000);
+      const rows = contracts
+        .filter(
+          (row) =>
+            contractState(row) === "active" &&
+            row.currency === currency &&
+            row.renews_on !== null &&
+            daysUntil(row.renews_on) <= windowDays,
+        )
+        .sort((a, b) => (a.renews_on ?? "").localeCompare(b.renews_on ?? ""));
+      const ahead = rows.filter((row) => (row.renews_on ?? "") >= todayIso);
+      const overdue = rows.filter((row) => (row.renews_on ?? "") < todayIso);
+      const firstMonth = `${todayIso.slice(0, 7)}-01`;
+      const months = Array.from({ length: 6 }, (_, index) => {
+        const key = addMonths(firstMonth, index).slice(0, 7);
+        return renewalRollup(
+          key,
+          ahead.filter((row) => (row.renews_on ?? "").slice(0, 7) === key),
+        );
+      });
+      const rollup = renewalRollup("window", ahead);
+      const totals = Object.fromEntries(Object.entries(rollup).filter(([key]) => key !== "month"));
+      return ok({
+        currency,
+        window_days: windowDays,
+        today: todayIso,
+        renewals: rows.map((row) => ({
+          ...contractView(row),
+          weighted_mrr: money(renewalWeightedCents(row)),
+        })),
+        months,
+        totals: {
+          ...totals,
+          overdue_count: overdue.length,
+          overdue_mrr: money(overdue.reduce((sum, row) => sum + row.mrr_cents, 0)),
+        },
+        statuses: RENEWAL_STATUSES,
       });
     },
   },

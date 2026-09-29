@@ -2,6 +2,8 @@ import "server-only";
 
 import { z } from "zod";
 
+import { renewalRowSchema } from "@/lib/api/revenue";
+
 import { fetchHqJson } from "@/lib/api/core";
 import { moneyByCurrencySchema } from "@/lib/api/crm";
 import { dealSummarySchema, leadSchema, taskSchema } from "@/lib/api/crm";
@@ -60,6 +62,16 @@ const homeSchema = z.object({
       rotting: z.number(),
       no_next_step: z.number(),
       deals: z.array(dealSummarySchema.extend({ company_name: z.string() })),
+    })
+    .optional(),
+  renewals: z
+    .object({
+      due_60_count: z.number(),
+      due_60_mrr: z.number(),
+      undecided_count: z.number(),
+      at_risk_count: z.number(),
+      overdue_count: z.number(),
+      renewals: z.array(renewalRowSchema),
     })
     .optional(),
 });
