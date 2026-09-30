@@ -14,6 +14,9 @@ describe("default-deny route policy", () => {
       "/u/dTEBfb56jBDzRbafTujEGst",
       "/u/dTEBfb56jBDzRbafTujEGst/one-click",
       "/report/eyJhbGciOiJIUzI1NiJ9.e30.sig",
+      "/status",
+      "/status/confirm/czE3sK2x",
+      "/status/stop/czE3sK2x",
     ]) {
       expect(isPublicPath(path)).toBe(true);
     }
@@ -32,6 +35,9 @@ describe("default-deny route policy", () => {
       "/report",
       "/mail",
       "/mail/campaigns",
+      "/service-status",
+      "/service-status/incidents/abc",
+      "/statusx",
     ]) {
       expect(isPublicPath(path)).toBe(false);
     }

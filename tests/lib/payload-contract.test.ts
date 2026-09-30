@@ -95,6 +95,7 @@ import * as inspectionApi from "@/lib/api/inspection";
 import * as privacyApi from "@/lib/api/privacy";
 import * as receivablesApi from "@/lib/api/receivables";
 import * as successApi from "@/lib/api/success";
+import * as statusApi from "@/lib/api/status";
 import * as security from "@/lib/api/security";
 import * as settings from "@/lib/api/settings";
 import * as staff from "@/lib/api/staff";
@@ -172,6 +173,11 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
     () => successApi.readFeatureRequest(token, ids.feature_request_id!),
   ],
   ["hq/onboardings", () => successApi.readOnboardings(token)],
+  ["hq/status", () => statusApi.readStatusBoard(token)],
+  [
+    "hq/status/incidents/{incident_id}",
+    () => statusApi.readStatusIncident(token, ids.status_incident_id!),
+  ],
   [
     "hq/subprocessors/{subprocessor_id}",
     () => privacyApi.readSubprocessor(token, ids.subprocessor_id!),
@@ -254,6 +260,12 @@ describe("every portal read parses the service's own payload", () => {
     it("public/mail/unsubscribe/{token}", async () => {
       shared.role = "anonymous";
       await expect(mail.readUnsubscribe(ids.unsubscribe_token!)).resolves.toBeTruthy();
+    });
+    it("public/status", async () => {
+      shared.role = "anonymous";
+      const page = await statusApi.readPublicStatus();
+      // The public page never says who posted an update.
+      expect(JSON.stringify(page)).not.toContain("posted_by");
     });
   });
 

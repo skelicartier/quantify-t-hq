@@ -24649,6 +24649,929 @@ routes.push(
   },
 );
 
+// --- status page (mirrors status.py and status_routes.py) --------------------------------------
+type StatusComponentRow = {
+  id: string;
+  name: string;
+  description: string;
+  position: number;
+  archived_at: string | null;
+  created_at: string;
+};
+type StatusIncidentRow = {
+  id: string;
+  title: string;
+  status: string;
+  started_at: string;
+  resolved_at: string | null;
+  created_by: string;
+  created_at: string;
+};
+type StatusImpactRow = { incident_id: string; component_id: string; impact: string };
+type StatusUpdateRow = {
+  id: string;
+  incident_id: string | null;
+  maintenance_id: string | null;
+  status: string;
+  body: string;
+  posted_by: string;
+  posted_at: string;
+  mailed: number;
+};
+type StatusMaintenanceRow = {
+  id: string;
+  title: string;
+  body: string;
+  starts_at: string;
+  ends_at: string;
+  component_ids: string;
+  cancelled_at: string | null;
+  created_by: string;
+  created_at: string;
+};
+type StatusSubscriberRow = {
+  id: string;
+  email_norm: string;
+  confirmed_at: string | null;
+  stopped_at: string | null;
+  confirm_sent_at: string | null;
+  created_at: string;
+};
+
+const ST_STATES: Record<string, string> = {
+  operational: "Operational",
+  maintenance: "Under maintenance",
+  degraded: "Degraded performance",
+  partial: "Partial outage",
+  major: "Major outage",
+};
+const ST_RANK: Record<string, number> = {
+  operational: 0,
+  maintenance: 1,
+  degraded: 2,
+  partial: 3,
+  major: 4,
+};
+const ST_IMPACTS = ["degraded", "partial", "major"];
+const ST_INCIDENT_STATUSES: Record<string, string> = {
+  investigating: "Investigating",
+  identified: "Identified",
+  monitoring: "Monitoring",
+  resolved: "Resolved",
+};
+const ST_INCIDENT_IMPACT: Record<string, string> = {
+  degraded: "minor",
+  partial: "major",
+  major: "critical",
+};
+const ST_OVERALL: Record<string, string> = {
+  operational: "All systems operational",
+  maintenance: "Maintenance in progress",
+  degraded: "Some systems degraded",
+  partial: "Partial outage",
+  major: "Major outage",
+};
+const ST_BAR_DAYS = 90;
+const ST_CONFIRM_GAP_MS = 60 * 60_000;
+
+const statusComponents: StatusComponentRow[] = [];
+const statusIncidents: StatusIncidentRow[] = [];
+const statusImpacts: StatusImpactRow[] = [];
+const statusUpdates: StatusUpdateRow[] = [];
+const statusMaintenance: StatusMaintenanceRow[] = [];
+const statusSubscribers: StatusSubscriberRow[] = [];
+
+/** The mock's stand-in for the service's HMAC tokens: purpose and id, base64url. The harness mints them the same way. */
+function stReadToken(token: string, purpose: string): string | null {
+  const text = Buffer.from(String(token ?? ""), "base64url").toString("utf8");
+  return text.startsWith(`${purpose}:`) ? text.slice(purpose.length + 1) : null;
+}
+
+function stWorst(states: Iterable<string>): string {
+  let found = "operational";
+  for (const state of states) if ((ST_RANK[state] ?? 0) > ST_RANK[found]!) found = state;
+  return found;
+}
+function stMaintenanceState(row: StatusMaintenanceRow, at = Date.now()): string {
+  if (row.cancelled_at) return "cancelled";
+  if (at < Date.parse(row.starts_at)) return "scheduled";
+  if (at < Date.parse(row.ends_at)) return "in_progress";
+  return "completed";
+}
+function stComponentIds(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+function stLiveComponents(): StatusComponentRow[] {
+  return statusComponents
+    .filter((row) => !row.archived_at)
+    .sort(
+      (a, b) => a.position - b.position || a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+    );
+}
+function stComponentStates(): Record<string, string> {
+  const open = new Set(
+    statusIncidents.filter((row) => row.status !== "resolved").map((row) => row.id),
+  );
+  const states: Record<string, string[]> = Object.fromEntries(
+    stLiveComponents().map((row) => [row.id, []]),
+  );
+  for (const item of statusImpacts)
+    if (open.has(item.incident_id) && states[item.component_id])
+      states[item.component_id]!.push(item.impact);
+  for (const window of statusMaintenance)
+    if (stMaintenanceState(window) === "in_progress")
+      for (const key of stComponentIds(window.component_ids)) states[key]?.push("maintenance");
+  return Object.fromEntries(Object.entries(states).map(([key, values]) => [key, stWorst(values)]));
+}
+function stIncidentImpact(impacts: StatusImpactRow[]): string {
+  return ST_INCIDENT_IMPACT[stWorst(impacts.map((item) => item.impact))] ?? "none";
+}
+function stDayBars(componentId: string, days = ST_BAR_DAYS) {
+  const todayDay = todayIso();
+  const spans = statusIncidents.flatMap((row) => {
+    const impact = statusImpacts.find(
+      (item) => item.incident_id === row.id && item.component_id === componentId,
+    )?.impact;
+    return impact
+      ? [
+          {
+            first: row.started_at.slice(0, 10),
+            last: row.resolved_at?.slice(0, 10) ?? todayDay,
+            impact,
+          },
+        ]
+      : [];
+  });
+  const bars: Array<{ day: string; state: string; incidents: number }> = [];
+  for (let back = days - 1; back >= 0; back -= 1) {
+    const day = addDaysIso(todayDay, -back);
+    const touching = spans
+      .filter((span) => span.first <= day && day <= span.last)
+      .map((span) => span.impact);
+    bars.push({ day, state: stWorst(touching), incidents: touching.length });
+  }
+  return bars;
+}
+function stUpdateView(row: StatusUpdateRow, names: boolean) {
+  return {
+    id: row.id,
+    status: row.status,
+    status_label:
+      ST_INCIDENT_STATUSES[row.status] ??
+      `${row.status.charAt(0).toUpperCase()}${row.status.slice(1).replaceAll("_", " ")}`,
+    body: row.body,
+    posted_at: row.posted_at,
+    ...(names ? { posted_by: nameOf(row.posted_by), mailed: row.mailed } : {}),
+  };
+}
+function stIncidentView(row: StatusIncidentRow, updates: StatusUpdateRow[], names: boolean) {
+  const mine = statusImpacts.filter((item) => item.incident_id === row.id);
+  return {
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    status_label: ST_INCIDENT_STATUSES[row.status] ?? "",
+    impact: stIncidentImpact(mine),
+    started_at: row.started_at,
+    resolved_at: row.resolved_at,
+    components: mine.map((item) => ({
+      id: item.component_id,
+      name: statusComponents.find((component) => component.id === item.component_id)?.name ?? "",
+      impact: item.impact,
+      impact_label: ST_STATES[item.impact] ?? "",
+    })),
+    updates: [...updates]
+      .sort((a, b) => b.posted_at.localeCompare(a.posted_at))
+      .map((update) => stUpdateView(update, names)),
+  };
+}
+function stMaintenanceView(row: StatusMaintenanceRow) {
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    starts_at: row.starts_at,
+    ends_at: row.ends_at,
+    state: stMaintenanceState(row),
+    components: stComponentIds(row.component_ids).map((key) => ({
+      id: key,
+      name: statusComponents.find((component) => component.id === key)?.name ?? "",
+    })),
+  };
+}
+function stPage(names: boolean) {
+  const states = stComponentStates();
+  const overall = stWorst(Object.values(states));
+  const updatesOf = (id: string) => statusUpdates.filter((row) => row.incident_id === id);
+  const cutoff = Date.now() - 7 * 86_400_000;
+  const byStart = (a: StatusIncidentRow, b: StatusIncidentRow) =>
+    b.started_at.localeCompare(a.started_at);
+  return {
+    overall,
+    overall_label: ST_OVERALL[overall]!,
+    components: stLiveComponents().map((row) => ({
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      position: row.position,
+      state: states[row.id] ?? "operational",
+      state_label: ST_STATES[states[row.id] ?? "operational"]!,
+      bars: stDayBars(row.id),
+    })),
+    open_incidents: statusIncidents
+      .filter((row) => row.status !== "resolved")
+      .sort(byStart)
+      .map((row) => stIncidentView(row, updatesOf(row.id), names)),
+    recent_incidents: statusIncidents
+      .filter((row) => row.status === "resolved" && Date.parse(row.resolved_at ?? now()) >= cutoff)
+      .sort(byStart)
+      .map((row) => stIncidentView(row, updatesOf(row.id), names)),
+    maintenance: [...statusMaintenance]
+      .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+      .filter((row) => ["scheduled", "in_progress"].includes(stMaintenanceState(row)))
+      .map(stMaintenanceView),
+    bars_note: `Each bar is a day; its colour is the worst incident we reported that day. These are reported incidents over ${ST_BAR_DAYS} days, not measured uptime.`,
+  };
+}
+function stConfirmedSubscribers(): number {
+  return statusSubscribers.filter((row) => row.confirmed_at && !row.stopped_at).length;
+}
+/** Mirrors _post_update: the mock mails nobody, but counts whom the service would have. */
+function stPostUpdate(input: {
+  incident_id: string | null;
+  maintenance_id: string | null;
+  status: string;
+  body: string;
+  notify: boolean;
+  staffId: string;
+}): StatusUpdateRow {
+  const row: StatusUpdateRow = {
+    id: randomUUID(),
+    incident_id: input.incident_id,
+    maintenance_id: input.maintenance_id,
+    status: input.status,
+    body: input.body,
+    posted_by: input.staffId,
+    posted_at: now(),
+    mailed: input.notify && MOCK_MAIL_READY ? Math.min(stConfirmedSubscribers(), 500) : 0,
+  };
+  statusUpdates.push(row);
+  return row;
+}
+function stImpactsFrom(
+  body: Record<string, unknown>,
+): Array<{ component_id: string; impact: string }> | string {
+  const known = new Set(stLiveComponents().map((row) => row.id));
+  const found = new Map<string, string>();
+  for (const item of Array.isArray(body.components) ? body.components : []) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    const componentId = String(entry.component_id ?? "")
+      .trim()
+      .toLowerCase();
+    const impact = String(entry.impact ?? "");
+    if (!known.has(componentId)) return "a component on the page";
+    if (!ST_IMPACTS.includes(impact)) return "impact is degraded, partial or major";
+    found.set(componentId, impact);
+  }
+  return [...found].map(([component_id, impact]) => ({ component_id, impact }));
+}
+/** Mirrors strftime('%-d %b %Y, %H:%M'). */
+function stWhen(value: string): string {
+  const iso = new Date(value).toISOString();
+  return `${pvDay(iso)}, ${iso.slice(11, 16)}`;
+}
+
+function seedStatus() {
+  statusComponents.length = 0;
+  statusIncidents.length = 0;
+  statusImpacts.length = 0;
+  statusUpdates.length = 0;
+  statusMaintenance.length = 0;
+  statusSubscribers.length = 0;
+  const component = (n: number) => `5c000000-0000-4000-8000-00000000000${n}`;
+  const parts: Array<[string, string]> = [
+    ["Desktop sign-in", "Signing in to the desktop app and the account console"],
+    ["Charts and market data", "Quotes, bars and the chart panels"],
+    ["Filings and research", "Company filings, the research tabs and their sources"],
+    ["Overnight brief", "The morning brief and its email"],
+    ["Account console", "Billing, seats and settings on the web"],
+  ];
+  parts.forEach(([name, description], index) =>
+    statusComponents.push({
+      id: component(index + 1),
+      name,
+      description,
+      position: index,
+      archived_at: null,
+      created_at: hoursAgo(24 * 120),
+    }),
+  );
+  const desk = "aa000000-0000-4000-8000-00000000000d";
+  const owner = "aa000000-0000-4000-8000-00000000000a";
+  const incident = (
+    n: number,
+    title: string,
+    startedHoursAgo: number,
+    lastedHours: number | null,
+    impacts: Array<[number, string]>,
+    updates: Array<[string, string, number]>,
+  ) => {
+    const id = `5d000000-0000-4000-8000-00000000000${n}`;
+    statusIncidents.push({
+      id,
+      title,
+      status: lastedHours === null ? updates[updates.length - 1]![0] : "resolved",
+      started_at: hoursAgo(startedHoursAgo),
+      resolved_at: lastedHours === null ? null : hoursAgo(startedHoursAgo - lastedHours),
+      created_by: desk,
+      created_at: hoursAgo(startedHoursAgo),
+    });
+    for (const [part, impact] of impacts)
+      statusImpacts.push({ incident_id: id, component_id: component(part), impact });
+    updates.forEach(([status, body, atHoursAgo], index) =>
+      statusUpdates.push({
+        id: `5f00000${n}-0000-4000-8000-00000000000${index + 1}`,
+        incident_id: id,
+        maintenance_id: null,
+        status,
+        body,
+        posted_by: index === 0 ? desk : owner,
+        posted_at: hoursAgo(atHoursAgo),
+        mailed: 38,
+      }),
+    );
+  };
+  incident(
+    1,
+    "Charts blank after the machine wakes from sleep",
+    8,
+    null,
+    [[2, "degraded"]],
+    [
+      [
+        "investigating",
+        "Some chart panels stay blank after a Mac wakes from sleep until the app is restarted. We are looking into it.",
+        8,
+      ],
+      [
+        "identified",
+        "Found: the chart feed does not reconnect after sleep on 1.4.2. A fix is being tested; restarting the app clears it meanwhile.",
+        3,
+      ],
+    ],
+  );
+  incident(
+    2,
+    "Morning brief sent two hours late",
+    52,
+    25,
+    [[4, "degraded"]],
+    [
+      ["investigating", "This morning's brief has not gone out. We are looking into it.", 52],
+      ["monitoring", "The brief has been sent. We are watching tomorrow's run.", 50],
+      ["resolved", "Today's brief went out on time. Resolved.", 27],
+    ],
+  );
+  incident(
+    3,
+    "Some sign-ins failing",
+    24 * 19,
+    2,
+    [
+      [1, "partial"],
+      [5, "degraded"],
+    ],
+    [
+      [
+        "investigating",
+        "Some desktop sign-ins fail with an error. We are looking into it.",
+        24 * 19,
+      ],
+      [
+        "resolved",
+        "Sign-ins work again. A certificate renewal had not reached one server.",
+        24 * 19 - 2,
+      ],
+    ],
+  );
+  incident(
+    4,
+    "Filings for European issuers delayed",
+    24 * 44,
+    30,
+    [[3, "degraded"]],
+    [
+      [
+        "identified",
+        "New filings from European issuers are arriving hours late: a source changed its format.",
+        24 * 44,
+      ],
+      [
+        "resolved",
+        "Caught up. Every delayed filing is in, stamped with when it was filed.",
+        24 * 44 - 30,
+      ],
+    ],
+  );
+  incident(
+    5,
+    "Desktop app will not open",
+    24 * 71,
+    1,
+    [
+      [1, "major"],
+      [2, "major"],
+    ],
+    [
+      [
+        "investigating",
+        "The desktop app fails to open for everyone on 1.3.9. We are on it.",
+        24 * 71,
+      ],
+      ["resolved", "1.3.10 is out and opens normally. Update from the app menu.", 24 * 71 - 1],
+    ],
+  );
+  const starts = new Date(Date.now() + 4 * 86_400_000);
+  starts.setUTCHours(6, 0, 0, 0);
+  statusMaintenance.push({
+    id: "5b000000-0000-4000-8000-000000000001",
+    title: "Database upgrade",
+    body: "Sign-in and the console may be unavailable for up to twenty minutes inside the window.",
+    starts_at: starts.toISOString().replace(/\.\d{3}Z$/, "Z"),
+    ends_at: new Date(starts.getTime() + 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    component_ids: `${component(1)},${component(5)}`,
+    cancelled_at: null,
+    created_by: owner,
+    created_at: hoursAgo(20),
+  });
+  statusUpdates.push({
+    id: "5f000000-0000-4000-8000-0000000000aa",
+    incident_id: null,
+    maintenance_id: "5b000000-0000-4000-8000-000000000001",
+    status: "scheduled",
+    body: "Database upgrade.",
+    posted_by: owner,
+    posted_at: hoursAgo(20),
+    mailed: 38,
+  });
+  const firms = [
+    "halcyon",
+    "meridian",
+    "bluecrest",
+    "northwind",
+    "kestrel",
+    "alder",
+    "tamarind",
+    "juniper",
+  ];
+  for (let index = 0; index < 43; index += 1) {
+    const waiting = index >= 38 && index < 41;
+    const stopped = index >= 41;
+    statusSubscribers.push({
+      id: `5e000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      email_norm: `ops${index + 1}@${firms[index % firms.length]}.test`,
+      confirmed_at: waiting ? null : hoursAgo(24 * (60 - index)),
+      stopped_at: stopped ? hoursAgo(24 * 3) : null,
+      confirm_sent_at: waiting ? hoursAgo(30) : hoursAgo(24 * (60 - index)),
+      created_at: hoursAgo(24 * (60 - index)),
+    });
+  }
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/status",
+    auth: true,
+    capability: "tickets:read",
+    handler: () => {
+      const history = [...statusIncidents]
+        .sort((a, b) => b.started_at.localeCompare(a.started_at))
+        .slice(0, 30)
+        .map((row) => stIncidentView(row, [], false));
+      return ok({
+        ...stPage(true),
+        history,
+        subscribers: {
+          confirmed: stConfirmedSubscribers(),
+          waiting: statusSubscribers.filter((row) => !row.confirmed_at && !row.stopped_at).length,
+          stopped: statusSubscribers.filter((row) => row.stopped_at).length,
+        },
+        mail_ready: MOCK_MAIL_READY,
+        impacts: ST_IMPACTS.map((value) => ({ value, label: ST_STATES[value] })),
+        statuses: Object.entries(ST_INCIDENT_STATUSES).map(([value, label]) => ({ value, label })),
+        public_url: "https://hq.quantifyterminal.com/status",
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/status/components/create",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 80);
+      if (!name) return refuse(400, "malformed_request", { name: "what a customer would call it" });
+      if (
+        statusComponents.some(
+          (row) => !row.archived_at && row.name.trim().toLowerCase() === name.toLowerCase(),
+        )
+      )
+        return refuse(400, "malformed_request", { name: "already on the page" });
+      const row: StatusComponentRow = {
+        id: randomUUID(),
+        name,
+        description: String(body.description ?? "")
+          .trim()
+          .slice(0, 400),
+        position: statusComponents.length,
+        archived_at: null,
+        created_at: now(),
+      };
+      statusComponents.push(row);
+      audit("status.component_added", viewer.id, "status", row.id, "", { name });
+      return ok({ component_id: row.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/status/components/{component_id}/update",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, body, params }) => {
+      const row = statusComponents.find(
+        (item) => item.id === String(params.component_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      const fields: string[] = [];
+      if ("name" in body) {
+        const name = String(body.name ?? "")
+          .trim()
+          .slice(0, 80);
+        if (!name)
+          return refuse(400, "malformed_request", { name: "what a customer would call it" });
+        row.name = name;
+        fields.push("name");
+      }
+      if ("description" in body) {
+        row.description = String(body.description ?? "")
+          .trim()
+          .slice(0, 400);
+        fields.push("description");
+      }
+      if ("position" in body) {
+        const position = Number.parseInt(String(body.position), 10);
+        if (Number.isNaN(position))
+          return refuse(400, "malformed_request", { position: "a whole number" });
+        row.position = Math.max(0, Math.min(position, 999));
+        fields.push("position");
+      }
+      if (body.archive) {
+        row.archived_at = now();
+        fields.push("archived_at");
+      }
+      if (!fields.length) return refuse(400, "malformed_request", { fields: "nothing to change" });
+      audit("status.component_updated", caller(headers)!.member.id, "status", row.id, "", {
+        fields: fields.sort(),
+      });
+      return ok({ updated: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/status/incidents/create",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title)
+        return refuse(400, "malformed_request", { title: "what customers see, in a line" });
+      const status = String(body.status || "investigating");
+      if (!(status in ST_INCIDENT_STATUSES) || status === "resolved")
+        return refuse(400, "malformed_request", {
+          status: "investigating, identified or monitoring",
+        });
+      const message = String(body.body ?? "")
+        .trim()
+        .slice(0, 2000);
+      if (!message)
+        return refuse(400, "malformed_request", {
+          body: "the first update: what customers are seeing, and that we are on it",
+        });
+      const impacts = stImpactsFrom(body);
+      if (typeof impacts === "string")
+        return refuse(400, "malformed_request", { components: impacts });
+      if (!impacts.length)
+        return refuse(400, "malformed_request", {
+          components: "name at least one component and its impact",
+        });
+      const row: StatusIncidentRow = {
+        id: randomUUID(),
+        title,
+        status,
+        started_at: now(),
+        resolved_at: null,
+        created_by: viewer.id,
+        created_at: now(),
+      };
+      statusIncidents.push(row);
+      for (const item of impacts) statusImpacts.push({ incident_id: row.id, ...item });
+      const update = stPostUpdate({
+        incident_id: row.id,
+        maintenance_id: null,
+        status,
+        body: message,
+        notify: body.notify !== false,
+        staffId: viewer.id,
+      });
+      audit("status.incident_opened", viewer.id, "status", row.id, "", {
+        title,
+        components: impacts.length,
+        mailed: update.mailed,
+      });
+      return ok({ incident_id: row.id, mailed: update.mailed });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/status/incidents/{incident_id}",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ params }) => {
+      const row = statusIncidents.find(
+        (item) => item.id === String(params.incident_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      const startedMs = Date.parse(row.started_at);
+      const endedMs = row.resolved_at ? Date.parse(row.resolved_at) : Date.now();
+      const firms = new Map<
+        string,
+        {
+          company_id: string;
+          company_name: string;
+          tickets: Array<{ id: string; subject: string }>;
+        }
+      >();
+      for (const ticket of tickets) {
+        const opened = Date.parse(ticket.created_at);
+        if (!(startedMs <= opened && opened <= endedMs)) continue;
+        const person =
+          people.find((item) => ticket.account_id && item.account_user_id === ticket.account_id) ??
+          people.find((item) => item.email.toLowerCase() === ticket.contact_email.toLowerCase());
+        const companyId = person?.company_id ?? "";
+        const key = companyId || `unknown:${ticket.contact_email || ticket.account_id}`;
+        const entry = firms.get(key) ?? {
+          company_id: companyId,
+          company_name:
+            companies.find((company) => company.id === companyId)?.name ||
+            ticket.contact_email ||
+            "An unlinked account",
+          tickets: [],
+        };
+        entry.tickets.push({ id: ticket.id, subject: ticket.subject });
+        firms.set(key, entry);
+      }
+      return ok({
+        incident: stIncidentView(
+          row,
+          statusUpdates.filter((item) => item.incident_id === row.id),
+          true,
+        ),
+        affected: {
+          searched: true,
+          firms: [...firms.values()].sort((a, b) =>
+            a.company_name.toLowerCase().localeCompare(b.company_name.toLowerCase()),
+          ),
+        },
+        components: statusComponents
+          .map((item) => ({ id: item.id, name: item.name }))
+          .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),
+        impacts: ST_IMPACTS.map((value) => ({ value, label: ST_STATES[value] })),
+        statuses: Object.entries(ST_INCIDENT_STATUSES).map(([value, label]) => ({ value, label })),
+        mail_ready: MOCK_MAIL_READY,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/status/incidents/{incident_id}/update",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, body, params }) => {
+      const viewer = caller(headers)!.member;
+      const row = statusIncidents.find(
+        (item) => item.id === String(params.incident_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      if (row.status === "resolved")
+        return refuse(400, "malformed_request", {
+          status: "resolved; open a new incident if it came back",
+        });
+      const status = String(body.status || row.status || "investigating");
+      if (!(status in ST_INCIDENT_STATUSES))
+        return refuse(400, "malformed_request", {
+          status: Object.keys(ST_INCIDENT_STATUSES).join(", "),
+        });
+      const message = String(body.body ?? "")
+        .trim()
+        .slice(0, 2000);
+      if (!message)
+        return refuse(400, "malformed_request", {
+          body: "what changed, in words customers understand",
+        });
+      if ("components" in body && status !== "resolved") {
+        const impacts = stImpactsFrom(body);
+        if (typeof impacts === "string")
+          return refuse(400, "malformed_request", { components: impacts });
+        if (!impacts.length)
+          return refuse(400, "malformed_request", {
+            components: "name at least one component and its impact",
+          });
+        for (let index = statusImpacts.length - 1; index >= 0; index -= 1)
+          if (statusImpacts[index]!.incident_id === row.id) statusImpacts.splice(index, 1);
+        for (const item of impacts) statusImpacts.push({ incident_id: row.id, ...item });
+      }
+      row.status = status;
+      if (status === "resolved") row.resolved_at = now();
+      const update = stPostUpdate({
+        incident_id: row.id,
+        maintenance_id: null,
+        status,
+        body: message,
+        notify: body.notify !== false,
+        staffId: viewer.id,
+      });
+      audit("status.incident_updated", viewer.id, "status", row.id, "", {
+        status,
+        mailed: update.mailed,
+      });
+      return ok({ status, mailed: update.mailed });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/status/maintenance/create",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title)
+        return refuse(400, "malformed_request", { title: "what is being done, in a line" });
+      const startsMs = Date.parse(String(body.starts_at ?? ""));
+      const endsMs = Date.parse(String(body.ends_at ?? ""));
+      if (Number.isNaN(startsMs) || Number.isNaN(endsMs))
+        return refuse(400, "malformed_request", { starts_at: "a start and an end" });
+      if (endsMs <= startsMs)
+        return refuse(400, "malformed_request", { ends_at: "after it starts" });
+      if (endsMs <= Date.now())
+        return refuse(400, "malformed_request", { ends_at: "a window that has not already ended" });
+      const known = new Set(stLiveComponents().map((row) => row.id));
+      const raw = Array.isArray(body.component_ids) ? body.component_ids : [body.component_ids];
+      const ids = raw
+        .map((item) =>
+          String(item ?? "")
+            .trim()
+            .toLowerCase(),
+        )
+        .filter(Boolean);
+      if (!ids.length || ids.some((item) => !known.has(item)))
+        return refuse(400, "malformed_request", { component_ids: "the components it touches" });
+      const description = String(body.body ?? "")
+        .trim()
+        .slice(0, 2000);
+      const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+      const row: StatusMaintenanceRow = {
+        id: randomUUID(),
+        title,
+        body: description,
+        starts_at: iso(startsMs),
+        ends_at: iso(endsMs),
+        component_ids: ids.join(","),
+        cancelled_at: null,
+        created_by: viewer.id,
+        created_at: now(),
+      };
+      statusMaintenance.push(row);
+      const update = stPostUpdate({
+        incident_id: null,
+        maintenance_id: row.id,
+        status: "scheduled",
+        body: `${title}. ${stWhen(row.starts_at)} to ${stWhen(row.ends_at)} UTC.${description ? ` ${description}` : ""}`,
+        notify: body.notify !== false,
+        staffId: viewer.id,
+      });
+      audit("status.maintenance_scheduled", viewer.id, "status", row.id, "", {
+        title,
+        mailed: update.mailed,
+      });
+      return ok({ maintenance_id: row.id, mailed: update.mailed });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/status/maintenance/{maintenance_id}/cancel",
+    auth: true,
+    capability: "tickets:manage",
+    handler: ({ headers, params }) => {
+      const row = statusMaintenance.find(
+        (item) => item.id === String(params.maintenance_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      if (!["scheduled", "in_progress"].includes(stMaintenanceState(row)))
+        return refuse(400, "malformed_request", { maintenance: "already over or cancelled" });
+      row.cancelled_at = now();
+      audit("status.maintenance_cancelled", caller(headers)!.member.id, "status", row.id, "", {
+        title: row.title,
+      });
+      return ok({ cancelled: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "public/status",
+    handler: () => ok(stPage(false)),
+  },
+  {
+    method: "POST",
+    pattern: "public/status/subscribe",
+    handler: ({ body }) => {
+      const received = ok({ received: true });
+      if (String(body.website ?? "").trim()) return received;
+      const email = String(body.email ?? "")
+        .trim()
+        .toLowerCase();
+      const domain = email.split("@").pop() ?? "";
+      if (
+        email.length < 3 ||
+        email.length > 254 ||
+        !email.includes("@") ||
+        email.includes(" ") ||
+        !domain.includes(".")
+      )
+        return refuse(400, "malformed_request", { email: "an email address" });
+      let row = statusSubscribers.find((item) => item.email_norm === email);
+      if (!row) {
+        row = {
+          id: randomUUID(),
+          email_norm: email,
+          confirmed_at: null,
+          stopped_at: null,
+          confirm_sent_at: null,
+          created_at: now(),
+        };
+        statusSubscribers.push(row);
+      } else if (row.confirmed_at && !row.stopped_at) return received;
+      if (row.confirm_sent_at && Date.now() - Date.parse(row.confirm_sent_at) < ST_CONFIRM_GAP_MS)
+        return received;
+      if (MOCK_MAIL_READY) row.confirm_sent_at = now();
+      audit("status.subscribe_requested", null, "status", row.id);
+      return received;
+    },
+  },
+  {
+    method: "POST",
+    pattern: "public/status/confirm/{token}",
+    handler: ({ params }) => {
+      const id = stReadToken(String(params.token ?? ""), "confirm");
+      const row = statusSubscribers.find((item) => id && item.id === id.toLowerCase());
+      if (!row) return refuse(404, "not_found");
+      if (!row.confirmed_at || row.stopped_at) {
+        row.confirmed_at = now();
+        row.stopped_at = null;
+        audit("status.subscribe_confirmed", null, "status", row.id);
+      }
+      return ok({ confirmed: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "public/status/stop/{token}",
+    handler: ({ params }) => {
+      const id = stReadToken(String(params.token ?? ""), "stop");
+      const row = statusSubscribers.find((item) => id && item.id === id.toLowerCase());
+      if (!row) return refuse(404, "not_found");
+      if (!row.stopped_at) {
+        row.stopped_at = now();
+        audit("status.subscribe_stopped", null, "status", row.id);
+      }
+      return ok({ stopped: true });
+    },
+  },
+);
+
 seedTeam();
 seedOpenReview();
 seedPeopleOps();
@@ -24662,6 +25585,7 @@ seedReceivables();
 seedPrivacy();
 seedInspection();
 seedSuccess();
+seedStatus();
 seedSecurityFeed();
 seedReadWatch();
 seedInbox();
@@ -26043,6 +26967,7 @@ function resetWorld() {
   seedPrivacy();
   seedInspection();
   seedSuccess();
+  seedStatus();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

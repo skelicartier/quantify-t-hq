@@ -1,4 +1,5 @@
 import {
+  Activity,
   Award,
   Bell,
   Building2,
@@ -148,6 +149,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         activePrefix: "/privacy/",
         capability: "privacy:read",
         key: "v",
+      },
+      {
+        href: "/service-status",
+        label: "Status",
+        icon: Activity,
+        activePrefix: "/service-status/",
+        capability: "tickets:read",
       },
     ],
   },

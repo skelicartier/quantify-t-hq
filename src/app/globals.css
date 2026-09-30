@@ -9655,3 +9655,247 @@
     }
   }
 }
+
+/* Status: the desk's board and the public page. A banner with a full border and a tint
+   (never a strip down one side), each component with its ninety reported days. */
+@layer pages {
+  .status-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px 18px;
+    padding: 14px 16px;
+    border: 1px solid var(--success-ring);
+    background: color-mix(in srgb, var(--success) 7%, transparent);
+    color: var(--text);
+  }
+
+  .status-banner strong {
+    font-family: var(--font-heading);
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .status-banner span {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .status-banner--maintenance {
+    border-color: color-mix(in srgb, var(--info) 35%, transparent);
+    background: color-mix(in srgb, var(--info) 7%, transparent);
+  }
+
+  .status-banner--degraded {
+    border-color: var(--attention-ring);
+    background: color-mix(in srgb, var(--attention) 7%, transparent);
+  }
+
+  .status-banner--partial,
+  .status-banner--major {
+    border-color: var(--danger-ring);
+    background: var(--danger-soft);
+  }
+
+  .status-components {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .status-components__item {
+    display: grid;
+    gap: 8px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .status-components__item .field__hint {
+    margin: 0;
+  }
+
+  .status-components__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .status-components__head strong {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .status-bars {
+    display: grid;
+    gap: 6px;
+  }
+
+  .status-bars__row {
+    display: flex;
+    gap: 2px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .status-bars__bar {
+    flex: 1 1 0;
+    min-width: 1px;
+    background: var(--success);
+    opacity: 0.8;
+  }
+
+  .status-bars__bar:hover {
+    opacity: 1;
+  }
+
+  .status-bars__bar--maintenance {
+    background: var(--info);
+  }
+
+  .status-bars__bar--degraded {
+    background: var(--attention);
+  }
+
+  .status-bars__bar--partial {
+    background: color-mix(in srgb, var(--danger) 70%, var(--attention));
+  }
+
+  .status-bars__bar--major {
+    background: var(--danger);
+  }
+
+  .status-bars__scale {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .impact-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .impact-list__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+    align-items: center;
+    gap: 12px;
+  }
+
+  .impact-list__row label {
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .honeypot {
+    position: absolute;
+    left: -10000px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+  }
+
+  .subscribe-form {
+    display: grid;
+    gap: 10px;
+    max-width: 480px;
+  }
+
+  .subscribe-form__row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .subscribe-form__row input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* The public page: no rail, no bar — one column a customer reads top to bottom. */
+  .status-public {
+    display: grid;
+    gap: 24px;
+    width: min(100%, 780px);
+    min-height: 100vh;
+    margin: 0 auto;
+    padding: 40px var(--gutter) 56px;
+    align-content: start;
+  }
+
+  .status-public__header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .status-public__title {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .status-public__section,
+  .status-public__incident {
+    display: grid;
+    gap: 10px;
+  }
+
+  .status-public__incident {
+    padding: 16px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .status-public h2 {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 17px;
+    font-weight: 600;
+  }
+
+  .status-public__past {
+    display: grid;
+    gap: 4px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .status-public__past p {
+    margin: 0;
+  }
+
+  @media (max-width: 640px) {
+    .impact-list__row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 4px;
+    }
+
+    .subscribe-form__row {
+      flex-direction: column;
+    }
+
+    .status-public {
+      padding-top: 24px;
+    }
+  }
+}

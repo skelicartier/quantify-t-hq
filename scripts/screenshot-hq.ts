@@ -180,6 +180,12 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: ".ask-list, main#main-content",
   },
   { name: "success-onboarding", path: "/success/onboarding", ready: "main#main-content" },
+  { name: "service-status", path: "/service-status", ready: ".status-components" },
+  {
+    name: "service-status-incident",
+    path: "/service-status/incidents/5d000000-0000-4000-8000-000000000001",
+    ready: ".event-timeline",
+  },
   { name: "privacy", path: "/privacy", ready: "main#main-content" },
   { name: "privacy-closed", path: "/privacy?scope=closed", ready: "main#main-content" },
   {
@@ -426,6 +432,7 @@ async function captureInteractions(page: Page, folder: string) {
   await capturePrivacyFlows(page, folder);
   await captureInspectionFlows(page, folder);
   await captureSuccessFlows(page, folder);
+  await captureStatusFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -724,6 +731,100 @@ async function captureSuccessFlows(page: Page, folder: string) {
     }
   }
   await shoot(page, `${folder}/contract-playbook`);
+}
+
+/**
+ * The status page from the desk's side: an incident reported on the first component,
+ * moved to monitoring, then resolved; a maintenance window scheduled a week out.
+ */
+async function captureStatusFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/service-status`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Report an incident" }).click();
+  await page.fill("#status-title", `Harness incident ${Date.now().toString(36)}`);
+  await page.fill("#status-body", "Some exports are slow. We are looking into it.");
+  await page.locator(".impact-list select").first().selectOption("degraded");
+  await page.locator("button", { hasText: "Post the incident" }).click();
+  await page.waitForURL("**/service-status/incidents/**", { timeout: 15_000 });
+  await page.selectOption("#update-status", "monitoring");
+  await page.fill("#update-body", "A fix is out. We are watching it.");
+  await page.locator("button", { hasText: "Post the update" }).click();
+  await page.waitForSelector("form:has(#update-body) .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/status-incident-monitoring`);
+  await page.selectOption("#update-status", "resolved");
+  await page.fill("#update-body", "Exports are back to normal. Resolved.");
+  await page.locator("button", { hasText: "Post and resolve" }).click();
+  // Resolving takes the form away: a resolved incident takes no more updates.
+  await page
+    .waitForSelector("#update-body", { state: "detached", timeout: 10_000 })
+    .catch(() =>
+      report(
+        `${folder}/status-incident-resolved`,
+        "a resolved incident still offers an update form",
+      ),
+    );
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/status-incident-resolved`);
+
+  await page.goto(`${BASE}/service-status`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Schedule maintenance" }).click();
+  const day = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  await page.fill("#maintenance-title", "Harness window");
+  await page.fill("#maintenance-starts", `${day}T06:00`);
+  await page.fill("#maintenance-ends", `${day}T07:00`);
+  await page.locator(".pick-list input[name=component_ids]").first().check();
+  await page.locator("button", { hasText: "Schedule it" }).click();
+  await page.waitForSelector("form:has(#maintenance-title) .form-sent", { timeout: 10_000 });
+  await page.keyboard.press("Escape");
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/status-maintenance-scheduled`);
+}
+
+/**
+ * The public status page, signed out: the page itself, a subscribe (always the same
+ * answer), and the two mailed links — opening each changes nothing, one press acts.
+ */
+async function captureStatusPublic(page: Page, folder: string) {
+  await capture(page, folder, {
+    name: "status-public",
+    path: "/status",
+    ready: ".status-components",
+  });
+  await page.fill("#subscribe-email", `harness-${Date.now().toString(36)}@example.test`);
+  await page.locator("button", { hasText: "Subscribe" }).click();
+  await page.waitForSelector(".subscribe-form .form-sent", { timeout: 10_000 });
+  await shoot(page, `${folder}/status-subscribed`);
+
+  // The mock's stand-in token for a subscriber still waiting to confirm, and one who is live.
+  const token = (purpose: string, n: number) =>
+    Buffer.from(`${purpose}:5e000000-0000-4000-8000-${String(n).padStart(12, "0")}`).toString(
+      "base64url",
+    );
+  await capture(page, folder, {
+    name: "status-confirm",
+    path: `/status/confirm/${token("confirm", 39)}`,
+    ready: ".auth-form",
+  });
+  await page.locator("button", { hasText: "Confirm" }).click();
+  await page.waitForSelector(".form-sent", { timeout: 15_000 });
+  if (!/Confirmed\./.test(await page.locator("main").innerText()))
+    report(`${folder}/status-confirmed`, "pressing confirm did not say it was confirmed");
+  await shoot(page, `${folder}/status-confirmed`);
+
+  await page.goto(`${BASE}/status/stop/${token("confirm", 1)}`, { waitUntil: "networkidle" });
+  await page.locator("button", { hasText: "Stop the mail" }).click();
+  // The refusal arrives as an alert; nothing on the page carries that role before the press.
+  await page.waitForSelector("main [role=alert]", { timeout: 15_000 });
+  if (!/not valid/.test(await page.locator("main").innerText()))
+    report(`${folder}/status-stop-wrong-token`, "a confirm token was accepted as a stop token");
+  await capture(page, folder, {
+    name: "status-stop",
+    path: `/status/stop/${token("stop", 2)}`,
+    ready: ".auth-form",
+  });
+  await page.locator("button", { hasText: "Stop the mail" }).click();
+  await page.waitForSelector(".form-sent", { timeout: 15_000 });
+  await shoot(page, `${folder}/status-stopped`);
 }
 
 /**
@@ -1193,6 +1294,7 @@ async function run(browser: Browser) {
     });
     await captureUnsubscribe(page, `${viewport.name}/auth`);
     await captureReport(page, `${viewport.name}/auth`);
+    await captureStatusPublic(page, `${viewport.name}/auth`);
 
     // The two-step and the code screen, mid-flow.
     await page.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });

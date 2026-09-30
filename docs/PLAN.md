@@ -137,6 +137,8 @@ and asked for gaps only. Section 8 of that file is the build order.
 | Receivables          | migration 0032: a billing profile per customer (legal entity, address, tax identity and treatment, accounts-payable addresses, PO rules, terms, currency, withholding) with the gaps an invoice would have named; invoices as the accounting system issued them (its number, never ours; gross = net + tax enforced; voided with a reason, never deleted); receipts with bank charges and tax withheld, allocated across invoices, withheld tax a receivable until its certificate is recorded; ageing per currency (nothing summed across currencies); a worklist ordered by owed times days late; reminders drafted at −7/0/+7/+14/+30 days stating the real days overdue, sent only when a person presses send; promises and disputes pause them; the schedule from contracts names periods begun with no invoice, counted only from the first invoice recorded here; export flags at 6 and 8 months and the bad-debt relief date; write-offs wait for a second owner or admin; `/revenue/receivables`, `/revenue/invoices/[id]`, the company Billing tab                                                                                                                                                                                                                                                                                                                                               | receivables, invoice, company billing                                               | service `5585103`; HQ: the commit adding this |
 | Privacy desk         | migration 0033: rights requests and complaints on the UK clock (Art 12A: one month from the latest of receipt, identity confirmed and a fee paid; the corresponding date, or the month's last day; the next working day over weekends and England and Wales bank holidays through 2028; stopped only while scoping and moved by every stopped day; a two-month extension told inside the first month), complaints acknowledged in 30 days (s.164A), India's 90; a checklist of every system searched, and what HQ already holds under the address (people, leads, list memberships, meetings, mail sent, tickets); erasure empties the CRM person and what hangs off them alone, keeps the address on the suppression list only, and needs an admin with a fresh code; an objection stops contact; the incident and breach register with the regulator's 72 hours from awareness, a recorded notifiability judgement, reasons when late, and each affected customer's contractual hours (DORA firms named), never closed with anything owed or without lessons; customer commitments with departures from the standard flagged; sub-processors with a notice to each customer's privacy contact (mailed, or recorded as sent by hand), objection windows, and no go-live while anyone is untold, the notice is running or an objection is open; a daily sweep reminding request holders and incident leads | privacy, request, incident, sub-processors, commitments, company privacy            | service `b478903`; HQ: the commit adding this |
 | Pipeline inspection  | migration 0034: a forecast category on each deal (the stage's default — 80 % commit, 40 % best case — or a person's, without moving the stage), a push count each time the close date moves into a later month (saying when it crossed a quarter), the first close date, and when the next step last changed (a week unchanged shows the red clock); a nightly picture of every open deal, so 'what changed' compares each deal with itself 7, 14 or 30 days ago and gives one reason by rank (won, lost, new, pushed, pulled in, category moved, bigger, smaller, stage moved), saying that two ends cannot see a push and a pull inside the window; the quarter's forecast per currency (target, won, gap, open by category, coverage, the suggested call) with calls frozen with their deals and, for past quarters, accuracy, bias and the money missed beside the deals hit and missed; targets (owners and admins); competitors with battlecards (quick dismiss, why we win and lose, objections and answers), 'won 3 of 5' until ten deals, stale after 90 days unreviewed, on each deal with their strengths and weaknesses there; win/loss interviews with the buyer's reason beside the seller's and the drivers for and against                                                                                                                                                                 | what changed, forecast, competitors, battlecard, win/loss, a deal's Competition tab | service `3b55f71`; HQ: the commit adding this |
+| Customer success     | migration 0035: signals per customer from the product accounts linked to the firm — nobody signing in (14 days), seats going unused (under half signed in within 30 days), renewal at risk (inside 90 days, marked at risk or not called), no contact, near the seat limit — each with its evidence, never a score, and a firm with no linked account says its usage cannot be read; feature requests with each firm's ask (their words, how much it matters, the deal it blocks), the open pipeline and MRR asking, and once shipped whom to tell (mailed with `mail:send`, or recorded as told); onboarding plans from a template with steps ticked and durations measured; a contract's notice period and a renewal playbook whose tasks are dated back from the notice date; `/success` (signals, requests, onboarding), the company Success tab, "Notice by" on renewals                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | success, feature requests, onboarding, company success, contract playbook           | service `3b55f71`; HQ `5c899dc`               |
+| Status               | migration 0036: components whose state is computed (the worst impact among open incidents naming them, else maintenance while a window runs), incidents with public updates (investigating → identified → monitoring → resolved; impact minor/major/critical from the worst component), maintenance that starts and ends itself, ninety-day bars of REPORTED incidents that say they are not measured uptime; subscribers by double opt-in (signed confirm and stop tokens, a honeypot, one confirm mail per address per hour, the same answer whoever asks), each update mailed to confirmed subscribers with a stop link; an incident lists the firms whose tickets arrived while it ran; the public `/status` page (no session, never names who posted) with `/status/confirm/[token]` and `/status/stop/[token]` acting only on a press; Desk → Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | service status, incident, public status                                             | service `c7b5fad`; HQ: the commit adding this |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
@@ -184,51 +186,26 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of the end of pipeline inspection** (the machine clock read 2026-09-30 night; the dates
-above were written ahead of it).
+**As of the end of Status** (the machine clock read 2026-09-30 night; the dates above were
+written ahead of it).
 
-- HQ repo: HEAD is the "Mailing lists" commit (`git log -1`). Pushed to `origin/main`.
-  Harness passed with 378 checks, including create → import a CSV → add by hand →
-  remove. Coloured side strips removed from every screen (DESIGN.md §11 forbids them).
-  Then form field names became readable labels (13.5px body type, sentence case, full
-  text colour) with card, section and panel titles one step above at 15px; header
-  readouts lost their dividers (a wrapped row drew a bar down its left edge), and side
-  panel labels wrap instead of running into their value. Harness 378 checks again.
-- Product repo: HEAD `f095b76`; 244 HQ tests pass; not pushed. Uncommitted and not ours:
-  `src/intelligence/overnight/impact.py`, `src/ui/tabs/deep_research_tab.py`,
-  `src/ui/tabs/pulse_tab.py`, `tests/_fabric_coverage_test.db` — never stage them.
-- Migrations 0006–0034 unapplied (production blocked on Azure).
-- Local run note: the console's dev server may hold port 3000; HQ then runs on 3001 with
-  `PORT=3001 NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3001 npx next dev -p 3001`, the mock
-  with `HQ_UI_BASE=http://localhost:3001 npm run mock:hq`, the harness with
-  `HQ_UI_BASE=http://127.0.0.1:3001`.
-- **Security 2 (part one)** committed: service `a04a737` (local), HQ pushed. Harness 406
-  checks, including the end-to-end walk: reset → one-time link shown → the password alone
-  refused in a fresh browser → the link reaches enrolment; the "this wasn't me" page pressed.
-- **Security 2 part two** committed with the inbox's service side (service `d124d90`
-  holds both: migrations 0030 and 0031, `inbox.py`, `inbox_routes.py`, hooks in mentions,
-  tasks, leads, companies, deals, tickets, the customer reply route, approvals and the
-  security feed; 262 HQ service tests). Harness 422 checks.
-- **Inbox** done end to end; harness 450 checks. The mock now seeds the security feed,
-  the read watch and the inbox at start-up too (they were only seeded by the harness's
-  reset, so a plain demo started with them empty).
-- **Receivables** done end to end; harness 466 checks (record an invoice → dispute it;
-  the demo seed now deals its stories only to contracts with an overdue invoice, so promised,
-  disputed and billed-late all show). Service `5585103` (local).
-- **Privacy desk** and **Pipeline inspection** done end to end; one harness run gated both
-  (574 checks, including: a request logged → a system searched → its clock stopped; the
-  seeded breach assessed and reported; an objection settled; a customer's commitments saved;
-  a competitor added and reviewed, put on a deal and dropped out; a call submitted with its
-  target; a buyer interviewed). Service `b478903` (privacy) and `3b55f71` (inspection with
-  customer success's service side), both local.
-  Three earlier runs failed on slow pages while other work loaded the machine: run the
-  harness with nothing heavy beside it, and restart a dev server that has run for hours.
-- **Next step:** Customer success (`RESEARCH-2026-09-30-SUITE.md` §2.1–2, §2.4–5). The service
-  side is written, tested and committed in `3b55f71`: migration 0035 (`hq_contracts.notice_days`
-  and `playbook_started_at`, `hq_feature_requests`, `hq_feature_asks`, `hq_onboardings`,
-  `hq_onboarding_steps`), `success.py` (signals with rule and evidence, never a score; usage;
-  onboarding durations; the playbook dated back from the notice date), `success_routes.py`,
-  `tests/test_hq_success.py` (12); 330 HQ service tests. Portal drafts are in the session
-  scratchpad (`draft2/`), the mock in `mock-success-*.ts` there. Still to do: copy the drafts
-  in, the contract page's notice period and playbook button, the company Success tab, nav,
-  the mock, harness screens, the HQ commit.
+- HQ repo: HEAD is the Status commit (`git log -1`), pushed to `origin/main`. Customer
+  success is `5c899dc` (harness 606 checks). `next-env.d.ts` shows modified after every
+  `next dev`; never commit it. `.env.local` (HQ_DEV_AUTOLOGIN) never committed.
+- Product repo: HEAD `c7b5fad` (Status), local only; 340 HQ service tests pass. Uncommitted
+  and not ours: `src/intelligence/overnight/impact.py`, `src/ui/tabs/deep_research_tab.py`,
+  `src/ui/tabs/pulse_tab.py`, `tests/_fabric_coverage_test.db`, and another session's theses
+  tab, `app_manager`, examiner and memory-service edits — never stage them.
+- Migrations 0006–0036 unapplied (production blocked on Azure).
+- Local run: the console's dev server holds port 3000; HQ runs on 3001 with
+  `PORT=3001 NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3001 npx next dev -p 3001`, the mock with
+  `HQ_UI_BASE=http://127.0.0.1:3001 npm run mock:hq` (port 7071; without `HQ_UI_BASE` its
+  calendar consent answers with port 3000 and the harness's calendar step times out; restart
+  it after any mock edit — tsx does not reload), the harness with
+  `HQ_UI_BASE=http://127.0.0.1:3001 npm run check:hq-ui`. Warm new routes with curl first
+  (`-L -c /tmp/hq-cookies -b /tmp/hq-cookies`). Run the harness with nothing heavy beside it;
+  restart a dev server that has run for hours.
+- The harness mints the mock's status tokens itself (`base64url("confirm:<id>")`); the real
+  service's are HMAC-signed and cannot be minted outside it.
+- **Next step:** Security 3 (`RESEARCH-2026-09-30-SUITE.md` §8), then AI assistance, Platform,
+  Trust registers — each a full wave.
