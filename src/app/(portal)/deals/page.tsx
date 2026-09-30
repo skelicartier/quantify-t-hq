@@ -5,6 +5,7 @@ import { moveDealStageAction } from "@/app/(portal)/deals/actions";
 import { DealBoard } from "@/components/crm/deal-board";
 import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
+import { PipelineTabs } from "@/components/deals/pipeline-tabs";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
@@ -15,7 +16,6 @@ import { SelectionBar } from "@/components/ui/selection-bar";
 import { ViewTabs } from "@/components/ui/view-tabs";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Stat, StatGrid } from "@/components/ui/stat";
-import { SegmentedLinks } from "@/components/ui/toolbar";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readDealsBoard, type BoardColumn, type DealsBoard } from "@/lib/api/deals";
@@ -200,15 +200,7 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
         eyebrow="CRM"
         title="Deals"
         description="Every open deal names its next step and a date. Deals quiet for 14 days, or past their stage's limit with no step on the calendar, are flagged."
-        actions={
-          <SegmentedLinks
-            label="View"
-            items={[
-              { href: link({ view: "board" }), label: "Board", current: view === "board" },
-              { href: link({ view: "table" }), label: "Table", current: view === "table" },
-            ]}
-          />
-        }
+        actions={<PipelineTabs current="/deals" />}
       />
       <LiveRefresh intervalSeconds={120} label="Pipeline" />
       {board === null ? (
@@ -254,6 +246,19 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
                 {label}
               </Link>
             ))}
+            <span className="eyebrow">View</span>
+            <Link
+              href={link({ view: "board" })}
+              aria-current={view === "board" ? "page" : undefined}
+            >
+              Board
+            </Link>
+            <Link
+              href={link({ view: "table" })}
+              aria-current={view === "table" ? "page" : undefined}
+            >
+              Table
+            </Link>
             <span className="filter-strip__note">
               New deals open from a company page, or when a lead is qualified.
             </span>

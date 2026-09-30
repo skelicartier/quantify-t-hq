@@ -131,6 +131,15 @@ export const dealSummarySchema = z.object({
   loss_detail: z.string(),
   closed_at: z.string().nullable(),
   created_at: z.string().nullable(),
+  /** The category in effect: the one a person set, else the stage's. */
+  forecast_category: z.string(),
+  /** What a person set on the deal; empty when the stage decides. */
+  forecast_override: z.string(),
+  /** How many times the close date has moved into a later month. */
+  push_count: z.number(),
+  first_close_date: z.string(),
+  /** An open deal whose next step has not changed in a week. */
+  next_step_stale: z.boolean(),
 });
 export type DealSummary = z.infer<typeof dealSummarySchema>;
 

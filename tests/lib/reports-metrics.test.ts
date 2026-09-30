@@ -30,6 +30,11 @@ function deal(over: Partial<DealSummary> & { deal_id: string }): DealSummary {
     loss_detail: "",
     closed_at: null,
     created_at: null,
+    forecast_category: "closed",
+    forecast_override: "",
+    push_count: 0,
+    first_close_date: "",
+    next_step_stale: false,
     ...over,
   };
 }

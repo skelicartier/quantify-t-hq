@@ -91,6 +91,8 @@ import * as mail from "@/lib/api/mail";
 import * as meetings from "@/lib/api/meetings";
 import * as reports from "@/lib/api/reports";
 import * as revenue from "@/lib/api/revenue";
+import * as inspectionApi from "@/lib/api/inspection";
+import * as privacyApi from "@/lib/api/privacy";
 import * as receivablesApi from "@/lib/api/receivables";
 import * as security from "@/lib/api/security";
 import * as settings from "@/lib/api/settings";
@@ -140,6 +142,28 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/invoices/{invoice_id}", () => receivablesApi.readInvoice(token, ids.invoice_id!)],
   ["hq/receipts", () => receivablesApi.readReceipts(token)],
   ["hq/companies/{company_id}/billing", () => receivablesApi.readBilling(token, ids.company_id!)],
+  ["hq/privacy/requests", () => privacyApi.readPrivacyRequests(token)],
+  [
+    "hq/privacy/requests/{request_id}",
+    () => privacyApi.readPrivacyRequest(token, ids.privacy_request_id!),
+  ],
+  ["hq/incidents", () => privacyApi.readIncidents(token)],
+  ["hq/incidents/{incident_id}", () => privacyApi.readIncident(token, ids.incident_id!)],
+  ["hq/commitments", () => privacyApi.readCommitments(token)],
+  [
+    "hq/companies/{company_id}/commitments",
+    () => privacyApi.readCompanyPrivacy(token, ids.company_id!),
+  ],
+  ["hq/subprocessors", () => privacyApi.readSubprocessors(token)],
+  ["hq/pipeline/changes", () => inspectionApi.readPipelineChanges(token)],
+  ["hq/forecast", () => inspectionApi.readForecast(token)],
+  ["hq/competitors", () => inspectionApi.readCompetitors(token)],
+  ["hq/competitors/{competitor_id}", () => inspectionApi.readCompetitor(token, ids.competitor_id!)],
+  ["hq/win-loss", () => inspectionApi.readWinLoss(token)],
+  [
+    "hq/subprocessors/{subprocessor_id}",
+    () => privacyApi.readSubprocessor(token, ids.subprocessor_id!),
+  ],
   ["hq/me/notifications", () => inboxApi.readNotificationPrefs(token)],
   [
     "hq/subscriptions/company/{company_id}",

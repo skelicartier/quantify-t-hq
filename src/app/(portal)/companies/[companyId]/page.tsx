@@ -36,6 +36,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { RecordFollow } from "@/components/inbox/record-follow";
 import { ViewedBy } from "@/components/security/viewed-by";
+import { CompanyPrivacy } from "@/components/privacy/company-privacy";
 import { CompanyBilling } from "@/components/revenue/company-billing";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
@@ -83,6 +84,7 @@ const TABS = [
   { key: "people", label: "People" },
   { key: "history", label: "History" },
   { key: "billing", label: "Billing" },
+  { key: "privacy", label: "Privacy" },
 ];
 
 type CompanyPageProps = {
@@ -358,6 +360,7 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
           { ...TABS[3]!, count: people.length },
           TABS[4]!,
           ...(hasCapability(context, "revenue:read") ? [TABS[5]!] : []),
+          ...(hasCapability(context, "privacy:read") ? [TABS[6]!] : []),
         ]}
         current={tab}
         label="Company sections"
@@ -578,6 +581,21 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
               />
             ) : (
               <Callout tone="neutral">Billing is visible to Sales, Admins and Owners.</Callout>
+            )}
+          </RecordSection>
+        )}
+        {tab === "privacy" && (
+          <RecordSection id="company-privacy" title="Privacy">
+            {hasCapability(context, "privacy:read") ? (
+              <CompanyPrivacy
+                token={context.token}
+                companyId={company.company_id}
+                canWrite={hasCapability(context, "privacy:write")}
+              />
+            ) : (
+              <Callout tone="neutral">
+                The privacy desk is run by Support, Admins and Owners.
+              </Callout>
             )}
           </RecordSection>
         )}

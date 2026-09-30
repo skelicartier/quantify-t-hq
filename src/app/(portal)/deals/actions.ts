@@ -139,6 +139,8 @@ export async function updateDealAction(
   }
   if (formData.has("currency")) input.currency = fieldValue(formData, "currency", 3).toUpperCase();
   if (formData.has("plan_key")) input.plan_key = fieldValue(formData, "plan_key", 32).trim();
+  if (formData.has("forecast_category"))
+    input.forecast_category = fieldValue(formData, "forecast_category", 12).trim();
   try {
     await dealsApi.updateDeal(context.token, dealId, input);
   } catch (error) {

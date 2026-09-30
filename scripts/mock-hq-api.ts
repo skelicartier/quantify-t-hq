@@ -44,6 +44,8 @@ const CAPABILITIES: Record<string, string[]> = {
     "hr:read",
     "hr:write",
     "mail:send",
+    "privacy:read",
+    "privacy:write",
     "revenue:read",
     "revenue:write",
     "tickets:manage",
@@ -62,6 +64,8 @@ const CAPABILITIES: Record<string, string[]> = {
     "hr:read",
     "hr:write",
     "mail:send",
+    "privacy:read",
+    "privacy:write",
     "revenue:read",
     "revenue:write",
     "tickets:manage",
@@ -69,7 +73,15 @@ const CAPABILITIES: Record<string, string[]> = {
     "tickets:write",
   ],
   sales: ["crm:read", "crm:write", "deals:read", "deals:write", "revenue:read", "tickets:read"],
-  support: ["crm:read", "deals:read", "tickets:manage", "tickets:read", "tickets:write"],
+  support: [
+    "crm:read",
+    "deals:read",
+    "privacy:read",
+    "privacy:write",
+    "tickets:manage",
+    "tickets:read",
+    "tickets:write",
+  ],
   intern_readonly: ["crm:read", "deals:read", "tickets:read"],
 };
 
@@ -2496,6 +2508,11 @@ type DealRow = {
   loss_detail: string;
   closed_at: string | null;
   created_at: string;
+  /** Mirrors 0034: a person's category ('' or absent: the stage's), pushes, first date. */
+  forecast_category?: string | null;
+  push_count?: number;
+  first_close_date?: string;
+  next_step_changed_at?: string;
 };
 type ActivityRow = {
   kind: string;
@@ -2977,6 +2994,7 @@ const WATCHED_READS: Record<string, [string, string]> = {
   "hq/meetings/{meeting_id}": ["meeting", "meeting_id"],
   "hq/contracts/{contract_id}": ["contract", "contract_id"],
   "hq/team/{staff_id}": ["team_member", "staff_id"],
+  "hq/privacy/requests/{request_id}": ["privacy_request", "request_id"],
 };
 const READ_ENTITY_TYPES = [
   "company",
@@ -2988,6 +3006,7 @@ const READ_ENTITY_TYPES = [
   "meeting",
   "staff",
   "team_member",
+  "privacy_request",
 ];
 const READ_WINDOW_MS = 60 * 60_000;
 const READ_NOTIFY_AT = 150;
@@ -3813,6 +3832,1932 @@ function seedReceivables() {
   });
 }
 
+// --- pipeline inspection (mirrors inspection.py and inspection_routes.py) --------------------------
+
+const IN_CATEGORIES: Record<string, string> = {
+  pipeline: "Pipeline",
+  best_case: "Best case",
+  commit: "Commit",
+  closed: "Closed",
+  omitted: "Omitted",
+};
+const IN_SETTABLE = ["pipeline", "best_case", "commit", "omitted"];
+const IN_RANK: Record<string, number> = {
+  omitted: 0,
+  pipeline: 1,
+  best_case: 2,
+  commit: 3,
+  closed: 4,
+};
+const IN_REASONS: Record<string, string> = {
+  won: "Won",
+  lost: "Lost",
+  new: "New",
+  pushed: "Pushed",
+  pulled_in: "Pulled in",
+  category_up: "Moved up a category",
+  category_down: "Moved down a category",
+  increased: "Increased",
+  decreased: "Decreased",
+  stage_moved: "Moved stage",
+};
+const IN_DRIVERS: Record<string, string> = {
+  data_coverage: "Data coverage",
+  product_fit: "Fit to their workflow",
+  ease_of_use: "Ease of use",
+  price: "Price",
+  support: "Support and onboarding",
+  speed: "Speed",
+  trust: "Trust and security",
+  integration: "Integration",
+  timing: "Timing and budget",
+  champion: "Our champion",
+  competitor: "A competitor's strength",
+};
+const IN_SELLER_REASONS: Record<string, string> = {
+  no_decision: "No decision",
+  timing: "Timing",
+  price: "Price",
+  competitor: "Competitor",
+  status_quo: "Status quo",
+  missing_feature: "Missing feature",
+  procurement: "Procurement",
+  champion_left: "Champion left",
+};
+const IN_STALE_STEP_DAYS = 7;
+const IN_STALE_CARD_DAYS = 90;
+const IN_PERCENT_FROM = 10;
+
+type DealSnapshotRow = {
+  deal_id: string;
+  stage_key: string;
+  status: string;
+  mrr_amount: number;
+  currency: string;
+  expected_close_date: string;
+  forecast_category: string;
+};
+type SubmissionRow = {
+  id: string;
+  period: string;
+  currency: string;
+  commit_cents: number;
+  best_case_cents: number;
+  closed_cents: number;
+  pipeline_cents: number;
+  deals: Array<{
+    deal_id: string;
+    name: string;
+    company: string;
+    category: string;
+    amount: string;
+  }>;
+  note: string;
+  submitted_by: string;
+  submitted_at: string;
+};
+type CompetitorRow = {
+  id: string;
+  name: string;
+  website: string;
+  summary: string;
+  quick_dismiss: string;
+  why_we_win: string;
+  why_we_lose: string;
+  objections: Array<{ objection: string; response: string }>;
+  reviewed_at: string | null;
+  reviewed_by: string;
+  archived_at: string | null;
+};
+type DealCompetitorRow = {
+  deal_id: string;
+  competitor_id: string;
+  strengths: string;
+  weaknesses: string;
+  state: string;
+};
+type InterviewRow = {
+  id: string;
+  deal_id: string;
+  held_on: string;
+  interviewer_staff_id: string;
+  interviewee_name: string;
+  interviewee_title: string;
+  buyer_reason: string;
+  drivers: Array<{ driver: string; effect: string }>;
+  quotes: string;
+  summary: string;
+};
+
+const dealSnapshots = new Map<string, DealSnapshotRow[]>();
+const forecastSubmissions: SubmissionRow[] = [];
+const salesTargets = new Map<string, number>();
+const competitors: CompetitorRow[] = [];
+const dealCompetitors: DealCompetitorRow[] = [];
+const interviews: InterviewRow[] = [];
+
+function inDefaultCategory(probability: number, status: string): string {
+  if (status === "won") return "closed";
+  if (status === "lost" || status === "unqualified") return "omitted";
+  if (probability >= 80) return "commit";
+  if (probability >= 40) return "best_case";
+  return "pipeline";
+}
+function inEffectiveCategory(row: DealRow): string {
+  const probability = stageOf(row.stage_key)?.win_probability ?? 0;
+  if (row.status !== "open") return inDefaultCategory(probability, row.status);
+  return row.forecast_category && IN_SETTABLE.includes(row.forecast_category)
+    ? row.forecast_category
+    : inDefaultCategory(probability, row.status);
+}
+function inMonthIndex(day: string): number {
+  const [year, month] = day.split("-").map(Number) as [number, number];
+  return year * 12 + month - 1;
+}
+function inQuarterOf(day: string): string {
+  const [year, month] = day.split("-").map(Number) as [number, number];
+  return `${year}-Q${Math.floor((month - 1) / 3) + 1}`;
+}
+function inQuarterBounds(period: string): [string, string] | null {
+  const match = /^(\d{4})-Q([1-4])$/.exec(period);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const quarter = Number(match[2]);
+  const start = `${year}-${String(3 * (quarter - 1) + 1).padStart(2, "0")}-01`;
+  const end = addDaysIso(addMonthsIso(start, 3), -1);
+  return [start, end];
+}
+function inShiftQuarter(period: string, by: number): string {
+  const [start] = inQuarterBounds(period)!;
+  const [year, month] = start.split("-").map(Number) as [number, number];
+  const index = year * 4 + Math.floor((month - 1) / 3) + by;
+  return `${Math.floor(index / 4)}-Q${(index % 4) + 1}`;
+}
+function inPushKind(before: string, after: string): string {
+  if (!before || !after) return "";
+  if (inMonthIndex(after) > inMonthIndex(before))
+    return inQuarterOf(after) !== inQuarterOf(before) ? "quarter" : "month";
+  if (inMonthIndex(after) < inMonthIndex(before)) return "pulled_in";
+  return "";
+}
+function inChange(start: DealSnapshotRow | undefined, now: DealRow) {
+  const amountNow = Math.round(now.mrr_amount * 100);
+  if (!start) {
+    if (now.status === "open")
+      return { reason: "new", before: null as number | null, after: amountNow, push: "" };
+    if (now.status === "won")
+      return { reason: "won", before: null as number | null, after: amountNow, push: "" };
+    return null;
+  }
+  const before = Math.round(start.mrr_amount * 100);
+  if (now.status === "won") return { reason: "won", before, after: amountNow, push: "" };
+  if (now.status === "lost" || now.status === "unqualified")
+    return { reason: "lost", before, after: amountNow, push: "" };
+  const push = inPushKind(start.expected_close_date, now.expected_close_date);
+  if (push === "month" || push === "quarter")
+    return { reason: "pushed", before, after: amountNow, push };
+  if (push === "pulled_in") return { reason: "pulled_in", before, after: amountNow, push: "" };
+  const rankBefore = IN_RANK[start.forecast_category] ?? 1;
+  const rankAfter = IN_RANK[inEffectiveCategory(now)] ?? 1;
+  if (rankAfter > rankBefore) return { reason: "category_up", before, after: amountNow, push: "" };
+  if (rankAfter < rankBefore)
+    return { reason: "category_down", before, after: amountNow, push: "" };
+  if (amountNow > before) return { reason: "increased", before, after: amountNow, push: "" };
+  if (amountNow < before) return { reason: "decreased", before, after: amountNow, push: "" };
+  if (start.stage_key !== now.stage_key)
+    return { reason: "stage_moved", before, after: amountNow, push: "" };
+  return null;
+}
+function inAccuracy(forecastCents: number, actualCents: number) {
+  const miss = centsText(forecastCents - actualCents);
+  if (actualCents <= 0)
+    return { accuracy: null as number | null, bias: null as number | null, miss };
+  const ratio = Math.abs(forecastCents - actualCents) / actualCents;
+  return {
+    accuracy: Math.round(Math.max(0, 1 - ratio) * 10_000) / 10_000,
+    bias: Math.round(((forecastCents - actualCents) / actualCents) * 10_000) / 10_000,
+    miss,
+  };
+}
+function inRecordText(won: number, closed: number): string {
+  if (closed === 0) return "no closed deals yet";
+  if (closed < IN_PERCENT_FROM) return `won ${won} of ${closed}`;
+  return `won ${Math.round((100 * won) / closed)}% of ${closed}`;
+}
+function inCardStale(reviewedAt: string | null): boolean {
+  return !reviewedAt || Date.now() - Date.parse(reviewedAt) > IN_STALE_CARD_DAYS * 86_400_000;
+}
+function inSnapshotOf(row: DealRow): DealSnapshotRow {
+  return {
+    deal_id: row.id,
+    stage_key: row.stage_key,
+    status: "open",
+    mrr_amount: row.mrr_amount,
+    currency: row.currency,
+    expected_close_date: row.expected_close_date,
+    forecast_category: inEffectiveCategory(row),
+  };
+}
+function inEnsureToday() {
+  const today = todayIso();
+  if (!dealSnapshots.has(today))
+    dealSnapshots.set(today, deals.filter((row) => row.status === "open").map(inSnapshotOf));
+}
+function inRecord(competitor: CompetitorRow) {
+  const name = competitor.name.trim().toLowerCase();
+  const ids = new Set(
+    dealCompetitors.filter((row) => row.competitor_id === competitor.id).map((row) => row.deal_id),
+  );
+  for (const deal of deals)
+    if (name && deal.loss_competitor.trim().toLowerCase() === name) ids.add(deal.id);
+  const on = deals.filter((deal) => ids.has(deal.id));
+  const closed = on.filter((deal) => deal.status === "won" || deal.status === "lost");
+  const won = closed.filter((deal) => deal.status === "won").length;
+  return {
+    won,
+    closed: closed.length,
+    open: on.filter((deal) => deal.status === "open").length,
+    text: inRecordText(won, closed.length),
+  };
+}
+function inCompetitorView(row: CompetitorRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    website: row.website,
+    summary: row.summary,
+    quick_dismiss: row.quick_dismiss,
+    why_we_win: row.why_we_win,
+    why_we_lose: row.why_we_lose,
+    objections: row.objections,
+    reviewed_at: row.reviewed_at,
+    reviewed_by: staff.find((member) => member.id === row.reviewed_by)?.display_name ?? "",
+    stale: inCardStale(row.reviewed_at),
+    record: inRecord(row),
+  };
+}
+function inDealCompetitors(dealId: string) {
+  return dealCompetitors
+    .filter((row) => row.deal_id === dealId)
+    .map((row) => {
+      const card = competitors.find((item) => item.id === row.competitor_id);
+      return card
+        ? {
+            competitor_id: card.id,
+            name: card.name,
+            strengths: row.strengths,
+            weaknesses: row.weaknesses,
+            state: row.state,
+            quick_dismiss: card.quick_dismiss,
+            card_stale: inCardStale(card.reviewed_at),
+          }
+        : null;
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null)
+    .sort(
+      (a, b) =>
+        Number(a.state !== "active") - Number(b.state !== "active") || a.name.localeCompare(b.name),
+    );
+}
+function inInterviewView(row: InterviewRow) {
+  const deal = deals.find((item) => item.id === row.deal_id);
+  const status = deal?.status ?? "";
+  return {
+    id: row.id,
+    deal_id: row.deal_id,
+    deal_name: deal?.name ?? "",
+    company: deal ? companyName(deal.company_id) : "",
+    outcome: status,
+    seller_reason:
+      status === "won"
+        ? "Won"
+        : (IN_SELLER_REASONS[deal?.loss_reason ?? ""] ?? (deal?.loss_reason || "—")),
+    seller_detail: status === "lost" ? (deal?.loss_detail ?? "") : "",
+    held_on: row.held_on,
+    interviewer: staff.find((member) => member.id === row.interviewer_staff_id)?.display_name ?? "",
+    interviewee_name: row.interviewee_name,
+    interviewee_title: row.interviewee_title,
+    buyer_reason: row.buyer_reason,
+    drivers: row.drivers.map((item) => ({
+      ...item,
+      label: IN_DRIVERS[item.driver] ?? item.driver,
+    })),
+    quotes: row.quotes,
+    summary: row.summary,
+  };
+}
+function inTally(views: Array<ReturnType<typeof inInterviewView>>) {
+  const counts = new Map<string, { positive: number; negative: number }>();
+  for (const view of views)
+    for (const item of view.drivers) {
+      const entry = counts.get(item.driver) ?? { positive: 0, negative: 0 };
+      if (item.effect === "positive") entry.positive += 1;
+      if (item.effect === "negative") entry.negative += 1;
+      counts.set(item.driver, entry);
+    }
+  return [...counts.entries()]
+    .map(([driver, value]) => ({ driver, label: IN_DRIVERS[driver] ?? driver, ...value }))
+    .sort(
+      (a, b) =>
+        b.positive + b.negative - (a.positive + a.negative) || a.label.localeCompare(b.label),
+    );
+}
+/** The quarter's deals in one currency: open ones closing in it, by category, and won ones. */
+function inDealLines(period: string, currency: string) {
+  const [start, end] = inQuarterBounds(period)!;
+  const open: Array<
+    Record<string, unknown> & { category: string; cents: number; deal_id: string }
+  > = [];
+  const won: typeof open = [];
+  let undated = 0;
+  for (const deal of deals) {
+    if (deal.currency !== currency) continue;
+    const category = inEffectiveCategory(deal);
+    const line = {
+      deal_id: deal.id,
+      name: deal.name,
+      company: companyName(deal.company_id),
+      company_id: deal.company_id,
+      stage: stageOf(deal.stage_key)?.label ?? deal.stage_key,
+      category,
+      category_label: IN_CATEGORIES[category] ?? "",
+      overridden: deal.status === "open" && Boolean(deal.forecast_category),
+      amount: centsText(Math.round(deal.mrr_amount * 100)),
+      cents: Math.round(deal.mrr_amount * 100),
+      close_date: deal.expected_close_date,
+      push_count: deal.push_count ?? 0,
+      closed_at: deal.closed_at,
+    };
+    if (deal.status === "won") {
+      const closed = (deal.closed_at ?? "").slice(0, 10);
+      if (closed && closed >= start && closed <= end) won.push(line);
+    } else if (deal.status === "open") {
+      if (!deal.expected_close_date) undated += 1;
+      else if (deal.expected_close_date >= start && deal.expected_close_date <= end)
+        open.push(line);
+    }
+  }
+  return { open, won, undated };
+}
+function inStrip<T extends { cents: number }>(line: T): Omit<T, "cents"> {
+  const { cents: _cents, ...rest } = line;
+  void _cents;
+  return rest;
+}
+function inSubmissionView(row: SubmissionRow, actualCents: number | null, wonIds: Set<string>) {
+  const committed = row.deals.filter((item) => item.category === "commit");
+  return {
+    id: row.id,
+    period: row.period,
+    currency: row.currency,
+    commit: centsText(row.commit_cents),
+    best_case: centsText(row.best_case_cents),
+    closed_then: centsText(row.closed_cents),
+    pipeline_then: centsText(row.pipeline_cents),
+    note: row.note,
+    by: staff.find((member) => member.id === row.submitted_by)?.display_name ?? "",
+    at: row.submitted_at,
+    deals: row.deals,
+    result:
+      actualCents === null
+        ? null
+        : {
+            ...inAccuracy(row.commit_cents, actualCents),
+            actual: centsText(actualCents),
+            hit: committed.filter((item) => wonIds.has(item.deal_id)),
+            missed: committed.filter((item) => !wonIds.has(item.deal_id)),
+          },
+  };
+}
+function inObjections(value: unknown): Array<{ objection: string; response: string }> {
+  const rows = Array.isArray(value) ? value : [];
+  return rows
+    .map((item) => ({
+      objection: String((item as Record<string, unknown>)?.objection ?? "")
+        .trim()
+        .slice(0, 300),
+      response: String((item as Record<string, unknown>)?.response ?? "")
+        .trim()
+        .slice(0, 1000),
+    }))
+    .filter((item) => item.objection)
+    .slice(0, 20);
+}
+
+/**
+ * The pipeline's recent past, so inspection has something to show on a fresh demo: nightly
+ * pictures 7, 14 and 30 days back in which some deals closed later, were smaller or sat in
+ * a lower category; a few deals pushed (with their counts) and set by hand; a quarter's
+ * target and calls, last quarter's scored; four competitors met in deals; three buyers
+ * interviewed after the decision.
+ */
+function seedInspection() {
+  dealSnapshots.clear();
+  forecastSubmissions.length = 0;
+  salesTargets.clear();
+  competitors.length = 0;
+  dealCompetitors.length = 0;
+  interviews.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const today = todayIso();
+  const open = deals.filter((deal) => deal.status === "open");
+
+  // Hand-set categories, pushes and next-step ages on today's deals.
+  open.forEach((deal, index) => {
+    deal.next_step_changed_at =
+      index % 4 === 3 ? agoIso(24 * (9 + index)) : agoIso(24 * (index % 5));
+    if (index % 5 === 1 && deal.expected_close_date) {
+      deal.push_count = 1 + (index % 3 === 0 ? 1 : 0);
+      deal.first_close_date = addDaysIso(deal.expected_close_date, -35);
+    }
+    if (index === 2) deal.forecast_category = "commit";
+    if (index === 6) deal.forecast_category = "omitted";
+  });
+
+  // The pictures at 30, 14 and 7 days back.
+  for (const back of [30, 14, 7]) {
+    const day = addDaysIso(today, -back);
+    const since = `${day}T00:00:00Z`;
+    const rows = deals
+      .filter(
+        (deal) =>
+          deal.created_at < since &&
+          (deal.status === "open" || (deal.closed_at !== null && deal.closed_at >= since)),
+      )
+      .map((deal, index) => {
+        const row = inSnapshotOf(deal);
+        if (deal.status !== "open") {
+          row.stage_key = "negotiation";
+          row.forecast_category = "commit";
+        }
+        if ((deal.push_count ?? 0) > 0 && deal.expected_close_date)
+          row.expected_close_date = addDaysIso(deal.expected_close_date, -Math.min(35, back + 21));
+        if (index % 6 === 2) row.mrr_amount = Math.round(deal.mrr_amount * 0.75);
+        if (index % 9 === 4 && row.forecast_category === "commit")
+          row.forecast_category = "best_case";
+        return row;
+      });
+    dealSnapshots.set(day, rows);
+  }
+  inEnsureToday();
+
+  // Targets and calls: this quarter's, and last quarter's scored against what was won.
+  const current = inQuarterOf(today);
+  // The latest earlier quarter that has wins, so its scored call means something; with
+  // none, no past call is invented.
+  const last =
+    [1, 2, 3, 4]
+      .map((back) => inShiftQuarter(current, -back))
+      .find((period) => inDealLines(period, "USD").won.length > 0) ?? "";
+  salesTargets.set(`${current}|USD`, 600_000);
+  salesTargets.set(`${inShiftQuarter(current, 1)}|USD`, 750_000);
+  if (last) salesTargets.set(`${last}|USD`, 450_000);
+  const lastLines = inDealLines(last || current, "USD");
+  const lastWon = lastLines.won.reduce((total, line) => total + line.cents, 0);
+  const lastStart = inQuarterBounds(last || current)![0];
+  const frozen = (lines: typeof lastLines.won, category: string) =>
+    lines.map((line) => ({
+      deal_id: line.deal_id,
+      name: String(line.name),
+      company: String(line.company),
+      category,
+      amount: String(line.amount),
+    }));
+  if (last)
+    forecastSubmissions.push(
+      {
+        id: randomUUID(),
+        period: last,
+        currency: "USD",
+        commit_cents: Math.round(lastWon * 1.25),
+        best_case_cents: Math.round(lastWon * 1.6),
+        closed_cents: 0,
+        pipeline_cents: Math.round(lastWon * 2.2),
+        deals: frozen(lastLines.won, "commit"),
+        note: "Early call: the pilots convert if the fixed-income coverage lands.",
+        submitted_by: OWNER,
+        submitted_at: `${addDaysIso(lastStart, 6)}T09:00:00Z`,
+      },
+      {
+        id: randomUUID(),
+        period: last,
+        currency: "USD",
+        commit_cents: Math.round(lastWon * 1.08),
+        best_case_cents: Math.round(lastWon * 1.3),
+        closed_cents: Math.round(lastWon * 0.6),
+        pipeline_cents: Math.round(lastWon * 1.4),
+        deals: frozen(lastLines.won, "commit"),
+        note: "Mid-quarter: one pilot slipped to next quarter.",
+        submitted_by: SALES,
+        submitted_at: `${addDaysIso(lastStart, 45)}T09:00:00Z`,
+      },
+    );
+  const nowLines = inDealLines(current, "USD");
+  const committed = nowLines.open.filter((line) => line.category === "commit");
+  const wonNow = nowLines.won.reduce((total, line) => total + line.cents, 0);
+  const commitNow = wonNow + committed.reduce((total, line) => total + line.cents, 0);
+  forecastSubmissions.push({
+    id: randomUUID(),
+    period: current,
+    currency: "USD",
+    commit_cents: commitNow,
+    best_case_cents: Math.round(commitNow * 1.35),
+    closed_cents: wonNow,
+    pipeline_cents: nowLines.open.reduce((total, line) => total + line.cents, 0),
+    deals: [
+      ...frozen(committed as typeof lastLines.won, "commit"),
+      ...frozen(nowLines.won, "closed"),
+    ],
+    note: committed.length
+      ? "Won so far plus the negotiations; best case adds the proposals out this week."
+      : "Won so far: nothing else closes before the quarter ends.",
+    submitted_by: SALES,
+    submitted_at: agoIso(24 * 4),
+  });
+
+  // Competitors: invented names, never a real vendor's.
+  const cards: CompetitorRow[] = [
+    {
+      id: "cf000001-0000-4000-8000-000000000000",
+      name: "Fathom Terminal",
+      website: "fathomterminal.example",
+      summary: "A desktop terminal sold per desk, strong in rates and FX.",
+      quick_dismiss:
+        "Their filings arrive a day after ours, and every extra seat costs a desk licence.",
+      why_we_win: "Same-day filings; research and chat in one place; seats priced per person.",
+      why_we_lose: "Deeper fixed-income history; firms already trained on it.",
+      objections: [
+        {
+          objection: "Everyone here already knows Fathom.",
+          response: "Keep it for rates; put the research desk on us and compare the week.",
+        },
+        {
+          objection: "You are newer.",
+          response: "Show the audit export and the uptime page; offer the pilot.",
+        },
+      ],
+      reviewed_at: agoIso(24 * 20),
+      reviewed_by: SALES,
+      archived_at: null,
+    },
+    {
+      id: "cf000002-0000-4000-8000-000000000000",
+      name: "Ledgerpoint",
+      website: "ledgerpoint.example",
+      summary: "Low-cost screening and charts for small funds.",
+      quick_dismiss: "Cheaper per seat, but no filings and no research workflow.",
+      why_we_win: "Primary documents and the desk's own notes on one record.",
+      why_we_lose: "Price, when the buyer only screens.",
+      objections: [
+        {
+          objection: "Ledgerpoint is half the price.",
+          response: "Count the hours spent pulling filings by hand.",
+        },
+      ],
+      reviewed_at: agoIso(24 * 120),
+      reviewed_by: OWNER,
+      archived_at: null,
+    },
+    {
+      id: "cf000003-0000-4000-8000-000000000000",
+      name: "Northbeam Data",
+      website: "northbeam.example",
+      summary: "A data feed firms build their own screens on.",
+      quick_dismiss: "A feed, not a desk: they will build and maintain what we ship.",
+      why_we_win: "No engineering needed; alerts and research ready on day one.",
+      why_we_lose: "Firms with a data team who want raw access.",
+      objections: [],
+      reviewed_at: agoIso(24 * 45),
+      reviewed_by: SALES,
+      archived_at: null,
+    },
+    {
+      id: "cf000004-0000-4000-8000-000000000000",
+      name: "In-house spreadsheets",
+      website: "",
+      summary: "The status quo: analysts' own workbooks and a shared drive.",
+      quick_dismiss:
+        "Nobody is fired for a spreadsheet, until a number is wrong in front of a client.",
+      why_we_win: "Sources on every figure; the audit trail.",
+      why_we_lose: "No budget line; the team does not feel the pain yet.",
+      objections: [],
+      reviewed_at: null,
+      reviewed_by: "",
+      archived_at: null,
+    },
+  ];
+  competitors.push(...cards);
+  open.slice(0, 9).forEach((deal, index) => {
+    const card = cards[index % 3]!;
+    dealCompetitors.push({
+      deal_id: deal.id,
+      competitor_id: card.id,
+      strengths:
+        index % 3 === 0
+          ? "Incumbent on the rates desk"
+          : index % 3 === 1
+            ? "Half our price"
+            : "Their data team likes raw access",
+      weaknesses:
+        index % 3 === 0
+          ? "No same-day filings"
+          : index % 3 === 1
+            ? "No research workflow"
+            : "Months to build screens",
+      state: index === 4 ? "eliminated" : "active",
+    });
+  });
+  const lost = deals.filter((deal) => deal.status === "lost");
+  lost.forEach((deal, index) => {
+    if (index % 2 === 0) {
+      deal.loss_reason = deal.loss_reason || "competitor";
+      if (deal.loss_reason === "competitor") deal.loss_competitor = cards[index % 2]!.name;
+    }
+  });
+  const won = deals.filter((deal) => deal.status === "won").slice(-4);
+  won.slice(0, 2).forEach((deal, index) =>
+    dealCompetitors.push({
+      deal_id: deal.id,
+      competitor_id: cards[index]!.id,
+      strengths: "",
+      weaknesses: "",
+      state: "eliminated",
+    }),
+  );
+
+  // Interviews after the decision.
+  const pickLost = lost.slice(0, 2);
+  pickLost.forEach((deal, index) =>
+    interviews.push({
+      id: `cf1000${index + 1}0-0000-4000-8000-000000000000`,
+      deal_id: deal.id,
+      held_on: addDaysIso((deal.closed_at ?? agoIso(24 * 10)).slice(0, 10), 6),
+      interviewer_staff_id: SALES,
+      interviewee_name: index === 0 ? "Head of research" : "COO",
+      interviewee_title: index === 0 ? "Research" : "Operations",
+      buyer_reason:
+        index === 0
+          ? "We needed ten years of fixed-income history on day one."
+          : "The team would not move off the tool they already know this year.",
+      drivers:
+        index === 0
+          ? [
+              { driver: "data_coverage", effect: "negative" },
+              { driver: "ease_of_use", effect: "positive" },
+              { driver: "price", effect: "positive" },
+            ]
+          : [
+              { driver: "timing", effect: "negative" },
+              { driver: "champion", effect: "positive" },
+              { driver: "competitor", effect: "negative" },
+            ],
+      quotes: index === 0 ? "“Price was never the issue.”" : "“Ask us again in the new year.”",
+      summary: "",
+    }),
+  );
+  if (won[0])
+    interviews.push({
+      id: "cf100030-0000-4000-8000-000000000000",
+      deal_id: won[0].id,
+      held_on: addDaysIso((won[0].closed_at ?? agoIso(24 * 30)).slice(0, 10), 10),
+      interviewer_staff_id: OWNER,
+      interviewee_name: "Portfolio manager",
+      interviewee_title: "Equities",
+      buyer_reason: "Filings the same day, with the desk's notes beside them.",
+      drivers: [
+        { driver: "speed", effect: "positive" },
+        { driver: "data_coverage", effect: "positive" },
+        { driver: "support", effect: "positive" },
+      ],
+      quotes: "“It saved an analyst a morning a week.”",
+      summary: "",
+    });
+}
+
+// --- the privacy desk (mirrors privacy.py and privacy_routes.py) -----------------------------------
+
+const PV_KINDS: Record<string, string> = {
+  access: "Access (a copy of their data)",
+  rectification: "Rectification",
+  erasure: "Erasure",
+  restriction: "Restriction of processing",
+  portability: "Portability",
+  objection: "Objection",
+  automated: "Review of an automated decision",
+  consent: "Consent withdrawn",
+  complaint: "Complaint about how we used their data",
+};
+const PV_REGIMES: Record<string, string> = {
+  uk_gdpr: "UK GDPR",
+  eu_gdpr: "EU GDPR",
+  india_dpdp: "India DPDP",
+  other: "Other",
+};
+const PV_CHANNELS = ["email", "form", "post", "phone", "in_app", "other"];
+const PV_OPEN = ["received", "identity", "scoping", "searching", "review"];
+const PV_CLOSED = ["responded", "refused", "withdrawn"];
+const PV_OUTCOMES = ["fulfilled", "partly", "none_held"];
+const PV_REFUSALS: Record<string, string> = {
+  manifestly_unfounded: "Manifestly unfounded",
+  excessive: "Manifestly excessive",
+  exemption: "An exemption applies",
+  identity: "Identity was not confirmed",
+  not_ours: "We are not the controller",
+};
+const PV_SYSTEMS: Record<string, string> = {
+  crm: "CRM: people, leads, companies and notes",
+  support: "Support tickets and their replies",
+  mail: "Mail sent, mailing lists and consent",
+  meetings: "Meetings and calendar invitations",
+  product: "The product account and its usage",
+  billing: "Invoices, receipts and contracts",
+  mailboxes: "Staff mailboxes and chat (outside HQ)",
+  backups: "Backups and logs (kept to their retention)",
+};
+const PV_SEARCH_STATES = ["pending", "found", "none", "not_applicable"];
+const PV_BANK_HOLIDAYS = new Set([
+  "2025-01-01",
+  "2025-04-18",
+  "2025-04-21",
+  "2025-05-05",
+  "2025-05-26",
+  "2025-08-25",
+  "2025-12-25",
+  "2025-12-26",
+  "2026-01-01",
+  "2026-04-03",
+  "2026-04-06",
+  "2026-05-04",
+  "2026-05-25",
+  "2026-08-31",
+  "2026-12-25",
+  "2026-12-28",
+  "2027-01-01",
+  "2027-03-26",
+  "2027-03-29",
+  "2027-05-03",
+  "2027-05-31",
+  "2027-08-30",
+  "2027-12-27",
+  "2027-12-28",
+  "2028-01-03",
+  "2028-04-14",
+  "2028-04-17",
+  "2028-05-01",
+  "2028-05-29",
+  "2028-08-28",
+  "2028-12-25",
+  "2028-12-26",
+]);
+const PV_HOLIDAYS_KNOWN_THROUGH = "2028-12-31";
+const PV_INCIDENT_KINDS: Record<string, string> = {
+  security: "Security",
+  availability: "Availability",
+  data_loss: "Data lost or destroyed",
+  misdirected: "Sent to the wrong person",
+  other: "Other",
+};
+const PV_SEVERITIES = ["low", "medium", "high", "critical"];
+const PV_RISKS: Record<string, string> = {
+  none: "Unlikely to result in a risk: not notifiable",
+  risk: "A risk: tell the regulator",
+  high: "A high risk: tell the regulator and the people affected",
+};
+const PV_STANDARD = {
+  incident_notice_hours: 72,
+  subprocessor_notice_days: 30,
+  objection_window_days: 30,
+};
+const PV_AUDIT = ["none", "questionnaire", "remote", "onsite"];
+const PV_DORA = ["none", "ict_service", "critical_important"];
+const PV_TRANSFERS: Record<string, string> = {
+  adequacy: "Adequacy decision",
+  idta: "UK IDTA",
+  scc_uk_addendum: "EU SCCs with the UK Addendum",
+  scc: "EU SCCs",
+  not_needed: "No restricted transfer",
+};
+const PV_RESOLUTIONS = ["withdrawn", "accommodated", "terminated"];
+/** The mock's mail is "set up" unless told otherwise, so the demo can send a notice. */
+const MOCK_MAIL_READY = process.env.MOCK_MAIL_READY !== "0";
+
+type PrivacyRequestRow = {
+  id: string;
+  reference: string;
+  kind: string;
+  regime: string;
+  channel: string;
+  requester_name: string;
+  requester_email: string;
+  person_id: string;
+  company_id: string;
+  description: string;
+  received_on: string;
+  identity_state: string;
+  identity_confirmed_on: string | null;
+  identity_method: string;
+  fee_requested_on: string | null;
+  fee_paid_on: string | null;
+  status: string;
+  paused_on: string | null;
+  paused_question: string;
+  paused_days: number;
+  extended: boolean;
+  extension_reason: string;
+  extension_told_on: string | null;
+  acknowledged_on: string | null;
+  responded_on: string | null;
+  outcome: string;
+  outcome_detail: string;
+  assignee_staff_id: string;
+  created_at: string;
+  updated_at: string;
+};
+type PrivacySearchRow = { state: string; note: string; staff_id: string; at: string | null };
+type PrivacyEventRow = {
+  subject_type: string;
+  subject_id: string;
+  kind: string;
+  detail: string;
+  staff_id: string;
+  at: string;
+};
+type IncidentRow = {
+  id: string;
+  reference: string;
+  title: string;
+  summary: string;
+  kind: string;
+  severity: string;
+  status: string;
+  personal_data: boolean;
+  occurred_at: string | null;
+  detected_at: string;
+  aware_at: string | null;
+  contained_at: string | null;
+  resolved_at: string | null;
+  data_categories: string;
+  subjects_estimate: number | null;
+  records_estimate: number | null;
+  risk: string;
+  risk_reason: string;
+  assessed_by: string;
+  assessed_at: string | null;
+  regulator_notified_at: string | null;
+  regulator_reference: string;
+  late_reason: string;
+  individuals_notified_at: string | null;
+  lessons: string;
+  lead_staff_id: string;
+  created_at: string;
+};
+type IncidentCustomerRow = {
+  incident_id: string;
+  company_id: string;
+  due_at: string | null;
+  notified_at: string | null;
+  note: string;
+};
+type CommitmentRow = {
+  company_id: string;
+  contract_reference: string;
+  privacy_contact_email: string;
+  incident_notice_hours: number | null;
+  subprocessor_notice_days: number | null;
+  objection_window_days: number | null;
+  audit_rights: string;
+  data_locations: string;
+  exit_assistance_days: number | null;
+  dora_classification: string;
+  material_outsourcing: boolean;
+  nonstandard_clauses: string;
+  reviewed_on: string | null;
+  updated_by: string;
+  updated_at: string;
+};
+type SubprocessorRow = {
+  id: string;
+  legal_name: string;
+  service: string;
+  purpose: string;
+  data_categories: string;
+  locations: string;
+  transfer_mechanism: string;
+  dpa_signed_on: string | null;
+  status: string;
+  notice_sent_on: string | null;
+  effective_on: string | null;
+  activated_on: string | null;
+  retired_on: string | null;
+};
+type NoticeRow = {
+  subprocessor_id: string;
+  company_id: string;
+  sent_to: string;
+  sent_on: string;
+  objection_deadline: string;
+  objected_on: string | null;
+  objection: string;
+  resolution: string;
+  resolved_on: string | null;
+};
+
+const privacyRequests: PrivacyRequestRow[] = [];
+const privacySearches = new Map<string, PrivacySearchRow>();
+const privacyEvents: PrivacyEventRow[] = [];
+const incidents: IncidentRow[] = [];
+const incidentCustomers: IncidentCustomerRow[] = [];
+const commitmentsByCompany = new Map<string, CommitmentRow>();
+const subprocessors: SubprocessorRow[] = [];
+const subprocessorNotices: NoticeRow[] = [];
+const erasedPeople = new Set<string>();
+
+function pvEvent(
+  subjectType: string,
+  subjectId: string,
+  kind: string,
+  detail: string,
+  staffId: string,
+  at?: string,
+) {
+  privacyEvents.push({
+    subject_type: subjectType,
+    subject_id: subjectId,
+    kind,
+    detail: detail.slice(0, 2000),
+    staff_id: staffId,
+    at: at ?? now(),
+  });
+}
+
+const PV_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+/** Mirrors privacy.long_day: 3 Sep 2026 (spelled out, not left to the runtime's locale). */
+function pvDay(value: string | null | undefined): string {
+  if (!value) return "";
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number) as [number, number, number];
+  return `${day} ${PV_MONTHS[month - 1]} ${year}`;
+}
+/** Mirrors privacy.long_moment: 29 Sep 2026, 21:36 UTC. */
+function pvMoment(value: string | null | undefined): string {
+  if (!value) return "";
+  const iso = new Date(value).toISOString();
+  return `${pvDay(iso)}, ${iso.slice(11, 16)} UTC`;
+}
+function pvWorkingDay(day: string): boolean {
+  const weekday = new Date(`${day}T00:00:00Z`).getUTCDay();
+  return weekday !== 0 && weekday !== 6 && !PV_BANK_HOLIDAYS.has(day);
+}
+function pvNextWorkingDay(day: string): string {
+  let at = day;
+  while (!pvWorkingDay(at)) at = addDaysIso(at, 1);
+  return at;
+}
+function pvClockStart(row: PrivacyRequestRow): string | null {
+  let start = row.received_on;
+  if (row.identity_state === "requested") return null;
+  if (row.identity_state === "confirmed") {
+    if (!row.identity_confirmed_on) return null;
+    if (row.identity_confirmed_on > start) start = row.identity_confirmed_on;
+  }
+  if (row.fee_requested_on) {
+    if (!row.fee_paid_on) return null;
+    if (row.fee_paid_on > start) start = row.fee_paid_on;
+  }
+  return start;
+}
+function pvFirstMonthEnd(row: PrivacyRequestRow): string | null {
+  const start = pvClockStart(row);
+  if (!start) return null;
+  if (row.regime === "india_dpdp") return addDaysIso(start, 90 + row.paused_days);
+  return pvNextWorkingDay(addDaysIso(addMonthsIso(start, 1), row.paused_days));
+}
+function pvDueOn(row: PrivacyRequestRow): string | null {
+  if (row.kind === "complaint") return addDaysIso(row.received_on, 30);
+  if (row.paused_on) return null;
+  const start = pvClockStart(row);
+  if (!start) return null;
+  if (row.regime === "india_dpdp") return addDaysIso(start, 90 + row.paused_days);
+  return pvNextWorkingDay(
+    addDaysIso(addMonthsIso(start, 1 + (row.extended ? 2 : 0)), row.paused_days),
+  );
+}
+function pvStoppedDays(pausedOn: string, answeredOn: string): number {
+  return Math.max(0, rxDaysBetween(pausedOn, answeredOn) + 1);
+}
+function pvClock(row: PrivacyRequestRow, today: string) {
+  const due = pvDueOn(row);
+  const closed = PV_CLOSED.includes(row.status);
+  let state: string;
+  if (closed) state = "closed";
+  else if (row.kind === "complaint") state = row.acknowledged_on ? "acknowledged" : "running";
+  else if (row.paused_on) state = "stopped";
+  else if (!due) state = "not_started";
+  else state = "running";
+  const daysLeft = due && state === "running" ? rxDaysBetween(today, due) : null;
+  const firstMonth = row.kind !== "complaint" ? pvFirstMonthEnd(row) : null;
+  let whenStopped: number | null = null;
+  if (row.paused_on) {
+    const running = pvDueOn({ ...row, paused_on: null });
+    whenStopped = running ? rxDaysBetween(row.paused_on, running) : null;
+  }
+  const reason =
+    state === "not_started"
+      ? row.identity_state === "requested"
+        ? "Waiting on proof of identity; the month starts when it is confirmed."
+        : "Waiting on the fee; the month starts when it is paid."
+      : state === "stopped"
+        ? "Stopped while we wait for the information needed to scope the request."
+        : row.kind === "complaint"
+          ? "A complaint is acknowledged within 30 days of receipt."
+          : row.regime === "india_dpdp"
+            ? "Answered within 90 days of receipt."
+            : row.extended
+              ? "Extended by two months; the person was told why."
+              : "One month from the day the clock started, to the next working day.";
+  return {
+    state,
+    starts_on: row.kind !== "complaint" ? pvClockStart(row) : row.received_on,
+    due_on: due,
+    days_left: daysLeft,
+    overdue: daysLeft !== null && daysLeft < 0,
+    stopped_since: row.paused_on,
+    days_left_when_stopped: whenStopped,
+    paused_days: row.paused_days,
+    extended: row.extended,
+    can_extend:
+      !closed &&
+      row.kind !== "complaint" &&
+      (row.regime === "uk_gdpr" || row.regime === "eu_gdpr") &&
+      !row.extended &&
+      firstMonth !== null &&
+      today <= firstMonth,
+    extend_by: firstMonth && !row.extended && row.kind !== "complaint" ? firstMonth : null,
+    answered_late: Boolean(row.responded_on && due && row.responded_on > due),
+    holidays_known: due === null || due <= PV_HOLIDAYS_KNOWN_THROUGH,
+    reason,
+  };
+}
+function pvRequestView(row: PrivacyRequestRow, today = todayIso()) {
+  const assignee = staff.find((member) => member.id === row.assignee_staff_id);
+  return {
+    id: row.id,
+    reference: row.reference,
+    kind: row.kind,
+    kind_label: PV_KINDS[row.kind] ?? row.kind,
+    regime: row.regime,
+    regime_label: PV_REGIMES[row.regime] ?? row.regime,
+    channel: row.channel,
+    requester_name: row.requester_name,
+    requester_email: row.requester_email,
+    person_id: row.person_id || null,
+    company: row.company_id ? { id: row.company_id, name: companyName(row.company_id) } : null,
+    description: row.description,
+    received_on: row.received_on,
+    identity_state: row.identity_state,
+    identity_confirmed_on: row.identity_confirmed_on,
+    identity_method: row.identity_method,
+    fee_requested_on: row.fee_requested_on,
+    fee_paid_on: row.fee_paid_on,
+    status: row.status,
+    open: PV_OPEN.includes(row.status),
+    paused_question: row.paused_question,
+    extension_reason: row.extension_reason,
+    extension_told_on: row.extension_told_on,
+    acknowledged_on: row.acknowledged_on,
+    responded_on: row.responded_on,
+    outcome: row.outcome,
+    outcome_detail: row.outcome_detail,
+    assignee: assignee ? { id: assignee.id, name: assignee.display_name } : null,
+    clock: pvClock(row, today),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+function pvReference(existing: string[], prefix: string, year: number): string {
+  const stem = `${prefix}-${year}-`;
+  const used = existing
+    .filter((ref) => ref.startsWith(stem))
+    .map((ref) => Number(ref.slice(stem.length)))
+    .filter((value) => Number.isFinite(value));
+  return `${stem}${String((used.length ? Math.max(...used) : 0) + 1).padStart(4, "0")}`;
+}
+function pvEvents(subjectType: string, subjectId: string) {
+  return privacyEvents
+    .filter((row) => row.subject_type === subjectType && row.subject_id === subjectId)
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .map((row) => ({
+      kind: row.kind,
+      detail: row.detail,
+      by: staff.find((member) => member.id === row.staff_id)?.display_name ?? "",
+      at: row.at,
+    }));
+}
+function pvActiveCustomers(): Map<string, string> {
+  const found = new Map<string, string>();
+  for (const contract of contracts)
+    if (contract.status === "active")
+      found.set(contract.company_id, companyName(contract.company_id));
+  return found;
+}
+function pvRegulatorClock(row: IncidentRow, at = Date.now()) {
+  if (!row.personal_data)
+    return { state: "not_applicable", due_at: null, hours_left: null, late: false };
+  if (!row.aware_at) return { state: "no_awareness", due_at: null, hours_left: null, late: false };
+  const due = Date.parse(row.aware_at) + 72 * 3_600_000;
+  const dueIso = new Date(due).toISOString().replace(/\.\d{3}Z$/, "Z");
+  if (row.regulator_notified_at)
+    return {
+      state: "notified",
+      due_at: dueIso,
+      hours_left: null,
+      late: Date.parse(row.regulator_notified_at) > due,
+      notified_at: row.regulator_notified_at,
+    };
+  if (row.risk === "none")
+    return { state: "not_notifiable", due_at: dueIso, hours_left: null, late: false };
+  const hoursLeft = Math.round(((due - at) / 3_600_000) * 10) / 10;
+  return {
+    state: row.risk === "" ? "unassessed" : "due",
+    due_at: dueIso,
+    hours_left: hoursLeft,
+    late: hoursLeft < 0,
+  };
+}
+function pvIncidentView(row: IncidentRow) {
+  const at = Date.now();
+  const lead = staff.find((member) => member.id === row.lead_staff_id);
+  const owed = incidentCustomers
+    .filter((item) => item.incident_id === row.id)
+    .map((item) => {
+      const commitment = commitmentsByCompany.get(item.company_id);
+      const due = item.due_at ? Date.parse(item.due_at) : null;
+      const told = item.notified_at ? Date.parse(item.notified_at) : null;
+      return {
+        company_id: item.company_id,
+        company_name: companyName(item.company_id),
+        due_at: item.due_at,
+        notified_at: item.notified_at,
+        hours_left:
+          due !== null && told === null ? Math.round(((due - at) / 3_600_000) * 10) / 10 : null,
+        late: due !== null && ((told !== null && told > due) || (told === null && at > due)),
+        note: item.note,
+        contact: commitment?.privacy_contact_email ?? "",
+        dora: (commitment?.dora_classification ?? "none") !== "none",
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(a.notified_at !== null) - Number(b.notified_at !== null) ||
+        String(a.due_at ?? "~").localeCompare(String(b.due_at ?? "~")),
+    );
+  return {
+    id: row.id,
+    reference: row.reference,
+    title: row.title,
+    summary: row.summary,
+    kind: row.kind,
+    kind_label: PV_INCIDENT_KINDS[row.kind] ?? "",
+    severity: row.severity,
+    status: row.status,
+    personal_data: row.personal_data,
+    occurred_at: row.occurred_at,
+    detected_at: row.detected_at,
+    aware_at: row.aware_at,
+    contained_at: row.contained_at,
+    resolved_at: row.resolved_at,
+    data_categories: row.data_categories,
+    subjects_estimate: row.subjects_estimate,
+    records_estimate: row.records_estimate,
+    risk: row.risk,
+    risk_label: PV_RISKS[row.risk] ?? "Not yet assessed",
+    risk_reason: row.risk_reason,
+    assessed_by: staff.find((member) => member.id === row.assessed_by)?.display_name ?? "",
+    assessed_at: row.assessed_at,
+    regulator: pvRegulatorClock(row, at),
+    regulator_reference: row.regulator_reference,
+    late_reason: row.late_reason,
+    individuals_notified_at: row.individuals_notified_at,
+    lessons: row.lessons,
+    lead: lead ? { id: lead.id, name: lead.display_name } : null,
+    customers: owed,
+    customers_owed: owed.filter((item) => !item.notified_at).length,
+    created_at: row.created_at,
+  };
+}
+function pvCommitmentFlags(row: CommitmentRow | undefined): string[] {
+  if (!row) return [];
+  const flags: string[] = [];
+  if (
+    row.incident_notice_hours !== null &&
+    row.incident_notice_hours < PV_STANDARD.incident_notice_hours
+  )
+    flags.push(
+      `Incident notice within ${row.incident_notice_hours} hours (standard ${PV_STANDARD.incident_notice_hours})`,
+    );
+  if (
+    row.subprocessor_notice_days !== null &&
+    row.subprocessor_notice_days > PV_STANDARD.subprocessor_notice_days
+  )
+    flags.push(
+      `Sub-processor notice ${row.subprocessor_notice_days} days ahead (standard ${PV_STANDARD.subprocessor_notice_days})`,
+    );
+  if (
+    row.objection_window_days !== null &&
+    row.objection_window_days > PV_STANDARD.objection_window_days
+  )
+    flags.push(
+      `Objection window ${row.objection_window_days} days (standard ${PV_STANDARD.objection_window_days})`,
+    );
+  if (row.audit_rights === "onsite") flags.push("On-site audit rights");
+  if (row.dora_classification === "critical_important")
+    flags.push("DORA: we support a critical or important function");
+  if (row.material_outsourcing) flags.push("Material outsourcing for the customer");
+  if (row.nonstandard_clauses.trim()) flags.push("Non-standard clauses recorded");
+  return flags;
+}
+function pvCommitmentView(companyId: string, row: CommitmentRow | undefined) {
+  return {
+    company_id: companyId,
+    recorded: Boolean(row),
+    contract_reference: row?.contract_reference ?? "",
+    privacy_contact_email: row?.privacy_contact_email ?? "",
+    incident_notice_hours: row?.incident_notice_hours ?? null,
+    subprocessor_notice_days: row?.subprocessor_notice_days ?? null,
+    objection_window_days: row?.objection_window_days ?? null,
+    audit_rights: row?.audit_rights ?? "none",
+    data_locations: row?.data_locations ?? "",
+    exit_assistance_days: row?.exit_assistance_days ?? null,
+    dora_classification: row?.dora_classification ?? "none",
+    material_outsourcing: row?.material_outsourcing ?? false,
+    nonstandard_clauses: row?.nonstandard_clauses ?? "",
+    reviewed_on: row?.reviewed_on ?? null,
+    updated_by: staff.find((member) => member.id === row?.updated_by)?.display_name ?? "",
+    updated_at: row?.updated_at ?? null,
+    flags: pvCommitmentFlags(row),
+  };
+}
+function pvNoticeDays(companyId: string): number {
+  return (
+    commitmentsByCompany.get(companyId)?.subprocessor_notice_days ??
+    PV_STANDARD.subprocessor_notice_days
+  );
+}
+function pvObjectionDays(companyId: string): number {
+  return commitmentsByCompany.get(companyId)?.objection_window_days ?? pvNoticeDays(companyId);
+}
+function pvSubprocessorView(row: SubprocessorRow, today = todayIso()) {
+  const notices = subprocessorNotices.filter((item) => item.subprocessor_id === row.id);
+  const customers = pvActiveCustomers();
+  const noticed = new Set(notices.map((item) => item.company_id));
+  const unnoticed = [...customers.keys()].filter((id) => !noticed.has(id));
+  const open = notices.filter((item) => item.objected_on && !item.resolution);
+  const blockers: string[] = [];
+  if (row.status === "notice_sent") {
+    if (unnoticed.length) blockers.push(`${unnoticed.length} customer(s) not yet told`);
+    if (row.effective_on && today < row.effective_on)
+      blockers.push(`the notice runs until ${pvDay(row.effective_on)}`);
+    if (open.length) blockers.push(`${open.length} objection(s) not settled`);
+  }
+  return {
+    id: row.id,
+    legal_name: row.legal_name,
+    service: row.service,
+    purpose: row.purpose,
+    data_categories: row.data_categories,
+    locations: row.locations,
+    transfer_mechanism: row.transfer_mechanism,
+    transfer_label: PV_TRANSFERS[row.transfer_mechanism] ?? "",
+    dpa_signed_on: row.dpa_signed_on,
+    status: row.status,
+    notice_sent_on: row.notice_sent_on,
+    effective_on: row.effective_on,
+    activated_on: row.activated_on,
+    retired_on: row.retired_on,
+    notices_sent: notices.length,
+    customers_unnoticed:
+      row.status === "proposed" || row.status === "notice_sent" ? unnoticed.length : 0,
+    open_objections: open.length,
+    objections: notices.filter((item) => item.objected_on).length,
+    can_activate: row.status === "notice_sent" && blockers.length === 0,
+    blockers,
+  };
+}
+function pvEffectiveOn(subprocessorId: string): string | null {
+  const days = subprocessorNotices
+    .filter((item) => item.subprocessor_id === subprocessorId)
+    .map((item) => addDaysIso(item.sent_on, pvNoticeDays(item.company_id)));
+  return days.length ? days.sort().at(-1)! : null;
+}
+function pvNoticeText(
+  row: SubprocessorRow,
+  companyName: string,
+  effective: string,
+  deadline: string,
+) {
+  const long = (day: string) =>
+    new Date(`${day}T00:00:00Z`).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  const lines = [
+    `Hello ${companyName} team,`,
+    "",
+    `Under our data processing terms we are telling you, before it happens, that we intend to engage a new sub-processor from ${long(effective)}.`,
+    "",
+    `Sub-processor: ${row.legal_name}`,
+  ];
+  if (row.service) lines.push(`Service: ${row.service}`);
+  if (row.purpose) lines.push(`Purpose: ${row.purpose}`);
+  if (row.data_categories) lines.push(`Personal data involved: ${row.data_categories}`);
+  if (row.locations) lines.push(`Where it is processed: ${row.locations}`);
+  lines.push(`Transfer safeguard: ${PV_TRANSFERS[row.transfer_mechanism] ?? ""}`);
+  lines.push(
+    "",
+    `If you object on reasonable data-protection grounds, reply to this message by ${long(deadline)} and say why. We will work with you on it before the change takes effect.`,
+    "",
+    "Quantify Terminal",
+  );
+  return { subject: `Notice of a new sub-processor: ${row.legal_name}`, body: lines.join("\n") };
+}
+function pvSuppress(email: string, reason: string, staffId: string, reference: string): boolean {
+  if (!email) return false;
+  if (
+    mailSuppressions.some(
+      (row) => row.email_norm === email && row.scope === "global" && !row.released_at,
+    )
+  )
+    return false;
+  mailSuppressions.push({
+    id: randomUUID(),
+    email_norm: email,
+    scope: "global",
+    scope_key: "",
+    reason,
+    source: `privacy ${reference}`.slice(0, 60),
+    detail: "",
+    created_at: now(),
+    created_by: staffId,
+    released_at: null,
+    released_by: "",
+    release_note: "",
+  });
+  return true;
+}
+function pvMatches(email: string, person: PersonRow | undefined) {
+  if (!email) {
+    return {
+      email: "",
+      people: [],
+      leads: [],
+      list_memberships: [],
+      meetings: [],
+      mail_messages: 0,
+      suppressed: false,
+      consent: null,
+      tickets: [],
+      tickets_searched: true,
+    };
+  }
+  const account = person?.account_user_id ?? "";
+  return {
+    email,
+    people: people
+      .filter((row) => row.email.toLowerCase() === email)
+      .map((row) => ({
+        id: row.id,
+        name: row.full_name,
+        company_id: row.company_id,
+        erased: erasedPeople.has(row.id),
+      })),
+    leads: leads
+      .filter((row) => row.email.toLowerCase() === email)
+      .map((row) => ({
+        id: row.id,
+        name: row.full_name,
+        stage: row.stage,
+        anonymised: Boolean(row.anonymised_at),
+      })),
+    list_memberships: mailListMembers
+      .filter((row) => row.email_norm === email)
+      .map((row) => ({
+        list_id: row.list_id,
+        list_name: mailLists.find((list) => list.id === row.list_id)?.name ?? "",
+      })),
+    meetings: meetingAttendees
+      .filter((row) => row.email.toLowerCase() === email)
+      .map((row) => ({
+        id: row.meeting_id,
+        title: meetings.find((meeting) => meeting.id === row.meeting_id)?.title ?? "",
+      })),
+    mail_messages: mailMessages.filter((row) => row.email_norm === email).length,
+    suppressed: mailSuppressions.some((row) => row.email_norm === email && !row.released_at),
+    consent: null,
+    tickets: tickets
+      .filter(
+        (row) =>
+          String(row.contact_email ?? "").toLowerCase() === email ||
+          (account && String(row.account_id ?? "") === account),
+      )
+      .map((row) => ({ id: row.id, subject: row.subject })),
+    tickets_searched: true,
+  };
+}
+
+/**
+ * A privacy desk with something at every stage: a request due this week, one overdue, one
+ * with its clock stopped, one waiting on identity, an erasure, an objection, an
+ * unacknowledged complaint and one answered; a misdirected export on the regulator's clock
+ * with a DORA customer owed notice within hours; commitments with the usual departures;
+ * the register of sub-processors with one change in its notice period and an objection.
+ */
+function seedPrivacy() {
+  privacyRequests.length = 0;
+  privacySearches.clear();
+  privacyEvents.length = 0;
+  incidents.length = 0;
+  incidentCustomers.length = 0;
+  commitmentsByCompany.clear();
+  subprocessors.length = 0;
+  subprocessorNotices.length = 0;
+  erasedPeople.clear();
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const SUPPORT = "aa000000-0000-4000-8000-00000000000d";
+  const today = todayIso();
+  const customers = [...pvActiveCustomers().keys()];
+
+  // Commitments: most customers recorded, with the usual departures from the standard.
+  customers.forEach((companyId, index) => {
+    if (index % 12 === 11) return; // a few never recorded
+    const company = companies.find((row) => row.id === companyId);
+    const domain = company?.domain || "example.test";
+    commitmentsByCompany.set(companyId, {
+      company_id: companyId,
+      contract_reference: `MSA-${2025 + (index % 2)}-${String(40 + index).padStart(3, "0")}`,
+      privacy_contact_email: index % 17 === 16 ? "" : `dpo@${domain}`,
+      incident_notice_hours: index % 11 === 0 ? 24 : index % 7 === 1 ? 48 : 72,
+      subprocessor_notice_days: index % 13 === 2 ? 60 : 30,
+      objection_window_days: index % 13 === 2 ? 45 : 30,
+      audit_rights: index % 9 === 0 ? "onsite" : index % 4 === 1 ? "remote" : "questionnaire",
+      data_locations: index % 3 === 0 ? "UK and EU only" : "",
+      exit_assistance_days: index % 9 === 0 ? 90 : null,
+      dora_classification:
+        index % 11 === 0 ? "critical_important" : index % 11 === 5 ? "ict_service" : "none",
+      material_outsourcing: index % 22 === 0,
+      nonstandard_clauses:
+        index === 2
+          ? "Clause 14.3: incidents reported to their CISO by phone as well as in writing."
+          : "",
+      reviewed_on: addDaysIso(today, -30 - index * 3),
+      updated_by: OWNER,
+      updated_at: agoIso(24 * (30 + index)),
+    });
+  });
+
+  // Requests.
+  const withEmail = people.filter((row) => row.email && row.company_id);
+  const person = (index: number) => withEmail[index % Math.max(withEmail.length, 1)];
+  let serial = 0;
+  let complaints = 0;
+  const add = (input: Partial<PrivacyRequestRow> & { kind: string; received_on: string }) => {
+    const complaint = input.kind === "complaint";
+    const reference = complaint
+      ? `PC-${input.received_on.slice(0, 4)}-${String(++complaints).padStart(4, "0")}`
+      : `PR-${input.received_on.slice(0, 4)}-${String(++serial).padStart(4, "0")}`;
+    const row: PrivacyRequestRow = {
+      // Stable ids, so a demo link or a harness screen reaches the same request every time.
+      id: `ad${String(serial + complaints).padStart(6, "0")}-0000-4000-8000-000000000000`,
+      reference,
+      regime: "uk_gdpr",
+      channel: "email",
+      requester_name: "",
+      requester_email: "",
+      person_id: "",
+      company_id: "",
+      description: "",
+      identity_state: "not_needed",
+      identity_confirmed_on: null,
+      identity_method: "",
+      fee_requested_on: null,
+      fee_paid_on: null,
+      status: "searching",
+      paused_on: null,
+      paused_question: "",
+      paused_days: 0,
+      extended: false,
+      extension_reason: "",
+      extension_told_on: null,
+      acknowledged_on: null,
+      responded_on: null,
+      outcome: "",
+      outcome_detail: "",
+      assignee_staff_id: SUPPORT,
+      created_at: `${input.received_on}T10:00:00Z`,
+      updated_at: `${input.received_on}T10:00:00Z`,
+      ...input,
+    };
+    privacyRequests.push(row);
+    if (!complaint)
+      for (const system of Object.keys(PV_SYSTEMS))
+        privacySearches.set(`${row.id}|${system}`, {
+          state: "pending",
+          note: "",
+          staff_id: "",
+          at: null,
+        });
+    const due = pvDueOn(row);
+    pvEvent(
+      "request",
+      row.id,
+      "received",
+      `Received ${pvDay(row.received_on)} by ${row.channel}.${due ? ` Due ${pvDay(due)}.` : ""}`,
+      OWNER,
+      `${row.received_on}T10:00:00Z`,
+    );
+    return row;
+  };
+  const from = (index: number) => {
+    const found = person(index);
+    return found
+      ? {
+          requester_name: found.full_name,
+          requester_email: found.email.toLowerCase(),
+          person_id: found.id,
+          company_id: found.company_id,
+        }
+      : {};
+  };
+
+  // Due this week: two systems searched, the rest to go.
+  const dueSoon = add({
+    kind: "access",
+    received_on: addDaysIso(addMonthsIso(today, -1), 4),
+    ...from(0),
+    description:
+      "Please send me a copy of all personal data you hold about me, including call notes.",
+  });
+  for (const [system, state, note] of [
+    ["crm", "found", "Person record, 6 notes, 2 meetings"],
+    ["billing", "not_applicable", "Invoices name the firm, not the person"],
+  ] as const) {
+    privacySearches.set(`${dueSoon.id}|${system}`, {
+      state,
+      note,
+      staff_id: SUPPORT,
+      at: agoIso(20),
+    });
+    pvEvent(
+      "request",
+      dueSoon.id,
+      "search",
+      `${PV_SYSTEMS[system]}: ${state === "found" ? "found data" : "not applicable"} — ${note}`,
+      SUPPORT,
+      agoIso(20),
+    );
+  }
+  // Overdue: nobody finished it.
+  add({
+    kind: "rectification",
+    received_on: addDaysIso(addMonthsIso(today, -1), -4),
+    ...from(1),
+    description: "My job title and phone number are wrong in your records; please correct them.",
+  });
+  // Clock stopped while scoping.
+  const stopped = add({
+    kind: "access",
+    received_on: addDaysIso(today, -12),
+    ...from(2),
+    status: "scoping",
+    paused_on: addDaysIso(today, -6),
+    paused_question:
+      "Which period do you mean — only since you became a customer, or your trial in 2025 as well?",
+    description: "I want everything you have on me.",
+  });
+  pvEvent(
+    "request",
+    stopped.id,
+    "stop_clock",
+    `Clock stopped on ${pvDay(stopped.paused_on)} while we wait for: ${stopped.paused_question}`,
+    SUPPORT,
+    agoIso(24 * 6),
+  );
+  // Waiting on identity: an address nobody knows.
+  add({
+    kind: "access",
+    received_on: addDaysIso(today, -3),
+    requester_name: "M. Hartley",
+    requester_email: "m.hartley.private@example.net",
+    identity_state: "requested",
+    status: "identity",
+    channel: "form",
+    description: "Send me all data you hold about me. I used a different email before.",
+  });
+  // An erasure from someone with a lead and a person record.
+  add({
+    kind: "erasure",
+    received_on: addDaysIso(today, -9),
+    ...from(3),
+    description: "Please delete my details. I left the firm last month.",
+  });
+  // An objection to marketing.
+  add({
+    kind: "objection",
+    received_on: addDaysIso(today, -2),
+    ...from(4),
+    description: "Stop sending me your newsletters and research invitations.",
+  });
+  // A complaint not yet acknowledged.
+  add({
+    kind: "complaint",
+    received_on: addDaysIso(today, -20),
+    ...from(5),
+    status: "received",
+    description: "Your sales team phoned my mobile after I asked to be contacted by email only.",
+  });
+  // Answered last month.
+  const answered = add({
+    kind: "access",
+    received_on: addDaysIso(today, -52),
+    ...from(6),
+    status: "responded",
+    responded_on: addDaysIso(today, -30),
+    outcome: "fulfilled",
+    outcome_detail:
+      "Sent a copy of the CRM record, 4 notes and the 11 messages we mailed, by secure link.",
+  });
+  for (const system of Object.keys(PV_SYSTEMS))
+    privacySearches.set(`${answered.id}|${system}`, {
+      state: system === "crm" || system === "mail" ? "found" : "none",
+      note: system === "crm" ? "Person record and 4 notes" : system === "mail" ? "11 messages" : "",
+      staff_id: SUPPORT,
+      at: agoIso(24 * 32),
+    });
+  pvEvent(
+    "request",
+    answered.id,
+    "respond",
+    `Responded on ${pvDay(answered.responded_on)} (fulfilled): ${answered.outcome_detail}`,
+    SUPPORT,
+    agoIso(24 * 30),
+  );
+
+  // Incidents.
+  const misdirected: IncidentRow = {
+    id: "ae000003-0000-4000-8000-000000000000",
+    reference: `INC-${today.slice(0, 4)}-0003`,
+    title: "Weekly usage export mailed to the wrong customer",
+    summary:
+      "The Monday seat-usage export for one firm went to another firm's admin. It lists 38 named users with work emails and last-active times. The recipient has confirmed deletion in writing.",
+    kind: "misdirected",
+    severity: "high",
+    status: "contained",
+    personal_data: true,
+    occurred_at: agoIso(22),
+    detected_at: agoIso(20),
+    aware_at: agoIso(19),
+    contained_at: agoIso(6),
+    resolved_at: null,
+    data_categories: "Customer staff: names, work emails, last-active times",
+    subjects_estimate: 38,
+    records_estimate: 38,
+    risk: "",
+    risk_reason: "",
+    assessed_by: "",
+    assessed_at: null,
+    regulator_notified_at: null,
+    regulator_reference: "",
+    late_reason: "",
+    individuals_notified_at: null,
+    lessons: "",
+    lead_staff_id: OWNER,
+    created_at: agoIso(20),
+  };
+  incidents.push(misdirected);
+  pvEvent(
+    "incident",
+    misdirected.id,
+    "logged",
+    `Logged. Personal data involved: the regulator's 72 hours run from ${pvMoment(misdirected.aware_at)}.`,
+    OWNER,
+    misdirected.detected_at,
+  );
+  pvEvent(
+    "incident",
+    misdirected.id,
+    "status",
+    `Marked contained: the recipient confirmed deletion in writing.`,
+    OWNER,
+    misdirected.contained_at!,
+  );
+  const affected = customers.filter((id) => commitmentsByCompany.has(id)).slice(0, 2);
+  for (const companyId of affected) {
+    const hours = commitmentsByCompany.get(companyId)?.incident_notice_hours ?? null;
+    incidentCustomers.push({
+      incident_id: misdirected.id,
+      company_id: companyId,
+      due_at: hours
+        ? new Date(Date.parse(misdirected.aware_at!) + hours * 3_600_000)
+            .toISOString()
+            .replace(/\.\d{3}Z$/, "Z")
+        : null,
+      notified_at: null,
+      note: "",
+    });
+  }
+  const laptop: IncidentRow = {
+    ...misdirected,
+    id: "ae000002-0000-4000-8000-000000000000",
+    reference: `INC-${today.slice(0, 4)}-0002`,
+    title: "Staff laptop left on a train",
+    summary:
+      "Recovered by the operator two days later. Full-disk encryption on, locked; the device was wiped remotely within the hour.",
+    kind: "security",
+    severity: "medium",
+    status: "resolved",
+    occurred_at: agoIso(24 * 26),
+    detected_at: agoIso(24 * 26),
+    aware_at: agoIso(24 * 26),
+    contained_at: agoIso(24 * 26 - 1),
+    resolved_at: agoIso(24 * 24),
+    data_categories: "CRM cache on the device",
+    subjects_estimate: null,
+    records_estimate: null,
+    risk: "none",
+    risk_reason: "Encrypted and locked; wiped within the hour. No realistic access to the data.",
+    assessed_by: OWNER,
+    assessed_at: agoIso(24 * 26 - 3),
+    lessons: "",
+    created_at: agoIso(24 * 26),
+  };
+  incidents.push(laptop);
+  pvEvent("incident", laptop.id, "logged", "Logged.", OWNER, laptop.detected_at);
+  pvEvent(
+    "incident",
+    laptop.id,
+    "assess",
+    `Assessed: ${PV_RISKS.none}. ${laptop.risk_reason}`,
+    OWNER,
+    laptop.assessed_at!,
+  );
+  const outage: IncidentRow = {
+    ...misdirected,
+    id: "ae000001-0000-4000-8000-000000000000",
+    reference: `INC-${today.slice(0, 4)}-0001`,
+    title: "Charts unavailable for 47 minutes",
+    summary:
+      "The price service's upstream throttled us; charts showed a stale banner until the fallback took over.",
+    kind: "availability",
+    severity: "low",
+    status: "closed",
+    personal_data: false,
+    occurred_at: agoIso(24 * 40),
+    detected_at: agoIso(24 * 40),
+    aware_at: null,
+    contained_at: agoIso(24 * 40 - 1),
+    resolved_at: agoIso(24 * 40 - 1),
+    data_categories: "",
+    subjects_estimate: null,
+    records_estimate: null,
+    risk: "",
+    lessons: "The fallback now takes over after two failed calls, not five.",
+    created_at: agoIso(24 * 40),
+  };
+  incidents.push(outage);
+  pvEvent("incident", outage.id, "logged", "Logged.", OWNER, outage.detected_at);
+  pvEvent("incident", outage.id, "status", "Marked closed.", OWNER, outage.resolved_at!);
+
+  // Sub-processors: the register as it stands, and one change in its notice period.
+  const register: Array<
+    Omit<SubprocessorRow, "id" | "status" | "notice_sent_on" | "effective_on" | "retired_on">
+  > = [
+    {
+      legal_name: "Northgate Cloud Ltd",
+      service: "Hosting and database",
+      purpose: "Runs the service and stores account data",
+      data_categories: "Account holders: names, emails, usage",
+      locations: "EU (Ireland, Netherlands)",
+      transfer_mechanism: "adequacy",
+      dpa_signed_on: "2025-03-02",
+      activated_on: "2025-03-10",
+    },
+    {
+      legal_name: "Edgeline Inc.",
+      service: "Web hosting",
+      purpose: "Serves the website and the account console",
+      data_categories: "Visitors: IP addresses, request logs",
+      locations: "United States, EU",
+      transfer_mechanism: "scc_uk_addendum",
+      dpa_signed_on: "2025-03-02",
+      activated_on: "2025-03-10",
+    },
+    {
+      legal_name: "Parcel Mail SAS",
+      service: "Email delivery",
+      purpose: "Sends account, support and outbound mail",
+      data_categories: "Recipients: names, emails, delivery events",
+      locations: "EU (France)",
+      transfer_mechanism: "adequacy",
+      dpa_signed_on: "2025-04-11",
+      activated_on: "2025-04-15",
+    },
+    {
+      legal_name: "Calendra Ltd",
+      service: "Calendar",
+      purpose: "Books demos and syncs meetings",
+      data_categories: "Invitees: names, emails, meeting times",
+      locations: "United Kingdom",
+      transfer_mechanism: "not_needed",
+      dpa_signed_on: "2025-06-01",
+      activated_on: "2025-06-03",
+    },
+  ];
+  register.forEach((entry, index) =>
+    subprocessors.push({
+      ...entry,
+      id: `af${String(index + 1).padStart(6, "0")}-0000-4000-8000-000000000000`,
+      status: "active",
+      notice_sent_on: null,
+      effective_on: null,
+      retired_on: null,
+    }),
+  );
+  for (const row of subprocessors)
+    pvEvent(
+      "subprocessor",
+      row.id,
+      "created",
+      `Recorded as in use since ${pvDay(row.activated_on)}.`,
+      OWNER,
+      `${row.activated_on}T09:00:00Z`,
+    );
+  const proposed: SubprocessorRow = {
+    id: "af000009-0000-4000-8000-000000000000",
+    legal_name: "Ledgerline Analytics Ltd",
+    service: "Product analytics",
+    purpose: "Counts which features each firm uses, to decide what to build next",
+    data_categories: "Account holders: user ids, feature events (no names or emails)",
+    locations: "EU (Germany)",
+    transfer_mechanism: "adequacy",
+    dpa_signed_on: addDaysIso(today, -14),
+    status: "notice_sent",
+    notice_sent_on: addDaysIso(today, -8),
+    effective_on: null,
+    activated_on: null,
+    retired_on: null,
+  };
+  subprocessors.push(proposed);
+  pvEvent(
+    "subprocessor",
+    proposed.id,
+    "created",
+    "Proposed. Customers are told before it goes live.",
+    OWNER,
+    agoIso(24 * 14),
+  );
+  const told = customers.filter((id) => commitmentsByCompany.get(id)?.privacy_contact_email);
+  told.forEach((companyId, index) => {
+    const sent = addDaysIso(today, -8);
+    subprocessorNotices.push({
+      subprocessor_id: proposed.id,
+      company_id: companyId,
+      sent_to: commitmentsByCompany.get(companyId)!.privacy_contact_email,
+      sent_on: sent,
+      objection_deadline: addDaysIso(sent, pvObjectionDays(companyId)),
+      objected_on: index === 1 ? addDaysIso(today, -3) : null,
+      objection:
+        index === 1
+          ? "Our data must not leave the UK; please confirm the events carry no personal data."
+          : "",
+      resolution: "",
+      resolved_on: null,
+    });
+  });
+  proposed.effective_on = pvEffectiveOn(proposed.id);
+  pvEvent(
+    "subprocessor",
+    proposed.id,
+    "send_notices",
+    `Notice mailed to ${told.length} customer(s). Not sent — no privacy contact: ${customers.length - told.length}.`,
+    OWNER,
+    agoIso(24 * 8),
+  );
+}
+
 // --- the inbox (mirrors inbox.py) ----------------------------------------------------------------
 
 type NotificationRow = {
@@ -3854,6 +5799,8 @@ const INBOX_PAGES: Record<string, string> = {
   approval: "/admin/approvals",
   security: "/admin/security",
   task: "/tasks",
+  privacy_request: "/privacy/requests/{id}",
+  incident: "/privacy/incidents/{id}",
 };
 const INBOX_SPECIFICITY = ["deal", "lead", "meeting", "person", "company"];
 const notifications: NotificationRow[] = [];
@@ -3899,6 +5846,10 @@ function inboxLabel(subjectType: string, subjectId: string): string {
     return lead ? lead.full_name || lead.company_name : "";
   }
   if (subjectType === "task") return tasks.find((row) => row.id === subjectId)?.title ?? "";
+  if (subjectType === "privacy_request")
+    return privacyRequests.find((row) => row.id === subjectId)?.reference ?? "";
+  if (subjectType === "incident")
+    return incidents.find((row) => row.id === subjectId)?.reference ?? "";
   return "";
 }
 
@@ -5460,6 +7411,14 @@ function dealSummary(row: DealRow) {
     loss_detail: row.loss_detail,
     closed_at: row.closed_at,
     created_at: row.created_at,
+    forecast_category: inEffectiveCategory(row),
+    forecast_override: isOpen ? (row.forecast_category ?? "") : "",
+    push_count: row.push_count ?? 0,
+    first_close_date: row.first_close_date ?? "",
+    next_step_stale:
+      isOpen &&
+      Date.now() - Date.parse(row.next_step_changed_at ?? row.created_at) >
+        IN_STALE_STEP_DAYS * 86_400_000,
   };
 }
 
@@ -7275,6 +9234,14 @@ routes.push(
             exit_criteria: stage.exit_criteria,
           })),
         loss_reasons: LOSS_REASONS,
+        competitors: inDealCompetitors(row.id),
+        competitor_options: competitors
+          .filter((card) => !card.archived_at)
+          .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+          .map((card) => ({ id: card.id, name: card.name })),
+        interviews: interviews.filter((item) => item.deal_id === row.id).map(inInterviewView),
+        forecast_categories: IN_SETTABLE.map((value) => ({ value, label: IN_CATEGORIES[value] })),
+        drivers: Object.entries(IN_DRIVERS).map(([value, label]) => ({ value, label })),
       });
     },
   },
@@ -7307,8 +9274,27 @@ routes.push(
             row.mrr_amount = Math.round(plan.unit_amount * row.seats * 100) / 100;
         }
       }
-      if ("expected_close_date" in body)
-        row.expected_close_date = String(body.expected_close_date ?? "");
+      if ("forecast_category" in body) {
+        const category = String(body.forecast_category ?? "").trim();
+        if (category && !IN_SETTABLE.includes(category))
+          return refuse(400, "malformed_request", {
+            forecast_category: "pipeline, best_case, commit, omitted, or empty for the stage's",
+          });
+        if (row.status !== "open")
+          return refuse(400, "malformed_request", {
+            forecast_category: "only an open deal is forecast",
+          });
+        row.forecast_category = category || null;
+      }
+      if ("expected_close_date" in body) {
+        const before = row.expected_close_date;
+        const after = String(body.expected_close_date ?? "");
+        // Each move into a later month counts, for good; the first date given is kept.
+        const push = inPushKind(before, after);
+        if (push === "month" || push === "quarter") row.push_count = (row.push_count ?? 0) + 1;
+        if (!row.first_close_date && (before || after)) row.first_close_date = before || after;
+        row.expected_close_date = after;
+      }
       if ("next_step" in body || "next_step_due" in body) {
         const nextStep = String(body.next_step ?? row.next_step).trim();
         const nextStepDue = String(body.next_step_due ?? row.next_step_due).trim();
@@ -7316,6 +9302,8 @@ routes.push(
           return refuse(400, "malformed_request", {
             next_step: "an open deal names its next step",
           });
+        if (nextStep !== row.next_step || nextStepDue !== row.next_step_due)
+          row.next_step_changed_at = now();
         row.next_step = nextStep;
         row.next_step_due = nextStepDue;
       }
@@ -7382,6 +9370,7 @@ routes.push(
       row.last_activity_at = now();
       row.next_step = nextStep;
       row.next_step_due = nextStepDue;
+      row.next_step_changed_at = now();
       audit("deal.stage_moved", found?.member.id ?? null, "deal", row.id);
       return ok({ deal: withoutMoney(dealSummary(row), seesMoney(headers)) });
     },
@@ -8774,6 +10763,2025 @@ routes.push(
         profile: profileViewRx(String(params.company_id)),
         treatments: Object.entries(RX_TREATMENTS).map(([value, label]) => ({ value, label })),
       });
+    },
+  },
+  // --- pipeline inspection (mirrors inspection_routes.py) ------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/pipeline/changes",
+    auth: true,
+    capability: "deals:read",
+    handler: ({ headers, query }) => {
+      const viewer = caller(headers)!.member;
+      const moneyOk = (CAPABILITIES[viewer.role] ?? []).includes("revenue:read");
+      const days = Number(query.days ?? "7");
+      if (![7, 14, 30].includes(days))
+        return refuse(400, "malformed_request", { days: "7, 14 or 30" });
+      inEnsureToday();
+      const today = todayIso();
+      const start = addDaysIso(today, -days);
+      const known = [...dealSnapshots.keys()].sort();
+      let comparedFrom = [...known].reverse().find((day) => day <= start) ?? null;
+      let note = "";
+      if (!comparedFrom) {
+        comparedFrom = known[0] ?? null;
+        note =
+          comparedFrom && comparedFrom < today
+            ? `The nightly history starts on ${comparedFrom}, so this compares from then, not ${start}.`
+            : "No history before today yet: every open deal counts as new until the nightly record has a few days in it.";
+      }
+      const before = new Map(
+        (comparedFrom ? (dealSnapshots.get(comparedFrom) ?? []) : []).map((row) => [
+          row.deal_id,
+          row,
+        ]),
+      );
+      const since = `${comparedFrom ?? today}T00:00:00Z`;
+      const changes: Array<
+        Record<string, unknown> & { reason: string; company: { id: string; name: string } }
+      > = [];
+      for (const deal of deals) {
+        const startRow = before.get(deal.id);
+        if (!startRow) {
+          if (deal.status === "open" && deal.created_at < since) continue;
+          if (
+            deal.status !== "open" &&
+            (!deal.closed_at || deal.closed_at < since || deal.created_at < since)
+          )
+            continue;
+        } else if (deal.status !== "open" && deal.closed_at && deal.closed_at < since) continue;
+        const change = inChange(startRow, deal);
+        if (!change) continue;
+        const summary = dealSummary(deal);
+        changes.push({
+          deal_id: deal.id,
+          name: deal.name,
+          company: { id: deal.company_id, name: companyName(deal.company_id) },
+          owner: staff.find((member) => member.id === deal.owner_staff_id)?.display_name ?? "",
+          reason: change.reason,
+          reason_label: IN_REASONS[change.reason],
+          push: change.push,
+          push_count: deal.push_count ?? 0,
+          stage_before: startRow ? (stageOf(startRow.stage_key)?.label ?? "") : "",
+          stage_after: summary.stage_label,
+          category_before: startRow ? (IN_CATEGORIES[startRow.forecast_category] ?? "") : "",
+          category_after: IN_CATEGORIES[inEffectiveCategory(deal)] ?? "",
+          close_before: startRow?.expected_close_date ?? "",
+          close_after: deal.expected_close_date,
+          currency: deal.currency,
+          amount_before: moneyOk && change.before !== null ? centsText(change.before) : null,
+          amount_after: moneyOk ? centsText(change.after) : null,
+          delta: moneyOk ? centsText(change.after - (change.before ?? 0)) : null,
+          next_step: deal.next_step,
+          next_step_stale: summary.next_step_stale,
+        });
+      }
+      const order = Object.keys(IN_REASONS);
+      changes.sort(
+        (a, b) =>
+          order.indexOf(a.reason) - order.indexOf(b.reason) ||
+          a.company.name.toLowerCase().localeCompare(b.company.name.toLowerCase()),
+      );
+      const byReason = Object.entries(IN_REASONS)
+        .map(([reason, label]) => {
+          const rows = changes.filter((row) => row.reason === reason);
+          const totals: Record<string, number> = {};
+          if (moneyOk)
+            for (const row of rows) {
+              const value = ["lost", "decreased"].includes(reason)
+                ? (row.amount_before ?? "0")
+                : row.amount_after;
+              totals[String(row.currency)] =
+                (totals[String(row.currency)] ?? 0) + Math.round(Number(value) * 100);
+            }
+          return {
+            reason,
+            label,
+            count: rows.length,
+            amounts: Object.fromEntries(
+              Object.entries(totals)
+                .sort()
+                .map(([code, cents]) => [code, centsText(cents)]),
+            ),
+          };
+        })
+        .filter((row) => row.count > 0);
+      return ok({
+        window: { days, from: start, to: today, compared_from: comparedFrom, note },
+        changes,
+        by_reason: byReason,
+        stale_steps: deals
+          .filter((deal) => deal.status === "open" && dealSummary(deal).next_step_stale)
+          .map((deal) => ({
+            deal_id: deal.id,
+            name: deal.name,
+            company: companyName(deal.company_id),
+            next_step: deal.next_step,
+            next_step_due: deal.next_step_due,
+            owner: staff.find((member) => member.id === deal.owner_staff_id)?.display_name ?? "",
+          })),
+        windows: [7, 14, 30],
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/forecast",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query }) => {
+      const today = todayIso();
+      const period = query.period || inQuarterOf(today);
+      const bounds = inQuarterBounds(period);
+      if (!bounds) return refuse(400, "malformed_request", { period: "a quarter such as 2026-Q4" });
+      const tally = new Map<string, number>();
+      for (const deal of deals) tally.set(deal.currency, (tally.get(deal.currency) ?? 0) + 1);
+      const common = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "USD";
+      const currency = (query.currency || common).toUpperCase();
+      const lines = inDealLines(period, currency);
+      const wonCents = lines.won.reduce((total, line) => total + line.cents, 0);
+      const sum = (category: string) =>
+        lines.open
+          .filter((line) => line.category === category)
+          .reduce((total, line) => total + line.cents, 0);
+      const commit = sum("commit");
+      const best = sum("best_case");
+      const pipeline = sum("pipeline");
+      const openTotal = commit + best + pipeline;
+      const goal = salesTargets.get(`${period}|${currency}`);
+      const gap = goal === undefined ? null : Math.max(goal - wonCents, 0);
+      const ended = bounds[1] < today;
+      const wonIds = new Set(lines.won.map((line) => line.deal_id));
+      const submissions = forecastSubmissions
+        .filter((row) => row.period === period && row.currency === currency)
+        .sort((a, b) => a.submitted_at.localeCompare(b.submitted_at))
+        .map((row) => inSubmissionView(row, ended ? wonCents : null, wonIds));
+      const history = [];
+      for (let back = 1; back <= 4; back += 1) {
+        const past = inShiftQuarter(period, -back);
+        const rows = forecastSubmissions
+          .filter((row) => row.period === past && row.currency === currency)
+          .sort((a, b) => a.submitted_at.localeCompare(b.submitted_at));
+        if (!rows.length) continue;
+        const pastLines = inDealLines(past, currency);
+        const pastWon = pastLines.won.reduce((total, line) => total + line.cents, 0);
+        const latest = rows.at(-1)!;
+        history.push({
+          period: past,
+          call: centsText(latest.commit_cents),
+          actual: centsText(pastWon),
+          ...inAccuracy(latest.commit_cents, pastWon),
+          deals_won: pastLines.won.length,
+        });
+      }
+      const current = inQuarterOf(today);
+      return ok({
+        period,
+        periods: [-4, -3, -2, -1, 0, 1, 2].map((offset) => inShiftQuarter(current, offset)),
+        currency,
+        currencies: [...tally.keys()].sort(),
+        starts_on: bounds[0],
+        ends_on: bounds[1],
+        ended,
+        goal: goal === undefined ? null : centsText(goal),
+        won: centsText(wonCents),
+        gap: gap === null ? null : centsText(gap),
+        open: {
+          commit: centsText(commit),
+          best_case: centsText(best),
+          pipeline: centsText(pipeline),
+          total: centsText(openTotal),
+        },
+        coverage: gap ? Math.round((openTotal / gap) * 100) / 100 : null,
+        suggested: {
+          commit: centsText(wonCents + commit),
+          best_case: centsText(wonCents + commit + best),
+        },
+        deals: [...lines.open]
+          .sort(
+            (a, b) =>
+              (IN_RANK[b.category] ?? 0) - (IN_RANK[a.category] ?? 0) ||
+              String(a.close_date).localeCompare(String(b.close_date)),
+          )
+          .map(inStrip),
+        won_deals: lines.won.map(inStrip),
+        undated_open: lines.undated,
+        submissions: submissions.reverse(),
+        history,
+        categories: IN_SETTABLE.map((value) => ({ value, label: IN_CATEGORIES[value] })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/forecast/submit",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const today = todayIso();
+      const period = String(body.period ?? "") || inQuarterOf(today);
+      const bounds = inQuarterBounds(period);
+      if (!bounds) return refuse(400, "malformed_request", { period: "a quarter such as 2026-Q4" });
+      if (bounds[1] < today)
+        return refuse(400, "malformed_request", {
+          period: "the quarter is over; a call is made before the result is known",
+        });
+      const currency = String(body.currency ?? "USD").toUpperCase();
+      const cents = (name: string) => {
+        const value = Number(String(body[name] ?? "").trim());
+        return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) : null;
+      };
+      const commit = cents("commit");
+      const best = cents("best_case");
+      if (commit === null)
+        return refuse(400, "malformed_request", { commit: "an amount such as 12500.00" });
+      if (best === null)
+        return refuse(400, "malformed_request", { best_case: "an amount such as 12500.00" });
+      if (best < commit)
+        return refuse(400, "malformed_request", { best_case: "best case is at least the commit" });
+      const lines = inDealLines(period, currency);
+      const row: SubmissionRow = {
+        id: randomUUID(),
+        period,
+        currency,
+        commit_cents: commit,
+        best_case_cents: best,
+        closed_cents: lines.won.reduce((total, line) => total + line.cents, 0),
+        pipeline_cents: lines.open.reduce((total, line) => total + line.cents, 0),
+        deals: [
+          ...lines.open
+            .filter((line) => line.category === "commit" || line.category === "best_case")
+            .map((line) => ({
+              deal_id: line.deal_id,
+              name: String(line.name),
+              company: String(line.company),
+              category: line.category,
+              amount: String(line.amount),
+            })),
+          ...lines.won.map((line) => ({
+            deal_id: line.deal_id,
+            name: String(line.name),
+            company: String(line.company),
+            category: "closed",
+            amount: String(line.amount),
+          })),
+        ],
+        note: String(body.note ?? "")
+          .trim()
+          .slice(0, 2000),
+        submitted_by: viewer.id,
+        submitted_at: now(),
+      };
+      forecastSubmissions.push(row);
+      audit("forecast.submitted", viewer.id, "forecast", row.id, "", { period, currency });
+      return ok({ submission: inSubmissionView(row, null, new Set()) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/forecast/targets/update",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const period = String(body.period ?? "") || inQuarterOf(todayIso());
+      if (!inQuarterBounds(period))
+        return refuse(400, "malformed_request", { period: "a quarter such as 2026-Q4" });
+      const currency = String(body.currency ?? "USD").toUpperCase();
+      const value = Number(String(body.amount ?? "").trim());
+      if (!Number.isFinite(value) || value < 0)
+        return refuse(400, "malformed_request", { amount: "an amount such as 12500.00" });
+      salesTargets.set(`${period}|${currency}`, Math.round(value * 100));
+      audit("forecast.target_set", viewer.id, "forecast", `${period}:${currency}`, "", {
+        after: value.toFixed(2),
+      });
+      return ok({ period, currency, amount: value.toFixed(2) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/competitors",
+    auth: true,
+    capability: "deals:read",
+    handler: () =>
+      ok({
+        competitors: competitors
+          .filter((row) => !row.archived_at)
+          .map(inCompetitorView)
+          .sort(
+            (a, b) =>
+              b.record.open - a.record.open ||
+              a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+          ),
+        stale_after_days: IN_STALE_CARD_DAYS,
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/competitors/create",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!name) return refuse(400, "malformed_request", { name: "the competitor's name" });
+      if (
+        competitors.some((row) => !row.archived_at && row.name.toLowerCase() === name.toLowerCase())
+      )
+        return refuse(400, "malformed_request", { name: "already on the list" });
+      const row: CompetitorRow = {
+        id: randomUUID(),
+        name,
+        website: String(body.website ?? "")
+          .trim()
+          .slice(0, 200),
+        summary: String(body.summary ?? "")
+          .trim()
+          .slice(0, 1000),
+        quick_dismiss: String(body.quick_dismiss ?? "")
+          .trim()
+          .slice(0, 1000),
+        why_we_win: String(body.why_we_win ?? "")
+          .trim()
+          .slice(0, 2000),
+        why_we_lose: String(body.why_we_lose ?? "")
+          .trim()
+          .slice(0, 2000),
+        objections: inObjections(body.objections),
+        reviewed_at: now(),
+        reviewed_by: viewer.id,
+        archived_at: null,
+      };
+      competitors.push(row);
+      audit("competitor.created", viewer.id, "competitor", row.id, "", { name });
+      return ok({ competitor: inCompetitorView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/competitors/{competitor_id}",
+    auth: true,
+    capability: "deals:read",
+    handler: ({ params }) => {
+      const row = competitors.find((item) => item.id === params.competitor_id && !item.archived_at);
+      if (!row) return refuse(404, "not_found");
+      const on = new Map(
+        dealCompetitors
+          .filter((item) => item.competitor_id === row.id)
+          .map((item) => [item.deal_id, item]),
+      );
+      for (const deal of deals)
+        if (
+          row.name &&
+          deal.loss_competitor.trim().toLowerCase() === row.name.toLowerCase() &&
+          !on.has(deal.id)
+        )
+          on.set(deal.id, {
+            deal_id: deal.id,
+            competitor_id: row.id,
+            strengths: "",
+            weaknesses: "",
+            state: "active",
+          });
+      const lines = [...on.values()]
+        .map((item) => {
+          const deal = deals.find((candidate) => candidate.id === item.deal_id);
+          return deal
+            ? {
+                deal_id: deal.id,
+                name: deal.name,
+                company: companyName(deal.company_id),
+                status: deal.status,
+                stage: stageOf(deal.stage_key)?.label ?? deal.stage_key,
+                state: item.state,
+                strengths: item.strengths,
+                weaknesses: item.weaknesses,
+                loss_detail: deal.status === "lost" ? deal.loss_detail : "",
+              }
+            : null;
+        })
+        .filter((line): line is NonNullable<typeof line> => line !== null)
+        .sort(
+          (a, b) =>
+            Number(a.status !== "open") - Number(b.status !== "open") ||
+            a.company.toLowerCase().localeCompare(b.company.toLowerCase()),
+        );
+      return ok({ competitor: inCompetitorView(row), deals: lines });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/competitors/{competitor_id}/update",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = competitors.find((item) => item.id === params.competitor_id && !item.archived_at);
+      if (!row) return refuse(404, "not_found");
+      if (body.archive) {
+        row.archived_at = now();
+        audit("competitor.archived", viewer.id, "competitor", row.id, "", { name: row.name });
+        return ok({ archived: true });
+      }
+      if ("name" in body) {
+        const name = String(body.name ?? "")
+          .trim()
+          .slice(0, 120);
+        if (!name) return refuse(400, "malformed_request", { name: "the competitor's name" });
+        if (
+          name.toLowerCase() !== row.name.toLowerCase() &&
+          competitors.some(
+            (other) => !other.archived_at && other.name.toLowerCase() === name.toLowerCase(),
+          )
+        )
+          return refuse(400, "malformed_request", { name: "already on the list" });
+        row.name = name;
+      }
+      for (const [name, limit] of [
+        ["website", 200],
+        ["summary", 1000],
+        ["quick_dismiss", 1000],
+        ["why_we_win", 2000],
+        ["why_we_lose", 2000],
+      ] as const)
+        if (name in body)
+          row[name] = String(body[name] ?? "")
+            .trim()
+            .slice(0, limit);
+      if ("objections" in body) row.objections = inObjections(body.objections);
+      row.reviewed_at = now();
+      row.reviewed_by = viewer.id;
+      audit("competitor.updated", viewer.id, "competitor", row.id, "", {});
+      return ok({ competitor: inCompetitorView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/deals/{deal_id}/competitors",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const deal = deals.find((row) => row.id === params.deal_id);
+      if (!deal) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      if (!["add", "update", "eliminate", "restore", "remove"].includes(action))
+        return refuse(400, "malformed_request", {
+          action: "add, update, eliminate, restore, remove",
+        });
+      const competitorId = String(body.competitor_id ?? "");
+      const card = competitors.find((row) => row.id === competitorId && !row.archived_at);
+      if (!card)
+        return refuse(400, "malformed_request", {
+          competitor_id: "choose a competitor on the list",
+        });
+      const index = dealCompetitors.findIndex(
+        (row) => row.deal_id === deal.id && row.competitor_id === card.id,
+      );
+      if (action === "add") {
+        if (index >= 0)
+          return refuse(400, "malformed_request", { competitor_id: "already on this deal" });
+        dealCompetitors.push({
+          deal_id: deal.id,
+          competitor_id: card.id,
+          strengths: String(body.strengths ?? "")
+            .trim()
+            .slice(0, 1000),
+          weaknesses: String(body.weaknesses ?? "")
+            .trim()
+            .slice(0, 1000),
+          state: "active",
+        });
+      } else {
+        if (index < 0)
+          return refuse(400, "malformed_request", { competitor_id: "not on this deal" });
+        const row = dealCompetitors[index]!;
+        if (action === "remove") dealCompetitors.splice(index, 1);
+        else if (action === "update") {
+          if ("strengths" in body)
+            row.strengths = String(body.strengths ?? "")
+              .trim()
+              .slice(0, 1000);
+          if ("weaknesses" in body)
+            row.weaknesses = String(body.weaknesses ?? "")
+              .trim()
+              .slice(0, 1000);
+        } else row.state = action === "eliminate" ? "eliminated" : "active";
+      }
+      audit(`deal.competitor_${action}`, viewer.id, "deal", deal.id, "", { competitor: card.name });
+      return ok({ competitors: inDealCompetitors(deal.id) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/win-loss",
+    auth: true,
+    capability: "deals:read",
+    handler: () => {
+      const views = interviews
+        .map(inInterviewView)
+        .sort((a, b) => b.held_on.localeCompare(a.held_on));
+      const asked = new Set(views.map((view) => view.deal_id));
+      const cutoff = agoIso(24 * 180);
+      return ok({
+        interviews: views,
+        tally: {
+          won: inTally(views.filter((view) => view.outcome === "won")),
+          lost: inTally(views.filter((view) => view.outcome === "lost")),
+        },
+        counts: {
+          interviews: views.length,
+          won: views.filter((view) => view.outcome === "won").length,
+          lost: views.filter((view) => view.outcome === "lost").length,
+        },
+        not_interviewed: deals
+          .filter(
+            (deal) =>
+              (deal.status === "won" || deal.status === "lost") &&
+              deal.closed_at &&
+              deal.closed_at >= cutoff &&
+              !asked.has(deal.id),
+          )
+          .map((deal) => ({
+            deal_id: deal.id,
+            name: deal.name,
+            company: companyName(deal.company_id),
+            outcome: deal.status,
+            closed_at: deal.closed_at,
+          }))
+          .sort((a, b) => String(b.closed_at).localeCompare(String(a.closed_at))),
+        drivers: Object.entries(IN_DRIVERS).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/deals/{deal_id}/interviews",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const deal = deals.find((row) => row.id === params.deal_id);
+      if (!deal) return refuse(404, "not_found");
+      if (deal.status !== "won" && deal.status !== "lost")
+        return refuse(400, "malformed_request", {
+          deal: "an interview is held once the deal is won or lost",
+        });
+      const held = String(body.held_on ?? "") || todayIso();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(held) || held > todayIso())
+        return refuse(400, "malformed_request", { held_on: "a date, not in the future" });
+      const buyer = String(body.buyer_reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (!buyer)
+        return refuse(400, "malformed_request", {
+          buyer_reason: "why they decided, in their words",
+        });
+      const seen = new Set<string>();
+      const drivers = (Array.isArray(body.drivers) ? body.drivers : [])
+        .map((item) => ({
+          driver: String((item as Record<string, unknown>).driver ?? ""),
+          effect: String((item as Record<string, unknown>).effect ?? ""),
+        }))
+        .filter((item) => {
+          const valid =
+            IN_DRIVERS[item.driver] &&
+            ["positive", "negative"].includes(item.effect) &&
+            !seen.has(item.driver);
+          if (valid) seen.add(item.driver);
+          return valid;
+        });
+      const row: InterviewRow = {
+        id: randomUUID(),
+        deal_id: deal.id,
+        held_on: held,
+        interviewer_staff_id: viewer.id,
+        interviewee_name: String(body.interviewee_name ?? "")
+          .trim()
+          .slice(0, 160),
+        interviewee_title: String(body.interviewee_title ?? "")
+          .trim()
+          .slice(0, 120),
+        buyer_reason: buyer,
+        drivers,
+        quotes: String(body.quotes ?? "")
+          .trim()
+          .slice(0, 4000),
+        summary: String(body.summary ?? "")
+          .trim()
+          .slice(0, 4000),
+      };
+      interviews.push(row);
+      audit("deal.interview_recorded", viewer.id, "deal", deal.id, "", { interview_id: row.id });
+      return ok({ interview: inInterviewView(row) });
+    },
+  },
+  // --- the privacy desk (mirrors privacy_routes.py) ------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/privacy/requests",
+    auth: true,
+    capability: "privacy:read",
+    handler: ({ query }) => {
+      const today = todayIso();
+      let views = privacyRequests.map((row) => pvRequestView(row, today));
+      const live = views.filter((view) => view.open);
+      const stats = {
+        open: live.length,
+        overdue: live.filter((view) => view.clock.overdue).length,
+        due_soon: live.filter(
+          (view) =>
+            view.clock.days_left !== null && view.clock.days_left >= 0 && view.clock.days_left <= 7,
+        ).length,
+        stopped: live.filter((view) => view.clock.state === "stopped").length,
+        not_started: live.filter((view) => view.clock.state === "not_started").length,
+        complaints_unacknowledged: live.filter(
+          (view) => view.kind === "complaint" && !view.acknowledged_on,
+        ).length,
+      };
+      const scope = query.scope || "open";
+      if (query.company_id) views = views.filter((view) => view.company?.id === query.company_id);
+      else if (scope === "open") views = views.filter((view) => view.open);
+      else if (scope === "closed") views = views.filter((view) => !view.open);
+      const rank = (view: (typeof views)[number]): [number, string] =>
+        !view.open
+          ? [3, `~${view.responded_on ?? view.received_on}`]
+          : view.clock.due_on
+            ? [0, view.clock.due_on]
+            : [view.clock.state === "stopped" ? 1 : 2, view.received_on];
+      views.sort((a, b) => rank(a)[0] - rank(b)[0] || rank(a)[1].localeCompare(rank(b)[1]));
+      return ok({
+        requests: views,
+        stats,
+        kinds: Object.entries(PV_KINDS).map(([value, label]) => ({ value, label })),
+        regimes: Object.entries(PV_REGIMES).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/privacy/requests/create",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const today = todayIso();
+      const kind = String(body.kind ?? "");
+      if (!PV_KINDS[kind])
+        return refuse(400, "malformed_request", { kind: "choose what they asked for" });
+      const regime = String(body.regime ?? "uk_gdpr");
+      if (!PV_REGIMES[regime])
+        return refuse(400, "malformed_request", {
+          regime: "UK GDPR, EU GDPR, India DPDP or other",
+        });
+      const channel = String(body.channel ?? "email");
+      if (!PV_CHANNELS.includes(channel))
+        return refuse(400, "malformed_request", { channel: PV_CHANNELS.join(", ") });
+      const email = String(body.requester_email ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 254);
+      const name = String(body.requester_name ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!email && !name)
+        return refuse(400, "malformed_request", {
+          requester_email: "who is asking: an email or a name",
+        });
+      if (email && (!email.includes("@") || email.includes(" ")))
+        return refuse(400, "malformed_request", { requester_email: "an email address" });
+      const received = String(body.received_on ?? "") || today;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(received))
+        return refuse(400, "malformed_request", { received_on: "a date, YYYY-MM-DD" });
+      if (received > today)
+        return refuse(400, "malformed_request", { received_on: "cannot be in the future" });
+      const identity = String(body.identity ?? "not_needed");
+      if (!["not_needed", "requested"].includes(identity))
+        return refuse(400, "malformed_request", { identity: "not_needed or requested" });
+      if (badId(body.company_id))
+        return refuse(400, "malformed_request", { company_id: "not an id" });
+      let companyId = String(body.company_id ?? "");
+      if (companyId && !companies.some((row) => row.id === companyId))
+        return refuse(400, "malformed_request", { company_id: "no such company" });
+      const person = email ? people.find((row) => row.email.toLowerCase() === email) : undefined;
+      if (person && !companyId) companyId = person.company_id;
+      const prefix = kind === "complaint" ? "PC" : "PR";
+      const row: PrivacyRequestRow = {
+        id: randomUUID(),
+        reference: pvReference(
+          privacyRequests.map((item) => item.reference),
+          prefix,
+          Number(received.slice(0, 4)),
+        ),
+        kind,
+        regime,
+        channel,
+        requester_name: name,
+        requester_email: email,
+        person_id: person?.id ?? "",
+        company_id: companyId,
+        description: String(body.description ?? "")
+          .trim()
+          .slice(0, 4000),
+        received_on: received,
+        identity_state: identity,
+        identity_confirmed_on: null,
+        identity_method: "",
+        fee_requested_on: null,
+        fee_paid_on: null,
+        status: identity === "requested" ? "identity" : "received",
+        paused_on: null,
+        paused_question: "",
+        paused_days: 0,
+        extended: false,
+        extension_reason: "",
+        extension_told_on: null,
+        acknowledged_on: null,
+        responded_on: null,
+        outcome: "",
+        outcome_detail: "",
+        assignee_staff_id: viewer.id,
+        created_at: now(),
+        updated_at: now(),
+      };
+      privacyRequests.push(row);
+      if (kind !== "complaint")
+        for (const system of Object.keys(PV_SYSTEMS))
+          privacySearches.set(`${row.id}|${system}`, {
+            state: "pending",
+            note: "",
+            staff_id: "",
+            at: null,
+          });
+      const due = pvDueOn(row);
+      pvEvent(
+        "request",
+        row.id,
+        "received",
+        `Received ${pvDay(received)} by ${channel}.` +
+          (due
+            ? ` Due ${pvDay(due)}.`
+            : identity === "requested"
+              ? " Proof of identity asked for; the month starts when it is confirmed."
+              : ""),
+        viewer.id,
+      );
+      audit("privacy_request.created", viewer.id, "privacy_request", row.id, "", {
+        reference: row.reference,
+        kind,
+        regime,
+      });
+      return ok({ request: pvRequestView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/privacy/requests/{request_id}",
+    auth: true,
+    capability: "privacy:read",
+    handler: ({ params }) => {
+      const row = privacyRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      const person = people.find((item) => item.id === row.person_id);
+      const view = pvRequestView(row);
+      const erased = person ? erasedPeople.has(person.id) : false;
+      return ok({
+        request: view,
+        person: person
+          ? {
+              id: person.id,
+              name: person.full_name,
+              email: person.email,
+              do_not_contact: person.do_not_contact,
+              erased,
+            }
+          : null,
+        searches:
+          row.kind === "complaint"
+            ? []
+            : Object.entries(PV_SYSTEMS).map(([system, label]) => {
+                const found = privacySearches.get(`${row.id}|${system}`);
+                return {
+                  system,
+                  label,
+                  state: found?.state ?? "pending",
+                  note: found?.note ?? "",
+                  by: staff.find((member) => member.id === found?.staff_id)?.display_name ?? "",
+                  at: found?.at ?? null,
+                };
+              }),
+        matches: pvMatches(row.requester_email, person),
+        events: pvEvents("request", row.id),
+        can_erase: row.kind === "erasure" && view.open && Boolean(person) && !erased,
+        can_stop_contact:
+          ["erasure", "objection", "consent"].includes(row.kind) &&
+          view.open &&
+          Boolean(row.requester_email || person),
+        refusals: Object.entries(PV_REFUSALS).map(([value, label]) => ({ value, label })),
+        staff: staff
+          .filter((member) => member.is_active)
+          .map((member) => ({ id: member.id, name: member.display_name }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/privacy/requests/{request_id}/act",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = privacyRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      const today = todayIso();
+      const text = (name: string, limit = 2000) =>
+        String(body[name] ?? "")
+          .trim()
+          .slice(0, limit);
+      const day = (name: string) => {
+        const value = String(body[name] ?? "") || today;
+        return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+      };
+      if (!PV_OPEN.includes(row.status) && action !== "note")
+        return refuse(400, "malformed_request", {
+          status: `this request is ${row.status}; only a note can be added`,
+        });
+      const clock = pvClock(row, today);
+      let detail = "";
+      if (action === "assign") {
+        const assignee = String(body.assignee_staff_id ?? "");
+        const member = staff.find((item) => item.id === assignee);
+        if (!member)
+          return refuse(400, "malformed_request", { assignee_staff_id: "choose who handles it" });
+        row.assignee_staff_id = assignee;
+        detail = `Given to ${member.display_name}.`;
+        inboxAssigned(
+          assignee,
+          "privacy_request",
+          row.id,
+          viewer,
+          `${row.reference}: ${PV_KINDS[row.kind]}`,
+          row.reference,
+          `/privacy/requests/${row.id}`,
+        );
+      } else if (action === "request_identity") {
+        if (row.kind === "complaint")
+          return refuse(400, "malformed_request", {
+            action: "a complaint does not wait on identity",
+          });
+        if (row.identity_state === "confirmed")
+          return refuse(400, "malformed_request", { identity: "identity is already confirmed" });
+        row.identity_state = "requested";
+        row.status = "identity";
+        detail =
+          text("note", 400) ||
+          "Proof of identity asked for. The month starts when it is confirmed.";
+      } else if (action === "confirm_identity") {
+        const on = day("on");
+        if (!on || on > today)
+          return refuse(400, "malformed_request", { on: "cannot be in the future" });
+        if (on < row.received_on)
+          return refuse(400, "malformed_request", { on: "cannot be before the request arrived" });
+        const method = text("method", 200);
+        if (!method)
+          return refuse(400, "malformed_request", { method: "how identity was confirmed" });
+        row.identity_state = "confirmed";
+        row.identity_confirmed_on = on;
+        row.identity_method = method;
+        if (["received", "identity"].includes(row.status)) row.status = "searching";
+        detail = `Identity confirmed on ${pvDay(on)}: ${method}.`;
+      } else if (action === "stop_clock") {
+        if (row.kind === "complaint")
+          return refuse(400, "malformed_request", { action: "a complaint's clock does not stop" });
+        if (clock.state !== "running")
+          return refuse(400, "malformed_request", { clock: "the clock is not running" });
+        const on = day("on");
+        if (!on || on > today)
+          return refuse(400, "malformed_request", { on: "cannot be in the future" });
+        const start = pvClockStart(row);
+        if (start && on < start)
+          return refuse(400, "malformed_request", { on: "cannot be before the clock started" });
+        const question = text("question", 1000);
+        if (!question)
+          return refuse(400, "malformed_request", {
+            question: "what you asked them, to scope the request",
+          });
+        row.paused_on = on;
+        row.paused_question = question;
+        row.status = "scoping";
+        detail = `Clock stopped on ${pvDay(on)} while we wait for: ${question}`;
+      } else if (action === "resume_clock") {
+        if (!row.paused_on)
+          return refuse(400, "malformed_request", { clock: "the clock is not stopped" });
+        const on = day("on");
+        if (!on || on > today)
+          return refuse(400, "malformed_request", { on: "cannot be in the future" });
+        if (on < row.paused_on)
+          return refuse(400, "malformed_request", { on: "the answer came after the question" });
+        const days = pvStoppedDays(row.paused_on, on);
+        row.paused_days += days;
+        row.paused_on = null;
+        row.status = "searching";
+        detail = `Answer received on ${pvDay(on)}; the clock runs again from the next day. ${days} day${days === 1 ? "" : "s"} added; due ${pvDay(pvDueOn(row))}.`;
+      } else if (action === "review") {
+        row.status = "review";
+        detail = text("note", 400) || "Searches done; the response is being reviewed.";
+      } else if (action === "extend") {
+        if (!clock.can_extend)
+          return refuse(400, "malformed_request", {
+            extend: "only inside the first month, once, for a UK or EU request",
+          });
+        const reason = text("reason", 1000);
+        if (!reason)
+          return refuse(400, "malformed_request", {
+            reason: "why it is complex or one of many — the person is told this",
+          });
+        const told = day("told_on");
+        if (!told || told > today)
+          return refuse(400, "malformed_request", { told_on: "cannot be in the future" });
+        if (clock.extend_by && told > clock.extend_by)
+          return refuse(400, "malformed_request", {
+            told_on: `they must be told by ${pvDay(clock.extend_by)}`,
+          });
+        row.extended = true;
+        row.extension_reason = reason;
+        row.extension_told_on = told;
+        detail = `Extended by two months, told on ${pvDay(told)}: ${reason}. Now due ${pvDay(pvDueOn(row))}.`;
+      } else if (action === "acknowledge") {
+        if (row.kind !== "complaint")
+          return refuse(400, "malformed_request", { action: "only a complaint is acknowledged" });
+        const on = day("on");
+        if (!on || on > today)
+          return refuse(400, "malformed_request", { on: "cannot be in the future" });
+        row.acknowledged_on = on;
+        if (row.status === "received") row.status = "searching";
+        detail = `Acknowledged on ${pvDay(on)}.`;
+      } else if (action === "respond") {
+        const on = day("on");
+        if (!on || on > today)
+          return refuse(400, "malformed_request", { on: "cannot be in the future" });
+        if (on < row.received_on)
+          return refuse(400, "malformed_request", { on: "cannot be before the request arrived" });
+        const outcome = String(body.outcome ?? "");
+        if (!PV_OUTCOMES.includes(outcome))
+          return refuse(400, "malformed_request", { outcome: PV_OUTCOMES.join(", ") });
+        if (row.kind !== "complaint") {
+          const pending = Object.entries(PV_SYSTEMS)
+            .filter(
+              ([system]) =>
+                (privacySearches.get(`${row.id}|${system}`)?.state ?? "pending") === "pending",
+            )
+            .map(([, label]) => label);
+          if (pending.length)
+            return refuse(400, "malformed_request", {
+              searches: `not yet searched: ${pending.join("; ")}`,
+            });
+        }
+        if (row.paused_on)
+          return refuse(400, "malformed_request", {
+            clock: "the clock is stopped; record the answer first",
+          });
+        const summary = text("detail");
+        if (!summary)
+          return refuse(400, "malformed_request", { detail: "what they were sent or told" });
+        const late = clock.due_on !== null && on > clock.due_on;
+        row.status = "responded";
+        row.responded_on = on;
+        row.outcome = outcome;
+        row.outcome_detail = summary;
+        detail = `Responded on ${pvDay(on)} (${outcome.replace("_", " ")})${late ? " — after the deadline" : ""}: ${summary}`;
+      } else if (action === "refuse") {
+        const on = day("on");
+        const reason = String(body.reason ?? "");
+        if (!PV_REFUSALS[reason])
+          return refuse(400, "malformed_request", { reason: Object.keys(PV_REFUSALS).join(", ") });
+        const summary = text("detail");
+        if (!summary)
+          return refuse(400, "malformed_request", {
+            detail: "the reasons they were given, and that they may complain to the regulator",
+          });
+        row.status = "refused";
+        row.responded_on = on;
+        row.outcome = "refused";
+        row.outcome_detail = `${PV_REFUSALS[reason]}: ${summary}`;
+        detail = `Refused on ${pvDay(on)} — ${PV_REFUSALS[reason]}: ${summary}`;
+      } else if (action === "withdraw") {
+        row.status = "withdrawn";
+        row.responded_on = today;
+        detail = text("note", 400) || "Withdrawn by the person.";
+      } else if (action === "note") {
+        detail = text("note");
+        if (!detail) return refuse(400, "malformed_request", { note: "write the note" });
+      } else if (action === "request_fee" || action === "fee_paid") {
+        const on = day("on");
+        if (action === "request_fee") {
+          const reason = text("reason", 400);
+          if (!reason) return refuse(400, "malformed_request", { reason: "why a fee is charged" });
+          row.fee_requested_on = on;
+          detail = `Fee asked for on ${pvDay(on)}: ${reason}. The clock waits until it is paid.`;
+        } else {
+          if (!row.fee_requested_on)
+            return refuse(400, "malformed_request", { fee: "no fee was asked for" });
+          row.fee_paid_on = on;
+          detail = `Fee paid on ${pvDay(on)}.`;
+        }
+      } else return refuse(400, "malformed_request", { action: "not a request act" });
+      row.updated_at = now();
+      pvEvent("request", row.id, action, detail, viewer.id);
+      audit(`privacy_request.${action}`, viewer.id, "privacy_request", row.id, "", {
+        reference: row.reference,
+      });
+      return ok({ request: pvRequestView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/privacy/requests/{request_id}/search",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = privacyRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      if (!PV_OPEN.includes(row.status))
+        return refuse(400, "malformed_request", { status: "the request is closed" });
+      if (row.kind === "complaint")
+        return refuse(400, "malformed_request", { system: "a complaint has no search checklist" });
+      const system = String(body.system ?? "");
+      if (!PV_SYSTEMS[system])
+        return refuse(400, "malformed_request", { system: Object.keys(PV_SYSTEMS).join(", ") });
+      const state = String(body.state ?? "");
+      if (!PV_SEARCH_STATES.includes(state))
+        return refuse(400, "malformed_request", { state: PV_SEARCH_STATES.join(", ") });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 1000);
+      if (state === "found" && !note)
+        return refuse(400, "malformed_request", {
+          note: "what was found, and what was done with it",
+        });
+      privacySearches.set(`${row.id}|${system}`, {
+        state,
+        note,
+        staff_id: state === "pending" ? "" : viewer.id,
+        at: state === "pending" ? null : now(),
+      });
+      const labels: Record<string, string> = {
+        found: "found data",
+        none: "holds nothing",
+        not_applicable: "not applicable",
+        pending: "back to be searched",
+      };
+      pvEvent(
+        "request",
+        row.id,
+        "search",
+        `${PV_SYSTEMS[system]}: ${labels[state]}${note ? ` — ${note}` : ""}`,
+        viewer.id,
+      );
+      if (row.status === "received") row.status = "searching";
+      audit("privacy_request.searched", viewer.id, "privacy_request", row.id, "", {
+        system,
+        state,
+      });
+      return ok({ system, state });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/privacy/requests/{request_id}/stop-contact",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, params }) => {
+      const viewer = caller(headers)!.member;
+      const row = privacyRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      if (!["erasure", "objection", "consent"].includes(row.kind) || !PV_OPEN.includes(row.status))
+        return refuse(400, "malformed_request", {
+          action: "only an open erasure, objection or consent withdrawal",
+        });
+      const person = people.find((item) => item.id === row.person_id);
+      if (person) person.do_not_contact = true;
+      const email = row.requester_email || (person?.email ?? "").toLowerCase();
+      if (!email && !person)
+        return refuse(400, "malformed_request", {
+          requester_email: "no address or person to stop",
+        });
+      const reason = { erasure: "erasure", objection: "objection", consent: "consent_withdrawn" }[
+        row.kind
+      ]!;
+      const added = pvSuppress(email, reason, viewer.id, row.reference);
+      privacySearches.set(`${row.id}|mail`, {
+        state: "found",
+        note: "Suppressed: no campaign, sequence or list mail reaches this address.",
+        staff_id: viewer.id,
+        at: now(),
+      });
+      pvEvent(
+        "request",
+        row.id,
+        "stop_contact",
+        "Marked do not contact" +
+          (added
+            ? " and the address added to the suppression list."
+            : "; the address was already suppressed."),
+        viewer.id,
+      );
+      audit("privacy_request.stop_contact", viewer.id, "privacy_request", row.id, "", {
+        reference: row.reference,
+        suppressed: added,
+      });
+      return ok({ suppressed: added, person_marked: Boolean(person) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/privacy/requests/{request_id}/erase",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = privacyRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.kind !== "erasure" || !PV_OPEN.includes(row.status))
+        return refuse(400, "malformed_request", { action: "only an open erasure request erases" });
+      const person = people.find((item) => item.id === row.person_id);
+      if (!person)
+        return refuse(400, "malformed_request", { person: "link the request to the person first" });
+      if (erasedPeople.has(person.id))
+        return refuse(400, "malformed_request", { person: "already erased" });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (!reason)
+        return refuse(400, "malformed_request", {
+          reason: "why erasure applies (and no exemption keeps the data)",
+        });
+      const email = person.email.toLowerCase() || row.requester_email;
+      let leadCount = 0;
+      for (const lead of leads)
+        if (
+          !lead.anonymised_at &&
+          (lead.converted_person_id === person.id || (email && lead.email.toLowerCase() === email))
+        ) {
+          Object.assign(lead, {
+            email: "",
+            full_name: "",
+            company_name: "",
+            message: "",
+            payload: {},
+            anonymised_at: now(),
+          });
+          leadCount += 1;
+        }
+      let memberships = 0;
+      for (let index = mailListMembers.length - 1; index >= 0; index -= 1)
+        if (
+          mailListMembers[index]!.person_id === person.id ||
+          (email && mailListMembers[index]!.email_norm === email)
+        ) {
+          mailListMembers.splice(index, 1);
+          memberships += 1;
+        }
+      let attendances = 0;
+      for (let index = meetingAttendees.length - 1; index >= 0; index -= 1)
+        if (
+          meetingAttendees[index]!.person_id === person.id ||
+          (email && meetingAttendees[index]!.email.toLowerCase() === email)
+        ) {
+          meetingAttendees.splice(index, 1);
+          attendances += 1;
+        }
+      let notes = 0;
+      for (const activity of activities)
+        if (
+          activity.person_id === person.id &&
+          !activity.company_id &&
+          !activity.deal_id &&
+          activity.body
+        ) {
+          activity.body = "";
+          notes += 1;
+        }
+      Object.assign(person, {
+        full_name: "",
+        email: "",
+        title: "",
+        phone: "",
+        notes: "",
+        role_category: "",
+        account_user_id: "",
+        do_not_contact: true,
+      });
+      erasedPeople.add(person.id);
+      const added = pvSuppress(email, "erasure", viewer.id, row.reference);
+      const summary = `Erased from the CRM: the person record emptied, ${leadCount} lead(s), ${memberships} list membership(s), ${attendances} meeting attendance(s) and ${notes} note(s) on them alone. The address stays on the suppression list only.`;
+      privacySearches.set(`${row.id}|crm`, {
+        state: "found",
+        note: summary,
+        staff_id: viewer.id,
+        at: now(),
+      });
+      pvEvent("request", row.id, "erased", `${summary} Reason: ${reason}`, viewer.id);
+      audit("person.erased", viewer.id, "person", person.id, reason, {
+        reference: row.reference,
+        leads: leadCount,
+      });
+      return ok({
+        erased: { leads: leadCount, list_memberships: memberships, attendances, activities: notes },
+        suppressed: added,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/incidents",
+    auth: true,
+    capability: "privacy:read",
+    handler: () => {
+      const views = incidents.map(pvIncidentView);
+      const live = views.filter((view) => view.status !== "closed");
+      views.sort(
+        (a, b) =>
+          Number(a.status === "closed") - Number(b.status === "closed") ||
+          String(b.detected_at).localeCompare(String(a.detected_at)),
+      );
+      return ok({
+        incidents: views,
+        stats: {
+          open: live.length,
+          unassessed: live.filter((view) => view.regulator.state === "unassessed").length,
+          regulator_due: live.filter((view) => ["unassessed", "due"].includes(view.regulator.state))
+            .length,
+          customers_owed: live.reduce((total, view) => total + view.customers_owed, 0),
+          breaches_logged: views.filter((view) => view.personal_data).length,
+        },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/incidents/create",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title) return refuse(400, "malformed_request", { title: "what happened, in a line" });
+      const kind = String(body.kind ?? "security");
+      if (!PV_INCIDENT_KINDS[kind])
+        return refuse(400, "malformed_request", {
+          kind: Object.keys(PV_INCIDENT_KINDS).join(", "),
+        });
+      const severity = String(body.severity ?? "medium");
+      if (!PV_SEVERITIES.includes(severity))
+        return refuse(400, "malformed_request", { severity: PV_SEVERITIES.join(", ") });
+      const moment = (name: string) => {
+        const value = String(body[name] ?? "").trim();
+        if (!value) return null;
+        const parsed = Date.parse(/[zZ]|[+-]\d{2}:\d{2}$/.test(value) ? value : `${value}Z`);
+        return Number.isFinite(parsed)
+          ? new Date(parsed).toISOString().replace(/\.\d{3}Z$/, "Z")
+          : "bad";
+      };
+      const detected = moment("detected_at") ?? now();
+      const aware = moment("aware_at");
+      if (detected === "bad" || aware === "bad")
+        return refuse(400, "malformed_request", {
+          detected_at: "a date and time, YYYY-MM-DDTHH:MM",
+        });
+      if (detected > new Date(Date.now() + 300_000).toISOString())
+        return refuse(400, "malformed_request", { detected_at: "cannot be in the future" });
+      const personal = Boolean(body.personal_data);
+      const reference = pvReference(
+        incidents.map((item) => item.reference),
+        "INC",
+        Number(detected.slice(0, 4)),
+      );
+      const row: IncidentRow = {
+        id: randomUUID(),
+        reference,
+        title,
+        summary: String(body.summary ?? "")
+          .trim()
+          .slice(0, 4000),
+        kind,
+        severity,
+        status: "open",
+        personal_data: personal,
+        occurred_at: null,
+        detected_at: detected,
+        aware_at: personal ? (aware ?? detected) : aware,
+        contained_at: null,
+        resolved_at: null,
+        data_categories: String(body.data_categories ?? "")
+          .trim()
+          .slice(0, 400),
+        subjects_estimate: null,
+        records_estimate: null,
+        risk: "",
+        risk_reason: "",
+        assessed_by: "",
+        assessed_at: null,
+        regulator_notified_at: null,
+        regulator_reference: "",
+        late_reason: "",
+        individuals_notified_at: null,
+        lessons: "",
+        lead_staff_id: viewer.id,
+        created_at: now(),
+      };
+      incidents.push(row);
+      pvEvent(
+        "incident",
+        row.id,
+        "logged",
+        `Logged. Detected ${pvMoment(detected)}.${personal ? ` Personal data involved: the regulator's 72 hours run from ${pvMoment(row.aware_at)}.` : ""}`,
+        viewer.id,
+      );
+      audit("incident.logged", viewer.id, "incident", row.id, "", {
+        reference,
+        severity,
+        personal_data: personal,
+      });
+      return ok({ incident: pvIncidentView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/incidents/{incident_id}",
+    auth: true,
+    capability: "privacy:read",
+    handler: ({ params }) => {
+      const row = incidents.find((item) => item.id === params.incident_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        incident: pvIncidentView(row),
+        events: pvEvents("incident", row.id),
+        risks: Object.entries(PV_RISKS).map(([value, label]) => ({ value, label })),
+        staff: staff
+          .filter((member) => member.is_active)
+          .map((member) => ({ id: member.id, name: member.display_name }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/incidents/{incident_id}/act",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = incidents.find((item) => item.id === params.incident_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      if (row.status === "closed" && !["note", "lessons"].includes(action))
+        return refuse(400, "malformed_request", {
+          status: "the incident is closed; add a note instead",
+        });
+      const text = (name: string, limit = 2000) =>
+        String(body[name] ?? "")
+          .trim()
+          .slice(0, limit);
+      const moment = (name: string) => {
+        const value = String(body[name] ?? "").trim();
+        if (!value) return now();
+        const parsed = Date.parse(/[zZ]|[+-]\d{2}:\d{2}$/.test(value) ? value : `${value}Z`);
+        return Number.isFinite(parsed)
+          ? new Date(parsed).toISOString().replace(/\.\d{3}Z$/, "Z")
+          : now();
+      };
+      let detail = "";
+      if (action === "update") {
+        if ("summary" in body) row.summary = text("summary", 4000);
+        if ("data_categories" in body) row.data_categories = text("data_categories", 400);
+        for (const name of ["subjects_estimate", "records_estimate"] as const) {
+          if (!(name in body)) continue;
+          const raw = String(body[name] ?? "").trim();
+          if (raw && !/^\d+$/.test(raw))
+            return refuse(400, "malformed_request", { [name]: "a whole number" });
+          row[name] = raw ? Number(raw) : null;
+        }
+        if ("severity" in body) {
+          const severity = String(body.severity ?? "");
+          if (!PV_SEVERITIES.includes(severity))
+            return refuse(400, "malformed_request", { severity: PV_SEVERITIES.join(", ") });
+          row.severity = severity;
+        }
+        if ("personal_data" in body) row.personal_data = Boolean(body.personal_data);
+        if ("aware_at" in body && body.aware_at) row.aware_at = moment("aware_at");
+        if (row.personal_data && !row.aware_at) row.aware_at = row.detected_at;
+        detail = "Updated.";
+      } else if (action === "status") {
+        const target = String(body.status ?? "");
+        if (!["contained", "resolved", "closed"].includes(target))
+          return refuse(400, "malformed_request", { status: "contained, resolved or closed" });
+        const at = moment("at");
+        if (target === "contained") {
+          row.status = "contained";
+          row.contained_at = at;
+        } else if (target === "resolved") {
+          row.status = "resolved";
+          row.resolved_at = at;
+          row.contained_at = row.contained_at ?? at;
+        } else {
+          if (row.personal_data && !row.risk)
+            return refuse(400, "malformed_request", {
+              risk: "record whether it was notifiable before closing",
+            });
+          if (
+            row.personal_data &&
+            ["risk", "high"].includes(row.risk) &&
+            !row.regulator_notified_at
+          )
+            return refuse(400, "malformed_request", {
+              regulator: "the regulator has not been told",
+            });
+          const owed = incidentCustomers.filter(
+            (item) => item.incident_id === row.id && !item.notified_at,
+          );
+          if (owed.length)
+            return refuse(400, "malformed_request", {
+              customers: `${owed.length} affected customer(s) not yet told`,
+            });
+          if (!row.lessons.trim())
+            return refuse(400, "malformed_request", {
+              lessons: "write what was learned before closing",
+            });
+          row.status = "closed";
+          row.resolved_at = row.resolved_at ?? at;
+        }
+        detail = `Marked ${target} at ${pvMoment(at)}.`;
+      } else if (action === "assess") {
+        const risk = String(body.risk ?? "");
+        if (!PV_RISKS[risk])
+          return refuse(400, "malformed_request", { risk: Object.keys(PV_RISKS).join(", ") });
+        if (!row.personal_data)
+          return refuse(400, "malformed_request", {
+            personal_data: "only a personal-data breach is assessed for notification",
+          });
+        const reason = text("reason");
+        if (!reason)
+          return refuse(400, "malformed_request", {
+            reason: "why — the likely consequences for the people affected",
+          });
+        row.risk = risk;
+        row.risk_reason = reason;
+        row.assessed_by = viewer.id;
+        row.assessed_at = now();
+        detail = `Assessed: ${PV_RISKS[risk]}. ${reason}`;
+      } else if (action === "regulator") {
+        if (!row.personal_data)
+          return refuse(400, "malformed_request", { personal_data: "not a personal-data breach" });
+        const at = moment("at");
+        const reference = text("reference", 80);
+        const clock = pvRegulatorClock(row);
+        const lateReason = text("late_reason", 1000);
+        if (clock.due_at && at > clock.due_at && !lateReason)
+          return refuse(400, "malformed_request", {
+            late_reason: "after 72 hours the notification must give the reasons for the delay",
+          });
+        row.regulator_notified_at = at;
+        row.regulator_reference = reference;
+        row.late_reason = lateReason;
+        detail = `Regulator notified at ${pvMoment(at)}${reference ? ` (reference ${reference})` : ""}${lateReason ? `. Late: ${lateReason}` : "."}`;
+      } else if (action === "individuals") {
+        const how = text("how", 1000);
+        if (!how)
+          return refuse(400, "malformed_request", {
+            how: "how they were told, and what they were told to do",
+          });
+        row.individuals_notified_at = moment("at");
+        detail = `People affected told at ${pvMoment(row.individuals_notified_at)}: ${how}`;
+      } else if (action === "add_customers") {
+        const raw = Array.isArray(body.company_ids) ? body.company_ids : [body.company_ids];
+        const ids = raw.map((value) => String(value ?? "")).filter(Boolean);
+        if (!ids.length)
+          return refuse(400, "malformed_request", { company_ids: "choose the customers affected" });
+        if (ids.some((value) => badId(value)))
+          return refuse(400, "malformed_request", { company_ids: "not an id" });
+        const anchor = row.aware_at ?? row.detected_at;
+        const added: string[] = [];
+        for (const companyId of ids) {
+          if (
+            incidentCustomers.some(
+              (item) => item.incident_id === row.id && item.company_id === companyId,
+            )
+          )
+            continue;
+          if (!companies.some((company) => company.id === companyId)) continue;
+          const hours = commitmentsByCompany.get(companyId)?.incident_notice_hours ?? null;
+          incidentCustomers.push({
+            incident_id: row.id,
+            company_id: companyId,
+            due_at: hours
+              ? new Date(Date.parse(anchor) + hours * 3_600_000)
+                  .toISOString()
+                  .replace(/\.\d{3}Z$/, "Z")
+              : null,
+            notified_at: null,
+            note: "",
+          });
+          added.push(companyName(companyId));
+        }
+        if (!added.length)
+          return refuse(400, "malformed_request", {
+            company_ids: "already listed, or not a company",
+          });
+        detail = `Affected: ${added.join(", ")}.`;
+      } else if (action === "customer_notified") {
+        const companyId = String(body.company_id ?? "");
+        const item = incidentCustomers.find(
+          (entry) => entry.incident_id === row.id && entry.company_id === companyId,
+        );
+        if (!item)
+          return refuse(400, "malformed_request", { company_id: "not listed as affected" });
+        item.notified_at = moment("at");
+        item.note = text("note", 1000);
+        detail = `${companyName(companyId)} told at ${pvMoment(item.notified_at)}${item.note ? `: ${item.note}` : "."}`;
+      } else if (action === "lessons") {
+        const lessons = text("lessons", 4000);
+        if (!lessons)
+          return refuse(400, "malformed_request", {
+            lessons: "what was learned, and what changes",
+          });
+        row.lessons = lessons;
+        detail = "Lessons recorded.";
+      } else if (action === "note") {
+        detail = text("note");
+        if (!detail) return refuse(400, "malformed_request", { note: "write the note" });
+      } else return refuse(400, "malformed_request", { action: "not an incident act" });
+      pvEvent("incident", row.id, action, detail, viewer.id);
+      audit(`incident.${action}`, viewer.id, "incident", row.id, "", { reference: row.reference });
+      return ok({ incident: pvIncidentView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/commitments",
+    auth: true,
+    capability: "privacy:read",
+    handler: () => {
+      const customers = pvActiveCustomers();
+      const ids = [...new Set([...customers.keys(), ...commitmentsByCompany.keys()])].sort((a, b) =>
+        companyName(a).toLowerCase().localeCompare(companyName(b).toLowerCase()),
+      );
+      const rows = ids.map((id) => ({
+        company_name: companyName(id),
+        customer: customers.has(id),
+        ...pvCommitmentView(id, commitmentsByCompany.get(id)),
+      }));
+      return ok({
+        commitments: rows,
+        standard: PV_STANDARD,
+        stats: {
+          customers: customers.size,
+          recorded: [...customers.keys()].filter((id) => commitmentsByCompany.has(id)).length,
+          missing: [...customers.keys()].filter((id) => !commitmentsByCompany.has(id)).length,
+          nonstandard: rows.filter((row) => row.flags.length).length,
+          no_contact: rows.filter((row) => row.customer && !row.privacy_contact_email).length,
+          dora: rows.filter((row) => row.dora_classification !== "none").length,
+        },
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/companies/{company_id}/commitments",
+    auth: true,
+    capability: "privacy:read",
+    handler: ({ params }) => {
+      const companyId = String(params.company_id);
+      if (!companies.some((row) => row.id === companyId)) return refuse(404, "not_found");
+      return ok({
+        commitments: pvCommitmentView(companyId, commitmentsByCompany.get(companyId)),
+        standard: PV_STANDARD,
+        requests: privacyRequests
+          .filter((row) => row.company_id === companyId)
+          .map((row) => pvRequestView(row)),
+        notices: subprocessorNotices
+          .filter((row) => row.company_id === companyId)
+          .map((row) => ({
+            subprocessor_id: row.subprocessor_id,
+            legal_name:
+              subprocessors.find((sub) => sub.id === row.subprocessor_id)?.legal_name ?? "",
+            sent_on: row.sent_on,
+            objection_deadline: row.objection_deadline,
+            objected_on: row.objected_on,
+            resolution: row.resolution,
+          })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/{company_id}/commitments/update",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const companyId = String(params.company_id);
+      if (!companies.some((row) => row.id === companyId)) return refuse(404, "not_found");
+      const contact = String(body.privacy_contact_email ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 254);
+      if (contact && (!contact.includes("@") || contact.includes(" ")))
+        return refuse(400, "malformed_request", { privacy_contact_email: "an email address" });
+      const audit_rights = String(body.audit_rights ?? "none");
+      if (!PV_AUDIT.includes(audit_rights))
+        return refuse(400, "malformed_request", { audit_rights: PV_AUDIT.join(", ") });
+      const dora = String(body.dora_classification ?? "none");
+      if (!PV_DORA.includes(dora))
+        return refuse(400, "malformed_request", { dora_classification: PV_DORA.join(", ") });
+      const whole = (name: string, low: number, high: number): number | null | "bad" => {
+        const raw = String(body[name] ?? "").trim();
+        if (!raw) return null;
+        if (!/^\d+$/.test(raw) || Number(raw) < low || Number(raw) > high) return "bad";
+        return Number(raw);
+      };
+      const hours = whole("incident_notice_hours", 1, 720);
+      const notice = whole("subprocessor_notice_days", 0, 180);
+      const window = whole("objection_window_days", 0, 180);
+      const exit = whole("exit_assistance_days", 0, 730);
+      for (const [name, value, low, high] of [
+        ["incident_notice_hours", hours, 1, 720],
+        ["subprocessor_notice_days", notice, 0, 180],
+        ["objection_window_days", window, 0, 180],
+        ["exit_assistance_days", exit, 0, 730],
+      ] as const)
+        if (value === "bad")
+          return refuse(400, "malformed_request", {
+            [name]: `a whole number from ${low} to ${high}`,
+          });
+      const reviewed = String(body.reviewed_on ?? "") || todayIso();
+      const row: CommitmentRow = {
+        company_id: companyId,
+        contract_reference: String(body.contract_reference ?? "")
+          .trim()
+          .slice(0, 120),
+        privacy_contact_email: contact,
+        incident_notice_hours: hours as number | null,
+        subprocessor_notice_days: notice as number | null,
+        objection_window_days: window as number | null,
+        audit_rights,
+        data_locations: String(body.data_locations ?? "")
+          .trim()
+          .slice(0, 200),
+        exit_assistance_days: exit as number | null,
+        dora_classification: dora,
+        material_outsourcing: Boolean(body.material_outsourcing),
+        nonstandard_clauses: String(body.nonstandard_clauses ?? "")
+          .trim()
+          .slice(0, 2000),
+        reviewed_on: reviewed,
+        updated_by: viewer.id,
+        updated_at: now(),
+      };
+      const before = commitmentsByCompany.get(companyId);
+      commitmentsByCompany.set(companyId, row);
+      audit("commitments.updated", viewer.id, "company", companyId, "", {
+        changes: changesBetween(
+          (before ?? {}) as Record<string, unknown>,
+          row as unknown as Record<string, unknown>,
+        ),
+      });
+      return ok({ commitments: pvCommitmentView(companyId, row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/subprocessors",
+    auth: true,
+    capability: "privacy:read",
+    handler: () => {
+      const order: Record<string, number> = { notice_sent: 0, proposed: 1, active: 2, retired: 3 };
+      const views = subprocessors
+        .map((row) => pvSubprocessorView(row))
+        .sort(
+          (a, b) =>
+            (order[a.status] ?? 9) - (order[b.status] ?? 9) ||
+            a.legal_name.toLowerCase().localeCompare(b.legal_name.toLowerCase()),
+        );
+      return ok({
+        subprocessors: views,
+        transfers: Object.entries(PV_TRANSFERS).map(([value, label]) => ({ value, label })),
+        customers: pvActiveCustomers().size,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/subprocessors/create",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const legal = String(body.legal_name ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!legal)
+        return refuse(400, "malformed_request", { legal_name: "the company's legal name" });
+      if (
+        subprocessors.some(
+          (row) => row.legal_name.toLowerCase() === legal.toLowerCase() && row.status !== "retired",
+        )
+      )
+        return refuse(400, "malformed_request", { legal_name: "already on the register" });
+      const mechanism = String(body.transfer_mechanism ?? "not_needed");
+      if (!PV_TRANSFERS[mechanism])
+        return refuse(400, "malformed_request", {
+          transfer_mechanism: Object.keys(PV_TRANSFERS).join(", "),
+        });
+      const since = String(body.in_use_since ?? "");
+      if (since && since > todayIso())
+        return refuse(400, "malformed_request", { in_use_since: "cannot be in the future" });
+      const row: SubprocessorRow = {
+        id: randomUUID(),
+        legal_name: legal,
+        service: String(body.service ?? "")
+          .trim()
+          .slice(0, 200),
+        purpose: String(body.purpose ?? "")
+          .trim()
+          .slice(0, 1000),
+        data_categories: String(body.data_categories ?? "")
+          .trim()
+          .slice(0, 400),
+        locations: String(body.locations ?? "")
+          .trim()
+          .slice(0, 200),
+        transfer_mechanism: mechanism,
+        dpa_signed_on: String(body.dpa_signed_on ?? "") || null,
+        status: since ? "active" : "proposed",
+        notice_sent_on: null,
+        effective_on: null,
+        activated_on: since || null,
+        retired_on: null,
+      };
+      subprocessors.push(row);
+      pvEvent(
+        "subprocessor",
+        row.id,
+        "created",
+        since
+          ? `Recorded as in use since ${pvDay(since)}.`
+          : "Proposed. Customers are told before it goes live.",
+        viewer.id,
+      );
+      audit("subprocessor.created", viewer.id, "subprocessor", row.id, "", {
+        legal_name: legal,
+        status: row.status,
+      });
+      return ok({ subprocessor: pvSubprocessorView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/subprocessors/{subprocessor_id}",
+    auth: true,
+    capability: "privacy:read",
+    handler: ({ params }) => {
+      const row = subprocessors.find((item) => item.id === params.subprocessor_id);
+      if (!row) return refuse(404, "not_found");
+      const today = todayIso();
+      const customers = pvActiveCustomers();
+      const notices = subprocessorNotices.filter((item) => item.subprocessor_id === row.id);
+      const noticed = new Set(notices.map((item) => item.company_id));
+      const preview = addDaysIso(
+        today,
+        Math.max(
+          ...[...customers.keys()].map((id) => pvNoticeDays(id)),
+          PV_STANDARD.subprocessor_notice_days,
+        ),
+      );
+      const draft = pvNoticeText(
+        row,
+        "{customer}",
+        row.effective_on ?? preview,
+        addDaysIso(today, 30),
+      );
+      return ok({
+        subprocessor: pvSubprocessorView(row, today),
+        notices: notices
+          .map((item) => ({
+            company_id: item.company_id,
+            company_name: companyName(item.company_id),
+            sent_to: item.sent_to,
+            sent_on: item.sent_on,
+            objection_deadline: item.objection_deadline,
+            window_open: today <= item.objection_deadline,
+            objected_on: item.objected_on,
+            objection: item.objection,
+            resolution: item.resolution,
+            resolved_on: item.resolved_on,
+          }))
+          .sort((a, b) => a.company_name.toLowerCase().localeCompare(b.company_name.toLowerCase())),
+        unnoticed: ["proposed", "notice_sent"].includes(row.status)
+          ? [...customers.entries()]
+              .filter(([id]) => !noticed.has(id))
+              .sort(([, a], [, b]) => a.toLowerCase().localeCompare(b.toLowerCase()))
+              .map(([id, name]) => ({
+                company_id: id,
+                company_name: name,
+                contact: commitmentsByCompany.get(id)?.privacy_contact_email ?? "",
+                notice_days: pvNoticeDays(id),
+                objection_days: pvObjectionDays(id),
+              }))
+          : [],
+        draft,
+        mail_ready: MOCK_MAIL_READY,
+        events: pvEvents("subprocessor", row.id),
+        transfers: Object.entries(PV_TRANSFERS).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/subprocessors/{subprocessor_id}/act",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = subprocessors.find((item) => item.id === params.subprocessor_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      const today = todayIso();
+      if (row.status === "retired" && action !== "note")
+        return refuse(400, "malformed_request", { status: "retired; add a note instead" });
+      const customers = pvActiveCustomers();
+      const text = (name: string, limit = 2000) =>
+        String(body[name] ?? "")
+          .trim()
+          .slice(0, limit);
+      let detail = "";
+      const extra: Record<string, unknown> = {};
+      if (action === "update") {
+        for (const [name, limit] of [
+          ["legal_name", 200],
+          ["service", 200],
+          ["purpose", 1000],
+          ["data_categories", 400],
+          ["locations", 200],
+        ] as const)
+          if (name in body) row[name] = text(name, limit);
+        if ("transfer_mechanism" in body) {
+          const mechanism = String(body.transfer_mechanism ?? "");
+          if (!PV_TRANSFERS[mechanism])
+            return refuse(400, "malformed_request", {
+              transfer_mechanism: Object.keys(PV_TRANSFERS).join(", "),
+            });
+          row.transfer_mechanism = mechanism;
+        }
+        if ("dpa_signed_on" in body) row.dpa_signed_on = String(body.dpa_signed_on ?? "") || null;
+        detail = "Updated.";
+      } else if (action === "send_notices" || action === "record_notice") {
+        if (!["proposed", "notice_sent"].includes(row.status))
+          return refuse(400, "malformed_request", { status: "notices go before it is active" });
+        const noticed = new Set(
+          subprocessorNotices
+            .filter((item) => item.subprocessor_id === row.id)
+            .map((item) => item.company_id),
+        );
+        if (action === "send_notices") {
+          if (!MOCK_MAIL_READY)
+            return refuse(400, "malformed_request", {
+              mail: "mail is not set up, so nothing can leave HQ; send it yourself and record it",
+            });
+          const sent: string[] = [];
+          const missing: string[] = [];
+          for (const [companyId, name] of [...customers.entries()].sort(([, a], [, b]) =>
+            a.toLowerCase().localeCompare(b.toLowerCase()),
+          )) {
+            if (noticed.has(companyId)) continue;
+            const contact = commitmentsByCompany.get(companyId)?.privacy_contact_email ?? "";
+            if (!contact) {
+              missing.push(name);
+              continue;
+            }
+            subprocessorNotices.push({
+              subprocessor_id: row.id,
+              company_id: companyId,
+              sent_to: contact,
+              sent_on: today,
+              objection_deadline: addDaysIso(today, pvObjectionDays(companyId)),
+              objected_on: null,
+              objection: "",
+              resolution: "",
+              resolved_on: null,
+            });
+            sent.push(name);
+          }
+          if (!sent.length)
+            return refuse(400, "malformed_request", {
+              customers:
+                "nobody left to tell who has a privacy contact" +
+                (missing.length ? `; missing: ${missing.join(", ")}` : ""),
+            });
+          detail = `Notice mailed to ${sent.length} customer(s).${missing.length ? ` Not sent — no privacy contact: ${missing.join(", ")}.` : ""}`;
+          extra.sent = sent;
+          extra.missing = missing;
+        } else {
+          const companyId = String(body.company_id ?? "");
+          if (!customers.has(companyId))
+            return refuse(400, "malformed_request", {
+              company_id: "choose a customer with a contract in force",
+            });
+          if (noticed.has(companyId))
+            return refuse(400, "malformed_request", { company_id: "already told" });
+          const sentOn = String(body.sent_on ?? "") || today;
+          if (sentOn > today)
+            return refuse(400, "malformed_request", { sent_on: "cannot be in the future" });
+          const sentTo = text("sent_to", 254);
+          if (!sentTo)
+            return refuse(400, "malformed_request", {
+              sent_to: "where it went (an address, or how)",
+            });
+          subprocessorNotices.push({
+            subprocessor_id: row.id,
+            company_id: companyId,
+            sent_to: sentTo,
+            sent_on: sentOn,
+            objection_deadline: addDaysIso(sentOn, pvObjectionDays(companyId)),
+            objected_on: null,
+            objection: "",
+            resolution: "",
+            resolved_on: null,
+          });
+          detail = `Notice to ${customers.get(companyId)} recorded as sent on ${pvDay(sentOn)} to ${sentTo}.`;
+        }
+        row.status = "notice_sent";
+        row.notice_sent_on = row.notice_sent_on ?? today;
+        row.effective_on = pvEffectiveOn(row.id);
+      } else if (action === "objection" || action === "resolve") {
+        const companyId = String(body.company_id ?? "");
+        const notice = subprocessorNotices.find(
+          (item) => item.subprocessor_id === row.id && item.company_id === companyId,
+        );
+        if (!notice)
+          return refuse(400, "malformed_request", {
+            company_id: "this customer was not sent a notice",
+          });
+        if (action === "objection") {
+          const objection = text("objection");
+          if (!objection)
+            return refuse(400, "malformed_request", {
+              objection: "what they object to, in their words",
+            });
+          const on = String(body.on ?? "") || today;
+          notice.objected_on = on;
+          notice.objection = objection;
+          notice.resolution = "";
+          notice.resolved_on = null;
+          detail = `${companyName(companyId)} objected on ${pvDay(on)}${on > notice.objection_deadline ? " (after their window)" : ""}: ${objection}`;
+        } else {
+          const resolution = String(body.resolution ?? "");
+          if (!PV_RESOLUTIONS.includes(resolution))
+            return refuse(400, "malformed_request", { resolution: PV_RESOLUTIONS.join(", ") });
+          if (!notice.objected_on)
+            return refuse(400, "malformed_request", { company_id: "no objection to settle" });
+          notice.resolution = resolution;
+          notice.resolved_on = today;
+          detail =
+            `${companyName(companyId)}'s objection settled: ${resolution}. ${text("note", 400)}`.trim();
+        }
+      } else if (action === "activate") {
+        const view = pvSubprocessorView(row, today);
+        if (!(row.status === "proposed" && customers.size === 0) && !view.can_activate)
+          return refuse(400, "malformed_request", {
+            activate: view.blockers.join("; ") || "send the notices first",
+          });
+        row.status = "active";
+        row.activated_on = today;
+        detail = `Active from ${pvDay(today)}.`;
+      } else if (action === "retire") {
+        const reason = text("reason", 1000);
+        if (!reason)
+          return refuse(400, "malformed_request", {
+            reason: "why it is no longer used, and what happened to the data",
+          });
+        const on = String(body.on ?? "") || today;
+        row.status = "retired";
+        row.retired_on = on;
+        detail = `Retired on ${pvDay(on)}: ${reason}`;
+      } else if (action === "note") {
+        detail = text("note");
+        if (!detail) return refuse(400, "malformed_request", { note: "write the note" });
+      } else return refuse(400, "malformed_request", { action: "not a sub-processor act" });
+      pvEvent("subprocessor", row.id, action, detail, viewer.id);
+      audit(`subprocessor.${action}`, viewer.id, "subprocessor", row.id, "", {
+        legal_name: row.legal_name,
+      });
+      return ok({ subprocessor: pvSubprocessorView(row, today), ...extra });
     },
   },
   {
@@ -19590,6 +23598,8 @@ seedSecurityEvents();
 seedMail();
 // Seeded after everything they point at (companies, deals, tickets, approvals).
 seedReceivables();
+seedPrivacy();
+seedInspection();
 seedSecurityFeed();
 seedReadWatch();
 seedInbox();
@@ -20968,6 +24978,8 @@ function resetWorld() {
   seedSources();
   seedPlans();
   seedReceivables();
+  seedPrivacy();
+  seedInspection();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

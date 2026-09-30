@@ -9248,3 +9248,283 @@
     }
   }
 }
+
+/* The privacy desk: a three-up form row, the search checklist, what HQ holds, the timeline. */
+@layer pages {
+  .form-grid--3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .search-list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .search-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.2fr) minmax(150px, 0.8fr) minmax(0, 2fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .search-row__label {
+    color: var(--text);
+    font-size: 13.5px;
+  }
+
+  .search-row .form-feedback {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+
+  .search-row__done {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  .match-list {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13.5px;
+  }
+
+  .match-list__row {
+    display: grid;
+    grid-template-columns: 170px minmax(0, 1fr);
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .match-list__what {
+    color: var(--text-muted);
+  }
+
+  .event-timeline {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .event-timeline__row {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 13px;
+  }
+
+  .event-timeline__kind {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .event-timeline__detail {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .pick-list {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .pick-list__options {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 6px 16px;
+    max-height: 240px;
+    overflow: auto;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .prewrap {
+    margin: 0;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .clock-line {
+    margin: 0;
+    color: var(--text);
+    font-size: 13.5px;
+  }
+
+  @media (max-width: 900px) {
+    .form-grid--3 {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .search-row {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .search-row__label {
+      grid-column: 1 / -1;
+    }
+
+    .search-row .input {
+      grid-column: 1 / -1;
+      grid-row: 3;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .event-timeline__row,
+    .match-list__row {
+      grid-template-columns: 1fr;
+      gap: 2px;
+    }
+  }
+}
+
+/* Pipeline inspection: changes by reason, battlecards, interview drivers, the stale step. */
+@layer pages {
+  .reason-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 0;
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .reason-strip__item {
+    display: grid;
+    gap: 2px;
+    padding: 12px 14px;
+  }
+
+  .reason-strip__label {
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  .reason-strip__count {
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .reason-strip__amount {
+    color: var(--text-muted);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .objection-list {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .objection-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    gap: 8px;
+  }
+
+  .objection-answers {
+    display: grid;
+    gap: 0;
+    margin: 0;
+  }
+
+  .objection-answers__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 13.5px;
+  }
+
+  .objection-answers__row dt {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .objection-answers__row dd {
+    margin: 0;
+    color: var(--text);
+  }
+
+  .driver-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px 16px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .driver-grid__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 150px;
+    align-items: center;
+    gap: 10px;
+    color: var(--text);
+    font-size: 13.5px;
+  }
+
+  .competitor-list {
+    display: grid;
+    margin: 0 0 16px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .competitor-row {
+    display: grid;
+    gap: 8px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .competitor-row__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+  }
+
+  .next-step__stale {
+    margin: 6px 0 0;
+    color: var(--danger);
+    font-size: 12.5px;
+  }
+
+  .call-result {
+    display: grid;
+    gap: 4px;
+    margin: 8px 0;
+  }
+
+  @media (max-width: 640px) {
+    .objection-row,
+    .objection-answers__row {
+      grid-template-columns: 1fr;
+    }
+  }
+}

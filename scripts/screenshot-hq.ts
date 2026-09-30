@@ -19,6 +19,12 @@ import { chromium, type Browser, type Page } from "playwright";
 
 const BASE = process.env.HQ_UI_BASE ?? "http://127.0.0.1:3000";
 const OUT = "test-results/hq";
+/** The quarter after today's, for the forecast screens (the current one may end today). */
+const NEXT_QUARTER = (() => {
+  const now = new Date();
+  const index = now.getUTCFullYear() * 4 + Math.floor(now.getUTCMonth() / 3) + 1;
+  return `${Math.floor(index / 4)}-Q${(index % 4) + 1}`;
+})();
 const WIDTHS = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "phone", width: 412, height: 915 },
@@ -144,6 +150,61 @@ const SIGNED_IN_PAGES: Shot[] = [
   {
     name: "company-billing",
     path: "/companies/c0000000-0000-4000-8000-000000000002?tab=billing",
+    ready: "main#main-content",
+  },
+  { name: "deals-changes", path: "/deals/changes", ready: "main#main-content" },
+  { name: "deals-changes-30", path: "/deals/changes?days=30", ready: "main#main-content" },
+  { name: "deals-forecast", path: "/deals/forecast", ready: "main#main-content" },
+  {
+    name: "deals-forecast-next",
+    path: `/deals/forecast?period=${NEXT_QUARTER}`,
+    ready: "main#main-content",
+  },
+  { name: "deals-competitors", path: "/deals/competitors", ready: "main#main-content" },
+  {
+    name: "deals-competitor",
+    path: "/deals/competitors/cf000001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "deals-win-loss", path: "/deals/win-loss", ready: "main#main-content" },
+  {
+    name: "deal-competition",
+    path: "/deals/d0000000-0000-4000-8000-000000000001?tab=competition",
+    ready: ".competitor-list, main#main-content",
+  },
+  { name: "privacy", path: "/privacy", ready: "main#main-content" },
+  { name: "privacy-closed", path: "/privacy?scope=closed", ready: "main#main-content" },
+  {
+    name: "privacy-request",
+    path: "/privacy/requests/ad000001-0000-4000-8000-000000000000",
+    ready: ".search-list",
+  },
+  {
+    name: "privacy-request-erasure",
+    path: "/privacy/requests/ad000005-0000-4000-8000-000000000000",
+    ready: ".search-list",
+  },
+  {
+    name: "privacy-complaint",
+    path: "/privacy/requests/ad000007-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  {
+    name: "privacy-incident-resolved",
+    path: "/privacy/incidents/ae000002-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  {
+    name: "privacy-subprocessor-change",
+    path: "/privacy/subprocessors/af000009-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "privacy-incidents", path: "/privacy/incidents", ready: "main#main-content" },
+  { name: "privacy-subprocessors", path: "/privacy/subprocessors", ready: "main#main-content" },
+  { name: "privacy-commitments", path: "/privacy/commitments", ready: "main#main-content" },
+  {
+    name: "company-privacy",
+    path: "/companies/c0000000-0000-4000-8000-000000000002?tab=privacy",
     ready: "main#main-content",
   },
   { name: "confirm-reads", path: "/confirm-reads?next=%2Fcompanies", ready: "main#main-content" },
@@ -354,6 +415,8 @@ async function captureInteractions(page: Page, folder: string) {
   await captureSecurityFlows(page, folder);
   await captureInboxFlows(page, folder);
   await captureReceivableFlows(page, folder);
+  await capturePrivacyFlows(page, folder);
+  await captureInspectionFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -447,6 +510,146 @@ async function captureReceivableFlows(page: Page, folder: string) {
   await assertAccessible(page, `${folder}/company-billing-received`);
   await page.screenshot({ path: `${OUT}/${folder}/company-billing-received.png`, fullPage: true });
   console.log(`  ✓ ${folder}/company-billing-received`);
+}
+
+async function shoot(page: Page, name: string) {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await assertNoOverflow(page, name);
+  await assertAccessible(page, name);
+  await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true });
+  console.log(`  ✓ ${name}`);
+}
+
+/**
+ * The privacy desk, end to end: a request logged and landed on, one system marked searched,
+ * its clock stopped with the question asked; the seeded breach assessed and reported; an
+ * objection to the sub-processor change settled; a customer's commitments saved.
+ */
+async function capturePrivacyFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/privacy`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Log a request" }).click();
+  await page.fill("#request-name", "Harness Person");
+  await page.fill("#request-email", `harness-${Date.now().toString(36)}@example.org`);
+  await page.fill("#request-description", "Please send me a copy of my data.");
+  await page.locator("button", { hasText: "Log the request" }).click();
+  await page.waitForURL("**/privacy/requests/**", { timeout: 15_000 });
+  const firstSearch = page.locator(".search-row").first();
+  await firstSearch.locator("select").selectOption("none");
+  await firstSearch.locator("button", { hasText: "Save" }).click();
+  await page.waitForSelector(".search-row__done", { timeout: 10_000 });
+  await page.fill("#stop-question", "Which years do you mean?");
+  await page.locator("button", { hasText: "Stop the clock" }).click();
+  await page.waitForSelector(".event-timeline__row:has-text('Clock stopped')", { timeout: 10_000 });
+  await shoot(page, `${folder}/privacy-request-worked`);
+
+  await page.goto(`${BASE}/privacy/incidents`, { waitUntil: "networkidle" });
+  const unassessed = page.locator("tr:has-text('Not assessed') a").first();
+  if ((await unassessed.count()) > 0) {
+    await unassessed.click();
+    await page.waitForURL("**/privacy/incidents/**", { timeout: 15_000 });
+    await page.selectOption("#assess-risk", "risk");
+    await page.fill("#assess-reason", "Names and work emails of 38 people went to one other firm.");
+    await page.locator("button", { hasText: "Record the assessment" }).click();
+    await page.waitForSelector("#regulator-reference", { timeout: 10_000 });
+    await page.fill("#regulator-reference", "ICO-HARNESS");
+    await page.locator("button", { hasText: "Record the report" }).click();
+    await page.waitForSelector(".event-timeline__row:has-text('Regulator told')", {
+      timeout: 10_000,
+    });
+  } else {
+    await page.locator("tbody tr a").first().click();
+    await page.waitForURL("**/privacy/incidents/**", { timeout: 15_000 });
+  }
+  await shoot(page, `${folder}/privacy-incident`);
+
+  await page.goto(`${BASE}/privacy/subprocessors`, { waitUntil: "networkidle" });
+  await page.locator("tbody tr a", { hasText: "Ledgerline" }).first().click();
+  await page.waitForURL("**/privacy/subprocessors/**", { timeout: 15_000 });
+  if ((await page.locator("#resolve-company").count()) > 0) {
+    await page.selectOption("#resolve-company", { index: 1 });
+    await page.locator("button", { hasText: "Settle it" }).click();
+    await page.waitForSelector(".event-timeline__row:has-text('Objection settled')", {
+      timeout: 10_000,
+    });
+  }
+  await shoot(page, `${folder}/privacy-subprocessor`);
+
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002?tab=privacy`, {
+    waitUntil: "networkidle",
+  });
+  await page.fill("#commit-contact", "dpo@northwall.ch");
+  await page.fill("#commit-incident", "24");
+  await page.locator("button", { hasText: "Save the commitments" }).click();
+  await page.waitForSelector("form:has(#commit-contact) .form-sent", { timeout: 10_000 });
+  await shoot(page, `${folder}/company-privacy-saved`);
+}
+
+/**
+ * Pipeline inspection, end to end: a competitor added and its card marked reviewed; that
+ * competitor put on a deal and dropped out; a call submitted for next quarter with its
+ * target; a buyer interviewed after a closed deal.
+ */
+async function captureInspectionFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/deals/competitors`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Add a competitor" }).click();
+  const name = `Harness Rival ${Date.now().toString(36)}`;
+  await page.fill("#card-name", name);
+  await page.fill("#card-dismiss", "A day late on filings.");
+  await page.locator(".objection-row input").first().fill("They are cheaper");
+  await page.locator(".objection-row input").nth(1).fill("Per seat, not per desk.");
+  await page.locator("button", { hasText: "Add the card" }).click();
+  await page.waitForURL("**/deals/competitors/**", { timeout: 15_000 });
+  await page.locator("button", { hasText: "Still true: mark reviewed" }).click();
+  await page.waitForSelector("form:has(input[value=review]) .form-sent", { timeout: 10_000 });
+  await shoot(page, `${folder}/deals-competitor-new`);
+
+  await page.goto(`${BASE}/deals/d0000000-0000-4000-8000-000000000001?tab=competition`, {
+    waitUntil: "networkidle",
+  });
+  const pick = page.locator("#deal-competitor option", { hasText: name });
+  if ((await pick.count()) > 0) {
+    await page.selectOption("#deal-competitor", { label: name });
+    await page.fill("#deal-competitor-strengths", "Cheaper per seat");
+    await page.locator("button", { hasText: "Add to the deal" }).click();
+    await page.waitForSelector(`.competitor-row:has-text("${name}")`, { timeout: 10_000 });
+    await page
+      .locator(`.competitor-row:has-text("${name}") button`, { hasText: "They dropped out" })
+      .click();
+    await page.waitForSelector(`.competitor-row:has-text("${name}") :text("Dropped out")`, {
+      timeout: 10_000,
+    });
+  }
+  await shoot(page, `${folder}/deal-competition-worked`);
+
+  await page.goto(`${BASE}/deals/forecast?period=${NEXT_QUARTER}`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Set the target" }).click();
+  await page.fill("#target-amount", "8000");
+  await page.locator("button", { hasText: "Set the target" }).last().click();
+  await page.waitForSelector("form:has(#target-amount) .form-sent", { timeout: 10_000 });
+  await page.goto(`${BASE}/deals/forecast?period=${NEXT_QUARTER}`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Submit a call" }).click();
+  await page.fill("#forecast-note", "Harness call: the negotiations close in October.");
+  await page.locator("button", { hasText: "Submit the call" }).click();
+  await page.waitForSelector("form:has(#forecast-commit) .form-sent", { timeout: 10_000 });
+  await page.goto(`${BASE}/deals/forecast?period=${NEXT_QUARTER}`, { waitUntil: "networkidle" });
+  await shoot(page, `${folder}/deals-forecast-called`);
+
+  await page.goto(`${BASE}/deals/win-loss`, { waitUntil: "networkidle" });
+  const unasked = page
+    .locator('table:has(caption:has-text("Closed deals without an interview")) tbody tr a')
+    .first();
+  if ((await unasked.count()) > 0) {
+    const href = await unasked.getAttribute("href");
+    await page.goto(`${BASE}${(href ?? "").split("#")[0]}?tab=competition`, {
+      waitUntil: "networkidle",
+    });
+    await page.fill("#interview-name", "Head of research");
+    await page.fill("#interview-reason", "Filings the same day decided it.");
+    await page.selectOption("select[name='driver:speed']", "positive");
+    await page.locator("button", { hasText: "Record the interview" }).click();
+    await page.waitForSelector("form:has(#interview-reason) .form-sent", { timeout: 10_000 });
+  }
+  await shoot(page, `${folder}/deal-interviewed`);
 }
 
 /**

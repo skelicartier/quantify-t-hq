@@ -49,6 +49,8 @@ const CAPABILITY_LABELS: ReadonlyArray<[string, string]> = [
   ["certificates:issue", "Issue certificates"],
   ["audit:read", "Read the audit log"],
   ["hq:admin", "Administer HQ"],
+  ["privacy:read", "See the privacy desk"],
+  ["privacy:write", "Run the privacy desk"],
 ];
 
 function accessState(member: StaffMember, today: string): { value: string; label: string } {

@@ -15,7 +15,14 @@ import { ThemeToggle } from "@/components/shell/theme-toggle";
 type Crumb = { href: string; label: string };
 
 /** Path words whose title case is not their spelling. */
-const LEAF_LABELS: Record<string, string> = { mrr: "MRR", sla: "SLA", api: "API" };
+const LEAF_LABELS: Record<string, string> = {
+  mrr: "MRR",
+  sla: "SLA",
+  api: "API",
+  subprocessors: "Sub-processors",
+  "win-loss": "Win/loss",
+  changes: "What changed",
+};
 
 /** The section and page a path sits under, from the navigation table; records add their own name in the page bar. */
 function crumbsFor(pathname: string): Crumb[] {

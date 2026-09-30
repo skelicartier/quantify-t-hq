@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
+import { dealCompetitorSchema, interviewSchema } from "@/lib/api/inspection";
 import {
   activitySchema,
   companySchema,
@@ -69,6 +70,11 @@ const dealDetailSchema = okEnvelope.extend({
     }),
   ),
   loss_reasons: z.array(z.string()),
+  competitors: z.array(dealCompetitorSchema),
+  competitor_options: z.array(z.object({ id: z.string(), name: z.string() })),
+  interviews: z.array(interviewSchema),
+  forecast_categories: z.array(z.object({ value: z.string(), label: z.string() })),
+  drivers: z.array(z.object({ value: z.string(), label: z.string() })),
 });
 export type DealDetail = z.infer<typeof dealDetailSchema>;
 

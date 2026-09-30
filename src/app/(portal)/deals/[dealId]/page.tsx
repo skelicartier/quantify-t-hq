@@ -18,6 +18,7 @@ import { DealCloseForm, DealStageForm, NextStepForm } from "@/components/crm/dea
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { StageRail } from "@/components/crm/stage-rail";
+import { DealCompetition } from "@/components/deals/deal-competition";
 import { TaskList } from "@/components/crm/task-list";
 import { TaskQuickAdd } from "@/components/crm/task-quick-add";
 import { Callout } from "@/components/ui/callout";
@@ -43,11 +44,19 @@ import { readCrmSettings, type Plan } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS, sourceLabel, stageLabel } from "@/lib/crm/vocabulary";
-import { formatMoney, formatMrr } from "@/lib/format";
+import { formatDate as formatDay, formatMoney, formatMrr } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Deal" };
+
+/** A forecast category's label, from the list the service sends. */
+function categoryLabel(
+  value: string,
+  categories: ReadonlyArray<{ value: string; label: string }>,
+): string {
+  return categories.find((item) => item.value === value)?.label ?? value.replace("_", " ");
+}
 export const dynamic = "force-dynamic";
 
 const TABS = [
@@ -55,6 +64,7 @@ const TABS = [
   { key: "history", label: "Stage history" },
   { key: "changes", label: "Changes" },
   { key: "tasks", label: "Tasks" },
+  { key: "competition", label: "Competition" },
 ];
 
 type DealPageProps = {
@@ -239,6 +249,11 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
               {deal.next_step || "None set. Every open deal needs one."}
             </p>
             {deal.next_step && <DueChip due={deal.next_step_due} today={today} />}
+            {deal.next_step_stale && (
+              <p className="next-step__stale">
+                Unchanged for over a week. Still right? Edit it to say so, or change it.
+              </p>
+            )}
           </div>
           {canDeal && <NextStepForm action={updateNextStepAction} deal={deal} />}
         </section>
@@ -281,6 +296,7 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
           { ...TABS[1]!, count: history.length },
           TABS[2]!,
           { ...TABS[3]!, count: openTasks.length },
+          { ...TABS[4]!, count: detail.competitors.length + detail.interviews.length },
         ]}
         current={tab}
         label="Deal sections"
@@ -376,6 +392,29 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
                   )
                 }
               />
+              {open && (
+                <InlineField
+                  {...inline}
+                  name="forecast_category"
+                  label="Forecast"
+                  type="select"
+                  value={deal.forecast_override}
+                  options={[{ value: "", label: "From the stage" }, ...detail.forecast_categories]}
+                  display={
+                    deal.forecast_override
+                      ? `${categoryLabel(deal.forecast_override, detail.forecast_categories)} (set)`
+                      : `${categoryLabel(deal.forecast_category, detail.forecast_categories)} (from the stage)`
+                  }
+                />
+              )}
+              {deal.push_count > 0 && (
+                <Property label="Pushed">
+                  {deal.push_count} {deal.push_count === 1 ? "time" : "times"}
+                  {deal.first_close_date && (
+                    <span className="quiet"> · first said {formatDay(deal.first_close_date)}</span>
+                  )}
+                </Property>
+              )}
               <Property label="Source">{sourceLabel(deal.source_key)}</Property>
               <Property label="Opened">
                 <Timestamp value={deal.created_at} mode="date" />
@@ -441,6 +480,7 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
           </RecordSection>
         )}
         {tab === "tasks" && tasks}
+        {tab === "competition" && <DealCompetition detail={detail} canDeal={canDeal} open={open} />}
       </RecordGrid>
     </>
   );
