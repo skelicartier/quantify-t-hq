@@ -2178,7 +2178,8 @@
     overflow-wrap: anywhere;
   }
 
-  .data-table__num {
+  /* Scoped to the table: the cell rule above sets text-align at the same weight plus one. */
+  .data-table .data-table__num {
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
@@ -10418,5 +10419,82 @@
     .automation-builder__add {
       flex-wrap: wrap;
     }
+  }
+}
+
+/* Finance: one card per currency — cash, burn and runway, or why there is no runway figure. */
+@layer pages {
+  .runway-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+    gap: 12px;
+  }
+
+  .runway-grid + .page-note,
+  .page-note + .runway-grid {
+    margin-top: 12px;
+  }
+
+  .runway {
+    display: grid;
+    align-content: start;
+    gap: 10px;
+    min-width: 0;
+    padding: 14px 16px;
+    border: 1px solid var(--line-soft);
+    background: var(--panel);
+  }
+
+  .runway__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .runway__currency {
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+
+  .runway__figures {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+  }
+
+  .runway__figures > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .runway__figures dt {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .runway__figures dd {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 15px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  .runway__note {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+    line-height: 1.5;
   }
 }

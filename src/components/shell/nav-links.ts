@@ -19,11 +19,13 @@ import {
   HeartHandshake,
   Mail,
   Newspaper,
+  Receipt,
   Scale,
   ScrollText,
   ShieldCheck,
   UserCog,
   UsersRound,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 
@@ -138,6 +140,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       // Everyone's: a check-in and time off are about the person, not a capability.
       { href: "/checkin", label: "Check-in", icon: NotebookPen },
       { href: "/time-off", label: "Time off", icon: CalendarOff },
+      // Everyone claims their own; deciding one is checked by the service.
+      { href: "/expenses", label: "Expenses", icon: Receipt },
     ],
   },
   {
@@ -193,6 +197,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: FileSpreadsheet,
         capability: "revenue:read",
         key: "w",
+      },
+      {
+        href: "/finance",
+        label: "Finance",
+        icon: Wallet,
+        activePrefix: "/finance/",
+        capability: "revenue:write",
       },
     ],
   },

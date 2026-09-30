@@ -33,6 +33,7 @@ const SCOPED_LABELS: Record<string, string> = {
   "/trust/changes": "Changes",
   "/trust/answers": "Answer library",
   "/trust/processing": "Record of processing",
+  "/finance/updates": "Investor updates",
 };
 
 /** The section and page a path sits under, from the navigation table; records add their own name in the page bar. */

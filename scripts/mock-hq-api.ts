@@ -34192,10 +34192,999 @@ routes.push(
   },
 );
 
+// --- finance operations (mirrors account_api/hq/finance.py and finance_routes.py) ------------
+
+type CashAccountRow = {
+  id: string;
+  name: string;
+  institution: string;
+  currency: string;
+  archived: boolean;
+};
+type CashBalanceRow = {
+  id: string;
+  account_id: string;
+  as_of: string;
+  amount: number;
+  note: string;
+  recorded_by: string;
+};
+type VendorRow = {
+  id: string;
+  name: string;
+  category: string;
+  owner_staff_id: string | null;
+  amount: number;
+  currency: string;
+  billing: string;
+  renews_on: string | null;
+  notice_days: number;
+  auto_renews: boolean;
+  status: string;
+  cancelled_on: string | null;
+  contract_ref: string;
+  notes: string;
+};
+type ClaimRow = {
+  id: string;
+  staff_id: string;
+  spent_on: string;
+  amount: number;
+  currency: string;
+  category: string;
+  description: string;
+  receipt_ref: string;
+  status: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string;
+  paid_on: string | null;
+  created_at: string;
+};
+type InvestorUpdateRow = {
+  id: string;
+  period: string;
+  title: string;
+  snapshot: Record<string, unknown>;
+  snapshot_at: string;
+  highlights: string;
+  lowlights: string;
+  asks: string;
+  status: string;
+  finalised_by: string | null;
+  finalised_at: string | null;
+  updated_at: string;
+};
+
+const FIN_CATEGORIES: Record<string, string> = {
+  software: "Software",
+  infrastructure: "Infrastructure",
+  data: "Data",
+  services: "Services",
+  office: "Office",
+  other: "Other",
+};
+const FIN_BILLING: Record<string, string> = {
+  monthly: "Monthly",
+  annual: "Annual",
+  usage: "By use",
+  one_off: "One-off",
+};
+const FIN_EXPENSES: Record<string, string> = {
+  travel: "Travel",
+  meals: "Meals",
+  software: "Software",
+  equipment: "Equipment",
+  events: "Events",
+  other: "Other",
+};
+const cashAccounts: CashAccountRow[] = [];
+const cashBalances: CashBalanceRow[] = [];
+const vendorsStore: VendorRow[] = [];
+const expenseClaims: ClaimRow[] = [];
+const investorUpdates: InvestorUpdateRow[] = [];
+
+const finRound = (value: number) => Math.round(value * 100) / 100;
+const finMonthName = (period: string) =>
+  new Date(`${period}-01T00:00:00Z`).toLocaleString("en-GB", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+const finDays = (from: string, to: string) =>
+  Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+
+function finBalanceOn(accountId: string, day: string): CashBalanceRow | undefined {
+  return cashBalances
+    .filter((row) => row.account_id === accountId && row.as_of <= day)
+    .sort((a, b) => b.as_of.localeCompare(a.as_of))[0];
+}
+
+function finRunway(day = todayIso()) {
+  const byCurrency = new Map<string, CashAccountRow[]>();
+  for (const account of cashAccounts.filter((row) => !row.archived))
+    byCurrency.set(account.currency, [...(byCurrency.get(account.currency) ?? []), account]);
+  return [...byCurrency.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, members]) => {
+      let cash = 0;
+      let then = 0;
+      let history = true;
+      const problems: string[] = [];
+      const latestDays: string[] = [];
+      for (const account of members) {
+        const latest = finBalanceOn(account.id, day);
+        if (!latest) {
+          problems.push(`${account.name} has no balance`);
+          continue;
+        }
+        if (finDays(latest.as_of, day) > 35)
+          problems.push(`${account.name}'s balance is from ${pvDay(latest.as_of)}`);
+        latestDays.push(latest.as_of);
+        cash += latest.amount;
+        const earlier = finBalanceOn(account.id, addDaysIso(latest.as_of, -90));
+        if (!earlier) history = false;
+        else then += earlier.amount;
+      }
+      const base = {
+        currency,
+        cash: finRound(cash),
+        accounts: members.length,
+        as_of: latestDays.length ? latestDays.sort()[0]! : null,
+        burn_per_month: null as number | null,
+        runway_months: null as number | null,
+        runs_out_on: null as string | null,
+      };
+      if (problems.length)
+        return {
+          ...base,
+          state: "refused",
+          reason: `Runway is not shown: ${problems.join("; ")}.`,
+        };
+      if (!history)
+        return {
+          ...base,
+          state: "no_history",
+          reason: "Runway needs a balance for every account from three months before its latest.",
+        };
+      const burn = finRound((then - cash) / (90 / 30.4375));
+      if (burn <= 0)
+        return {
+          ...base,
+          burn_per_month: burn,
+          state: "positive",
+          reason: "Cash-flow positive over the last three months.",
+        };
+      const months = Math.round((cash / burn) * 10) / 10;
+      return {
+        ...base,
+        burn_per_month: burn,
+        runway_months: months,
+        runs_out_on: addDaysIso(base.as_of!, Math.floor(months * 30.4375)),
+        state: "ok",
+        reason: "",
+      };
+    });
+}
+
+function finVendorView(row: VendorRow, day = todayIso()) {
+  const monthly =
+    row.billing === "monthly"
+      ? row.amount
+      : row.billing === "annual"
+        ? finRound(row.amount / 12)
+        : null;
+  let next: string | null = null;
+  let cancelBy: string | null = null;
+  let state = "ok";
+  let reason = "";
+  if (row.renews_on && row.status !== "cancelled") {
+    next = row.renews_on;
+    if (row.auto_renews && row.status === "active")
+      while (next < day) next = addMonthsIso(next, row.billing === "annual" ? 12 : 1);
+    cancelBy = addDaysIso(next, -row.notice_days);
+    if (row.status === "active" && row.auto_renews && row.billing === "annual") {
+      if (cancelBy < day) {
+        state = "locked";
+        reason = `Renews ${pvDay(next)}; the notice date has passed`;
+      } else if (finDays(day, cancelBy) <= 30) {
+        state = "decide";
+        reason = `Keep or cancel by ${pvDay(cancelBy)}`;
+      }
+    } else if (row.status === "cancelling") {
+      state = "ending";
+      reason = `Ends ${pvDay(next)}`;
+    }
+  }
+  return {
+    vendor_id: row.id,
+    name: row.name,
+    category: row.category,
+    category_label: FIN_CATEGORIES[row.category] ?? row.category,
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    amount: row.amount,
+    currency: row.currency,
+    billing: row.billing,
+    billing_label: FIN_BILLING[row.billing] ?? row.billing,
+    renews_on: row.renews_on,
+    notice_days: row.notice_days,
+    auto_renews: row.auto_renews,
+    status: row.status,
+    cancelled_on: row.cancelled_on,
+    subprocessor_id: null,
+    contract_ref: row.contract_ref,
+    notes: row.notes,
+    monthly_equivalent: monthly,
+    next_renewal: next,
+    cancel_by: cancelBy,
+    state,
+    reason,
+  };
+}
+
+function finClaimView(row: ClaimRow, viewer: string) {
+  return {
+    claim_id: row.id,
+    staff_id: row.staff_id,
+    staff_name: nameOf(row.staff_id),
+    mine: row.staff_id === viewer,
+    spent_on: row.spent_on,
+    amount: row.amount,
+    currency: row.currency,
+    category: row.category,
+    category_label: FIN_EXPENSES[row.category] ?? row.category,
+    description: row.description,
+    receipt_ref: row.receipt_ref,
+    status: row.status,
+    decided_by_name: row.decided_by ? nameOf(row.decided_by) : "",
+    decided_at: row.decided_at,
+    decision_note: row.decision_note,
+    paid_on: row.paid_on,
+    created_at: row.created_at,
+  };
+}
+
+function finUpdateView(row: InvestorUpdateRow, withSnapshot: boolean) {
+  const base = {
+    update_id: row.id,
+    period: row.period,
+    title: row.title,
+    snapshot_at: row.snapshot_at,
+    highlights: row.highlights,
+    lowlights: row.lowlights,
+    asks: row.asks,
+    status: row.status,
+    finalised_by_name: row.finalised_by ? nameOf(row.finalised_by) : "",
+    finalised_at: row.finalised_at,
+    updated_at: row.updated_at,
+  };
+  return withSnapshot ? { ...base, snapshot: row.snapshot } : base;
+}
+
+function finSnapshot(period: string): Record<string, unknown> {
+  const start = `${period}-01`;
+  const end = addDaysIso(addMonthsIso(start, 1), -1);
+  const asOf = end < todayIso() ? end : todayIso();
+  const dayBefore = addDaysIso(start, -1);
+  const currencies = [...new Set(movements.map((row) => row.currency || "USD"))].sort();
+  const mrr: Record<string, number> = {};
+  const moves: Record<string, Record<string, number>> = {};
+  const sumTo = (currency: string, day: string) =>
+    movements
+      .filter((row) => (row.currency || "USD") === currency && row.effective_on <= day)
+      .reduce((total, row) => total + row.cents, 0) / 100;
+  for (const currency of currencies) {
+    mrr[currency] = finRound(sumTo(currency, asOf));
+    const kinds: Record<string, number> = {};
+    for (const row of movements)
+      if (
+        (row.currency || "USD") === currency &&
+        row.effective_on >= start &&
+        row.effective_on <= asOf
+      )
+        kinds[row.kind || "adjustment"] = (kinds[row.kind || "adjustment"] ?? 0) + row.cents / 100;
+    moves[currency] = {
+      opening: finRound(sumTo(currency, dayBefore)),
+      ...Object.fromEntries(
+        Object.entries(kinds)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([kind, value]) => [kind, finRound(value)]),
+      ),
+    };
+  }
+  const balances = new Map<string, number>();
+  for (const row of movements)
+    if (row.effective_on <= asOf) {
+      const key = `${row.company_id}|${row.currency}`;
+      balances.set(key, (balances.get(key) ?? 0) + row.cents);
+    }
+  const paying = new Set(
+    [...balances.entries()].filter(([, cents]) => cents > 0).map(([key]) => key.split("|")[0]),
+  );
+  const pipeline: Record<string, number> = {};
+  const open = deals.filter((deal) => deal.status === "open");
+  for (const deal of open)
+    pipeline[deal.currency || "USD"] = finRound(
+      (pipeline[deal.currency || "USD"] ?? 0) + deal.mrr_amount,
+    );
+  const headcount: Record<string, number> = {};
+  for (const member of staff.filter((row) => row.is_active))
+    headcount[member.kind || "employee"] = (headcount[member.kind || "employee"] ?? 0) + 1;
+  return {
+    period,
+    as_of: asOf,
+    mrr,
+    movements: moves,
+    paying_customers: paying.size,
+    open_deals: open.length,
+    open_pipeline_mrr: Object.fromEntries(
+      Object.entries(pipeline).sort(([a], [b]) => a.localeCompare(b)),
+    ),
+    cash: finRunway(asOf),
+    headcount: Object.fromEntries(Object.entries(headcount).sort(([a], [b]) => a.localeCompare(b))),
+  };
+}
+
+function seedFinance() {
+  cashAccounts.length = 0;
+  cashBalances.length = 0;
+  vendorsStore.length = 0;
+  expenseClaims.length = 0;
+  investorUpdates.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const ADMIN = "aa000000-0000-4000-8000-00000000000b";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const INTERN = "aa000000-0000-4000-8000-00000000000e";
+  const day = todayIso();
+  cashAccounts.push(
+    {
+      id: "fa000001-0000-4000-8000-000000000000",
+      name: "Operating",
+      institution: "Harbour Bank",
+      currency: "USD",
+      archived: false,
+    },
+    {
+      id: "fa000002-0000-4000-8000-000000000000",
+      name: "Reserve",
+      institution: "Harbour Bank",
+      currency: "USD",
+      archived: false,
+    },
+    {
+      id: "fa000003-0000-4000-8000-000000000000",
+      name: "UK account",
+      institution: "Thames Bank",
+      currency: "GBP",
+      archived: false,
+    },
+  );
+  const balance = (account: string, daysAgo: number, amount: number) =>
+    cashBalances.push({
+      id: randomUUID(),
+      account_id: account,
+      as_of: addDaysIso(day, -daysAgo),
+      amount,
+      note: "",
+      recorded_by: OWNER,
+    });
+  balance("fa000001-0000-4000-8000-000000000000", 125, 412000);
+  balance("fa000001-0000-4000-8000-000000000000", 64, 371500);
+  balance("fa000001-0000-4000-8000-000000000000", 3, 336200);
+  balance("fa000002-0000-4000-8000-000000000000", 130, 150000);
+  balance("fa000002-0000-4000-8000-000000000000", 4, 150000);
+  balance("fa000003-0000-4000-8000-000000000000", 47, 38400);
+  const vendor = (
+    row: Omit<VendorRow, "id" | "cancelled_on" | "contract_ref" | "notes" | "status"> & {
+      status?: string;
+    },
+  ) =>
+    vendorsStore.push({
+      id: `fb00000${vendorsStore.length + 1}-0000-4000-8000-000000000000`,
+      cancelled_on: null,
+      contract_ref: "",
+      notes: "",
+      status: "active",
+      ...row,
+    });
+  vendor({
+    name: "Northgate Cloud",
+    category: "infrastructure",
+    owner_staff_id: ADMIN,
+    amount: 2400,
+    currency: "USD",
+    billing: "monthly",
+    renews_on: addDaysIso(day, 11),
+    notice_days: 0,
+    auto_renews: true,
+  });
+  vendor({
+    name: "Market data licence",
+    category: "data",
+    owner_staff_id: OWNER,
+    amount: 36000,
+    currency: "USD",
+    billing: "annual",
+    renews_on: addDaysIso(day, 52),
+    notice_days: 30,
+    auto_renews: true,
+  });
+  vendor({
+    name: "Design tools",
+    category: "software",
+    owner_staff_id: SALES,
+    amount: 1440,
+    currency: "USD",
+    billing: "annual",
+    renews_on: addDaysIso(day, 12),
+    notice_days: 30,
+    auto_renews: true,
+  });
+  vendor({
+    name: "Parcel Mail",
+    category: "software",
+    owner_staff_id: ADMIN,
+    amount: 89,
+    currency: "EUR",
+    billing: "monthly",
+    renews_on: addDaysIso(day, 20),
+    notice_days: 0,
+    auto_renews: true,
+  });
+  vendor({
+    name: "Office desks",
+    category: "office",
+    owner_staff_id: OWNER,
+    amount: 650,
+    currency: "GBP",
+    billing: "monthly",
+    renews_on: addDaysIso(day, 25),
+    notice_days: 30,
+    auto_renews: true,
+    status: "cancelling",
+  });
+  const claim = (
+    staffId: string,
+    daysAgo: number,
+    amount: number,
+    currency: string,
+    category: string,
+    description: string,
+    status: string,
+    decidedBy: string | null = null,
+  ) =>
+    expenseClaims.push({
+      id: randomUUID(),
+      staff_id: staffId,
+      spent_on: addDaysIso(day, -daysAgo),
+      amount,
+      currency,
+      category,
+      description,
+      receipt_ref: "Receipts folder",
+      status,
+      decided_by: decidedBy,
+      decided_at: decidedBy ? agoIso(24 * (daysAgo - 1)) : null,
+      decision_note: "",
+      paid_on: status === "paid" ? addDaysIso(day, -(daysAgo - 3)) : null,
+      created_at: agoIso(24 * daysAgo),
+    });
+  claim(INTERN, 3, 42.5, "GBP", "travel", "Train to the Meridian demo", "submitted");
+  claim(SALES, 6, 118, "USD", "meals", "Dinner with the Harbour Partners team", "submitted");
+  claim(ADMIN, 12, 64, "USD", "software", "Screen recorder, one month", "approved", OWNER);
+  claim(OWNER, 20, 380, "GBP", "events", "Conference ticket", "paid", ADMIN);
+  const period = addDaysIso(`${day.slice(0, 7)}-01`, -1).slice(0, 7);
+  investorUpdates.push({
+    id: "f7000001-0000-4000-8000-000000000000",
+    period,
+    title: `Update for ${finMonthName(period)}`,
+    snapshot: finSnapshot(period),
+    snapshot_at: agoIso(20),
+    highlights: "Two new desks signed; the first enterprise pilot started.",
+    lowlights: "One renewal pushed to next quarter.",
+    asks: "Introductions to heads of research at long/short funds.",
+    status: "draft",
+    finalised_by: null,
+    finalised_at: null,
+    updated_at: agoIso(18),
+  });
+}
+
+const finBad = (details: Record<string, string>) => refuse(400, "malformed_request", details);
+const finMoney = (value: unknown, allowNegative = false): number | null => {
+  const number = Number(String(value ?? "").replace(/,/g, ""));
+  if (String(value ?? "").trim() === "" || !Number.isFinite(number) || Math.abs(number) >= 1e9)
+    return null;
+  if (number < 0 && !allowNegative) return null;
+  return finRound(number);
+};
+const finCurrency = (value: unknown) => {
+  const text = String(value ?? "")
+    .trim()
+    .toUpperCase();
+  return /^[A-Z]{3}$/.test(text) ? text : null;
+};
+
+function finVendorWrite(mode: "create" | "update"): Handler {
+  return ({ params, body, headers }) => {
+    const creating = mode === "create";
+    const row: VendorRow | undefined = creating
+      ? {
+          id: randomUUID(),
+          name: "",
+          category: "other",
+          owner_staff_id: null,
+          amount: 0,
+          currency: "USD",
+          billing: "monthly",
+          renews_on: null,
+          notice_days: 0,
+          auto_renews: true,
+          status: "active",
+          cancelled_on: null,
+          contract_ref: "",
+          notes: "",
+        }
+      : vendorsStore.find((item) => item.id === params.vendor_id);
+    if (!row) return refuse(404, "not_found");
+    const next = { ...row };
+    if (creating || "name" in body) {
+      next.name = String(body.name ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!next.name) return finBad({ name: "who we pay" });
+    }
+    if (creating || "category" in body) {
+      if (!(String(body.category ?? "") in FIN_CATEGORIES))
+        return finBad({ category: Object.keys(FIN_CATEGORIES).join(", ") });
+      next.category = String(body.category);
+    }
+    if (creating || "amount" in body) {
+      const amount = finMoney(body.amount);
+      if (amount === null) return finBad({ amount: "an amount, like 1250.00" });
+      next.amount = amount;
+    }
+    if (creating || "currency" in body) {
+      const currency = finCurrency(body.currency);
+      if (!currency) return finBad({ currency: "a three-letter code, like USD" });
+      next.currency = currency;
+    }
+    if (creating || "billing" in body) {
+      if (!(String(body.billing ?? "") in FIN_BILLING))
+        return finBad({ billing: Object.keys(FIN_BILLING).join(", ") });
+      next.billing = String(body.billing);
+    }
+    if (creating || "renews_on" in body) next.renews_on = String(body.renews_on ?? "") || null;
+    if (creating || "notice_days" in body) {
+      const notice = Number(body.notice_days ?? 0);
+      if (!Number.isInteger(notice) || notice < 0 || notice > 365)
+        return finBad({ notice_days: "0 to 365" });
+      next.notice_days = notice;
+    }
+    if (creating || "auto_renews" in body) next.auto_renews = body.auto_renews !== false;
+    if (creating || "owner_staff_id" in body) {
+      next.owner_staff_id = String(body.owner_staff_id ?? "") || null;
+      if (next.owner_staff_id && !staff.some((member) => member.id === next.owner_staff_id))
+        return finBad({ owner_staff_id: "choose someone on the team" });
+    }
+    if ("contract_ref" in body) next.contract_ref = String(body.contract_ref ?? "").slice(0, 120);
+    if ("notes" in body) next.notes = String(body.notes ?? "").slice(0, 2000);
+    if ("status" in body) {
+      if (!["active", "cancelling", "cancelled"].includes(String(body.status)))
+        return finBad({ status: "active, cancelling, cancelled" });
+      next.status = String(body.status);
+      next.cancelled_on = next.status === "cancelled" ? todayIso() : null;
+    }
+    if (!creating && JSON.stringify(next) === JSON.stringify(row))
+      return finBad({ fields: "nothing to change" });
+    if (creating) vendorsStore.push(next);
+    else Object.assign(row, next);
+    audit(
+      creating ? "vendor.created" : "vendor.updated",
+      caller(headers)?.member.id ?? null,
+      "vendor",
+      next.id,
+    );
+    return ok({ vendor: finVendorView(next) });
+  };
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/finance/cash",
+    auth: true,
+    capability: "revenue:write",
+    handler: () =>
+      ok({
+        accounts: [...cashAccounts]
+          .sort(
+            (a, b) =>
+              Number(a.archived) - Number(b.archived) ||
+              a.currency.localeCompare(b.currency) ||
+              a.name.localeCompare(b.name),
+          )
+          .map((account) => {
+            const rows = cashBalances
+              .filter((row) => row.account_id === account.id)
+              .sort((a, b) => b.as_of.localeCompare(a.as_of));
+            const latest = rows[0];
+            return {
+              account_id: account.id,
+              name: account.name,
+              institution: account.institution,
+              currency: account.currency,
+              archived: account.archived,
+              balance: latest?.amount ?? null,
+              as_of: latest?.as_of ?? null,
+              stale: Boolean(latest && finDays(latest.as_of, todayIso()) > 35),
+              history: rows.slice(0, 12).map((row) => ({
+                as_of: row.as_of,
+                amount: row.amount,
+                note: row.note,
+                recorded_by_name: nameOf(row.recorded_by),
+              })),
+            };
+          }),
+        runway: finRunway(),
+        stale_after_days: 35,
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/cash/accounts/create",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ body, headers }) => {
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!name) return finBad({ name: "what the account is called" });
+      const currency = finCurrency(body.currency);
+      if (!currency) return finBad({ currency: "a three-letter code, like USD" });
+      const row: CashAccountRow = {
+        id: randomUUID(),
+        name,
+        institution: String(body.institution ?? "")
+          .trim()
+          .slice(0, 120),
+        currency,
+        archived: false,
+      };
+      cashAccounts.push(row);
+      audit("cash_account.created", caller(headers)?.member.id ?? null, "cash_account", row.id);
+      return ok({ account_id: row.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/cash/accounts/{account_id}/update",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ params, body, headers }) => {
+      const row = cashAccounts.find((item) => item.id === params.account_id);
+      if (!row) return refuse(404, "not_found");
+      if (!["name", "institution", "archived"].some((key) => key in body))
+        return finBad({ fields: "nothing to change" });
+      if ("name" in body && !String(body.name ?? "").trim())
+        return finBad({ name: "cannot be empty" });
+      if ("name" in body)
+        row.name = String(body.name ?? "")
+          .trim()
+          .slice(0, 120);
+      if ("institution" in body)
+        row.institution = String(body.institution ?? "")
+          .trim()
+          .slice(0, 120);
+      if ("archived" in body) row.archived = body.archived === true;
+      audit("cash_account.updated", caller(headers)?.member.id ?? null, "cash_account", row.id);
+      return ok({ account_id: row.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/cash/balances/record",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ body, headers }) => {
+      const account = cashAccounts.find((item) => item.id === String(body.account_id ?? ""));
+      if (!account) return refuse(404, "not_found");
+      if (account.archived) return finBad({ account_id: "archived; restore it first" });
+      const asOf = String(body.as_of || todayIso());
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return finBad({ as_of: "a date, YYYY-MM-DD" });
+      if (asOf > addDaysIso(todayIso(), 1)) return finBad({ as_of: "cannot be in the future" });
+      const amount = finMoney(body.amount, true);
+      if (amount === null) return finBad({ amount: "an amount, like 1250.00" });
+      const who = caller(headers)?.member.id ?? "";
+      const existing = cashBalances.find(
+        (row) => row.account_id === account.id && row.as_of === asOf,
+      );
+      if (existing)
+        Object.assign(existing, {
+          amount,
+          note: String(body.note ?? "").slice(0, 400),
+          recorded_by: who,
+        });
+      else
+        cashBalances.push({
+          id: randomUUID(),
+          account_id: account.id,
+          as_of: asOf,
+          amount,
+          note: String(body.note ?? "").slice(0, 400),
+          recorded_by: who,
+        });
+      audit(
+        existing ? "cash_balance.corrected" : "cash_balance.recorded",
+        who || null,
+        "cash_account",
+        account.id,
+      );
+      return ok({ corrected: Boolean(existing) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/finance/vendors",
+    auth: true,
+    capability: "revenue:write",
+    handler: () => {
+      const rank: Record<string, number> = { decide: 0, ending: 1, locked: 2, ok: 3 };
+      const views = vendorsStore
+        .map((row) => finVendorView(row))
+        .sort(
+          (a, b) =>
+            Number(a.status === "cancelled") - Number(b.status === "cancelled") ||
+            (rank[a.state] ?? 9) - (rank[b.state] ?? 9) ||
+            (a.cancel_by ?? "9999").localeCompare(b.cancel_by ?? "9999") ||
+            a.name.localeCompare(b.name),
+        );
+      const monthly: Record<string, number> = {};
+      for (const view of views)
+        if (view.status !== "cancelled" && view.monthly_equivalent !== null)
+          monthly[view.currency] = finRound(
+            (monthly[view.currency] ?? 0) + view.monthly_equivalent,
+          );
+      return ok({
+        vendors: views,
+        monthly_by_currency: Object.fromEntries(
+          Object.entries(monthly).sort(([a], [b]) => a.localeCompare(b)),
+        ),
+        decide: views.filter((view) => view.state === "decide").length,
+        categories: Object.entries(FIN_CATEGORIES).map(([value, label]) => ({ value, label })),
+        billing: Object.entries(FIN_BILLING).map(([value, label]) => ({ value, label })),
+        staff: staff
+          .filter((member) => member.is_active)
+          .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/vendors/create",
+    auth: true,
+    capability: "revenue:write",
+    handler: finVendorWrite("create"),
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/vendors/{vendor_id}/update",
+    auth: true,
+    capability: "revenue:write",
+    handler: finVendorWrite("update"),
+  },
+  {
+    method: "GET",
+    pattern: "hq/finance/expenses",
+    auth: true,
+    handler: ({ headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      const decides = hasCap(headers, "revenue:write");
+      const views = expenseClaims
+        .filter((row) => decides || row.staff_id === me)
+        .map((row) => finClaimView(row, me))
+        .sort(
+          (a, b) =>
+            Number(a.status !== "submitted") - Number(b.status !== "submitted") ||
+            a.spent_on.localeCompare(b.spent_on),
+        );
+      const owed: Record<string, number> = {};
+      if (decides)
+        for (const view of views)
+          if (view.status === "submitted" || view.status === "approved")
+            owed[view.currency] = finRound((owed[view.currency] ?? 0) + view.amount);
+      return ok({
+        claims: views,
+        can_decide: decides,
+        owed_by_currency: Object.fromEntries(
+          Object.entries(owed).sort(([a], [b]) => a.localeCompare(b)),
+        ),
+        categories: Object.entries(FIN_EXPENSES).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/expenses/create",
+    auth: true,
+    handler: ({ body, headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      if (!(String(body.category ?? "") in FIN_EXPENSES))
+        return finBad({ category: Object.keys(FIN_EXPENSES).join(", ") });
+      const amount = finMoney(body.amount);
+      if (amount === null || amount <= 0) return finBad({ amount: "more than nothing" });
+      const currency = finCurrency(body.currency);
+      if (!currency) return finBad({ currency: "a three-letter code, like USD" });
+      const spentOn = String(body.spent_on ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(spentOn)) return finBad({ spent_on: "a date, YYYY-MM-DD" });
+      if (spentOn > addDaysIso(todayIso(), 1))
+        return finBad({ spent_on: "cannot be in the future" });
+      const description = String(body.description ?? "")
+        .trim()
+        .slice(0, 400);
+      if (!description) return finBad({ description: "what it was for" });
+      const row: ClaimRow = {
+        id: randomUUID(),
+        staff_id: me,
+        spent_on: spentOn,
+        amount,
+        currency,
+        category: String(body.category),
+        description,
+        receipt_ref: String(body.receipt_ref ?? "").slice(0, 400),
+        status: "submitted",
+        decided_by: null,
+        decided_at: null,
+        decision_note: "",
+        paid_on: null,
+        created_at: now(),
+      };
+      expenseClaims.push(row);
+      audit("expense.claimed", me || null, "expense_claim", row.id);
+      return ok({ claim: finClaimView(row, me) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/expenses/{claim_id}/act",
+    auth: true,
+    handler: ({ params, body, headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      const row = expenseClaims.find((item) => item.id === params.claim_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      const mine = row.staff_id === me;
+      if (action === "withdraw") {
+        if (!mine) return refuse(404, "not_found");
+        if (row.status !== "submitted")
+          return finBad({ status: "only a claim not yet decided is withdrawn" });
+        row.status = "withdrawn";
+      } else if (["approve", "reject", "pay"].includes(action)) {
+        if (!hasCap(headers, "revenue:write"))
+          return refuse(403, "forbidden", { action: "owners and admins decide claims" });
+        if (mine)
+          return refuse(403, "forbidden", { action: "someone else decides your own claim" });
+        if (action === "pay") {
+          if (row.status !== "approved") return finBad({ status: "approve it before it is paid" });
+          Object.assign(row, { status: "paid", paid_on: String(body.paid_on || todayIso()) });
+        } else {
+          if (row.status !== "submitted") return finBad({ status: "already decided" });
+          const note = String(body.note ?? "")
+            .trim()
+            .slice(0, 400);
+          if (action === "reject" && !note) return finBad({ note: "why it is rejected" });
+          Object.assign(row, {
+            status: action === "approve" ? "approved" : "rejected",
+            decided_by: me,
+            decided_at: now(),
+            decision_note: note,
+          });
+        }
+      } else return finBad({ action: "withdraw, approve, reject, pay" });
+      audit(`expense.${action}`, me || null, "expense_claim", row.id);
+      return ok({ claim: finClaimView(row, me) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/finance/updates",
+    auth: true,
+    capability: "revenue:write",
+    handler: () =>
+      ok({
+        updates: [...investorUpdates]
+          .sort((a, b) => b.period.localeCompare(a.period))
+          .map((row) => finUpdateView(row, false)),
+        suggested_period: addDaysIso(`${todayIso().slice(0, 7)}-01`, -1).slice(0, 7),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/updates/create",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ body, headers }) => {
+      const period = String(body.period ?? "").trim();
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) return finBad({ period: "a month, YYYY-MM" });
+      if (`${period}-01` > todayIso()) return finBad({ period: "a month that has begun" });
+      if (investorUpdates.some((row) => row.period === period))
+        return finBad({ period: "there is already an update for that month" });
+      const row: InvestorUpdateRow = {
+        id: randomUUID(),
+        period,
+        title:
+          String(body.title ?? "")
+            .trim()
+            .slice(0, 160) || `Update for ${finMonthName(period)}`,
+        snapshot: finSnapshot(period),
+        snapshot_at: now(),
+        highlights: "",
+        lowlights: "",
+        asks: "",
+        status: "draft",
+        finalised_by: null,
+        finalised_at: null,
+        updated_at: now(),
+      };
+      investorUpdates.push(row);
+      audit(
+        "investor_update.created",
+        caller(headers)?.member.id ?? null,
+        "investor_update",
+        row.id,
+      );
+      return ok({ update: finUpdateView(row, true) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/finance/updates/{update_id}",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ params }) => {
+      const row = investorUpdates.find((item) => item.id === params.update_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({ update: finUpdateView(row, true) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/updates/{update_id}/act",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ params, body, headers }) => {
+      const row = investorUpdates.find((item) => item.id === params.update_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      if (!["edit", "refresh", "finalise"].includes(action))
+        return finBad({ action: "edit, refresh, finalise" });
+      if (row.status === "final") return finBad({ status: "final: it is kept as it was sent" });
+      const who = caller(headers)?.member.id ?? null;
+      if (action === "edit") {
+        if ("title" in body && !String(body.title ?? "").trim())
+          return finBad({ title: "cannot be empty" });
+        for (const name of ["title", "highlights", "lowlights", "asks"] as const)
+          if (name in body)
+            row[name] = String(body[name] ?? "")
+              .trim()
+              .slice(0, name === "title" ? 160 : 4000);
+      } else if (action === "refresh")
+        Object.assign(row, { snapshot: finSnapshot(row.period), snapshot_at: now() });
+      else Object.assign(row, { status: "final", finalised_by: who, finalised_at: now() });
+      row.updated_at = now();
+      audit(`investor_update.${action}`, who, "investor_update", row.id);
+      return ok({ update: finUpdateView(row, true) });
+    },
+  },
+);
+
 // After their declarations: the seeds read the blocks' constants.
 seedCustomFields();
 seedAutomations();
 seedDigests();
+seedFinance();
 
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
@@ -34298,6 +35287,7 @@ function resetWorld() {
   seedCustomFields();
   seedAutomations();
   seedDigests();
+  seedFinance();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

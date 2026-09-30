@@ -289,6 +289,22 @@ export function formatMoney(value: number | null | undefined, currency = "USD"):
   }).format(value);
 }
 
+/**
+ * Money to the cent when it has cents — a claim of £42.50 is not £43 — and whole when it
+ * has none, so a column of round prices does not read ".00" down its length.
+ */
+export function formatMoneyExact(value: number | null | undefined, currency = "USD"): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Not available";
+  const code = /^[A-Z]{3}$/.test(currency) ? currency : "USD";
+  const whole = Math.round(value * 100) % 100 === 0;
+  return new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: code,
+    ...(whole ? { maximumFractionDigits: 0, minimumFractionDigits: 0 } : {}),
+  }).format(value);
+}
+
 /** Monthly recurring revenue: "$1,235/mo". */
 /**
  * Money per currency, as the service totals it. Drawn one figure per currency, joined —

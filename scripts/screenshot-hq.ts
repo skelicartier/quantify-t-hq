@@ -194,6 +194,20 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "admin-fields", path: "/admin/fields", ready: "main#main-content" },
   { name: "admin-automations", path: "/admin/automations", ready: "main#main-content" },
   { name: "me-digests", path: "/me/digests", ready: "main#main-content" },
+  { name: "finance", path: "/finance", ready: "main#main-content" },
+  { name: "finance-vendors", path: "/finance/vendors", ready: "main#main-content" },
+  {
+    name: "finance-vendor-decide",
+    path: "/finance/vendors/fb000002-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "finance-updates", path: "/finance/updates", ready: "main#main-content" },
+  {
+    name: "finance-update",
+    path: "/finance/updates/f7000001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "expenses", path: "/expenses", ready: "main#main-content" },
   {
     name: "admin-automation",
     path: "/admin/automations/a7000001-0000-4000-8000-000000000000",
@@ -506,6 +520,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureFieldFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
+  await captureFinanceFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -1113,6 +1128,96 @@ async function capturePlatformFlows(page: Page, folder: string) {
     await page.waitForSelector("#company-templates .form-sent", { timeout: 10_000 });
   }
   await shoot(page, `${folder}/company-threads`);
+}
+
+/**
+ * Finance: a balance recorded; an annual vendor added inside its notice window; an expense
+ * claimed (its claimant is offered no approval) and someone else's claim approved; this
+ * month's investor update started, and last month's written up and finalised.
+ */
+async function captureFinanceFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  const inDays = (days: number) =>
+    new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
+  await page.goto(`${BASE}/finance`, { waitUntil: "networkidle" });
+  await page.selectOption("#balance-account", "fa000003-0000-4000-8000-000000000000");
+  await page.fill("#balance-amount", "36900");
+  await page.fill("#balance-note", `Statement ${stamp}`);
+  await page.locator("button", { hasText: "Record the balance" }).click();
+  await page.waitForSelector("form:has(#balance-amount) .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  if ((await page.locator(".runway").count()) < 2)
+    report(`${folder}/finance-balance-recorded`, "a runway card per currency is missing");
+  await shoot(page, `${folder}/finance-balance-recorded`);
+
+  await page.goto(`${BASE}/finance/vendors`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Add a vendor" }).click();
+  await page.fill("#vendor-name", `Analytics suite ${stamp}`);
+  await page.selectOption("#vendor-category", "software");
+  await page.selectOption("#vendor-billing", "annual");
+  await page.fill("#vendor-amount", "2400");
+  await page.fill("#vendor-renews", inDays(40));
+  await page.locator("button", { hasText: "Add the vendor" }).click();
+  await page.waitForSelector(`td:has-text("${stamp}")`, { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  // Forty days out with thirty days' notice: ten days left to decide.
+  if ((await page.locator(`tr:has-text("${stamp}") :text("Decide")`).count()) === 0)
+    report(
+      `${folder}/finance-vendor-added`,
+      "an annual renewal inside 30 days of its notice date is not flagged",
+    );
+  await shoot(page, `${folder}/finance-vendor-added`);
+
+  await page.goto(`${BASE}/expenses`, { waitUntil: "networkidle" });
+  await page.fill("#claim-amount", "18.40");
+  await page.fill("#claim-description", `Taxi to the client ${stamp}`);
+  await page.locator("button", { hasText: "Claim it" }).click();
+  await page.waitForSelector(`td:has-text("${stamp}")`, { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  if ((await page.locator(`tr:has-text("${stamp}") button[aria-label^="Approve "]`).count()) > 0)
+    report(`${folder}/expenses-decided`, "the claimant was offered their own approval");
+  const approve = page.locator('button[aria-label^="Approve "]').first();
+  if ((await approve.count()) > 0) {
+    const label = (await approve.getAttribute("aria-label")) ?? "";
+    await approve.click();
+    await page.waitForSelector(`button[aria-label="${label}"]`, {
+      state: "detached",
+      timeout: 10_000,
+    });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/expenses-decided`);
+
+  const month = new Date().toISOString().slice(0, 7);
+  await page.goto(`${BASE}/finance/updates`, { waitUntil: "networkidle" });
+  if ((await page.locator(`td:text-is("${month}")`).count()) === 0) {
+    await page.locator("summary", { hasText: "Start an update" }).click();
+    await page.fill("#update-period", month);
+    await page.locator("button", { hasText: "Start it" }).click();
+    await page
+      .waitForURL(/\/finance\/updates\/[0-9a-f-]{36}$/, { timeout: 15_000 })
+      .catch(() =>
+        report(`${folder}/finance-update-started`, "starting an update did not open it"),
+      );
+    await shoot(page, `${folder}/finance-update-started`);
+  }
+
+  await page.goto(`${BASE}/finance/updates/f7000001-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("#update-asks").count()) > 0) {
+    await page.fill("#update-asks", "Introductions to two heads of research at long/short funds.");
+    await page.locator("button", { hasText: /^Save$/ }).click();
+    await page.waitForSelector("form:has(#update-asks) .form-sent", { timeout: 10_000 });
+    await page.locator("button", { hasText: /^Finalise$/ }).click();
+    // Final, the words are no longer a form: the form going is the answer.
+    await page.waitForSelector("#update-asks", { state: "detached", timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  if ((await page.getByText("Introductions to two heads of research").count()) === 0)
+    report(`${folder}/finance-update-final`, "the saved asks are not on the final update");
+  await shoot(page, `${folder}/finance-update-final`);
 }
 
 /**

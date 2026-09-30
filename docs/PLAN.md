@@ -146,6 +146,7 @@ and asked for gaps only. Section 8 of that file is the build order.
 | Custom fields        | migration 0041: an admin's own fields on companies, people, deals and leads (Admin → Fields, a page per field): nine kinds, values normalised by kind; key and kind fixed once made, fields archived never deleted, a choice retired never removed; required when a person creates or edits (imports, conversions, intake exempt; a sensitive required field never blocks someone who cannot see it); sensitive fields shown and written only by owners and admins, masked elsewhere and in the audit log; checked before anything is written; a merge fills the kept record's blanks; changes in the record's audit row; a Fields section on each record, required fields in the create forms, custom fields in the Companies and Leads filters                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Admin → Fields; company, person, deal and lead pages; the create forms; Companies and Leads filters                                                                               | service `b6133b4`, `d9b3322`; HQ: the commit adding this |
 | Automations          | migration 0042: a trigger (created, a field changed to a value, a deal entering a stage, N days before a date, a button on the record), conditions (the list filters' tests), actions (a task, a field set, a notification, the automation.fired webhook); a draft never runs, publishing makes the next version and runs name theirs; it acts as its publisher (a button, as whoever pressed it) through the record's own checks, and fails rather than act as nobody; its own writes never start it again, nothing chains past depth 3, both written down as skipped_loop runs; five failures in a row pause it; date triggers from a nightly timer, once per record per date; a dry run on the last fifty records writes nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Admin → Automations (the builder: When · If · Then; try; publish; pause, resume, archive); an Automations section on company, person, deal and lead pages (its buttons, what ran) | service `50c7019`; HQ: the commit adding this            |
 | Digests              | migration 0043: a saved view mailed on a schedule (daily, or a weekday, at an hour UTC), paused or removed by its reader; the hourly worker asks the portal to render the view as its reader — the list's own filters and field readers, so a digest shows what the page would — through a ten-minute read-only token (`hqd_`, hashed, lists only: no writes, no record pages, no sudo), then sends it; an empty one is skipped unless asked for; each send an audit row with the rows it carried                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | My digests (add, pause, remove, send me one now); "Mail me a view" beside saved views on Companies, Leads and Deals                                                               | service `4124222`; HQ: the commit adding this            |
+| Finance, part two    | migration 0044: cash per account with the day each balance was true, and runway per currency (cash ÷ net burn over the trailing three months; refused, with the reason, when an account has no balance or one older than 35 days; "cash-flow positive" when burn is nil, never infinity; never added across currencies); vendors with their monthly cost and cancel-by date (an annual term within 30 days of its notice date is flagged; a monthly one never is); expense claims decided by someone other than the claimant (a rejection says why; paid is recorded); investor updates written over a snapshot frozen when started (MRR and what moved it, customers, pipeline, cash and runway, headcount), one per month, finalising keeps it as sent                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Business → Finance (cash and runway, vendors, investor updates); Work → Expenses; "Copy as text" on an update                                                                     | service `e4555ac`; HQ: the commit adding this            |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
@@ -193,28 +194,36 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of the end of Digests** (the machine clock read 2026-10-01).
+**As of the end of Finance, part two** (the machine clock read 2026-10-01).
 
-- HQ repo: automations `3e1ca31`; digests go out in the commit after it (harness 18: 854
-  checks, all clean). Each list's filter fields and field readers now live in
-  `src/lib/lists/definitions.ts`, shared by the page and its digest, so the two cannot drift.
-  `next-env.d.ts` shows modified after every `next dev`; never commit it. `.env.local`
-  (HQ_DEV_AUTOLOGIN) never committed.
+- HQ repo: digests `9a74715`; finance goes out in the commit after it (harness 19: 895
+  checks, all clean). Number columns now right-align everywhere: `.data-table td` outranked
+  `.data-table__num`, so every table asking for it was left-aligned. `formatMoneyExact` shows
+  cents when an amount has them (a claim of £42.50 is not £43). `next-env.d.ts` shows
+  modified after every `next dev`; never commit it. `.env.local` (HQ_DEV_AUTOLOGIN) never
+  committed.
 - Product repo, local only: Security 3 `b1ee121`, AI `c90131c`, platform part one
   `e72b9f0`, Trust `78b045e` + `5f3dae1`, index guards `d3f30d0`, custom fields `b6133b4` +
-  `d9b3322`, automations `50c7019`, digests `4124222`, finance part two `e4555ac` (cash and
-  runway, vendors, expense claims, investor updates; the portal is next). Run every file that
-  imports `account_api`, not only `tests/test_hq_*.py` (1,814 pass). Uncommitted and not
-  ours: the theses tab, `app_manager`, examiner, memory service,
-  `tests/_fabric_coverage_test.db` — never stage.
-- Migrations 0006–0044 unapplied (production blocked on Azure). 0042 adds a nightly timer,
+  `d9b3322`, automations `50c7019`, digests `4124222`, finance part two `e4555ac`, quotes and
+  action plans `6df204a` (0045), references and business reviews `ee7383f` (0046). Run
+  every file that imports `account_api`, not only `tests/test_hq_*.py` (1,841 pass; never
+  with `-p no:logging`, which breaks the `caplog` tests). Uncommitted and not ours: the
+  theses tab, `app_manager`, examiner, memory service, `tests/_fabric_coverage_test.db` —
+  never stage.
+- Migrations 0006–0046 unapplied (production blocked on Azure). 0042 adds a nightly timer,
   `hq_automation_sweeper` (04:11 UTC), for date triggers; 0043 an hourly one,
   `hq_digest_worker` (:07), which posts due digests to the portal's `/api/digests/render`
   with the portal key — so `QT_HQ_PORTAL_KEY` / `HQ_ACCOUNT_API_PORTAL_KEY` and
   `QT_HQ_PUBLIC_SITE_URL` must be set before digests can send.
-- The payload contract test fails on the five `hq/finance/*` reads until the finance portal
-  lands (the service's sampler already takes them). CI skips the test: it needs the product
-  repo's fixture.
+- The payload contract test fails on eight reads until their portals land: `hq/quotes`,
+  `hq/quotes/{id}`, `hq/deals/{id}/quotes`, `hq/deals/{id}/plan` (next), `hq/references`,
+  `hq/references/{id}`, `hq/companies/{id}/reviews`, `hq/reviews/{id}` (after). CI skips the
+  test: it needs the product repo's fixture.
+- The mock in the working tree already carries the quotes block (`seedQuotes`), held out of
+  the finance commit; the quotes portal is drafted in the session scratchpad
+  (`draft-quotes/`, `apply-quotes.py`: deal tabs Quotes and Action plan, the quote page with
+  the order form, a lines editor that previews the approval tier, print to PDF, Deals →
+  Quotes with "waiting on you").
 - Local run: the console's dev server holds port 3000; HQ runs on 3001 with
   `PORT=3001 NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3001 npx next dev -p 3001`, the mock with
   `MOCK_AI=1 HQ_UI_BASE=http://127.0.0.1:3001 npm run mock:hq` (port 7071; `MOCK_AI=1` puts a
@@ -236,11 +245,10 @@ founder can fix.
   records) rather than editing each; the automations block sits after the custom fields
   block because it reuses `cfWrap`. The mock's route-parity test reads `pattern:` strings
   literally: two routes sharing a handler are two entries, never a ternary.
-- **Next step:** the finance portal — Business → Finance (cash and runway per currency,
-  vendors with their cancel-by dates, investor updates over a frozen snapshot) and Work →
-  Expenses (everyone's own claims; someone else decides them), the mock's finance block, the
-  contract mappings and the harness flows. Then the research leftovers, in order: quotes with
-  discount approval and a mutual action plan per deal (sales part three) → a business review
-  per firm, the changelog tied to requests, the reference consent ledger (customer success)
-  → a public trust centre and a control map with an auditor's view (trust) → deferred
-  revenue and budget against actual (finance part three).
+- **Next step:** the quotes portal (apply, restart the mock and dev server, harness 20,
+  commit), then the references and business-review portal (a References page under
+  Customer success and a section on each company; a Reviews tab on the company page and a
+  review page with the frozen figures), then the changelog tied to requests and the
+  internal help centre with its gap list (customer success, part three) → a public trust
+  centre and a control map with an auditor's view (trust) → deferred revenue and budget
+  against actual (finance part three).
