@@ -30,17 +30,19 @@ dashboard template. This file is the contract every screen is held to.
 
 ## 2. Tokens
 
-| Token                         | Value                     | Use                                      |
-| ----------------------------- | ------------------------- | ---------------------------------------- |
-| `--rail` / `--rail-collapsed` | 232px / 56px              | left rail, expanded and icon-only        |
-| `--bar`                       | 44px                      | context bar height                       |
-| `--row`                       | 36px                      | list row height (48px for two-line rows) |
-| `--fs-ui`                     | 13px                      | lists, controls, chips                   |
-| `--fs-body`                   | 14px                      | prose                                    |
-| `--fs-mono`                   | 12px                      | identifiers, timestamps, figures         |
-| `--fs-label`                  | 10.5px                    | mono uppercase labels, 0.12em tracking   |
-| spacing                       | 4 · 8 · 12 · 16 · 24 · 32 | the only gaps used                       |
-| radius                        | 0                         | everywhere                               |
+| Token                         | Value                     | Use                                                              |
+| ----------------------------- | ------------------------- | ---------------------------------------------------------------- |
+| `--rail` / `--rail-collapsed` | 232px / 56px              | left rail, expanded and icon-only                                |
+| `--bar`                       | 44px                      | context bar height                                               |
+| `--row`                       | 36px                      | list row height (48px for two-line rows)                         |
+| `--fs-ui`                     | 13px                      | lists, controls, chips                                           |
+| `--fs-body`                   | 14px                      | prose                                                            |
+| `--fs-mono`                   | 12px                      | identifiers, timestamps, figures                                 |
+| `--fs-label`                  | 10.5px                    | mono uppercase readouts and table heads                          |
+| form field names              | 13.5px                    | body type, sentence case, full text colour — never mono capitals |
+| card and panel titles         | 15px                      | one step above the field names they head                         |
+| spacing                       | 4 · 8 · 12 · 16 · 24 · 32 | the only gaps used                                               |
+| radius                        | 0                         | everywhere                                                       |
 
 Colours are the console tokens (`--bg`, `--surface`, `--panel`, `--panel-raised`,
 `--line*`, `--text`, `--muted`, `--quiet`, `--accent`, `--success`, `--danger`,

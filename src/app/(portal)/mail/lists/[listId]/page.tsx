@@ -112,7 +112,7 @@ function PersonFields({
         <Field
           key={column}
           id={`${prefix}-field-${column}`}
-          label={column.replace(/_/g, " ")}
+          label={column.charAt(0).toUpperCase() + column.slice(1).replace(/_/g, " ")}
           hint={`{{custom.${column}}}`}
         >
           <Input

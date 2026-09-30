@@ -1510,24 +1510,26 @@
     min-width: 0;
   }
 
+  /* A form field's name: what to type here, readable at a glance — full-strength text,
+     body type, sentence case. The mono capitals stay for readouts and table heads. */
   .field__label {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 8px;
-    color: var(--muted);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 13.5px;
     font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
+    letter-spacing: 0;
+    text-transform: none;
   }
 
   .field__label-note {
-    color: var(--quiet);
-    font-size: 10px;
+    color: var(--muted);
+    font-size: 12px;
     font-weight: 500;
-    letter-spacing: 0.08em;
+    letter-spacing: 0;
   }
 
   .input,
@@ -1829,7 +1831,7 @@
 
   .card__title {
     margin: 0;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
     letter-spacing: -0.005em;
   }
@@ -5492,20 +5494,13 @@
   .rhead__readouts {
     display: flex;
     flex-wrap: wrap;
-    gap: 0;
+    gap: 8px 28px;
     margin: 0;
   }
 
   .rhead__readout {
     display: grid;
     gap: 1px;
-    padding: 0 18px;
-    border-left: 1px solid var(--line-soft);
-  }
-
-  .rhead__readout:first-child {
-    padding-left: 0;
-    border-left: 0;
   }
 
   .rhead__readout dt {
@@ -5600,7 +5595,7 @@
 
   .rsection__title {
     margin: 0;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
     letter-spacing: -0.005em;
   }
@@ -5612,7 +5607,7 @@
 
   .props__title {
     margin: 0 0 4px;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
   }
 
@@ -5636,7 +5631,7 @@
     padding-top: 2px;
     color: var(--quiet);
     font-size: 12px;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
 
   .prop__label label {
@@ -5777,7 +5772,7 @@
 
   .rgrid__side .card__title {
     margin: 0 0 4px;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
   }
 

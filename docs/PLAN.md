@@ -172,6 +172,10 @@ above were written ahead of it).
 - HQ repo: HEAD is the "Mailing lists" commit (`git log -1`). Pushed to `origin/main`.
   Harness passed with 378 checks, including create → import a CSV → add by hand →
   remove. Coloured side strips removed from every screen (DESIGN.md §11 forbids them).
+  Then form field names became readable labels (13.5px body type, sentence case, full
+  text colour) with card, section and panel titles one step above at 15px; header
+  readouts lost their dividers (a wrapped row drew a bar down its left edge), and side
+  panel labels wrap instead of running into their value. Harness 378 checks again.
 - Product repo: HEAD `f095b76`; 244 HQ tests pass; not pushed. Uncommitted and not ours:
   `src/intelligence/overnight/impact.py`, `src/ui/tabs/deep_research_tab.py`,
   `src/ui/tabs/pulse_tab.py`, `tests/_fabric_coverage_test.db` — never stage them.
