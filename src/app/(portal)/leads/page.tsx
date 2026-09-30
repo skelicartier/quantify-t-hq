@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { AiFilterBox } from "@/components/ai/ai-assist";
+import { filterAction } from "@/app/(portal)/_actions/ai";
 import { Fragment } from "react";
 
 import { createLeadAction } from "@/app/(portal)/leads/actions";
@@ -347,6 +349,9 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
                 : []),
             ]}
           />
+          {context.me.ai?.features.includes("filters") && (
+            <AiFilterBox list="leads" fields={filterFields} action={filterAction} />
+          )}
           <div className="list-tools" aria-label="List tools">
             <FilterBuilder fields={filterFields} basePath="/leads" currentQuery={currentQuery} />
             <nav className="list-tools__group" aria-label="Group rows">

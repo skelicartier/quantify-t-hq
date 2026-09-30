@@ -1,5 +1,7 @@
 import { RecordMail } from "@/components/mail/record-mail";
 import Link from "next/link";
+import { RecordComments } from "@/components/platform/comments-section";
+import { RecordTemplates } from "@/components/platform/record-templates";
 import { notFound } from "next/navigation";
 
 import { logActivityAction } from "@/app/(portal)/_actions/work";
@@ -172,6 +174,16 @@ export default async function LeadPage({ params }: LeadPageProps) {
       <RecordGrid
         side={
           <>
+            {canWrite && (
+              <RecordSection id="lead-templates" title="Tasks from a template">
+                <RecordTemplates
+                  token={context.token}
+                  appliesTo="lead"
+                  subjectId={lead.lead_id}
+                  returnPath={`/leads/${lead.lead_id}`}
+                />
+              </RecordSection>
+            )}
             <RecordSection id="lead-mail" title="Outreach">
               <RecordMail
                 token={context.token}
@@ -320,6 +332,15 @@ export default async function LeadPage({ params }: LeadPageProps) {
               </KeyValue>
             )}
           </Card>
+          <RecordSection id="lead-comments" title="Threads">
+            <RecordComments
+              token={context.token}
+              subjectType="lead"
+              subjectId={lead.lead_id}
+              returnPath={`/leads/${lead.lead_id}`}
+              canWrite={context.me.role !== "intern_readonly"}
+            />
+          </RecordSection>
           <RecordSection id="lead-activity" title="Activity">
             {canWrite && !closed && (
               <LogActivityForm

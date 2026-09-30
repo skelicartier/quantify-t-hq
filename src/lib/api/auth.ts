@@ -45,6 +45,12 @@ export const meSchema = okEnvelope.extend({
   staff: staffSummary.extend({ kind: z.string() }),
   role: z.string(),
   capabilities: z.array(z.string()),
+  /** Their own role; `role` differs from it only while an elevation is live. */
+  standing_role: z.string().optional(),
+  elevation: z
+    .object({ elevation_id: z.string(), role: z.string(), ends_at: z.string().nullable() })
+    .nullable()
+    .optional(),
   sudo_fresh: z.boolean(),
   sudo_until: z.string().nullable(),
   /** Unused recovery codes left; absent from an older service. */
@@ -54,6 +60,8 @@ export const meSchema = okEnvelope.extend({
   environment: z.string(),
   /** Unread inbox rows, counted as this page rendered; absent from an older service. */
   inbox_unread: z.number().optional(),
+  /** Whether AI assistance is set up, and the features this person may use. */
+  ai: z.object({ configured: z.boolean(), features: z.array(z.string()) }).optional(),
 });
 export type HqMe = z.infer<typeof meSchema>;
 

@@ -53,14 +53,21 @@ export default async function PipelineSettingsPage() {
                   <p className="stage-editor__key">
                     <span className="mono">{stage.key}</span>
                   </p>
-                  <PipelineStageForm action={updateStageAction} stage={stage} />
+                  <PipelineStageForm
+                    action={updateStageAction}
+                    stage={stage}
+                    requirements={settings.stage_requirements}
+                  />
                 </li>
               ))}
             </ol>
           </div>
           <aside className="record-layout__side">
             <Card title="Add a stage" titleAs="h3">
-              <PipelineStageForm action={updateStageAction} />
+              <PipelineStageForm
+                action={updateStageAction}
+                requirements={settings.stage_requirements}
+              />
             </Card>
             <Card
               title="Closing stages"

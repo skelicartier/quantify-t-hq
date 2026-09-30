@@ -468,6 +468,10 @@ export const pipelineStageSchema = z.object({
   stale_after_days: z.number(),
   outcome: z.string(),
   exit_criteria: z.string(),
+  /** What a deal needs before it enters, and the order rules; older services send none. */
+  required_fields: z.array(z.string()).default([]),
+  allow_skip: z.boolean().default(true),
+  allow_back: z.boolean().default(true),
 });
 export type PipelineStage = z.infer<typeof pipelineStageSchema>;
 
@@ -493,6 +497,7 @@ const crmSettingsSchema = okEnvelope.extend({
   protected_sources: z.array(z.string()),
   lead_stages: z.array(z.string()),
   disqualify_reasons: z.array(z.string()),
+  stage_requirements: z.array(z.object({ key: z.string(), label: z.string() })).default([]),
 });
 export type CrmSettings = z.infer<typeof crmSettingsSchema>;
 

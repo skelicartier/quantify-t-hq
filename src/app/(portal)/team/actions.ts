@@ -3,11 +3,13 @@
 import { revalidatePath } from "next/cache";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import * as privilegedApi from "@/lib/api/privileged";
 import * as teamApi from "@/lib/api/team";
 import { fieldValue } from "@/lib/auth/forms";
 import { crmRefusal } from "@/lib/crm/refusal";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
+import { privilegedRefusal } from "@/lib/security/privileged-refusal";
 
 const NOT_HR: ActionState = { status: "error", message: "Team records are kept by HQ admins." };
 
@@ -508,4 +510,33 @@ export async function acknowledgePolicyAction(
   revalidatePath("/me/security");
   revalidatePath("/home");
   return { status: "sent", message: "Acknowledged.", sentAt: Date.now() };
+}
+
+/**
+ * One masked value, for a reason. It comes back only in this answer, to the person who
+ * asked, and the page shows it for a minute; the reveal is in the audit log.
+ */
+export async function revealFieldAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const staffId = fieldValue(formData, "staff_id", 64);
+  const context = await requireStaff(`/team/${staffId}`);
+  if (!hasCapability(context, "hr:read")) return NOT_HR;
+  const oneOnOneId = fieldValue(formData, "one_on_one_id", 64);
+  let value = "";
+  try {
+    value = (
+      await privilegedApi.revealField(context.token, staffId, {
+        field: fieldValue(formData, "field", 40),
+        reason: fieldValue(formData, "reason", 400).trim(),
+        ...(oneOnOneId ? { one_on_one_id: oneOnOneId } : {}),
+      })
+    ).value;
+  } catch (error) {
+    return privilegedRefusal(error);
+  }
+  revalidatePath(`/team/${staffId}`);
+  return { status: "sent", message: null, sentAt: Date.now(), secret: value };
 }

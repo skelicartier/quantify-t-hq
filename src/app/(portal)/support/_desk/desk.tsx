@@ -8,6 +8,13 @@ import {
   sendMessage,
 } from "@/app/(portal)/support/[ticketId]/actions";
 import { LiveRefresh } from "@/components/shell/live-refresh";
+import { AiReplyDraft, AiTriage } from "@/components/ai/ai-assist";
+import {
+  aiFeedbackAction,
+  applyTriageAction,
+  draftReplyAction,
+  triageAction,
+} from "@/app/(portal)/_actions/ai";
 import { Composer } from "@/components/support/composer";
 import { DeskKeys } from "@/components/support/desk-keys";
 import { MergeForm } from "@/components/support/merge-form";
@@ -546,6 +553,13 @@ export async function Desk({ context, filters, selected }: DeskProps) {
               {canWrite ? (
                 <>
                   <DeskKeys />
+                  {context.me.ai?.features.includes("reply_draft") && (
+                    <AiReplyDraft
+                      ticketId={ticket.id}
+                      action={draftReplyAction}
+                      feedback={aiFeedbackAction}
+                    />
+                  )}
                   <Composer
                     ticketId={ticket.id}
                     action={sendMessage}
@@ -565,6 +579,17 @@ export async function Desk({ context, filters, selected }: DeskProps) {
 
       {ticket && (
         <aside className="desk__context" aria-label="Customer and controls">
+          {canWrite && context.me.ai?.features.includes("triage") && (
+            <section className="props" aria-label="Suggested filing">
+              <h2 className="props__title">Filing</h2>
+              <AiTriage
+                ticketId={ticket.id}
+                action={triageAction}
+                apply={applyTriageAction}
+                feedback={aiFeedbackAction}
+              />
+            </section>
+          )}
           <Properties title="Who is asking">
             {firmContext === null ? (
               <Property label="Account">Could not be read. Not empty — unavailable.</Property>

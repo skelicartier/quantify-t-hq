@@ -62,6 +62,8 @@ const EXPORT_NOTICES: Record<string, string> = {
   sudo: "Confirm it's you first, then export again.",
   forbidden: "Your role does not export records.",
   failed: "The export could not be made just now.",
+  quota:
+    "That is more than you can export today. An owner can lift your limit for a day on Privileged access.",
 };
 const STANDARD_LABELS = [
   ["first_name", "First name"],

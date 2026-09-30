@@ -125,7 +125,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         capability: "crm:read",
         key: "m",
       },
-      { href: "/tasks", label: "Tasks", icon: ClipboardList, capability: "crm:read", key: "t" },
+      {
+        href: "/tasks",
+        label: "Tasks",
+        icon: ClipboardList,
+        activePrefix: "/tasks/",
+        capability: "crm:read",
+        key: "t",
+      },
       // Everyone's: a check-in and time off are about the person, not a capability.
       { href: "/checkin", label: "Check-in", icon: NotebookPen },
       { href: "/time-off", label: "Time off", icon: CalendarOff },

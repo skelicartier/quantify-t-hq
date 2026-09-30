@@ -9899,3 +9899,304 @@
     }
   }
 }
+
+/* Privileged access: the elevation bar under the context bar (a tinted band across the
+   whole width with a hairline under it, never a strip down one side), masked values and
+   their reveal. */
+@layer pages {
+  .elevation-bar {
+    margin: 0;
+    padding: 8px var(--content-gutter);
+    border-bottom: 1px solid var(--attention-ring);
+    background: color-mix(in srgb, var(--attention) 9%, transparent);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .elevation-bar a {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .elevation-live {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 16px;
+  }
+
+  .elevation-live p {
+    margin: 0;
+  }
+
+  .privileged-subhead {
+    margin: 26px 0 8px;
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .reveal {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+  }
+
+  .reveal__masked {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+  }
+
+  .reveal__form {
+    flex-basis: 100%;
+    margin-top: 6px;
+  }
+
+  .reveal--shown {
+    display: inline-grid;
+    gap: 2px;
+  }
+
+  .reveal__value {
+    color: var(--text);
+    font-family: var(--font-mono);
+  }
+
+  .reveal__note {
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  @media (max-width: 640px) {
+    .elevation-bar {
+      padding: 8px var(--gutter);
+    }
+  }
+}
+
+/* AI assistance: an ask button, then what came back in a bordered panel — the text a person
+   reads, what it drew on, and the buttons that decide what happens to it. No side strips. */
+@layer pages {
+  .ai-panel {
+    display: grid;
+    gap: 8px;
+    margin: 0 0 12px;
+  }
+
+  .ai-ask {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .ai-panel__body {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    background: var(--panel-soft);
+  }
+
+  .ai-panel__label {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  /* On the panel's tint the quiet grey falls under 4.5:1 in the light theme. */
+  .ai-panel__body .field__hint {
+    color: var(--muted);
+  }
+
+  .ai-panel__text {
+    margin: 0;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+  }
+
+  .ai-panel__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ai-sources {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .ai-facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 4px 12px;
+    margin: 0;
+    font-size: 13.5px;
+  }
+
+  .ai-facts dt {
+    color: var(--muted);
+  }
+
+  .ai-facts dd {
+    margin: 0;
+    color: var(--text);
+  }
+
+  .ai-proposals {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ai-proposals__item {
+    display: grid;
+    gap: 4px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .ai-proposals__done {
+    color: var(--success);
+    font-size: 13px;
+  }
+
+  .ai-panel--filter {
+    margin: 0 0 10px;
+  }
+
+  .ai-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .ai-filter .field {
+    flex: 1 1 280px;
+    margin: 0;
+  }
+}
+
+/* The platform layer: comment threads (replies indented, never a bar down their side),
+   template task rows, and the webhook actions. */
+@layer pages {
+  .comments {
+    display: grid;
+    gap: 14px;
+  }
+
+  .comment-list {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .comment-thread {
+    display: grid;
+    gap: 8px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .comment-thread--resolved .comment__body {
+    color: var(--muted);
+  }
+
+  .comment-thread__state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .comment-list--replies {
+    margin-left: 22px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .comment-list--replies > li {
+    padding-top: 8px;
+  }
+
+  .comment {
+    display: grid;
+    gap: 4px;
+  }
+
+  .comment__head,
+  .comment__body {
+    margin: 0;
+  }
+
+  .comment__head strong {
+    color: var(--text);
+    font-size: 13.5px;
+  }
+
+  .comment__body {
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
+  .comment-thread__reply {
+    margin-left: 22px;
+  }
+
+  .template-items {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .template-items__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(120px, 160px) minmax(120px, 160px);
+    gap: 10px;
+    align-items: end;
+  }
+
+  .template-list {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 12px;
+    padding-left: 18px;
+  }
+
+  .webhook-acts {
+    display: grid;
+    gap: 10px;
+  }
+
+  @media (max-width: 640px) {
+    .template-items__row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .comment-list--replies,
+    .comment-thread__reply {
+      margin-left: 12px;
+    }
+  }
+}

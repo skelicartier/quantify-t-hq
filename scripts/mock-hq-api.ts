@@ -106,6 +106,9 @@ type Staff = {
   emergency_contact_name?: string;
   emergency_contact_phone?: string;
   emergency_contact_relation?: string;
+  break_glass?: boolean;
+  break_glass_tested_at?: string | null;
+  break_glass_test_note?: string;
 };
 
 const STAFF_KINDS = ["founder", "employee", "intern", "contractor"];
@@ -377,7 +380,7 @@ function mintSession(member: Staff, ip: string, userAgent: string) {
  */
 function seesMoney(headers: Record<string, string | string[] | undefined>): boolean {
   const found = caller(headers);
-  return Boolean(found && (CAPABILITIES[found.member.role] ?? []).includes("revenue:read"));
+  return Boolean(found && capsFor(found.role).includes("revenue:read"));
 }
 /** Mirrors deal_routes.money_total: summed per currency, never across, null when unseen. */
 function moneyByCurrency<T extends { currency: string }>(
@@ -424,7 +427,10 @@ function caller(headers: Record<string, string | string[] | undefined>) {
   if (!session || session.revoked_at) return null;
   session.last_seen_at = now();
   const member = staff.find((row) => row.id === session.staffId);
-  return member ? { member, session } : null;
+  if (!member) return null;
+  // Mirrors resolve_staff_caller: a live elevation is the role they act as.
+  const elevation = activeElevation(member.id);
+  return { member, session, elevation, role: elevation ? elevation.role : member.role };
 }
 
 /** Mirrors 0009's seeded targets; `hq/settings/sla/update` changes them. */
@@ -541,6 +547,85 @@ function makeTicket(
   };
 }
 
+/** Mirrors secret_scrub.py: secrets out of support text before it is kept, and the desk told. */
+const SCRUB_PATTERNS: Array<[string, RegExp, number]> = [
+  [
+    "a private key",
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
+    0,
+  ],
+  ["an access key", /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, 0],
+  ["an access token", /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, 0],
+  ["an access token", /\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, 0],
+  ["an access token", /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, 0],
+  ["an API key", /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g, 0],
+  ["an API key", /\bsk-(?:[A-Za-z0-9]+-)?[A-Za-z0-9_-]{20,}\b/g, 0],
+  ["an API key", /\bAIza[0-9A-Za-z_-]{35}\b/g, 0],
+  ["an API key", /\bxkeysib-[A-Za-z0-9-]{20,}\b/g, 0],
+  ["a sign-in token", /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, 0],
+  ["a sign-in token", /\bhq_[A-Za-z0-9_-]{30,}\b/g, 0],
+  ["a sign-in token", /\b([Bb]earer\s+)([A-Za-z0-9._~+/-]{20,}=*)/g, 2],
+  [
+    "a password",
+    /\b((?:password|passwd|pwd|passcode|secret|api[_-]?key)\s*[:=]\s*["']?)([^\s"';,]{4,})/gi,
+    2,
+  ],
+  ["a password", /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s@/]{3,})(@)/g, 2],
+];
+function luhn(digits: string): boolean {
+  let total = 0;
+  [...digits].reverse().forEach((char, index) => {
+    let value = Number(char);
+    if (index % 2 === 1) {
+      value *= 2;
+      if (value > 9) value -= 9;
+    }
+    total += value;
+  });
+  return total % 10 === 0;
+}
+function scrubSecrets(text: string): { text: string; found: string[] } {
+  const found: string[] = [];
+  const note = (label: string) => {
+    if (!found.includes(label)) found.push(label);
+    return `[removed: looked like ${label}]`;
+  };
+  let cleaned = text;
+  for (const [label, pattern, group] of SCRUB_PATTERNS) {
+    cleaned = cleaned.replace(pattern, (...match: string[]) => {
+      if (group === 0) return note(label);
+      const value = match[group] ?? "";
+      if (label === "a password" && !/[^A-Za-z]/.test(value) && value.length < 12) return match[0]!;
+      const before = match.slice(1, group).join("");
+      const after = match
+        .slice(group + 1, match.length - 2)
+        .filter((part) => typeof part === "string")
+        .join("");
+      return `${before}${note(label)}${after}`;
+    });
+  }
+  cleaned = cleaned.replace(/(?<![\d-])(?:\d[ -]?){12,18}\d(?![\d-])/g, (candidate) => {
+    const digits = candidate.replace(/[ -]/g, "");
+    return "23456".includes(digits[0] ?? "") && luhn(digits) ? note("a card number") : candidate;
+  });
+  return { text: cleaned, found };
+}
+function scrubNote(found: string[], whose: string, at: string): Message {
+  const what =
+    found.length === 1
+      ? found[0]!
+      : `${found.slice(0, -1).join(", ")} and ${found[found.length - 1]}`;
+  return {
+    id: messageId(),
+    author: "system",
+    author_id: "",
+    author_name: "HQ",
+    visibility: "internal",
+    body: `Removed from ${whose} before it was stored: ${what}. Nothing of it was kept. Treat it as exposed: ask them to replace it, and do not ask them to send it again.`,
+    at,
+  };
+}
+
 const tickets: TicketRow[] = [];
 function seedTickets() {
   tickets.length = 0;
@@ -549,7 +634,10 @@ function seedTickets() {
   tickets.push(
     makeTicket({
       subject: "Export refuses our fiscal calendar",
-      body: "Exports land with calendar quarters; our fiscal year ends in June and every figure shifts a quarter.",
+      body: scrubSecrets(
+        "Exports land with calendar quarters; our fiscal year ends in June and every figure shifts a quarter. Our sync job uses AKIAQ7Z3EXAMPLE2F4K9 if that helps you look.",
+      ).text,
+      messages: [scrubNote(["an access key"], "the message above", hoursAgo(31))],
       opened: hoursAgo(31),
       priority: "high",
       contact_email: "ops@halcyoncapital.test",
@@ -1185,8 +1273,16 @@ const routes: Array<{
           role: found.member.role,
           kind: found.member.kind,
         },
-        role: found.member.role,
-        capabilities: CAPABILITIES[found.member.role] ?? [],
+        role: found.role,
+        capabilities: capsFor(found.role),
+        standing_role: found.member.role,
+        elevation: found.elevation
+          ? {
+              elevation_id: found.elevation.id,
+              role: found.elevation.role,
+              ends_at: found.elevation.ends_at,
+            }
+          : null,
         sudo_fresh: sudoFresh,
         sudo_until: found.session.sudo_until,
         recovery_codes_remaining: found.member.recovery_codes_remaining ?? 10,
@@ -1196,6 +1292,7 @@ const routes: Array<{
         },
         environment: "mock",
         inbox_unread: inboxUnread(found.member.id),
+        ai: aiStatus(found.role),
       });
     },
   },
@@ -1499,9 +1596,10 @@ const routes: Array<{
     pattern: "hq/staff/{staff_id}",
     auth: true,
     capability: "hq:admin",
-    handler: ({ params }) => {
+    handler: ({ params, headers }) => {
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
+      const own = caller(headers)!.member.id === member.id;
       const live = [...sessions.values()].filter(
         (session) => session.staffId === member.id && !session.revoked_at,
       );
@@ -1509,9 +1607,17 @@ const routes: Array<{
         staff: {
           ...staffView(member),
           live_sessions: live.length,
-          personal_email: member.personal_email ?? "",
+          personal_email: own
+            ? (member.personal_email ?? "")
+            : maskEmail(member.personal_email ?? ""),
+          personal_email_masked: Boolean(member.personal_email) && !own,
           // Mirrors staff_routes: joined = a password exists.
           joined: member.password_set !== false,
+          break_glass: Boolean(member.break_glass),
+          eligibility: eligibilities
+            .filter((row) => row.staff_id === member.id && eligibilityLive(row))
+            .map(eligibilityView),
+          elevation: activeElevation(member.id) ? elevationView(activeElevation(member.id)!) : null,
         },
       });
     },
@@ -1549,6 +1655,7 @@ const routes: Array<{
       const role = String(body.role ?? "");
       if (role && role !== member.role) {
         if (member.id === found.member.id) return refuse(403, "forbidden", { reason: "own-role" });
+        if (found.elevation) return refuse(403, "forbidden", { reason: "elevated-cannot-grant" });
         if (!(role in CAPABILITIES))
           return refuse(400, "malformed_request", { role: "unknown role" });
         if (["owner", "admin"].includes(role) && found.member.role !== "owner")
@@ -1876,7 +1983,8 @@ const routes: Array<{
       const found = caller(headers)!;
       const row = tickets.find((ticket) => ticket.id === params.ticket_id);
       if (!row) return refuse(404, "not_found");
-      const text = String(body.body ?? "").trim();
+      const scrubbed = scrubSecrets(String(body.body ?? "").trim());
+      const text = scrubbed.text;
       if (!text) return refuse(400, "malformed_request");
       const at = now();
       row.messages.push({
@@ -1888,6 +1996,8 @@ const routes: Array<{
         body: text,
         at,
       });
+      if (scrubbed.found.length)
+        row.messages.push(scrubNote(scrubbed.found, "the reply above", at));
       row.status = "pending";
       row.updated_at = at;
       row.staff_last_read_at = at;
@@ -1905,7 +2015,8 @@ const routes: Array<{
       const found = caller(headers)!;
       const row = tickets.find((ticket) => ticket.id === params.ticket_id);
       if (!row) return refuse(404, "not_found");
-      const text = String(body.body ?? "").trim();
+      const scrubbed = scrubSecrets(String(body.body ?? "").trim());
+      const text = scrubbed.text;
       if (!text) return refuse(400, "malformed_request");
       const at = now();
       row.messages.push({
@@ -1917,6 +2028,7 @@ const routes: Array<{
         body: text,
         at,
       });
+      if (scrubbed.found.length) row.messages.push(scrubNote(scrubbed.found, "the note above", at));
       row.updated_at = at;
       audit("ticket.noted", found.member.id, "ticket", row.id);
       return ok({ ticket: ticketView(row, found.member.id) });
@@ -2238,6 +2350,9 @@ type StageRow = {
   outcome: string;
   exit_criteria: string;
   archived: boolean;
+  required_fields?: string[];
+  allow_skip?: boolean;
+  allow_back?: boolean;
 };
 type CompanyRow = {
   id: string;
@@ -2623,6 +2738,8 @@ function approvers(kind: ApprovalRow["kind"], excluding: string, targetStaffId =
   return staff.filter(
     (row) =>
       row.is_active &&
+      // A sealed break-glass account approves nothing routine.
+      !row.break_glass &&
       row.id !== excluding &&
       row.id !== targetStaffId &&
       approverRoles(kind).includes(row.role),
@@ -2817,6 +2934,13 @@ const SECURITY_KINDS: Record<string, [SecurityEventRow["severity"], string]> = {
   "decoy.key_used": ["critical", "Decoy key used"],
   "key.expiring": ["info", "Intake key expiring"],
   "key.disabled_unused": ["warning", "Unused key revoked"],
+  "break_glass.signed_in": ["critical", "Break-glass account used"],
+  "break_glass.marked": ["warning", "Break-glass account changed"],
+  "break_glass.test_due": ["warning", "Break-glass test due"],
+  "elevation.granted": ["info", "Made eligible to elevate"],
+  "elevation.activated": ["warning", "Elevated"],
+  "export.canary": ["critical", "Exported file seen outside HQ"],
+  "export.quota_lifted": ["warning", "Export quota lifted"],
 };
 
 const securityEvents: SecurityEventRow[] = [];
@@ -8147,6 +8271,9 @@ function stagePayload() {
       stale_after_days: row.stale_after_days,
       outcome: row.outcome,
       exit_criteria: row.exit_criteria,
+      required_fields: row.required_fields ?? [],
+      allow_skip: row.allow_skip !== false,
+      allow_back: row.allow_back !== false,
     }));
 }
 
@@ -9669,7 +9796,14 @@ routes.push(
         closed_at: null,
         created_at: now(),
       };
+      // Mirrors prepare_deal: the stage's rules and the validation rules apply on create.
+      const createBlocked = {
+        ...stageRuleErrors(null, row.stage_key, row as unknown as Record<string, unknown>),
+        ...ruleErrors("deal", row as unknown as Record<string, unknown>),
+      };
+      if (Object.keys(createBlocked).length) return refuse(400, "malformed_request", createBlocked);
       deals.push(row);
+      mockEmit("deal.created");
       dealStageEvents.push({
         deal_id: row.id,
         from_stage_key: "",
@@ -9738,6 +9872,22 @@ routes.push(
       const row = deals.find((deal) => deal.id === params.deal_id);
       if (!row) return refuse(404, "not_found");
       const before = { ...row };
+      const written = [
+        "mrr_amount",
+        "seats",
+        "expected_close_date",
+        "next_step",
+        "next_step_due",
+      ].filter((key) => key in body);
+      const broken = ruleErrors(
+        "deal",
+        { ...row, ...Object.fromEntries(written.map((key) => [key, body[key]])) } as Record<
+          string,
+          unknown
+        >,
+        written,
+      );
+      if (Object.keys(broken).length) return refuse(400, "malformed_request", broken);
       if ("stage_key" in body || "status" in body)
         return refuse(400, "malformed_request", {
           reason: "move stages via /stage, close via /close",
@@ -9833,6 +9983,13 @@ routes.push(
       const nextStepDue = String(body.next_step_due ?? "").trim();
       if (!nextStep || !nextStepDue)
         return refuse(400, "malformed_request", { next_step: "an open deal names its next step" });
+      const blocked = stageRuleErrors(
+        row.stage_key,
+        stage.key,
+        row as unknown as Record<string, unknown>,
+      );
+      if (Object.keys(blocked).length) return refuse(400, "malformed_request", blocked);
+      mockEmit("deal.stage_changed");
       const found = caller(headers);
       dealStageEvents.push({
         deal_id: row.id,
@@ -10134,6 +10291,10 @@ routes.push(
         protected_sources: PROTECTED_SOURCES,
         lead_stages: ["new", "attempting", "connected", "qualified", "disqualified"],
         disqualify_reasons: DISQUALIFY_REASONS,
+        stage_requirements: Object.entries(STAGE_REQUIREMENTS).map(([key, label]) => ({
+          key,
+          label,
+        })),
       }),
   },
   {
@@ -10168,6 +10329,22 @@ routes.push(
           if (name in body) stage[name] = Number(body[name] ?? stage[name]) || 0;
         }
         if ("exit_criteria" in body) stage.exit_criteria = String(body.exit_criteria ?? "");
+        if ("required_fields" in body) {
+          const wanted = (
+            Array.isArray(body.required_fields)
+              ? body.required_fields
+              : String(body.required_fields ?? "").split(",")
+          )
+            .map((item) => String(item).trim())
+            .filter(Boolean);
+          if (wanted.some((item) => !(item in STAGE_REQUIREMENTS)))
+            return refuse(400, "malformed_request", {
+              required_fields: `from ${Object.keys(STAGE_REQUIREMENTS).join(", ")}`,
+            });
+          stage.required_fields = [...new Set(wanted)];
+        }
+        for (const flag of ["allow_skip", "allow_back"] as const)
+          if (flag in body) stage[flag] = body[flag] === true || body[flag] === "true";
         if (body.archived === true) {
           const openHere = deals.filter(
             (deal) => deal.stage_key === key && deal.status === "open",
@@ -14626,6 +14803,7 @@ routes.push(
         .toLowerCase();
       if (!email.includes("@"))
         return refuse(400, "malformed_request", { email: "an address is required" });
+      checkMarker(email, "the website form");
       live.last_used_at = now();
       // As the service: no source means the website's own; an unknown one means "other".
       const requested = String(body.source_key ?? "").trim() || "website_early_access";
@@ -18168,7 +18346,19 @@ routes.push(
       };
       const table = tables[String(params.kind)];
       if (!table) return refuse(404, "not_found");
-      const [header, rows] = table;
+      const [header, records] = table;
+      const exporterId = caller(headers)!.member.id;
+      const overQuota = exportQuotaRefusal(exporterId, records.length);
+      if (overQuota) return overQuota;
+      const mark = exportMarker(String(params.kind));
+      const rows = mark
+        ? placeMarker(
+            records,
+            String(params.kind) === "people"
+              ? [mark.id, mark.full_name, mark.email, mark.title]
+              : [mark.id, now(), "website", mark.full_name, mark.email, "new"],
+          )
+        : records;
       const decoyType = ({ companies: "company", people: "person" } as Record<string, string>)[
         String(params.kind)
       ];
@@ -18186,7 +18376,20 @@ routes.push(
         String(params.kind),
         reason,
       );
-      return ok({ filename: `hq-${params.kind}-mock.csv`, rows: rows.length, csv });
+      recordExport(
+        exporterId,
+        String(params.kind),
+        String(params.kind),
+        records.length,
+        reason,
+        mark?.email ?? null,
+      );
+      return ok({
+        filename: `hq-${params.kind}-mock.csv`,
+        rows: records.length,
+        marked: Boolean(mark),
+        csv,
+      });
     },
   },
 );
@@ -21945,6 +22148,8 @@ function mailListAdd(
   updateExisting: boolean,
   actorId: string,
 ) {
+  for (const item of rows)
+    checkMarker(item.email, source === "csv" ? "a list import" : "a list member added");
   const existing = new Map(
     mailListMembers.filter((row) => row.list_id === listRow.id).map((row) => [row.email_norm, row]),
   );
@@ -23279,6 +23484,9 @@ routes.push(
         return refuse(400, "malformed_request", { reason: "say what the export is for" });
       const verdicts = mailListStatuses(row.id);
       const members = mailListMembers.filter((member) => member.list_id === row.id);
+      const exporterId = caller(headers)!.member.id;
+      const overQuota = exportQuotaRefusal(exporterId, members.length);
+      if (overQuota) return overQuota;
       const cell = (value: string) => {
         const text = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
         return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -23306,13 +23514,37 @@ routes.push(
             .join(","),
         );
       }
-      audit("export.created", caller(headers)!.member.id, "mail_list", row.id, reason, {
+      const mark = exportMarker("mail_list");
+      if (mark) {
+        // A member who can be mailed, among the others, borrowing nothing that names a real one.
+        const markerLine = [
+          mark.email,
+          mark.first,
+          mark.last,
+          "",
+          mark.title,
+          "",
+          ...row.columns.map(() => ""),
+          "can be mailed",
+          "csv",
+          "legitimate_interest",
+          now(),
+        ]
+          .map((value) => cell(String(value)))
+          .join(",");
+        const body = placeMarker(lines.slice(1), markerLine);
+        lines.splice(1, lines.length - 1, ...body);
+      }
+      audit("export.created", exporterId, "mail_list", row.id, reason, {
         rows: members.length,
+        marked: Boolean(mark),
       });
+      recordExport(exporterId, "mail_list", row.id, members.length, reason, mark?.email ?? null);
       const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
       return ok({
         filename: `hq-list-${mailColumnKey(row.name) || "list"}-${stamp}.csv`,
         rows: members.length,
+        marked: Boolean(mark),
         csv: `${lines.join("\r\n")}\r\n`,
       });
     },
@@ -25522,6 +25754,7 @@ routes.push(
         !domain.includes(".")
       )
         return refuse(400, "malformed_request", { email: "an email address" });
+      checkMarker(email, "the status page");
       let row = statusSubscribers.find((item) => item.email_norm === email);
       if (!row) {
         row = {
@@ -25572,6 +25805,2444 @@ routes.push(
   },
 );
 
+// --- privileged access (mirrors elevation*.py, privileged_routes.py, exports.py, masking.py) ------
+type EligibilityRow = {
+  id: string;
+  staff_id: string;
+  role: string;
+  max_hours: number;
+  eligible_until: string | null;
+  reason: string;
+  granted_by: string;
+  created_at: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+};
+type ElevationRow = {
+  id: string;
+  staff_id: string;
+  eligibility_id: string;
+  role: string;
+  reason: string;
+  starts_at: string;
+  ends_at: string;
+  ended_at: string | null;
+  ended_by: string | null;
+};
+type ExportRow = {
+  id: string;
+  staff_id: string;
+  kind: string;
+  entity_id: string;
+  rows: number;
+  reason: string;
+  created_at: string;
+  canary_email: string | null;
+  tripped_at: string | null;
+  tripped_via: string;
+};
+type ExportLiftRow = {
+  id: string;
+  staff_id: string;
+  extra_rows: number;
+  until: string;
+  reason: string;
+  granted_by: string;
+  created_at: string;
+};
+
+const ELIGIBLE_ROLES = ["admin", "sales", "support"];
+const ROLE_LABELS: Record<string, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  sales: "Sales",
+  support: "Support",
+  intern_readonly: "Intern (read only)",
+};
+const EXPORT_QUOTA_ROWS = 5000;
+const EXPORT_WINDOW_MS = 24 * 3_600_000;
+const BREAK_GLASS_TEST_DAYS = 90;
+/** The mock runs with a marker domain set, as production would once it is configured. */
+const MOCK_MARKER_DOMAIN = process.env.MOCK_MARKER_DOMAIN ?? "mark.quantifyterminal.test";
+const MARKER_KINDS = ["people", "leads", "mail_list"];
+const EXPORT_KIND_LABELS: Record<string, string> = {
+  companies: "companies",
+  people: "people",
+  leads: "leads",
+  deals: "deals",
+  contracts: "contracts",
+  mail_list: "a mailing list",
+};
+const MASK_DOT = "•";
+const MASKED_FIELDS: Record<string, string> = {
+  personal_email: "Personal email",
+  emergency_contact_name: "Emergency contact",
+  emergency_contact_phone: "Emergency contact's phone",
+  one_on_one_notes: "One-to-one notes",
+};
+const SEALED_ID = "aa000000-0000-4000-8000-0000000000b9";
+
+const eligibilities: EligibilityRow[] = [];
+const elevations: ElevationRow[] = [];
+const exportLedger: ExportRow[] = [];
+const exportLifts: ExportLiftRow[] = [];
+
+function capsFor(role: string): string[] {
+  return (CAPABILITIES as Record<string, readonly string[]>)[role]
+    ? [...(CAPABILITIES as Record<string, readonly string[]>)[role]!]
+    : [];
+}
+function isUpward(standing: string, role: string): boolean {
+  const have = new Set(capsFor(standing));
+  return capsFor(role).some((capability) => !have.has(capability));
+}
+function eligibilityLive(row: EligibilityRow): boolean {
+  return !row.revoked_at && (!row.eligible_until || row.eligible_until >= today());
+}
+function elevationLive(row: ElevationRow, at = Date.now()): boolean {
+  return !row.ended_at && Date.parse(row.starts_at) <= at && at < Date.parse(row.ends_at);
+}
+function activeElevation(staffId: string): ElevationRow | null {
+  const live = elevations.filter((row) => row.staff_id === staffId && elevationLive(row));
+  return live.sort((a, b) => b.ends_at.localeCompare(a.ends_at))[0] ?? null;
+}
+function elevationState(row: ElevationRow): "live" | "ended" | "expired" {
+  if (row.ended_at) return "ended";
+  return elevationLive(row) ? "live" : "expired";
+}
+function eligibilityView(row: EligibilityRow) {
+  return {
+    eligibility_id: row.id,
+    staff_id: row.staff_id,
+    staff_name: nameOf(row.staff_id),
+    role: row.role,
+    role_label: ROLE_LABELS[row.role] ?? row.role,
+    max_hours: row.max_hours,
+    eligible_until: row.eligible_until,
+    reason: row.reason,
+    granted_by_name: nameOf(row.granted_by),
+    created_at: row.created_at,
+    live: eligibilityLive(row),
+  };
+}
+function elevationView(row: ElevationRow) {
+  return {
+    elevation_id: row.id,
+    staff_id: row.staff_id,
+    staff_name: nameOf(row.staff_id),
+    role: row.role,
+    role_label: ROLE_LABELS[row.role] ?? row.role,
+    reason: row.reason,
+    starts_at: row.starts_at,
+    ends_at: row.ends_at,
+    ended_at: row.ended_at,
+    ended_by_name: row.ended_by ? nameOf(row.ended_by) : "",
+    state: elevationState(row),
+  };
+}
+function breakGlassView(row: Staff) {
+  const tested = row.break_glass_tested_at ?? null;
+  const days = tested ? Math.floor((Date.now() - Date.parse(tested)) / 86_400_000) : null;
+  return {
+    staff_id: row.id,
+    display_name: row.display_name,
+    email: row.email,
+    is_active: row.is_active,
+    tested_at: tested,
+    test_note: row.break_glass_test_note ?? "",
+    days_since_test: days,
+    test_due: days === null || days >= BREAK_GLASS_TEST_DAYS,
+    last_login_at: row.last_login_at,
+    has_passkey: passkeys.some((item) => item.staff_id === row.id),
+  };
+}
+function maskEmail(value: string): string {
+  const [local = "", domain = ""] = value.split("@");
+  if (!value) return "";
+  return domain ? `${local.slice(0, 1)}${MASK_DOT.repeat(3)}@${domain}` : MASK_DOT.repeat(4);
+}
+function maskPhone(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return "";
+  return digits.length >= 6 ? `${MASK_DOT.repeat(4)} ${digits.slice(-2)}` : MASK_DOT.repeat(4);
+}
+function maskName(value: string): string {
+  return value ? `${value.slice(0, 1)}${MASK_DOT.repeat(3)}` : "";
+}
+function maskedValue(field: string, value: string): string {
+  if (field === "personal_email") return maskEmail(value);
+  if (field === "emergency_contact_phone") return maskPhone(value);
+  if (field === "emergency_contact_name") return maskName(value);
+  return "";
+}
+function isMasked(value: unknown): boolean {
+  return String(value ?? "").includes(MASK_DOT);
+}
+function exportQuota(staffId: string) {
+  const since = Date.now() - EXPORT_WINDOW_MS;
+  const used = exportLedger
+    .filter((row) => row.staff_id === staffId && Date.parse(row.created_at) >= since)
+    .reduce((sum, row) => sum + row.rows, 0);
+  const extra = exportLifts
+    .filter((row) => row.staff_id === staffId && Date.parse(row.until) > Date.now())
+    .reduce((sum, row) => sum + row.extra_rows, 0);
+  const limit = EXPORT_QUOTA_ROWS + extra;
+  return { used, limit, left: Math.max(0, limit - used), window_hours: 24 };
+}
+/** Mirrors exports.check_or_refuse: null when it fits, else the refusal. */
+function exportQuotaRefusal(staffId: string, rows: number) {
+  const quota = exportQuota(staffId);
+  return quota.used + rows > quota.limit
+    ? refuse(403, "forbidden", {
+        reason: "export-quota",
+        used: quota.used,
+        limit: quota.limit,
+        rows,
+      })
+    : null;
+}
+const MARKER_FIRST = ["Maren", "Tobias", "Ines", "Rafael", "Clara", "Anand", "Sofia", "Kenji"];
+const MARKER_LAST = [
+  "Albrecht",
+  "Okafor",
+  "Lindqvist",
+  "Moreau",
+  "Varga",
+  "Castell",
+  "Hartmann",
+  "Ishida",
+];
+function exportMarker(kind: string) {
+  if (!MARKER_KINDS.includes(kind) || !MOCK_MARKER_DOMAIN) return null;
+  const first = MARKER_FIRST[Math.floor(Math.random() * MARKER_FIRST.length)]!;
+  const last = MARKER_LAST[Math.floor(Math.random() * MARKER_LAST.length)]!;
+  const email = `${first[0]!.toLowerCase()}.${last.toLowerCase()}.${randomUUID().slice(0, 6)}@${MOCK_MARKER_DOMAIN}`;
+  return {
+    id: randomUUID(),
+    email,
+    first,
+    last,
+    full_name: `${first} ${last}`,
+    title: "Head of Research",
+  };
+}
+function placeMarker<T>(rows: T[], row: T): T[] {
+  const at = Math.floor(Math.random() * (rows.length + 1));
+  return [...rows.slice(0, at), row, ...rows.slice(at)];
+}
+function recordExport(
+  staffId: string,
+  kind: string,
+  entityId: string,
+  rows: number,
+  reason: string,
+  canary: string | null,
+) {
+  exportLedger.unshift({
+    id: randomUUID(),
+    staff_id: staffId,
+    kind,
+    entity_id: entityId,
+    rows,
+    reason,
+    created_at: now(),
+    canary_email: canary,
+    tripped_at: null,
+    tripped_via: "",
+  });
+}
+/** Mirrors exports.check: a marker coming back names its file and tells every owner. */
+function checkMarker(email: unknown, via: string): boolean {
+  const norm = String(email ?? "")
+    .trim()
+    .toLowerCase();
+  if (!MOCK_MARKER_DOMAIN || !norm.endsWith(`@${MOCK_MARKER_DOMAIN}`)) return false;
+  const [local = "", host = ""] = norm.split("@");
+  const row = exportLedger.find((item) => item.canary_email === `${local.split("+")[0]}@${host}`);
+  if (!row) return false;
+  if (!row.tripped_at) {
+    row.tripped_at = now();
+    row.tripped_via = via;
+  }
+  recordSecurityEvent(
+    "export.canary",
+    row.staff_id,
+    `A marker from ${nameOf(row.staff_id)}'s export of ${EXPORT_KIND_LABELS[row.kind] ?? row.kind} came back through ${via}. The file was made for: “${row.reason}”.`,
+  );
+  audit("export.canary_tripped", null, "export", row.id, "", { via });
+  return true;
+}
+
+function seedPrivileged() {
+  eligibilities.length = 0;
+  elevations.length = 0;
+  exportLedger.length = 0;
+  exportLifts.length = 0;
+  const owner = "aa000000-0000-4000-8000-00000000000a";
+  const desk = "aa000000-0000-4000-8000-00000000000d";
+  const intern = "aa000000-0000-4000-8000-00000000000e";
+  if (!staff.some((row) => row.id === SEALED_ID))
+    staff.push({
+      id: SEALED_ID,
+      email: "sealed@hq.test",
+      display_name: "Sealed Owner",
+      role: "owner",
+      kind: "founder",
+      is_active: true,
+      enrolled: true,
+      last_login_at: hoursAgo(24 * 97),
+      created_at: "2026-06-20T09:00:00Z",
+      ends_on: null,
+    });
+  const sealed = staff.find((row) => row.id === SEALED_ID)!;
+  sealed.break_glass = true;
+  sealed.last_login_at = hoursAgo(24 * 97);
+  sealed.break_glass_tested_at = hoursAgo(24 * 97);
+  sealed.break_glass_test_note = "Signed in from the office, envelope B back in the safe";
+  eligibilities.push(
+    {
+      id: "e1000000-0000-4000-8000-000000000001",
+      staff_id: desk,
+      role: "admin",
+      max_hours: 2,
+      eligible_until: null,
+      reason: "Release nights: re-sends and account unlocks",
+      granted_by: owner,
+      created_at: hoursAgo(24 * 40),
+      revoked_at: null,
+      revoked_by: null,
+    },
+    {
+      id: "e1000000-0000-4000-8000-000000000002",
+      staff_id: intern,
+      role: "support",
+      max_hours: 4,
+      eligible_until: "2026-12-20",
+      reason: "Covers the desk on Fridays",
+      granted_by: owner,
+      created_at: hoursAgo(24 * 20),
+      revoked_at: null,
+      revoked_by: null,
+    },
+  );
+  elevations.push({
+    id: "e2000000-0000-4000-8000-000000000001",
+    staff_id: desk,
+    eligibility_id: "e1000000-0000-4000-8000-000000000001",
+    role: "admin",
+    reason: "Release night: resending three invites",
+    starts_at: hoursAgo(24 * 6),
+    ends_at: hoursAgo(24 * 6 - 2),
+    ended_at: hoursAgo(24 * 6 - 1),
+    ended_by: desk,
+  });
+  exportLedger.push(
+    {
+      id: "e3000000-0000-4000-8000-000000000001",
+      staff_id: "aa000000-0000-4000-8000-00000000000b",
+      kind: "leads",
+      entity_id: "leads",
+      rows: 214,
+      reason: "Webinar follow-up list for the events agency",
+      created_at: hoursAgo(24 * 12),
+      canary_email: `c.moreau.4be1a0@${MOCK_MARKER_DOMAIN}`,
+      tripped_at: hoursAgo(30),
+      tripped_via: "the website form",
+    },
+    {
+      id: "e3000000-0000-4000-8000-000000000002",
+      staff_id: owner,
+      kind: "people",
+      entity_id: "people",
+      rows: 1180,
+      reason: "Quarterly board pack: customer contacts by firm",
+      created_at: hoursAgo(26),
+      canary_email: `t.lindqvist.91c2f7@${MOCK_MARKER_DOMAIN}`,
+      tripped_at: null,
+      tripped_via: "",
+    },
+    {
+      id: "e3000000-0000-4000-8000-000000000003",
+      staff_id: owner,
+      kind: "contracts",
+      entity_id: "contracts",
+      rows: 31,
+      reason: "Renewal forecast for the accountant",
+      created_at: hoursAgo(24 * 3),
+      canary_email: null,
+      tripped_at: null,
+      tripped_via: "",
+    },
+  );
+  const internRow = staff.find((row) => row.id === intern);
+  if (internRow) {
+    internRow.personal_email = internRow.personal_email || "rohan.home@example.org";
+  }
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/elevation",
+    auth: true,
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const standing = found.member.role;
+      const active = activeElevation(found.member.id);
+      const since = Date.now() - 90 * 86_400_000;
+      return ok({
+        standing_role: standing,
+        standing_role_label: ROLE_LABELS[standing] ?? standing,
+        active: active ? elevationView(active) : null,
+        eligible: eligibilities
+          .filter(
+            (row) =>
+              row.staff_id === found.member.id &&
+              eligibilityLive(row) &&
+              isUpward(standing, row.role),
+          )
+          .map(eligibilityView)
+          .sort((a, b) => a.role_label.localeCompare(b.role_label)),
+        history: elevations
+          .filter((row) => row.staff_id === found.member.id && Date.parse(row.ends_at) >= since)
+          .sort((a, b) => b.starts_at.localeCompare(a.starts_at))
+          .slice(0, 20)
+          .map(elevationView),
+        max_hours: 24,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/elevation/activate",
+    auth: true,
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      if (found.elevation)
+        return refuse(400, "malformed_request", { elevation: "already elevated; end it first" });
+      const eligibility = eligibilities.find(
+        (row) =>
+          row.id === String(body.eligibility_id ?? "").toLowerCase() &&
+          row.staff_id === found.member.id,
+      );
+      if (!eligibility || !eligibilityLive(eligibility)) return refuse(404, "not_found");
+      if (!isUpward(found.member.role, eligibility.role))
+        return refuse(400, "malformed_request", { role: "your own role already covers it" });
+      const hours = Number.parseInt(String(body.hours ?? "1"), 10);
+      if (Number.isNaN(hours) || hours < 1 || hours > eligibility.max_hours)
+        return refuse(400, "malformed_request", {
+          hours: `between 1 and ${eligibility.max_hours}`,
+        });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say what the elevation is for" });
+      let ends = Date.now() + hours * 3_600_000;
+      if (eligibility.eligible_until)
+        ends = Math.min(ends, Date.parse(`${eligibility.eligible_until}T00:00:00Z`) + 86_400_000);
+      const row: ElevationRow = {
+        id: randomUUID(),
+        staff_id: found.member.id,
+        eligibility_id: eligibility.id,
+        role: eligibility.role,
+        reason,
+        starts_at: now(),
+        ends_at: new Date(ends).toISOString().replace(/\.\d{3}Z$/, "Z"),
+        ended_at: null,
+        ended_by: null,
+      };
+      elevations.push(row);
+      audit("elevation.activated", found.member.id, "staff", found.member.id, reason, {
+        elevation_id: row.id,
+        role: row.role,
+        hours,
+      });
+      recordSecurityEvent(
+        "elevation.activated",
+        found.member.id,
+        `${found.member.display_name} took ${ROLE_LABELS[row.role]} until ${row.ends_at.slice(11, 16)} UTC: “${reason}”`,
+        { actor_staff_id: found.member.id },
+      );
+      return ok({ elevation: elevationView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/elevation/{elevation_id}/end",
+    auth: true,
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const row = elevations.find((item) => item.id === String(params.elevation_id).toLowerCase());
+      if (!row) return refuse(404, "not_found");
+      const own = row.staff_id === found.member.id;
+      if (!own && found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      if (!elevationLive(row))
+        return refuse(400, "malformed_request", { elevation: "already over" });
+      row.ended_at = now();
+      row.ended_by = found.member.id;
+      audit("elevation.ended", found.member.id, "staff", row.staff_id, "", {
+        elevation_id: row.id,
+        by_owner: !own,
+      });
+      return ok({ ended: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/staff/{staff_id}/eligibility",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      if (found.elevation) return refuse(403, "forbidden", { reason: "elevated-cannot-grant" });
+      if (found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      const target = staff.find((row) => row.id === String(params.staff_id).toLowerCase());
+      if (!target) return refuse(404, "not_found");
+      if (target.id === found.member.id) return refuse(403, "forbidden", { reason: "own-role" });
+      if (!target.is_active) return refuse(400, "malformed_request", { staff: "not active" });
+      const role = String(body.role ?? "").trim();
+      if (!ELIGIBLE_ROLES.includes(role))
+        return refuse(400, "malformed_request", { role: "admin, sales or support; never owner" });
+      if (!isUpward(target.role, role))
+        return refuse(400, "malformed_request", { role: "their own role already covers it" });
+      const maxHours = Number.parseInt(String(body.max_hours ?? "4"), 10);
+      if (Number.isNaN(maxHours) || maxHours < 1 || maxHours > 24)
+        return refuse(400, "malformed_request", { max_hours: "between 1 and 24" });
+      let until = String(body.eligible_until ?? "").trim() || null;
+      if (until && !/^\d{4}-\d{2}-\d{2}$/.test(until))
+        return refuse(400, "malformed_request", { eligible_until: "a date, YYYY-MM-DD" });
+      if (until && until < today())
+        return refuse(400, "malformed_request", { eligible_until: "today or later" });
+      if (target.ends_on && (!until || until > target.ends_on)) until = target.ends_on;
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say why they may need it" });
+      if (
+        eligibilities.some(
+          (row) => row.staff_id === target.id && row.role === role && eligibilityLive(row),
+        )
+      )
+        return refuse(400, "malformed_request", { role: "already eligible for it" });
+      const row: EligibilityRow = {
+        id: randomUUID(),
+        staff_id: target.id,
+        role,
+        max_hours: maxHours,
+        eligible_until: until,
+        reason,
+        granted_by: found.member.id,
+        created_at: now(),
+        revoked_at: null,
+        revoked_by: null,
+      };
+      eligibilities.push(row);
+      audit("elevation.eligibility_granted", found.member.id, "staff", target.id, reason, {
+        eligibility_id: row.id,
+        role,
+        max_hours: maxHours,
+      });
+      recordSecurityEvent(
+        "elevation.granted",
+        target.id,
+        `${target.display_name} may take ${ROLE_LABELS[role]} for up to ${maxHours} h at a time: “${reason}”`,
+        { actor_staff_id: found.member.id },
+      );
+      return ok({ eligibility: eligibilityView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/staff/{staff_id}/eligibility/{eligibility_id}/revoke",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      if (found.elevation) return refuse(403, "forbidden", { reason: "elevated-cannot-grant" });
+      if (found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      const row = eligibilities.find(
+        (item) =>
+          item.id === String(params.eligibility_id).toLowerCase() &&
+          item.staff_id === String(params.staff_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      if (row.revoked_at)
+        return refuse(400, "malformed_request", { eligibility: "already revoked" });
+      row.revoked_at = now();
+      row.revoked_by = found.member.id;
+      let ended = 0;
+      for (const elevation of elevations)
+        if (elevation.eligibility_id === row.id && elevationLive(elevation)) {
+          elevation.ended_at = now();
+          elevation.ended_by = found.member.id;
+          ended += 1;
+        }
+      audit("elevation.eligibility_revoked", found.member.id, "staff", row.staff_id, "", {
+        eligibility_id: row.id,
+        ended,
+      });
+      return ok({ revoked: true, ended });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/security/privileged",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const since = Date.now() - 30 * 86_400_000;
+      return ok({
+        break_glass: staff.filter((row) => row.break_glass).map(breakGlassView),
+        owners: staff
+          .filter((row) => row.role === "owner" && row.is_active)
+          .map((row) => ({
+            staff_id: row.id,
+            display_name: row.display_name,
+            break_glass: Boolean(row.break_glass),
+          }))
+          .sort((a, b) => a.display_name.toLowerCase().localeCompare(b.display_name.toLowerCase())),
+        eligibility: eligibilities
+          .filter(eligibilityLive)
+          .map(eligibilityView)
+          .sort(
+            (a, b) =>
+              a.staff_name.toLowerCase().localeCompare(b.staff_name.toLowerCase()) ||
+              a.role.localeCompare(b.role),
+          ),
+        elevations: elevations
+          .filter((row) => Date.parse(row.ends_at) >= since)
+          .sort((a, b) => b.starts_at.localeCompare(a.starts_at))
+          .slice(0, 50)
+          .map(elevationView),
+        exports: exportLedger
+          .filter((row) => Date.parse(row.created_at) >= since)
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))
+          .slice(0, 100)
+          .map((row) => ({
+            export_id: row.id,
+            staff_id: row.staff_id,
+            staff_name: nameOf(row.staff_id),
+            kind: row.kind,
+            kind_label: EXPORT_KIND_LABELS[row.kind] ?? row.kind,
+            rows: row.rows,
+            reason: row.reason,
+            created_at: row.created_at,
+            marked: Boolean(row.canary_email),
+            tripped_at: row.tripped_at,
+            tripped_via: row.tripped_via,
+          })),
+        quota: {
+          rows: EXPORT_QUOTA_ROWS,
+          window_hours: 24,
+          lifts: exportLifts
+            .filter((row) => Date.parse(row.until) > Date.now())
+            .map((row) => ({
+              staff_id: row.staff_id,
+              staff_name: nameOf(row.staff_id),
+              extra_rows: row.extra_rows,
+              until: row.until,
+              reason: row.reason,
+              granted_by_name: nameOf(row.granted_by),
+            })),
+        },
+        marker_domain_set: Boolean(MOCK_MARKER_DOMAIN),
+        grantable: staff
+          .filter((row) => row.is_active && row.role !== "owner")
+          .map((row) => ({
+            staff_id: row.id,
+            display_name: row.display_name,
+            role: row.role,
+            roles: ELIGIBLE_ROLES.filter((role) => isUpward(row.role, role)),
+          }))
+          .sort((a, b) => a.display_name.toLowerCase().localeCompare(b.display_name.toLowerCase())),
+        role_labels: ROLE_LABELS,
+        max_hours: 24,
+        test_days: BREAK_GLASS_TEST_DAYS,
+        viewer_is_owner: found.member.role === "owner",
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/staff/{staff_id}/break-glass",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      if (found.elevation) return refuse(403, "forbidden", { reason: "elevated-cannot-grant" });
+      if (found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      const target = staff.find((row) => row.id === String(params.staff_id).toLowerCase());
+      if (!target) return refuse(404, "not_found");
+      if (target.id === found.member.id) return refuse(403, "forbidden", { reason: "own-account" });
+      if (target.role !== "owner")
+        return refuse(400, "malformed_request", {
+          staff: "only an Owner account can be the break-glass account",
+        });
+      const on = body.on === true || body.on === "true";
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8) return refuse(400, "malformed_request", { reason: "say why" });
+      if (Boolean(target.break_glass) === on)
+        return refuse(400, "malformed_request", { on: "already so" });
+      target.break_glass = on;
+      audit(
+        on ? "break_glass.marked" : "break_glass.unmarked",
+        found.member.id,
+        "staff",
+        target.id,
+        reason,
+      );
+      recordSecurityEvent(
+        "break_glass.marked",
+        target.id,
+        on
+          ? `${target.email} is now a break-glass account: every sign-in on it alerts every Owner.`
+          : `${target.email} is no longer a break-glass account: “${reason}”`,
+        { actor_staff_id: found.member.id },
+      );
+      return ok({ break_glass: on });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/staff/{staff_id}/break-glass/test",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      if (found.elevation) return refuse(403, "forbidden", { reason: "elevated-cannot-grant" });
+      if (found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      const target = staff.find(
+        (row) => row.id === String(params.staff_id).toLowerCase() && row.break_glass,
+      );
+      if (!target) return refuse(404, "not_found");
+      if (!target.last_login_at || Date.now() - Date.parse(target.last_login_at) > 24 * 3_600_000)
+        return refuse(400, "malformed_request", {
+          test: "sign in with the sealed account first; the test is that sign-in",
+        });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      if (note.length < 8)
+        return refuse(400, "malformed_request", {
+          note: "what was checked, and where the credentials went back",
+        });
+      target.break_glass_tested_at = now();
+      target.break_glass_test_note = note;
+      audit("break_glass.tested", found.member.id, "staff", target.id, note);
+      return ok({ break_glass: breakGlassView(target) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/export-quota",
+    auth: true,
+    capability: "crm:export",
+    handler: ({ headers }) =>
+      ok({ ...exportQuota(caller(headers)!.member.id), marked: Boolean(MOCK_MARKER_DOMAIN) }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/staff/{staff_id}/export-lift",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      if (found.elevation) return refuse(403, "forbidden", { reason: "elevated-cannot-grant" });
+      if (found.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      const target = staff.find(
+        (row) => row.id === String(params.staff_id).toLowerCase() && row.is_active,
+      );
+      if (!target) return refuse(404, "not_found");
+      if (
+        target.id === found.member.id &&
+        staff.some(
+          (row) =>
+            row.role === "owner" && row.is_active && !row.break_glass && row.id !== found.member.id,
+        )
+      )
+        return refuse(403, "forbidden", { reason: "own-quota" });
+      const extra = Number.parseInt(String(body.extra_rows ?? "0"), 10);
+      if (Number.isNaN(extra) || extra < 1 || extra > 100_000)
+        return refuse(400, "malformed_request", { extra_rows: "between 1 and 100,000" });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say what the larger export is for" });
+      exportLifts.push({
+        id: randomUUID(),
+        staff_id: target.id,
+        extra_rows: extra,
+        until: new Date(Date.now() + EXPORT_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z"),
+        reason,
+        granted_by: found.member.id,
+        created_at: now(),
+      });
+      audit("export.quota_lifted", found.member.id, "staff", target.id, reason, {
+        extra_rows: extra,
+      });
+      recordSecurityEvent(
+        "export.quota_lifted",
+        target.id,
+        `${target.display_name} may export ${extra.toLocaleString("en-GB")} more rows until tomorrow: “${reason}”`,
+        { actor_staff_id: found.member.id },
+      );
+      return ok({ quota: exportQuota(target.id) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/team/{staff_id}/reveal",
+    auth: true,
+    capability: "hr:read",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const member = staff.find((row) => row.id === String(params.staff_id).toLowerCase());
+      if (!member) return refuse(404, "not_found");
+      const field = String(body.field ?? "").trim();
+      if (!(field in MASKED_FIELDS))
+        return refuse(400, "malformed_request", { field: Object.keys(MASKED_FIELDS).join(", ") });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say why you need to see it" });
+      let value = "";
+      const detail: Record<string, unknown> = { field };
+      if (field === "one_on_one_notes") {
+        const meeting = oneOnOnes.find(
+          (row) =>
+            row.id === String(body.one_on_one_id ?? "").toLowerCase() && row.staff_id === member.id,
+        );
+        if (!meeting) return refuse(404, "not_found");
+        value = meeting.notes;
+        detail.one_on_one_id = meeting.id;
+      } else {
+        value = String((member as Record<string, unknown>)[field] ?? "");
+      }
+      audit("field.revealed", found.member.id, "staff", member.id, reason, detail);
+      return ok({ field, value, seconds: 60 });
+    },
+  },
+);
+
+// --- AI assistance (mirrors ai_routes.py) ---------------------------------------------------------
+// With no model the service says "not configured", and so does the mock by default. MOCK_AI=1
+// (the harness) puts a stand-in behind the same routes: deterministic answers built from the
+// same sources, passed through the same checks, so the screens and the states can be walked.
+type AiRunRow = {
+  id: string;
+  feature: string;
+  staff_id: string;
+  subject_type: string;
+  outcome: string;
+  verdict: string;
+  tokens: number;
+  created_at: string;
+};
+const MOCK_AI = process.env.MOCK_AI === "1";
+const AI_FEATURES: Record<string, [string, string]> = {
+  reply_draft: ["Reply drafts", "tickets:write"],
+  triage: ["Triage suggestions", "tickets:write"],
+  brief: ["Brief me", "crm:read"],
+  tasks_from_notes: ["Tasks from meeting notes", "crm:write"],
+  filters: ["Filters in plain words", "crm:read"],
+};
+const AI_MESSAGES: Record<string, string> = {
+  not_configured:
+    "AI assistance is not configured. An owner adds the provider's key to the service settings.",
+  disabled: "An owner has not turned this on.",
+  capped:
+    "The limit for AI assistance is reached; it resets tomorrow (yours) or next month (the company's).",
+  no_grounded_answer: "Nothing HQ holds answers this, so no draft was written.",
+  rejected: "What came back did not hold up against the records, so it is not shown.",
+  error: "The model could not be reached just now. Nothing was shown or kept.",
+};
+const aiEnabled: Record<string, boolean> = {};
+const aiCaps = { daily_calls: 60, monthly_tokens: 3_000_000 };
+const aiRuns: AiRunRow[] = [];
+
+function seedAi() {
+  for (const key of Object.keys(AI_FEATURES)) aiEnabled[key] = MOCK_AI;
+  aiCaps.daily_calls = 60;
+  aiCaps.monthly_tokens = 3_000_000;
+  aiRuns.length = 0;
+  if (!MOCK_AI) return;
+  aiRuns.push(
+    {
+      id: randomUUID(),
+      feature: "reply_draft",
+      staff_id: "aa000000-0000-4000-8000-00000000000d",
+      subject_type: "ticket",
+      outcome: "ok",
+      verdict: "edited",
+      tokens: 1840,
+      created_at: hoursAgo(20),
+    },
+    {
+      id: randomUUID(),
+      feature: "brief",
+      staff_id: "aa000000-0000-4000-8000-00000000000c",
+      subject_type: "company",
+      outcome: "ok",
+      verdict: "",
+      tokens: 1210,
+      created_at: hoursAgo(26),
+    },
+    {
+      id: randomUUID(),
+      feature: "reply_draft",
+      staff_id: "aa000000-0000-4000-8000-00000000000d",
+      subject_type: "ticket",
+      outcome: "no_grounded_answer",
+      verdict: "",
+      tokens: 930,
+      created_at: hoursAgo(49),
+    },
+    {
+      id: randomUUID(),
+      feature: "triage",
+      staff_id: "aa000000-0000-4000-8000-00000000000d",
+      subject_type: "ticket",
+      outcome: "rejected",
+      verdict: "",
+      tokens: 610,
+      created_at: hoursAgo(73),
+    },
+  );
+  // A call already written up, so tasks can be proposed from its notes.
+  if (!meetings.some((row) => row.id === "ee100000-0000-4000-8000-0000000000a1"))
+    meetings.push({
+      id: "ee100000-0000-4000-8000-0000000000a1",
+      google_event_id: "",
+      kind: "check_in",
+      status: "completed",
+      starts_at: hoursFromNow(-30),
+      ends_at: hoursFromNow(-29.5),
+      title: "Renewal check-in — Northwall Capital",
+      description: "",
+      company_id: "c0000000-0000-4000-8000-000000000002",
+      deal_id: "",
+      prep_notes: "",
+      outcome: "advanced",
+      outcome_notes:
+        "They liked the morning brief. We will send the security questionnaire by Friday. Priya to confirm the seat count with finance. Follow up on bond coverage timing next week.",
+      outcome_recorded_at: hoursFromNow(-29),
+      recording_url: "",
+    });
+}
+
+function aiStatus(role: string) {
+  return {
+    configured: MOCK_AI,
+    features: MOCK_AI
+      ? Object.entries(AI_FEATURES)
+          .filter(([key, [, capability]]) => aiEnabled[key] && capsFor(role).includes(capability))
+          .map(([key]) => key)
+      : [],
+  };
+}
+/** Mirrors ai_routes._gate: a missing capability refuses; the rest are states. */
+function aiGate(headers: Record<string, string | string[] | undefined>, feature: string) {
+  const found = caller(headers)!;
+  const capability = AI_FEATURES[feature]![1];
+  if (!capsFor(found.role).includes(capability))
+    return {
+      refusal: refuse(403, "forbidden", { required_capability: capability }),
+      state: "",
+      found,
+    };
+  if (!MOCK_AI) return { refusal: null, state: "not_configured", found };
+  if (!aiEnabled[feature]) return { refusal: null, state: "disabled", found };
+  const today = todayIso();
+  const mine = aiRuns.filter(
+    (row) => row.staff_id === found.member.id && row.created_at.slice(0, 10) === today,
+  ).length;
+  if (mine >= aiCaps.daily_calls) return { refusal: null, state: "capped", found };
+  return { refusal: null, state: "", found };
+}
+function aiAnswer(state: string, extra: Record<string, unknown> = {}) {
+  return ok({ state, message: AI_MESSAGES[state] ?? "", run_id: null, ...extra });
+}
+function aiRun(
+  found: { member: Staff },
+  feature: string,
+  subjectType: string,
+  outcome: string,
+  extra: Record<string, unknown>,
+) {
+  const row: AiRunRow = {
+    id: randomUUID(),
+    feature,
+    staff_id: found.member.id,
+    subject_type: subjectType,
+    outcome,
+    verdict: "",
+    tokens: 600 + Math.floor(Math.random() * 1400),
+    created_at: now(),
+  };
+  aiRuns.unshift(row);
+  return ok({ state: outcome, message: AI_MESSAGES[outcome] ?? "", run_id: row.id, ...extra });
+}
+const AI_STOP = new Set([
+  "that",
+  "this",
+  "with",
+  "have",
+  "from",
+  "your",
+  "they",
+  "will",
+  "what",
+  "when",
+  "there",
+  "their",
+  "would",
+  "could",
+  "about",
+  "which",
+  "been",
+  "were",
+  "into",
+  "does",
+  "just",
+  "some",
+]);
+function aiWords(text: string): Set<string> {
+  return new Set(
+    (text.toLowerCase().match(/[a-z][a-z0-9'-]{3,}/g) ?? []).filter((word) => !AI_STOP.has(word)),
+  );
+}
+function aiOverlap(question: Set<string>, text: string): number {
+  const other = aiWords(text);
+  let shared = 0;
+  for (const word of question) if (other.has(word)) shared += 1;
+  return shared;
+}
+function customerWords(row: TicketRow): string {
+  return row.messages
+    .filter((message) => message.author === "customer")
+    .map((message) => message.body)
+    .slice(-3)
+    .join("\n\n");
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/ai/settings",
+    auth: true,
+    capability: "hq:admin",
+    handler: () => {
+      const since = Date.now() - 30 * 86_400_000;
+      const recent = aiRuns.filter((row) => Date.parse(row.created_at) >= since);
+      const monthStart = `${todayIso().slice(0, 7)}-01`;
+      return ok({
+        configured: MOCK_AI,
+        model: MOCK_AI ? "mock stand-in" : "",
+        features: Object.entries(AI_FEATURES).map(([key, [label, capability]]) => {
+          const mine = recent.filter((row) => row.feature === key);
+          return {
+            key,
+            label,
+            capability,
+            enabled: Boolean(aiEnabled[key]),
+            runs_30d: mine.length,
+            outcomes_30d: Object.fromEntries(
+              ["ok", "no_grounded_answer", "rejected", "error"].map((outcome) => [
+                outcome,
+                mine.filter((row) => row.outcome === outcome).length,
+              ]),
+            ),
+            used_30d: mine.filter((row) => row.verdict === "used" || row.verdict === "edited")
+              .length,
+            dismissed_30d: mine.filter((row) => row.verdict === "dismissed").length,
+          };
+        }),
+        daily_calls: aiCaps.daily_calls,
+        monthly_tokens: aiCaps.monthly_tokens,
+        tokens_this_month: aiRuns
+          .filter((row) => row.created_at >= monthStart)
+          .reduce((sum, row) => sum + row.tokens, 0),
+        runs: recent.slice(0, 40).map((row) => ({
+          run_id: row.id,
+          feature: row.feature,
+          feature_label: AI_FEATURES[row.feature]?.[0] ?? row.feature,
+          staff_name: nameOf(row.staff_id),
+          subject_type: row.subject_type,
+          outcome: row.outcome,
+          verdict: row.verdict,
+          tokens: row.tokens,
+          created_at: row.created_at,
+        })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/ai/settings/update",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const changes: string[] = [];
+      if (body.enabled && typeof body.enabled === "object") {
+        for (const [key, value] of Object.entries(body.enabled as Record<string, unknown>)) {
+          if (!(key in AI_FEATURES))
+            return refuse(400, "malformed_request", {
+              enabled: `features are ${Object.keys(AI_FEATURES).join(", ")}`,
+            });
+          aiEnabled[key] = value === true || value === "true" || value === 1 || value === "on";
+          changes.push(`ai.enabled.${key}`);
+        }
+      }
+      for (const [name, high] of [
+        ["daily_calls", 10_000],
+        ["monthly_tokens", 1_000_000_000],
+      ] as const) {
+        if (name in body) {
+          const value = Number.parseInt(String(body[name]).replace(/,/g, ""), 10);
+          if (Number.isNaN(value))
+            return refuse(400, "malformed_request", { [name]: "a whole number" });
+          if (value < 0 || value > high)
+            return refuse(400, "malformed_request", {
+              [name]: `between 0 and ${high.toLocaleString("en-GB")}`,
+            });
+          aiCaps[name] = value;
+          changes.push(name);
+        }
+      }
+      if (!changes.length) return refuse(400, "malformed_request", { body: "nothing to change" });
+      audit("ai.settings_updated", caller(headers)!.member.id, "settings", "ai", "", { changes });
+      return ok({ updated: changes.sort() });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/ai/reply-draft",
+    auth: true,
+    capability: "tickets:write",
+    handler: ({ headers, body }) => {
+      const gate = aiGate(headers, "reply_draft");
+      if (gate.refusal) return gate.refusal;
+      const ticket = tickets.find((row) => row.id === String(body.ticket_id ?? ""));
+      if (!ticket) return refuse(404, "not_found");
+      if (gate.state) return aiAnswer(gate.state);
+      const wanted = aiWords(`${ticket.subject} ${customerWords(ticket)}`);
+      const ranked = savedReplies
+        .filter((reply) => !reply.archived)
+        .map((reply) => ({ reply, score: aiOverlap(wanted, `${reply.title} ${reply.body}`) }))
+        .filter((item) => item.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (!ranked.length) return aiAnswer("no_grounded_answer", { sources: [] });
+      const best = ranked[0]!.reply;
+      return aiRun(gate.found, "reply_draft", "ticket", "ok", {
+        draft: best.body.slice(0, 900),
+        sources: [{ key: "S1", kind: "saved_reply", id: best.reply_id, title: best.title }],
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/ai/triage",
+    auth: true,
+    capability: "tickets:write",
+    handler: ({ headers, body }) => {
+      const gate = aiGate(headers, "triage");
+      if (gate.refusal) return gate.refusal;
+      const ticket = tickets.find((row) => row.id === String(body.ticket_id ?? ""));
+      if (!ticket) return refuse(404, "not_found");
+      if (gate.state) return aiAnswer(gate.state);
+      const text = `${ticket.subject} ${customerWords(ticket)}`.toLowerCase();
+      const known = [...new Set(tickets.flatMap((row) => row.tags ?? []))];
+      const tags = known
+        .filter((tag) => text.includes(tag.toLowerCase().replace(/s$/, "")))
+        .slice(0, 3);
+      const priority = /cannot|can't|down|blank|every/.test(text) ? "high" : "normal";
+      const twin = tickets.find(
+        (row) =>
+          row.id !== ticket.id &&
+          row.status !== "resolved" &&
+          Boolean(ticket.account_id) &&
+          row.account_id === ticket.account_id &&
+          aiOverlap(aiWords(text), `${row.subject} ${customerWords(row)}`) >= 2,
+      );
+      return aiRun(gate.found, "triage", "ticket", "ok", {
+        suggestion: {
+          tags,
+          priority,
+          duplicate: twin ? { ticket_id: twin.id, subject: twin.subject } : null,
+          why: "The mock's stand-in: the words in the ticket match these tags.",
+          current: { tags: ticket.tags ?? [], priority: ticket.priority },
+        },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/ai/brief",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, body }) => {
+      const gate = aiGate(headers, "brief");
+      if (gate.refusal) return gate.refusal;
+      const subjectType = String(body.subject_type ?? "");
+      const subjectId = String(body.subject_id ?? "");
+      let companyId = "";
+      const facts: Array<{ key: string; label: string; value: string }> = [];
+      const add = (label: string, value: string) =>
+        facts.push({ key: `F${facts.length + 1}`, label, value });
+      if (subjectType === "company") {
+        if (!companies.some((row) => row.id === subjectId)) return refuse(404, "not_found");
+        companyId = subjectId;
+      } else if (subjectType === "deal") {
+        const deal = deals.find((row) => row.id === subjectId);
+        if (!deal) return refuse(404, "not_found");
+        companyId = deal.company_id;
+        add("Deal", `${deal.name}, stage ${deal.stage_key}, status ${deal.status}`);
+        if (deal.next_step) add("Next step", deal.next_step);
+      } else if (subjectType === "meeting") {
+        const meeting = meetings.find((row) => row.id === subjectId);
+        if (!meeting) return refuse(404, "not_found");
+        companyId = meeting.company_id;
+        add("Meeting", `${meeting.title}, ${meeting.starts_at}`);
+      } else return refuse(400, "malformed_request", { subject_type: "company, deal or meeting" });
+      if (gate.state) return aiAnswer(gate.state);
+      const company = companies.find((row) => row.id === companyId);
+      if (company) {
+        add("Firm", `${company.name} (${company.lifecycle || "no stage"})`);
+        if (capsFor(gate.found.role).includes("revenue:read"))
+          for (const contract of contracts.filter(
+            (row) => row.company_id === companyId && row.status !== "canceled",
+          ))
+            add(
+              "Contract",
+              `${contract.plan_name}, ${contract.seats} seats, ${contract.currency} ${money(contract.mrr_cents)} a month, renews ${contract.renews_on ?? "not set"}`,
+            );
+        for (const deal of deals.filter(
+          (row) => row.company_id === companyId && row.status === "open" && row.id !== subjectId,
+        ))
+          add(
+            "Open deal",
+            `${deal.name}, stage ${deal.stage_key}, next step: ${deal.next_step || "none"}`,
+          );
+      }
+      if (!facts.length) return aiAnswer("no_grounded_answer", { facts: [] });
+      const firm = facts.find((fact) => fact.label === "Firm");
+      const brief = [
+        firm ? `${firm.value}.` : "",
+        ...facts
+          .filter((fact) => fact.label !== "Firm")
+          .slice(0, 3)
+          .map((fact) => `${fact.label}: ${fact.value}.`),
+        "Ask what has changed since the last conversation.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return aiRun(gate.found, "brief", subjectType, "ok", {
+        brief,
+        as_of: now(),
+        facts_used: Math.min(facts.length, 4),
+        facts,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/ai/tasks-from-notes",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const gate = aiGate(headers, "tasks_from_notes");
+      if (gate.refusal) return gate.refusal;
+      const meeting = meetings.find((row) => row.id === String(body.meeting_id ?? ""));
+      if (!meeting) return refuse(404, "not_found");
+      if (gate.state) return aiAnswer(gate.state);
+      const notes = meeting.outcome_notes.trim();
+      if (notes.length < 12) return aiAnswer("no_grounded_answer", { proposals: [] });
+      const proposals = notes
+        .split(/(?<=[.!?])\s+/)
+        .filter((line) => /\b(will|send|promised|confirm|follow up)\b/i.test(line))
+        .slice(0, 8)
+        .map((line, index) => ({
+          title: line
+            .replace(/^we will /i, "")
+            .replace(/[.!?]$/, "")
+            .replace(/^\w/, (c) => c.toUpperCase())
+            .slice(0, 120),
+          quote: line.replace(/[.!?]$/, ""),
+          due_on: addDaysIso(todayIso(), index === 0 ? 3 : 7),
+        }));
+      if (!proposals.length)
+        return aiRun(gate.found, "tasks_from_notes", "meeting", "no_grounded_answer", {
+          proposals: [],
+        });
+      return aiRun(gate.found, "tasks_from_notes", "meeting", "ok", {
+        proposals,
+        company_id: meeting.company_id,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/ai/filter",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, body }) => {
+      const gate = aiGate(headers, "filters");
+      if (gate.refusal) return gate.refusal;
+      const fields = Array.isArray(body.fields)
+        ? (body.fields as Array<Record<string, unknown>>)
+        : [];
+      if (!fields.length || fields.length > 20)
+        return refuse(400, "malformed_request", { fields: "the list's filter fields, 1 to 20" });
+      const text = String(body.text ?? "")
+        .trim()
+        .toLowerCase();
+      if (!text) return refuse(400, "malformed_request", { text: "what you are looking for" });
+      if (gate.state) return aiAnswer(gate.state);
+      const conditions: Array<{ field: string; op: string; value: string }> = [];
+      for (const field of fields) {
+        const choices = Array.isArray(field.choices)
+          ? (field.choices as Array<{ value: string; label: string }>)
+          : [];
+        const hit = choices.find((choice) => text.includes(String(choice.label).toLowerCase()));
+        if (hit) conditions.push({ field: String(field.key), op: "is", value: String(hit.value) });
+        if (field.kind === "number") {
+          const over = text.match(/(?:over|more than)\s+(\d+)/);
+          if (over) conditions.push({ field: String(field.key), op: "gt", value: over[1]! });
+        }
+      }
+      if (!conditions.length)
+        return aiRun(gate.found, "filters", "list", "no_grounded_answer", { conditions: [] });
+      return aiRun(gate.found, "filters", "list", "ok", { conditions: conditions.slice(0, 8) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/ai/runs/{run_id}/feedback",
+    auth: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = aiRuns.find(
+        (item) =>
+          item.id === String(params.run_id).toLowerCase() && item.staff_id === found.member.id,
+      );
+      if (!row) return refuse(404, "not_found");
+      const verdict = String(body.verdict ?? "");
+      if (!["used", "edited", "dismissed"].includes(verdict))
+        return refuse(400, "malformed_request", { verdict: "used, edited, dismissed" });
+      row.verdict = verdict;
+      audit("ai.feedback", found.member.id, "ai_run", row.id, "", { verdict });
+      return ok({ verdict });
+    },
+  },
+);
+
+// --- the platform layer (mirrors validation.py, platform_routes.py, webhooks.py) -------------------
+type RuleRow = {
+  id: string;
+  record_type: string;
+  field: string;
+  check_kind: string;
+  value: string;
+  message: string;
+  active: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+type CommentRow = {
+  id: string;
+  subject_type: string;
+  subject_id: string;
+  parent_id: string | null;
+  body: string;
+  author_id: string;
+  created_at: string;
+  edited_at: string | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  deleted_at: string | null;
+};
+type TemplateRow = {
+  id: string;
+  name: string;
+  applies_to: string;
+  description: string;
+  items: Array<{ title: string; due_in_days: number; priority: string }>;
+  archived_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+type EndpointRow = {
+  id: string;
+  url: string;
+  description: string;
+  event_types: string[];
+  secret_hint: string;
+  active: boolean;
+  failing_since: string | null;
+  disabled_at: string | null;
+  disabled_reason: string;
+  created_by: string;
+  created_at: string;
+};
+type DeliveryRow = {
+  id: string;
+  endpoint_id: string;
+  event_id: string;
+  event_type: string;
+  attempts: number;
+  next_attempt_at: string | null;
+  delivered_at: string | null;
+  gave_up_at: string | null;
+  last_status: number | null;
+  last_error: string;
+  created_at: string;
+};
+
+const RULE_FIELDS: Record<string, Record<string, [string, string]>> = {
+  deal: {
+    mrr_amount: ["Value", "number"],
+    seats: ["Seats", "number"],
+    expected_close_date: ["Close date", "date"],
+    next_step: ["Next step", "text"],
+    next_step_due: ["Next step due", "date"],
+  },
+  lead: {
+    full_name: ["Name", "text"],
+    company_name: ["Company", "text"],
+    title: ["Title", "text"],
+    phone: ["Phone", "text"],
+  },
+  company: {
+    domain: ["Domain", "text"],
+    country: ["Country", "text"],
+    firm_type: ["Firm type", "text"],
+    team_size_band: ["Team size", "text"],
+  },
+  person: { title: ["Title", "text"], phone: ["Phone", "text"], company_id: ["Company", "text"] },
+};
+const RULE_CHECKS: Record<string, string> = {
+  required: "must be filled in",
+  at_least: "must be at least",
+  at_most: "must be at most",
+  not_past: "must not be in the past",
+};
+const STAGE_REQUIREMENTS: Record<string, string> = {
+  mrr_amount: "a value",
+  expected_close_date: "a close date",
+  seats: "a seat count",
+  contacts: "a contact on the deal",
+};
+const WEBHOOK_EVENTS: Record<string, string> = {
+  "lead.created": "A lead arrived, from the website or added by hand",
+  "company.created": "A company was added",
+  "deal.created": "A deal was opened",
+  "deal.stage_changed": "A deal moved stage",
+  "deal.closed": "A deal was won, lost or closed as unqualified",
+  "contract.created": "A contract was recorded",
+  "ticket.resolved": "A support ticket was resolved",
+};
+const COMMENT_SUBJECTS: Record<string, string> = {
+  company: "crm:read",
+  person: "crm:read",
+  lead: "crm:read",
+  deal: "deals:read",
+  meeting: "crm:read",
+  contract: "revenue:read",
+  ticket: "tickets:read",
+};
+
+const validationRules: RuleRow[] = [];
+const comments: CommentRow[] = [];
+const recordTemplates: TemplateRow[] = [];
+const webhookEndpoints: EndpointRow[] = [];
+const webhookDeliveries: DeliveryRow[] = [];
+
+function mockEmpty(value: unknown): boolean {
+  return value === null || value === undefined || (typeof value === "string" && !value.trim());
+}
+/** Mirrors validation.check: {field: message} for every active rule broken. */
+function ruleErrors(
+  recordType: string,
+  row: Record<string, unknown>,
+  changed?: string[],
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const earliestToday = new Date(Date.now() - 12 * 3_600_000).toISOString().slice(0, 10);
+  for (const rule of validationRules) {
+    if (!rule.active || rule.record_type !== recordType || rule.field in errors) continue;
+    const value = row[rule.field];
+    if (rule.check_kind === "required" && mockEmpty(value)) errors[rule.field] = rule.message;
+    else if (
+      (rule.check_kind === "at_least" || rule.check_kind === "at_most") &&
+      !mockEmpty(value)
+    ) {
+      const number = Number(value);
+      const bound = Number(rule.value);
+      if (
+        !Number.isNaN(number) &&
+        !Number.isNaN(bound) &&
+        (rule.check_kind === "at_least" ? number < bound : number > bound)
+      )
+        errors[rule.field] = rule.message;
+    } else if (
+      rule.check_kind === "not_past" &&
+      !mockEmpty(value) &&
+      (!changed || changed.includes(rule.field))
+    ) {
+      if (String(value).slice(0, 10) < earliestToday) errors[rule.field] = rule.message;
+    }
+  }
+  return errors;
+}
+/** Mirrors validation.stage_errors. */
+function stageRuleErrors(
+  fromKey: string | null,
+  toKey: string,
+  deal: Record<string, unknown>,
+): Record<string, string> {
+  const open = stages
+    .filter((row) => !row.outcome && !row.archived)
+    .sort((a, b) => a.position - b.position);
+  const order = open.map((row) => row.key);
+  const target = open.find((row) => row.key === toKey);
+  if (!target) return {};
+  const missing = (target.required_fields ?? []).filter((key) =>
+    key === "contacts" ? !deal.primary_person_id : mockEmpty(deal[key]),
+  );
+  if (missing.length)
+    return {
+      stage_key: `${target.label} needs ${missing.map((key) => STAGE_REQUIREMENTS[key]).join(", ")} first`,
+    };
+  if (fromKey === null || !order.includes(fromKey)) {
+    if (fromKey === null && order.length && toKey !== order[0]) {
+      const skipped = open.slice(0, order.indexOf(toKey)).filter((row) => row.allow_skip === false);
+      if (skipped.length)
+        return {
+          stage_key: `a deal starts before ${skipped[skipped.length - 1]!.label}, which cannot be skipped`,
+        };
+    }
+    return {};
+  }
+  const here = order.indexOf(fromKey);
+  const there = order.indexOf(toKey);
+  const from = open[here]!;
+  if (there < here && from.allow_back === false)
+    return { stage_key: `a deal in ${from.label} does not move back` };
+  if (there > here + 1) {
+    const passed = open.slice(here + 1, there).filter((row) => row.allow_skip === false);
+    if (passed.length) return { stage_key: `${passed[0]!.label} cannot be skipped` };
+  }
+  return {};
+}
+function mockEmit(eventType: string) {
+  for (const endpoint of webhookEndpoints) {
+    if (
+      !endpoint.active ||
+      endpoint.disabled_at ||
+      !(endpoint.event_types.includes(eventType) || endpoint.event_types.includes("*"))
+    )
+      continue;
+    webhookDeliveries.unshift({
+      id: randomUUID(),
+      endpoint_id: endpoint.id,
+      event_id: `msg_${randomUUID().replaceAll("-", "")}`,
+      event_type: eventType,
+      attempts: 0,
+      next_attempt_at: now(),
+      delivered_at: null,
+      gave_up_at: null,
+      last_status: null,
+      last_error: "",
+      created_at: now(),
+    });
+  }
+}
+function commentView(row: CommentRow, viewerId: string) {
+  const deleted = Boolean(row.deleted_at);
+  return {
+    comment_id: row.id,
+    parent_id: row.parent_id ?? "",
+    body: deleted ? "" : row.body,
+    deleted,
+    author_id: row.author_id,
+    author_name: nameOf(row.author_id),
+    mine: row.author_id === viewerId,
+    created_at: row.created_at,
+    edited_at: row.edited_at,
+    resolved_at: row.resolved_at,
+    resolved_by_name: row.resolved_by ? nameOf(row.resolved_by) : "",
+  };
+}
+function templateView(row: TemplateRow) {
+  return {
+    template_id: row.id,
+    name: row.name,
+    applies_to: row.applies_to,
+    description: row.description,
+    items: row.items,
+    archived: Boolean(row.archived_at),
+    created_by_name: nameOf(row.created_by),
+    updated_at: row.updated_at,
+  };
+}
+function endpointView(row: EndpointRow) {
+  const mine = webhookDeliveries.filter((item) => item.endpoint_id === row.id).slice(0, 100);
+  return {
+    endpoint_id: row.id,
+    url: row.url,
+    description: row.description,
+    event_types: row.event_types,
+    secret_hint: row.secret_hint,
+    active: row.active && !row.disabled_at,
+    failing_since: row.failing_since,
+    disabled_at: row.disabled_at,
+    disabled_reason: row.disabled_reason,
+    created_at: row.created_at,
+    delivered: mine.filter((item) => item.delivered_at).length,
+    failed: mine.filter((item) => item.gave_up_at).length,
+    waiting: mine.filter((item) => !item.delivered_at && !item.gave_up_at).length,
+  };
+}
+function mockWebhookSecret(): string {
+  return `whsec_${Buffer.from(randomUUID().replaceAll("-", "").slice(0, 24)).toString("base64")}`;
+}
+/** Mirrors webhooks.check_url for what the mock can judge without resolving names. */
+function unsafeUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "an https address with no credentials in it";
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password)
+    return "an https address with no credentials in it";
+  const host = parsed.hostname;
+  if (host === "localhost" || /\.(local|internal|localhost)$/.test(host)) return "a public address";
+  if (
+    /^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    host.startsWith("[")
+  )
+    return "a public address";
+  return "";
+}
+
+function seedPlatform() {
+  validationRules.length = 0;
+  comments.length = 0;
+  recordTemplates.length = 0;
+  webhookEndpoints.length = 0;
+  webhookDeliveries.length = 0;
+  const owner = "aa000000-0000-4000-8000-00000000000a";
+  const sales = "aa000000-0000-4000-8000-00000000000c";
+  validationRules.push(
+    {
+      id: "f1000000-0000-4000-8000-000000000001",
+      record_type: "deal",
+      field: "seats",
+      check_kind: "at_least",
+      value: "1",
+      message: "A deal is for at least one seat",
+      active: true,
+      created_by: owner,
+      created_at: hoursAgo(24 * 9),
+      updated_at: hoursAgo(24 * 9),
+    },
+    {
+      id: "f1000000-0000-4000-8000-000000000002",
+      record_type: "company",
+      field: "country",
+      check_kind: "required",
+      value: "",
+      message: "Record the firm's country: it decides tax and data rules",
+      active: false,
+      created_by: owner,
+      created_at: hoursAgo(24 * 4),
+      updated_at: hoursAgo(24 * 2),
+    },
+  );
+  const firm = "c0000000-0000-4000-8000-000000000002";
+  comments.push(
+    {
+      id: "f2000000-0000-4000-8000-000000000001",
+      subject_type: "company",
+      subject_id: firm,
+      parent_id: null,
+      body: "Who takes the renewal call in November? Their CFO asked for one contact on our side.",
+      author_id: owner,
+      created_at: hoursAgo(30),
+      edited_at: null,
+      resolved_at: null,
+      resolved_by: null,
+      deleted_at: null,
+    },
+    {
+      id: "f2000000-0000-4000-8000-000000000002",
+      subject_type: "company",
+      subject_id: firm,
+      parent_id: "f2000000-0000-4000-8000-000000000001",
+      body: "I will: I ran the pilot with them.",
+      author_id: sales,
+      created_at: hoursAgo(26),
+      edited_at: null,
+      resolved_at: null,
+      resolved_by: null,
+      deleted_at: null,
+    },
+    {
+      id: "f2000000-0000-4000-8000-000000000003",
+      subject_type: "company",
+      subject_id: firm,
+      parent_id: null,
+      body: "Their security questionnaire is in the shared drive, answered.",
+      author_id: sales,
+      created_at: hoursAgo(24 * 6),
+      edited_at: null,
+      resolved_at: hoursAgo(24 * 5),
+      resolved_by: owner,
+      deleted_at: null,
+    },
+  );
+  recordTemplates.push(
+    {
+      id: "f3000000-0000-4000-8000-000000000001",
+      name: "Security review",
+      applies_to: "deal",
+      description: "When a buyer's security team gets involved.",
+      items: [
+        { title: "Send the security pack", due_in_days: 0, priority: "high" },
+        {
+          title: "Book the review call with their security lead",
+          due_in_days: 3,
+          priority: "medium",
+        },
+        { title: "Chase the questionnaire answers", due_in_days: 10, priority: "medium" },
+      ],
+      archived_at: null,
+      created_by: owner,
+      created_at: hoursAgo(24 * 20),
+      updated_at: hoursAgo(24 * 20),
+    },
+    {
+      id: "f3000000-0000-4000-8000-000000000002",
+      name: "New customer kickoff",
+      applies_to: "company",
+      description: "The first fortnight after a contract is signed.",
+      items: [
+        { title: "Kickoff call and account set-up", due_in_days: 1, priority: "high" },
+        { title: "Check every seat has signed in", due_in_days: 7, priority: "medium" },
+        { title: "First review of what they use", due_in_days: 14, priority: "medium" },
+      ],
+      archived_at: null,
+      created_by: owner,
+      created_at: hoursAgo(24 * 20),
+      updated_at: hoursAgo(24 * 20),
+    },
+  );
+  webhookEndpoints.push({
+    id: "f4000000-0000-4000-8000-000000000001",
+    url: "https://hooks.finance-desk.example.com/quantify",
+    description: "The finance team's contract feed",
+    event_types: ["contract.created", "deal.closed"],
+    secret_hint: "q7Zk",
+    active: true,
+    failing_since: null,
+    disabled_at: null,
+    disabled_reason: "",
+    created_by: owner,
+    created_at: hoursAgo(24 * 12),
+  });
+  for (const [index, type] of ["deal.closed", "contract.created", "deal.closed"].entries())
+    webhookDeliveries.push({
+      id: `f5000000-0000-4000-8000-00000000000${index + 1}`,
+      endpoint_id: "f4000000-0000-4000-8000-000000000001",
+      event_id: `msg_seed${index}`,
+      event_type: type,
+      attempts: index === 2 ? 2 : 1,
+      next_attempt_at: index === 2 ? hoursFromNow(0.4) : null,
+      delivered_at: index === 2 ? null : hoursAgo(24 * (5 - index)),
+      gave_up_at: null,
+      last_status: index === 2 ? 503 : 204,
+      last_error: index === 2 ? "answered 503" : "",
+      created_at: hoursAgo(24 * (5 - index)),
+    });
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/settings/rules",
+    auth: true,
+    capability: "hq:admin",
+    handler: () =>
+      ok({
+        rules: [...validationRules]
+          .sort(
+            (a, b) => a.record_type.localeCompare(b.record_type) || a.field.localeCompare(b.field),
+          )
+          .map((row) => ({
+            rule_id: row.id,
+            record_type: row.record_type,
+            field: row.field,
+            field_label: RULE_FIELDS[row.record_type]?.[row.field]?.[0] ?? row.field,
+            check_kind: row.check_kind,
+            value: row.value,
+            message: row.message,
+            active: row.active,
+            created_by_name: nameOf(row.created_by),
+            updated_at: row.updated_at,
+          })),
+        fields: Object.fromEntries(
+          Object.entries(RULE_FIELDS).map(([kind, fields]) => [
+            kind,
+            Object.entries(fields).map(([key, [label, fieldKind]]) => ({
+              key,
+              label,
+              kind: fieldKind,
+            })),
+          ]),
+        ),
+        checks: Object.entries(RULE_CHECKS).map(([key, label]) => ({ key, label })),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/rules/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers, body }) => {
+      const recordType = String(body.record_type ?? "");
+      const field = String(body.field ?? "");
+      const kind = String(body.check_kind ?? "");
+      const value = String(body.value ?? "")
+        .trim()
+        .slice(0, 60);
+      const message = String(body.message ?? "")
+        .split(/\s+/)
+        .join(" ")
+        .trim()
+        .slice(0, 200);
+      const fieldDef = RULE_FIELDS[recordType]?.[field];
+      if (!RULE_FIELDS[recordType])
+        return refuse(400, "malformed_request", { record_type: "deal, lead, company or person" });
+      if (!fieldDef)
+        return refuse(400, "malformed_request", {
+          field: `one of ${Object.keys(RULE_FIELDS[recordType]!).join(", ")}`,
+        });
+      if (!(kind in RULE_CHECKS))
+        return refuse(400, "malformed_request", {
+          check_kind: Object.keys(RULE_CHECKS).join(", "),
+        });
+      if ((kind === "at_least" || kind === "at_most") && fieldDef[1] !== "number")
+        return refuse(400, "malformed_request", { check_kind: "a bound applies to a number" });
+      if ((kind === "at_least" || kind === "at_most") && Number.isNaN(Number(value)))
+        return refuse(400, "malformed_request", { value: "a number" });
+      if (kind === "not_past" && fieldDef[1] !== "date")
+        return refuse(400, "malformed_request", {
+          check_kind: "not in the past applies to a date",
+        });
+      if (message.length < 4)
+        return refuse(400, "malformed_request", { message: "what the person should be told" });
+      const row: RuleRow = {
+        id: randomUUID(),
+        record_type: recordType,
+        field,
+        check_kind: kind,
+        value,
+        message,
+        active: true,
+        created_by: caller(headers)!.member.id,
+        created_at: now(),
+        updated_at: now(),
+      };
+      validationRules.push(row);
+      audit("validation_rule.created", row.created_by, "validation_rule", row.id);
+      return ok({
+        rule: {
+          rule_id: row.id,
+          record_type: row.record_type,
+          field: row.field,
+          field_label: fieldDef[0],
+          check_kind: row.check_kind,
+          value: row.value,
+          message: row.message,
+          active: true,
+          created_by_name: nameOf(row.created_by),
+          updated_at: row.updated_at,
+        },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/rules/{rule_id}/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers, params, body }) => {
+      const row = validationRules.find((item) => item.id === String(params.rule_id).toLowerCase());
+      if (!row) return refuse(404, "not_found");
+      const fields: string[] = [];
+      if ("active" in body) {
+        row.active = body.active === true || body.active === "true";
+        fields.push("active");
+      }
+      if ("message" in body) {
+        const message = String(body.message ?? "")
+          .trim()
+          .slice(0, 200);
+        if (message.length < 4)
+          return refuse(400, "malformed_request", { message: "what the person should be told" });
+        row.message = message;
+        fields.push("message");
+      }
+      if ("value" in body) {
+        row.value = String(body.value ?? "")
+          .trim()
+          .slice(0, 60);
+        fields.push("value");
+      }
+      if (!fields.length) return refuse(400, "malformed_request", { body: "nothing to change" });
+      row.updated_at = now();
+      audit("validation_rule.updated", caller(headers)!.member.id, "validation_rule", row.id, "", {
+        fields,
+      });
+      return ok({ updated: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/comments",
+    auth: true,
+    handler: ({ headers, query }) => {
+      const found = caller(headers)!;
+      const subjectType = String(query.subject_type ?? "");
+      const capability = COMMENT_SUBJECTS[subjectType];
+      if (!capability)
+        return refuse(400, "malformed_request", {
+          subject_type: Object.keys(COMMENT_SUBJECTS).join(", "),
+        });
+      if (!capsFor(found.role).includes(capability))
+        return refuse(403, "forbidden", { required_capability: capability });
+      const subjectId = String(query.subject_id ?? "");
+      const rows = comments
+        .filter((row) => row.subject_type === subjectType && row.subject_id === subjectId)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const threads = rows
+        .filter((row) => !row.parent_id)
+        .map((root) => ({
+          root,
+          replies: rows.filter((row) => row.parent_id === root.id),
+        }))
+        .filter(({ root, replies }) => !root.deleted_at || replies.length > 0)
+        .map(({ root, replies }) => ({
+          ...commentView(root, found.member.id),
+          replies: replies
+            .filter((reply) => !reply.deleted_at)
+            .map((reply) => commentView(reply, found.member.id)),
+        }));
+      return ok({
+        threads,
+        open: threads.filter((thread) => !thread.resolved_at).length,
+        resolved: threads.filter((thread) => thread.resolved_at).length,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/comments/create",
+    auth: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      if (found.role === "intern_readonly")
+        return refuse(403, "forbidden", { reason: "read-only-role" });
+      const subjectType = String(body.subject_type ?? "");
+      const capability = COMMENT_SUBJECTS[subjectType];
+      if (!capability)
+        return refuse(400, "malformed_request", {
+          subject_type: Object.keys(COMMENT_SUBJECTS).join(", "),
+        });
+      if (!capsFor(found.role).includes(capability))
+        return refuse(403, "forbidden", { required_capability: capability });
+      const subjectId = String(body.subject_id ?? "")
+        .trim()
+        .slice(0, 64);
+      if (!subjectId)
+        return refuse(400, "malformed_request", { subject_id: "the record it is about" });
+      const text = String(body.body ?? "")
+        .trim()
+        .slice(0, 4000);
+      if (!text) return refuse(400, "malformed_request", { body: "say something" });
+      const parentId =
+        String(body.parent_id ?? "")
+          .trim()
+          .toLowerCase() || null;
+      if (parentId) {
+        const parent = comments.find((row) => row.id === parentId);
+        if (!parent || parent.subject_id !== subjectId || parent.parent_id)
+          return refuse(400, "malformed_request", { parent_id: "a thread on this record" });
+        if (parent.resolved_at) {
+          parent.resolved_at = null;
+          parent.resolved_by = null;
+        }
+      }
+      const row: CommentRow = {
+        id: randomUUID(),
+        subject_type: subjectType,
+        subject_id: subjectId,
+        parent_id: parentId,
+        body: text,
+        author_id: found.member.id,
+        created_at: now(),
+        edited_at: null,
+        resolved_at: null,
+        resolved_by: null,
+        deleted_at: null,
+      };
+      comments.push(row);
+      audit("comment.created", found.member.id, subjectType, subjectId, "", { comment_id: row.id });
+      return ok({ comment: commentView(row, found.member.id), mentioned: [] });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/comments/{comment_id}/resolve",
+    auth: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = comments.find(
+        (item) => item.id === String(params.comment_id).toLowerCase() && !item.deleted_at,
+      );
+      if (!row) return refuse(404, "not_found");
+      if (row.parent_id)
+        return refuse(400, "malformed_request", {
+          comment: "a thread is resolved from its first comment",
+        });
+      const resolved = !(body.resolved === false || body.resolved === "false");
+      row.resolved_at = resolved ? now() : null;
+      row.resolved_by = resolved ? found.member.id : null;
+      audit(
+        resolved ? "comment.resolved" : "comment.reopened",
+        found.member.id,
+        row.subject_type,
+        row.subject_id,
+      );
+      return ok({ resolved });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/comments/{comment_id}/update",
+    auth: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = comments.find(
+        (item) => item.id === String(params.comment_id).toLowerCase() && !item.deleted_at,
+      );
+      if (!row) return refuse(404, "not_found");
+      if (row.author_id !== found.member.id)
+        return refuse(403, "forbidden", { reason: "not-yours" });
+      const text = String(body.body ?? "")
+        .trim()
+        .slice(0, 4000);
+      if (!text) return refuse(400, "malformed_request", { body: "say something" });
+      row.body = text;
+      row.edited_at = now();
+      audit("comment.edited", found.member.id, row.subject_type, row.subject_id);
+      return ok({ updated: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/comments/{comment_id}/delete",
+    auth: true,
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const row = comments.find(
+        (item) => item.id === String(params.comment_id).toLowerCase() && !item.deleted_at,
+      );
+      if (!row) return refuse(404, "not_found");
+      const own = row.author_id === found.member.id;
+      if (!own && !capsFor(found.role).includes("hq:admin"))
+        return refuse(403, "forbidden", { reason: "not-yours" });
+      row.deleted_at = now();
+      audit("comment.deleted", found.member.id, row.subject_type, row.subject_id, "", {
+        by_admin: !own,
+      });
+      return ok({ deleted: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/templates",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const appliesTo = String(query.applies_to ?? "");
+      return ok({
+        templates: recordTemplates
+          .filter((row) => !appliesTo || row.applies_to === appliesTo)
+          .sort(
+            (a, b) =>
+              Number(Boolean(a.archived_at)) - Number(Boolean(b.archived_at)) ||
+              a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+          )
+          .map(templateView),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/templates/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!name) return refuse(400, "malformed_request", { name: "what the team calls it" });
+      const appliesTo = String(body.applies_to ?? "");
+      if (!["company", "deal", "lead"].includes(appliesTo))
+        return refuse(400, "malformed_request", { applies_to: "company, deal or lead" });
+      const items = templateItems(body.items);
+      if (typeof items === "string") return refuse(400, "malformed_request", { items });
+      const row: TemplateRow = {
+        id: randomUUID(),
+        name,
+        applies_to: appliesTo,
+        description: String(body.description ?? "")
+          .trim()
+          .slice(0, 400),
+        items,
+        archived_at: null,
+        created_by: caller(headers)!.member.id,
+        created_at: now(),
+        updated_at: now(),
+      };
+      recordTemplates.push(row);
+      audit("template.created", row.created_by, "template", row.id);
+      return ok({ template: templateView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/templates/{template_id}/update",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const row = recordTemplates.find(
+        (item) => item.id === String(params.template_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      const fields: string[] = [];
+      if ("name" in body) {
+        const name = String(body.name ?? "")
+          .trim()
+          .slice(0, 120);
+        if (!name) return refuse(400, "malformed_request", { name: "what the team calls it" });
+        row.name = name;
+        fields.push("name");
+      }
+      if ("description" in body) {
+        row.description = String(body.description ?? "")
+          .trim()
+          .slice(0, 400);
+        fields.push("description");
+      }
+      if ("items" in body) {
+        const items = templateItems(body.items);
+        if (typeof items === "string") return refuse(400, "malformed_request", { items });
+        row.items = items;
+        fields.push("items");
+      }
+      if ("archived" in body) {
+        row.archived_at = body.archived === true || body.archived === "true" ? now() : null;
+        fields.push("archived_at");
+      }
+      if (!fields.length) return refuse(400, "malformed_request", { body: "nothing to change" });
+      row.updated_at = now();
+      audit("template.updated", caller(headers)!.member.id, "template", row.id, "", { fields });
+      return ok({ updated: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/templates/{template_id}/apply",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const row = recordTemplates.find(
+        (item) => item.id === String(params.template_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      if (row.archived_at)
+        return refuse(400, "malformed_request", { template: "archived; restore it first" });
+      const subjectId = String(body.subject_id ?? "")
+        .trim()
+        .toLowerCase();
+      if (!subjectId)
+        return refuse(400, "malformed_request", {
+          subject_id: `the ${row.applies_to} to apply it to`,
+        });
+      const subject =
+        row.applies_to === "company"
+          ? companies.find((item) => item.id === subjectId)
+          : row.applies_to === "deal"
+            ? deals.find((item) => item.id === subjectId)
+            : leads.find((item) => item.id === subjectId);
+      if (!subject) return refuse(404, "not_found");
+      const actor = caller(headers)!.member.id;
+      const companyId =
+        row.applies_to === "company"
+          ? subjectId
+          : String((subject as { company_id?: string }).company_id ?? "");
+      const ids: string[] = [];
+      for (const item of row.items) {
+        const task: TaskRow = {
+          id: randomUUID(),
+          title: item.title,
+          body: `From the template \u201c${row.name}\u201d.`,
+          status: "open",
+          priority: item.priority,
+          due_on: addDaysIso(todayIso(), item.due_in_days),
+          assignee_staff_id: actor,
+          company_id: companyId,
+          person_id: "",
+          deal_id: row.applies_to === "deal" ? subjectId : "",
+          lead_id: row.applies_to === "lead" ? subjectId : "",
+          ticket_id: "",
+          origin: "template",
+          completed_at: null,
+          created_at: now(),
+        };
+        tasks.push(task);
+        ids.push(task.id);
+      }
+      audit("template.applied", actor, row.applies_to, subjectId, "", {
+        template_id: row.id,
+        tasks: ids.length,
+      });
+      return ok({ created: ids.length, task_ids: ids });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/outbound-webhooks",
+    auth: true,
+    capability: "hq:admin",
+    handler: () =>
+      ok({
+        endpoints: [...webhookEndpoints]
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))
+          .map(endpointView),
+        events: Object.entries(WEBHOOK_EVENTS).map(([key, label]) => ({ key, label })),
+        can_seal: true,
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/outbound-webhooks/create",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const url = String(body.url ?? "").trim();
+      const problem = unsafeUrl(url);
+      if (problem) return refuse(400, "malformed_request", { url: `needs ${problem}` });
+      const events = (
+        Array.isArray(body.event_types)
+          ? body.event_types
+          : String(body.event_types ?? "").split(",")
+      )
+        .map((item) => String(item).trim())
+        .filter(Boolean);
+      if (!events.length)
+        return refuse(400, "malformed_request", { event_types: "at least one event" });
+      if (events.some((item) => !(item in WEBHOOK_EVENTS) && item !== "*"))
+        return refuse(400, "malformed_request", {
+          event_types: `from ${Object.keys(WEBHOOK_EVENTS).join(", ")}`,
+        });
+      const secret = mockWebhookSecret();
+      const row: EndpointRow = {
+        id: randomUUID(),
+        url,
+        description: String(body.description ?? "")
+          .trim()
+          .slice(0, 200),
+        event_types: [...new Set(events)],
+        secret_hint: secret.slice(-4),
+        active: true,
+        failing_since: null,
+        disabled_at: null,
+        disabled_reason: "",
+        created_by: caller(headers)!.member.id,
+        created_at: now(),
+      };
+      webhookEndpoints.push(row);
+      audit("webhook.created", row.created_by, "webhook", row.id, "", { url });
+      return ok({ endpoint: endpointView(row), secret });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/outbound-webhooks/{endpoint_id}",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params }) => {
+      const row = webhookEndpoints.find(
+        (item) => item.id === String(params.endpoint_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        endpoint: endpointView(row),
+        // Newest first, as the service's ORDER BY created_at DESC.
+        deliveries: webhookDeliveries
+          .filter((item) => item.endpoint_id === row.id)
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))
+          .slice(0, 100)
+          .map((item) => ({
+            delivery_id: item.id,
+            event_id: item.event_id,
+            event_type: item.event_type,
+            attempts: item.attempts,
+            state: item.delivered_at ? "delivered" : item.gave_up_at ? "gave_up" : "waiting",
+            last_status: item.last_status,
+            last_error: item.last_error,
+            next_attempt_at: item.next_attempt_at,
+            created_at: item.created_at,
+            delivered_at: item.delivered_at,
+          })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/outbound-webhooks/{endpoint_id}/update",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const row = webhookEndpoints.find(
+        (item) => item.id === String(params.endpoint_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      const fields: string[] = [];
+      if ("url" in body) {
+        const problem = unsafeUrl(String(body.url ?? ""));
+        if (problem) return refuse(400, "malformed_request", { url: `needs ${problem}` });
+        row.url = String(body.url);
+        fields.push("url");
+      }
+      if ("description" in body) {
+        row.description = String(body.description ?? "")
+          .trim()
+          .slice(0, 200);
+        fields.push("description");
+      }
+      if ("active" in body) {
+        row.active = body.active === true || body.active === "true";
+        if (row.active) {
+          row.disabled_at = null;
+          row.disabled_reason = "";
+          row.failing_since = null;
+        }
+        fields.push("active");
+      }
+      if (!fields.length) return refuse(400, "malformed_request", { body: "nothing to change" });
+      audit("webhook.updated", caller(headers)!.member.id, "webhook", row.id, "", { fields });
+      return ok({ updated: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/outbound-webhooks/{endpoint_id}/rotate",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params }) => {
+      const row = webhookEndpoints.find(
+        (item) => item.id === String(params.endpoint_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      const secret = mockWebhookSecret();
+      row.secret_hint = secret.slice(-4);
+      audit("webhook.secret_rotated", caller(headers)!.member.id, "webhook", row.id);
+      return ok({ secret });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/outbound-webhooks/{endpoint_id}/test",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers, params }) => {
+      const row = webhookEndpoints.find(
+        (item) => item.id === String(params.endpoint_id).toLowerCase(),
+      );
+      if (!row) return refuse(404, "not_found");
+      webhookDeliveries.unshift({
+        id: randomUUID(),
+        endpoint_id: row.id,
+        event_id: `msg_${randomUUID().replaceAll("-", "")}`,
+        event_type: "webhook.test",
+        attempts: 0,
+        next_attempt_at: now(),
+        delivered_at: null,
+        gave_up_at: null,
+        last_status: null,
+        last_error: "",
+        created_at: now(),
+      });
+      audit("webhook.tested", caller(headers)!.member.id, "webhook", row.id);
+      return ok({ queued: 1 });
+    },
+  },
+);
+
+function templateItems(
+  raw: unknown,
+): Array<{ title: string; due_in_days: number; priority: string }> | string {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 20) return "1 to 20 tasks";
+  const items = [];
+  for (const entry of raw as Array<Record<string, unknown>>) {
+    const title = String(entry?.title ?? "")
+      .split(/\s+/)
+      .join(" ")
+      .trim()
+      .slice(0, 200);
+    if (!title) return "every task needs a title";
+    const days = Number.parseInt(String(entry.due_in_days ?? "0"), 10);
+    if (Number.isNaN(days) || days < 0 || days > 365) return "due within a year";
+    const priority = String(entry.priority ?? "medium");
+    if (!["low", "medium", "high", "urgent"].includes(priority))
+      return "priority low, medium, high or urgent";
+    items.push({ title, due_in_days: days, priority });
+  }
+  return items;
+}
+
 seedTeam();
 seedOpenReview();
 seedPeopleOps();
@@ -25586,6 +28257,9 @@ seedPrivacy();
 seedInspection();
 seedSuccess();
 seedStatus();
+seedPrivileged();
+seedAi();
+seedPlatform();
 seedSecurityFeed();
 seedReadWatch();
 seedInbox();
@@ -25877,16 +28551,21 @@ routes.push(
     pattern: "hq/team/{staff_id}",
     auth: true,
     capability: "hr:read",
-    handler: ({ params }) => {
+    handler: ({ params, headers }) => {
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
+      const viewer = caller(headers)!;
+      const own = viewer.member.id === member.id;
+      const shown = (
+        field: "personal_email" | "emergency_contact_name" | "emergency_contact_phone",
+      ) => (own ? String(member[field] ?? "") : maskedValue(field, String(member[field] ?? "")));
       const state = documentsState(member.id);
       return ok({
         person: {
           staff_id: member.id,
           display_name: member.display_name,
           email: member.email,
-          personal_email: member.personal_email ?? "",
+          personal_email: shown("personal_email"),
           role: member.role,
           kind: member.kind,
           is_active: member.is_active,
@@ -25897,11 +28576,36 @@ routes.push(
             staff.find((candidate) => candidate.id === member.manager_id)?.display_name ?? "",
           probation_ends_on: member.probation_ends_on ?? null,
           emergency_contact: {
-            name: member.emergency_contact_name ?? "",
-            phone: member.emergency_contact_phone ?? "",
+            name: shown("emergency_contact_name"),
+            phone: shown("emergency_contact_phone"),
             relation: member.emergency_contact_relation ?? "",
           },
+          masked: own
+            ? []
+            : (
+                ["personal_email", "emergency_contact_name", "emergency_contact_phone"] as const
+              ).filter((field) => member[field]),
         },
+        reveals: capsFor(viewer.role).includes("audit:read")
+          ? auditEvents
+              .filter(
+                (row) =>
+                  row.action === "field.revealed" &&
+                  row.entity_id === member.id &&
+                  Date.parse(String(row.occurred_at)) >= Date.now() - 90 * 86_400_000,
+              )
+              .slice(0, 50)
+              .map((row) => {
+                const field = String((row.detail as Record<string, unknown>).field ?? "");
+                return {
+                  by_name: nameOf(String(row.staff_id)),
+                  field,
+                  field_label: MASKED_FIELDS[field] ?? field,
+                  reason: String(row.reason ?? ""),
+                  at: String(row.occurred_at),
+                };
+              })
+          : [],
         reports: staff
           .filter((candidate) => candidate.manager_id === member.id && candidate.is_active)
           .map((candidate) => ({ staff_id: candidate.id, display_name: candidate.display_name }))
@@ -25928,7 +28632,8 @@ routes.push(
             held_by: row.held_by,
             held_by_name:
               staff.find((candidate) => candidate.id === row.held_by)?.display_name ?? "",
-            notes: row.notes,
+            notes: own || row.held_by === viewer.member.id ? row.notes : "",
+            notes_masked: Boolean(row.notes) && !own && row.held_by !== viewer.member.id,
             actions: oneOnOneActions
               .filter((action) => action.one_on_one_id === row.id)
               .sort((a, b) => a.created_at.localeCompare(b.created_at))
@@ -26464,14 +29169,21 @@ routes.push(
         "emergency_contact_phone",
         "emergency_contact_relation",
       ] as const) {
-        if (name in body) {
+        if (name in body && !isMasked(body[name])) {
           member[name] = String(body[name] ?? "").trim();
           fields.push(name);
         }
       }
       if (!fields.length) return refuse(400, "malformed_request", { body: "nothing to change" });
+      const masks = (row: Record<string, unknown>) =>
+        Object.fromEntries(
+          Object.entries(row).map(([key, value]) => [
+            key,
+            key in MASKED_FIELDS ? maskedValue(key, String(value ?? "")) : value,
+          ]),
+        );
       audit("team.profile_updated", caller(headers)?.member.id ?? null, "staff", member.id, "", {
-        changes: changesBetween(before, member),
+        changes: changesBetween(masks(before), masks({ ...member })),
       });
       return ok({ updated: true });
     },
@@ -26968,6 +29680,9 @@ function resetWorld() {
   seedInspection();
   seedSuccess();
   seedStatus();
+  seedPrivileged();
+  seedAi();
+  seedPlatform();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;
@@ -26998,7 +29713,7 @@ function respond(
   if (entry.auth) {
     const found = caller(headers);
     if (!found) return refuse(401, "session_invalid");
-    if (entry.capability && !(CAPABILITIES[found.member.role] ?? []).includes(entry.capability)) {
+    if (entry.capability && !capsFor(found.role).includes(entry.capability)) {
       return refuse(403, "forbidden", { required_capability: entry.capability });
     }
     if (entry.sudo && !(found.session.sudo_until && found.session.sudo_until > now())) {

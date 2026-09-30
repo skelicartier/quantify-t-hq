@@ -1,5 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AiBrief, AiTaskProposals } from "@/components/ai/ai-assist";
+import {
+  addProposedTaskAction,
+  aiFeedbackAction,
+  briefAction,
+  tasksFromNotesAction,
+} from "@/app/(portal)/_actions/ai";
 
 import { logActivityAction } from "@/app/(portal)/_actions/work";
 import {
@@ -165,6 +172,16 @@ export default async function MeetingPage({ params, searchParams }: MeetingPageP
       <RecordGrid
         side={
           <>
+            {context.me.ai?.features.includes("brief") && (
+              <RecordSection id="meeting-brief" title="Before you call">
+                <AiBrief
+                  subjectType="meeting"
+                  subjectId={meeting.meeting_id}
+                  action={briefAction}
+                  feedback={aiFeedbackAction}
+                />
+              </RecordSection>
+            )}
             {showOutcome && (
               <Card title={started ? "Outcome" : "Call it off"} titleAs="h3">
                 <MeetingOutcomeForm
@@ -334,6 +351,13 @@ export default async function MeetingPage({ params, searchParams }: MeetingPageP
             {recorded && meeting.outcome_notes && (
               <RecordSection id="meeting-outcome" title="What happened">
                 <p className="prose-block">{meeting.outcome_notes}</p>
+                {context.me.ai?.features.includes("tasks_from_notes") && (
+                  <AiTaskProposals
+                    meetingId={meeting.meeting_id}
+                    action={tasksFromNotesAction}
+                    add={addProposedTaskAction}
+                  />
+                )}
               </RecordSection>
             )}
             {activity}

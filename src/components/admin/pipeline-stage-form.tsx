@@ -12,7 +12,16 @@ import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
 
 /** One working stage, tuned in place. `stage` absent means "add a new stage". */
-export function PipelineStageForm({ action, stage }: { action: Action; stage?: PipelineStage }) {
+export function PipelineStageForm({
+  action,
+  stage,
+  requirements = [],
+}: {
+  action: Action;
+  stage?: PipelineStage;
+  /** What a stage can require of a deal before it enters. */
+  requirements?: ReadonlyArray<{ key: string; label: string }>;
+}) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   const id = stage?.key ?? "new";
   return (
@@ -97,6 +106,53 @@ export function PipelineStageForm({ action, stage }: { action: Action; stage?: P
           disabled={isPending}
         />
       </Field>
+      {requirements.length > 0 && (
+        <fieldset className="pick-list">
+          <legend className="field__label">To enter this stage, a deal needs</legend>
+          <input type="hidden" name="rules_present" value="1" />
+          <div className="pick-list__options">
+            {requirements.map((item) => (
+              <label key={item.key} className="checkbox">
+                <input
+                  type="checkbox"
+                  name="required_fields"
+                  value={item.key}
+                  defaultChecked={stage?.required_fields.includes(item.key)}
+                  disabled={isPending}
+                />
+                <span className="checkbox__label">
+                  {item.label.charAt(0).toUpperCase() + item.label.slice(1)}
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+      {requirements.length > 0 && (
+        <fieldset className="pick-list">
+          <legend className="field__label">Order</legend>
+          <div className="pick-list__options">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                name="allow_skip"
+                defaultChecked={stage?.allow_skip ?? true}
+                disabled={isPending}
+              />
+              <span className="checkbox__label">A deal may skip past it</span>
+            </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                name="allow_back"
+                defaultChecked={stage?.allow_back ?? true}
+                disabled={isPending}
+              />
+              <span className="checkbox__label">A deal here may move back</span>
+            </label>
+          </div>
+        </fieldset>
+      )}
       <div className="stage-form__foot">
         <Button
           type="submit"

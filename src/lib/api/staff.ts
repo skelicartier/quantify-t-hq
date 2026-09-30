@@ -37,8 +37,25 @@ const staffDetailSchema = okEnvelope.extend({
   staff: staffMemberSchema.extend({
     live_sessions: z.number(),
     personal_email: z.string(),
+    /** Sent masked (not the caller's own record); revealed on the team record. */
+    personal_email_masked: z.boolean().default(false),
     /** Ever accepted an invite: decides between reinvite and reactivate. */
     joined: z.boolean(),
+    break_glass: z.boolean().default(false),
+    eligibility: z
+      .array(
+        z.object({
+          eligibility_id: z.string(),
+          role_label: z.string(),
+          max_hours: z.number(),
+          eligible_until: z.string().nullable(),
+        }),
+      )
+      .default([]),
+    elevation: z
+      .object({ role_label: z.string(), ends_at: z.string().nullable() })
+      .nullable()
+      .default(null),
   }),
 });
 export type StaffDetail = z.infer<typeof staffDetailSchema>["staff"];

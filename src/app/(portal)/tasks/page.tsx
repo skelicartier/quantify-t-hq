@@ -74,13 +74,18 @@ export default async function TasksIndexPage({ searchParams }: TasksPageProps) {
         title="Tasks"
         description="What each of us promised to do next. Ticking one off logs it on the record it belongs to."
         actions={
-          <SegmentedLinks
-            label="Whose tasks"
-            items={[
-              { href: link({ scope: "mine" }), label: "Mine", current: scope === "mine" },
-              { href: link({ scope: "all" }), label: "Everyone's", current: scope === "all" },
-            ]}
-          />
+          <>
+            <Link className="btn btn--small btn--ghost" href="/tasks/templates">
+              Templates
+            </Link>
+            <SegmentedLinks
+              label="Whose tasks"
+              items={[
+                { href: link({ scope: "mine" }), label: "Mine", current: scope === "mine" },
+                { href: link({ scope: "all" }), label: "Everyone's", current: scope === "all" },
+              ]}
+            />
+          </>
         }
       />
       {page === null ? (

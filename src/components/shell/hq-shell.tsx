@@ -21,6 +21,8 @@ type HqShellProps = {
   preferences?: Readonly<Record<string, string>> | undefined;
   /** Unread inbox rows, for the rail's badge. */
   inboxUnread?: number | undefined;
+  /** A live elevation: the role taken and when it ends, shown on every page until then. */
+  elevation?: { roleLabel: string; endsLabel: string } | undefined;
   children: ReactNode;
 };
 
@@ -37,6 +39,7 @@ export function HqShell({
   themeAction,
   preferences,
   inboxUnread,
+  elevation,
   children,
 }: HqShellProps) {
   return (
@@ -52,6 +55,13 @@ export function HqShell({
       />
       <div className="shell__body">
         <ContextBar />
+        {elevation && (
+          <p className="elevation-bar" role="status">
+            <strong>Acting as {elevation.roleLabel}</strong> until {elevation.endsLabel}. Everything
+            you do meanwhile is marked with it in the audit log.{" "}
+            <a href="/me/security#elevation">End it</a>
+          </p>
+        )}
         <main className="shell__main" id="main-content" tabIndex={-1}>
           {children}
         </main>

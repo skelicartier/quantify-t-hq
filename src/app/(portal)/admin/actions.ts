@@ -118,6 +118,11 @@ export async function updateStageAction(
     input.exit_criteria = fieldValue(formData, "exit_criteria", 1_000).trim();
   }
   if (fieldValue(formData, "archived", 5) === "true") input.archived = true;
+  if (formData.get("rules_present") === "1") {
+    input.required_fields = formData.getAll("required_fields").map(String).slice(0, 10);
+    input.allow_skip = formData.get("allow_skip") === "on";
+    input.allow_back = formData.get("allow_back") === "on";
+  }
   try {
     await crmApi.updatePipelineStage(context.token, input);
   } catch (error) {

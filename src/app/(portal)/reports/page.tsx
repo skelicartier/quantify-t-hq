@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
+import { readExportQuota, type ExportQuota } from "@/lib/api/privileged";
 import { BarList } from "@/components/charts/bar-list";
 import { TrendChart } from "@/components/charts/trend-chart";
 import { PageHeader } from "@/components/shell/page-header";
@@ -63,6 +64,8 @@ const EXPORT_OUTCOMES: Record<string, string> = {
   reason: "Say what the export is for, in a sentence.",
   forbidden: "Your role cannot export.",
   failed: "The export could not be made. Nothing left HQ.",
+  quota:
+    "That is more than you can export today. An owner can lift your limit for a day on Privileged access.",
 };
 
 type ReportsPageProps = {
@@ -130,6 +133,15 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
   const cover =
     quarter && report ? pipelineCover(report.pipeline.open_mrr, quarter.monthlyWonMrr) : null;
   const canExport = hasCapability(context, "crm:export");
+  let quota: ExportQuota | null = null;
+  if (canExport) {
+    try {
+      quota = await readExportQuota(context.token);
+    } catch (error) {
+      if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+        throw error;
+    }
+  }
   const untilLabel = context.me.sudo_until
     ? (formatAbsolute(context.me.sudo_until).split(", ")[1] ?? null)
     : null;
@@ -647,6 +659,14 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                   titleAs="h3"
                   description="A CSV for work outside HQ. It needs a reason, and the export is kept in the audit log."
                 >
+                  {quota && (
+                    <p className="field__hint">
+                      {quota.left.toLocaleString("en-GB")} of {quota.limit.toLocaleString("en-GB")}{" "}
+                      records left in any {quota.window_hours} hours.
+                      {quota.marked &&
+                        " Every file with addresses carries one marker row that names it if it is ever seen outside HQ."}
+                    </p>
+                  )}
                   <SudoGate
                     action={confirmSudoAction}
                     fresh={context.me.sudo_fresh}

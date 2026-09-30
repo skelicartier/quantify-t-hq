@@ -23,6 +23,9 @@ const LEAF_LABELS: Record<string, string> = {
   "win-loss": "Win/loss",
   changes: "What changed",
   requests: "Feature requests",
+  privileged: "Privileged access",
+  ai: "AI assistance",
+  templates: "Task templates",
 };
 
 /** The section and page a path sits under, from the navigation table; records add their own name in the page bar. */

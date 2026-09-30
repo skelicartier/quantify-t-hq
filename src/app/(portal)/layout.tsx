@@ -3,11 +3,13 @@ import type { ReactNode } from "react";
 import { signOutAction } from "@/app/login/actions";
 import { setHqTheme } from "@/app/(portal)/actions";
 import { HqShell } from "@/components/shell/hq-shell";
+import { roleLabel } from "@/lib/access/role-labels";
 import { requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readPreferences } from "@/lib/api/views";
 import { DEV_PERSONAS, devAutologinPersona } from "@/lib/auth/dev-bypass";
 import { readHqTheme } from "@/lib/dal/theme";
+import { formatAbsolute } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +45,14 @@ export default async function PortalLayout({ children }: Readonly<{ children: Re
         devPersonas: devAutologinPersona() ? DEV_PERSONAS : undefined,
       }}
       capabilities={me.capabilities}
+      elevation={
+        me.elevation
+          ? {
+              roleLabel: roleLabel(me.elevation.role),
+              endsLabel: me.elevation.ends_at ? formatAbsolute(me.elevation.ends_at) : "it ends",
+            }
+          : undefined
+      }
       signOutAction={signOutAction}
       theme={theme}
       themeAction={setHqTheme}

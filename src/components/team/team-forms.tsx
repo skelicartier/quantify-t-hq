@@ -637,6 +637,8 @@ export function ProfileForm({
     manager_id: string;
     probation_ends_on: string | null;
     emergency_contact: { name: string; phone: string; relation: string };
+    /** Fields that arrived masked; a mask left as it is changes nothing. */
+    masked?: readonly string[];
   };
   /** Active colleagues who could be the manager (the person themself excluded). */
   colleagues: readonly { staff_id: string; display_name: string }[];
@@ -674,7 +676,15 @@ export function ProfileForm({
           disabled={isPending}
         />
       </Field>
-      <Field id="profile-ec-name" label="Emergency contact">
+      <Field
+        id="profile-ec-name"
+        label="Emergency contact"
+        hint={
+          person.masked?.some((name) => name.startsWith("emergency_contact"))
+            ? "Hidden values stay as they are unless you type over them."
+            : undefined
+        }
+      >
         <Input
           id="profile-ec-name"
           name="emergency_contact_name"

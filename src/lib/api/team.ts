@@ -52,6 +52,8 @@ export const oneOnOneSchema = z.object({
   held_by: z.string(),
   held_by_name: z.string(),
   notes: z.string(),
+  /** The notes exist but are hidden from this reader; a reveal shows them. */
+  notes_masked: z.boolean().default(false),
   actions: z.array(
     z.object({
       action_id: z.string(),
@@ -218,7 +220,21 @@ const memberSchema = okEnvelope.extend({
     emergency_contact: z
       .object({ name: z.string(), phone: z.string(), relation: z.string() })
       .default({ name: "", phone: "", relation: "" }),
+    /** Fields sent masked to this reader (never their own record). */
+    masked: z.array(z.string()).default([]),
   }),
+  /** Who revealed what here in the last 90 days, for readers of the audit log. */
+  reveals: z
+    .array(
+      z.object({
+        by_name: z.string(),
+        field: z.string(),
+        field_label: z.string(),
+        reason: z.string(),
+        at: z.string().nullable(),
+      }),
+    )
+    .default([]),
   reports: z.array(z.object({ staff_id: z.string(), display_name: z.string() })).default([]),
   assets: z.array(assetSchema).default([]),
   training: z.array(trainingSchema).default([]),

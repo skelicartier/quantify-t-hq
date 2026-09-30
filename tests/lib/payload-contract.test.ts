@@ -96,6 +96,9 @@ import * as privacyApi from "@/lib/api/privacy";
 import * as receivablesApi from "@/lib/api/receivables";
 import * as successApi from "@/lib/api/success";
 import * as statusApi from "@/lib/api/status";
+import * as privilegedApi from "@/lib/api/privileged";
+import * as aiApi from "@/lib/api/ai";
+import * as platformApi from "@/lib/api/platform";
 import * as security from "@/lib/api/security";
 import * as settings from "@/lib/api/settings";
 import * as staff from "@/lib/api/staff";
@@ -178,6 +181,15 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
     "hq/status/incidents/{incident_id}",
     () => statusApi.readStatusIncident(token, ids.status_incident_id!),
   ],
+  ["hq/elevation", () => privilegedApi.readMyElevation(token)],
+  ["hq/security/privileged", () => privilegedApi.readPrivileged(token)],
+  ["hq/export-quota", () => privilegedApi.readExportQuota(token)],
+  ["hq/ai/settings", () => aiApi.readAiSettings(token)],
+  ["hq/settings/rules", () => platformApi.readRules(token)],
+  ["hq/comments", () => platformApi.readComments(token, "company", ids.company_id!)],
+  ["hq/templates", () => platformApi.readTemplates(token)],
+  ["hq/outbound-webhooks", () => platformApi.readWebhooks(token)],
+  ["hq/outbound-webhooks/{endpoint_id}", () => platformApi.readWebhook(token, ids.endpoint_id!)],
   [
     "hq/subprocessors/{subprocessor_id}",
     () => privacyApi.readSubprocessor(token, ids.subprocessor_id!),
@@ -235,6 +247,7 @@ const INTERN_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/deals/{deal_id}", () => deals.readDeal(token, ids.deal_id!)],
   ["hq/checkins", () => team.readCheckins(token)],
   ["hq/time-off", () => team.readTimeOff(token)],
+  ["hq/elevation", () => privilegedApi.readMyElevation(token)],
 ];
 
 describe("every portal read parses the service's own payload", () => {

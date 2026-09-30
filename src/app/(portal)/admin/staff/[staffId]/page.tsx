@@ -254,14 +254,41 @@ export default async function StaffMemberPage({ params, searchParams }: StaffMem
             <Property label="Work email" mono>
               {member.email}
             </Property>
-            <InlineField
-              {...inline}
-              name="personal_email"
-              label="Personal email"
-              type="email"
-              value={member.personal_email}
-              placeholder="Where to reach them after they leave"
-            />
+            {member.personal_email_masked ? (
+              <Property label="Personal email" mono>
+                {member.personal_email}{" "}
+                <Link className="side-quiet" href={`/team/${member.staff_id}`}>
+                  Reveal on their team record
+                </Link>
+              </Property>
+            ) : (
+              <InlineField
+                {...inline}
+                name="personal_email"
+                label="Personal email"
+                type="email"
+                value={member.personal_email}
+                placeholder="Where to reach them after they leave"
+              />
+            )}
+            {member.break_glass && (
+              <Property label="Break-glass">
+                Sealed account: every sign-in alerts every owner.{" "}
+                <Link href="/admin/privileged#break-glass">Privileged access</Link>
+              </Property>
+            )}
+            <Property label="Elevation">
+              {member.elevation
+                ? `Acting as ${member.elevation.role_label} until ${formatAbsolute(member.elevation.ends_at ?? "")}`
+                : member.eligibility.length === 0
+                  ? "Not eligible"
+                  : member.eligibility
+                      .map(
+                        (item) =>
+                          `May take ${item.role_label}, up to ${item.max_hours} h${item.eligible_until ? ` until ${formatDate(item.eligible_until)}` : ""}`,
+                      )
+                      .join("; ")}
+            </Property>
             <Property label="Authenticator">
               {member.totp_enrolled === null
                 ? "Unknown"

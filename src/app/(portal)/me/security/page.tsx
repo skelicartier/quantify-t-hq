@@ -32,6 +32,10 @@ import { formatAbsolute } from "@/lib/format";
 import { readMyDevices, type MyDevices } from "@/lib/api/security";
 import { currentDeviceHash } from "@/lib/auth/session";
 import { SeverityPill } from "@/components/admin/security-pills";
+import { endElevationAction } from "@/app/(portal)/admin/privileged/actions";
+import { activateElevationAction } from "@/app/(portal)/me/security/actions";
+import { TakeElevationForm } from "@/components/security/privileged-forms";
+import { readMyElevation, type MyElevation } from "@/lib/api/privileged";
 
 export const metadata = { title: "My security" };
 export const dynamic = "force-dynamic";
@@ -98,6 +102,14 @@ export default async function SecurityPage() {
       throw error;
   }
 
+  let elevation: MyElevation | null = null;
+  try {
+    elevation = await readMyElevation(context.token);
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
+
   return (
     <>
       <PageHeader
@@ -105,6 +117,108 @@ export default async function SecurityPage() {
         title="My security"
         description={`Your sessions and your password. A session ends after ${context.me.session_policy?.idle_minutes ?? 30} minutes without activity, and after ${context.me.session_policy?.absolute_hours ?? 12} hours regardless.`}
       />
+      {elevation !== null &&
+        (elevation.active || elevation.eligible.length > 0 || elevation.history.length > 0) && (
+          <Section
+            id="elevation"
+            title="Elevation"
+            description={`You work as ${elevation.standing_role_label}. Where an owner has made you eligible, you can take a bigger role for a few hours when the work needs it: the owners are told, and everything you do meanwhile is marked with it.`}
+          >
+            <Card>
+              {elevation.active ? (
+                <div className="elevation-live">
+                  <p>
+                    <strong>
+                      Acting as {elevation.active.role_label} until{" "}
+                      {formatAbsolute(elevation.active.ends_at ?? "")}
+                    </strong>
+                    <span className="field__hint"> · “{elevation.active.reason}”</span>
+                  </p>
+                  <RowAction
+                    action={endElevationAction}
+                    fields={{
+                      elevation_id: elevation.active.elevation_id,
+                      return_path: "/me/security",
+                    }}
+                    buttons={[
+                      { label: "End it now", pendingLabel: "Ending…", className: "btn btn--small" },
+                    ]}
+                  />
+                </div>
+              ) : elevation.eligible.length === 0 ? (
+                <p className="muted">You are not eligible for any other role.</p>
+              ) : (
+                <>
+                  <SudoGate
+                    action={confirmSudoAction}
+                    fresh={context.me.sudo_fresh}
+                    untilLabel={untilLabel}
+                    returnPath="/me/security"
+                    purpose="Taking a role needs a fresh code from your authenticator app."
+                  />
+                  <ul className="ask-list">
+                    {elevation.eligible.map((item) => (
+                      <li key={item.eligibility_id} className="ask-list__item">
+                        <div className="ask-list__head">
+                          <strong>{item.role_label}</strong>
+                          <span className="quiet">
+                            · up to {item.max_hours} {item.max_hours === 1 ? "hour" : "hours"} at a
+                            time
+                            {item.eligible_until
+                              ? ` · until ${formatDate(item.eligible_until)}`
+                              : ""}
+                          </span>
+                        </div>
+                        <p className="field__hint">
+                          Granted by {item.granted_by_name}: “{item.reason}”
+                        </p>
+                        <TakeElevationForm
+                          action={activateElevationAction}
+                          eligibilityId={item.eligibility_id}
+                          roleLabel={item.role_label}
+                          maxHours={item.max_hours}
+                          disabled={!context.me.sudo_fresh}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {elevation.history.length > 0 && (
+                <DataTable
+                  caption="Your elevations, last 90 days"
+                  columns={[
+                    { key: "as", label: "As" },
+                    { key: "when", label: "When" },
+                    { key: "why", label: "Why" },
+                    { key: "state", label: "State" },
+                  ]}
+                  isEmpty={false}
+                  empty={null}
+                  columnMenu={false}
+                >
+                  {elevation.history.map((row) => (
+                    <tr key={row.elevation_id}>
+                      <td>{row.role_label}</td>
+                      <td>
+                        {formatAbsolute(row.starts_at ?? "")} –{" "}
+                        {formatAbsolute(row.ended_at ?? row.ends_at ?? "")}
+                      </td>
+                      <td>{row.reason}</td>
+                      <td>
+                        {row.state === "live"
+                          ? "Live"
+                          : row.state === "ended"
+                            ? "Ended"
+                            : "Ran out"}
+                      </td>
+                    </tr>
+                  ))}
+                </DataTable>
+              )}
+            </Card>
+          </Section>
+        )}
       <Section id="sessions" title="Where you are signed in">
         {sessions === null ? (
           <Callout tone="danger" role="alert">

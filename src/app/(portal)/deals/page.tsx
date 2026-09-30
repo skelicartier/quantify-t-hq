@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { AiFilterBox } from "@/components/ai/ai-assist";
+import { filterAction } from "@/app/(portal)/_actions/ai";
 import { Fragment } from "react";
 
 import { moveDealStageAction } from "@/app/(portal)/deals/actions";
@@ -311,6 +313,9 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
                     : []),
                 ]}
               />
+              {context.me.ai?.features.includes("filters") && (
+                <AiFilterBox list="deals" fields={filterFields} action={filterAction} />
+              )}
               <div className="list-tools" aria-label="List tools">
                 <FilterBuilder
                   fields={filterFields}

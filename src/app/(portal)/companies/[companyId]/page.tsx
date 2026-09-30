@@ -1,4 +1,8 @@
 import Link from "next/link";
+import { RecordComments } from "@/components/platform/comments-section";
+import { RecordTemplates } from "@/components/platform/record-templates";
+import { AiBrief } from "@/components/ai/ai-assist";
+import { aiFeedbackAction, briefAction } from "@/app/(portal)/_actions/ai";
 import { notFound } from "next/navigation";
 
 import {
@@ -371,6 +375,26 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
       <RecordGrid
         side={
           <>
+            {context.me.ai?.features.includes("brief") && (
+              <RecordSection id="company-brief" title="Before you call">
+                <AiBrief
+                  subjectType="company"
+                  subjectId={company.company_id}
+                  action={briefAction}
+                  feedback={aiFeedbackAction}
+                />
+              </RecordSection>
+            )}
+            {canWrite && (
+              <RecordSection id="company-templates" title="Tasks from a template">
+                <RecordTemplates
+                  token={context.token}
+                  appliesTo="company"
+                  subjectId={company.company_id}
+                  returnPath={`/companies/${company.company_id}`}
+                />
+              </RecordSection>
+            )}
             <Properties title="Details">
               <InlineField {...inline} name="name" label="Name" value={company.name} />
               <InlineField
@@ -561,6 +585,15 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
               {openDealsTable}
             </RecordSection>
             {activity}
+            <RecordSection id="company-comments" title="Threads">
+              <RecordComments
+                token={context.token}
+                subjectType="company"
+                subjectId={company.company_id}
+                returnPath={`/companies/${company.company_id}`}
+                canWrite={context.me.role !== "intern_readonly"}
+              />
+            </RecordSection>
           </>
         )}
         {tab === "activity" && activity}

@@ -1,4 +1,8 @@
 import Link from "next/link";
+import { RecordComments } from "@/components/platform/comments-section";
+import { RecordTemplates } from "@/components/platform/record-templates";
+import { AiBrief } from "@/components/ai/ai-assist";
+import { aiFeedbackAction, briefAction } from "@/app/(portal)/_actions/ai";
 import { notFound } from "next/navigation";
 
 import {
@@ -304,6 +308,26 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
       <RecordGrid
         side={
           <>
+            {context.me.ai?.features.includes("brief") && (
+              <RecordSection id="deal-brief" title="Before you call">
+                <AiBrief
+                  subjectType="deal"
+                  subjectId={deal.deal_id}
+                  action={briefAction}
+                  feedback={aiFeedbackAction}
+                />
+              </RecordSection>
+            )}
+            {canWrite && (
+              <RecordSection id="deal-templates" title="Tasks from a template">
+                <RecordTemplates
+                  token={context.token}
+                  appliesTo="deal"
+                  subjectId={deal.deal_id}
+                  returnPath={`/deals/${deal.deal_id}`}
+                />
+              </RecordSection>
+            )}
             <Properties title="Deal">
               <InlineField {...inline} name="name" label="Name" value={deal.name} />
               <Property label="Company">
@@ -435,6 +459,17 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
           </>
         }
       >
+        {tab === "activity" && (
+          <RecordSection id="deal-comments" title="Threads">
+            <RecordComments
+              token={context.token}
+              subjectType="deal"
+              subjectId={deal.deal_id}
+              returnPath={`/deals/${deal.deal_id}?tab=activity`}
+              canWrite={context.me.role !== "intern_readonly"}
+            />
+          </RecordSection>
+        )}
         {tab === "activity" && (
           <RecordSection id="deal-activity" title="Activity">
             {canWrite && (

@@ -10,11 +10,13 @@ import {
   saveAssetAction,
   saveDocumentAction,
   startChecklistAction,
+  revealFieldAction,
   toggleActionItemAction,
   updateProfileAction,
 } from "@/app/(portal)/team/actions";
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
+import { RevealField } from "@/components/security/reveal-field";
 import { PageHeader } from "@/components/shell/page-header";
 import {
   Properties,
@@ -365,7 +367,21 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
                 <span>{formatDate(meeting.held_on)}</span>
                 <span className="side-quiet">with {meeting.held_by_name || "a colleague"}</span>
               </p>
-              {meeting.notes && <p className="checkin__line">{meeting.notes}</p>}
+              {meeting.notes_masked ? (
+                <p className="checkin__line">
+                  <RevealField
+                    action={revealFieldAction}
+                    staffId={person.staff_id}
+                    field="one_on_one_notes"
+                    oneOnOneId={meeting.one_on_one_id}
+                    masked="Notes hidden: they are for the person and whoever held it."
+                    label="Notes"
+                    disabled={!context.me.sudo_fresh}
+                  />
+                </p>
+              ) : (
+                meeting.notes && <p className="checkin__line">{meeting.notes}</p>
+              )}
               {meeting.actions.length > 0 && (
                 <ul className="checklist__steps">
                   {meeting.actions.map((item) => (
@@ -505,7 +521,7 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
           recorded. Record them below.
         </Callout>
       )}
-      {canWrite && (
+      {(canWrite || person.masked.length > 0) && (
         <SudoGate
           action={confirmSudoAction}
           fresh={context.me.sudo_fresh}
@@ -515,7 +531,7 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
               : null
           }
           returnPath={base}
-          purpose="Recording documents and system access needs a fresh code from your authenticator app."
+          purpose="Recording documents and system access, and revealing a hidden detail, need a fresh code from your authenticator app."
         />
       )}
       <RecordTabs base={base} tabs={tabs} current={tab} label="Team member sections" />
@@ -527,7 +543,18 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
                 {person.email}
               </Property>
               <Property label="Personal email" mono>
-                {person.personal_email || "—"}
+                {person.masked.includes("personal_email") ? (
+                  <RevealField
+                    action={revealFieldAction}
+                    staffId={person.staff_id}
+                    field="personal_email"
+                    masked={person.personal_email}
+                    label="Personal email"
+                    disabled={!context.me.sudo_fresh}
+                  />
+                ) : (
+                  person.personal_email || "—"
+                )}
               </Property>
               <Property label="Role">{roleLabel(person.role)}</Property>
               <Property label="Engagement">{kindLabel(person.kind)}</Property>
@@ -561,10 +588,37 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
                 {person.probation_ends_on ? formatDate(person.probation_ends_on) : "—"}
               </Property>
               <Property label="Emergency contact">
-                {person.emergency_contact.name
-                  ? `${person.emergency_contact.name}${person.emergency_contact.relation ? ` (${person.emergency_contact.relation})` : ""}${person.emergency_contact.phone ? ` · ${person.emergency_contact.phone}` : ""}`
-                  : "—"}
+                {!person.emergency_contact.name ? (
+                  "—"
+                ) : person.masked.includes("emergency_contact_name") ? (
+                  <RevealField
+                    action={revealFieldAction}
+                    staffId={person.staff_id}
+                    field="emergency_contact_name"
+                    masked={`${person.emergency_contact.name}${person.emergency_contact.relation ? ` (${person.emergency_contact.relation})` : ""}`}
+                    label="Emergency contact"
+                    disabled={!context.me.sudo_fresh}
+                  />
+                ) : (
+                  `${person.emergency_contact.name}${person.emergency_contact.relation ? ` (${person.emergency_contact.relation})` : ""}`
+                )}
               </Property>
+              {person.emergency_contact.phone && (
+                <Property label="Their phone" mono>
+                  {person.masked.includes("emergency_contact_phone") ? (
+                    <RevealField
+                      action={revealFieldAction}
+                      staffId={person.staff_id}
+                      field="emergency_contact_phone"
+                      masked={person.emergency_contact.phone}
+                      label="Emergency contact's phone"
+                      disabled={!context.me.sudo_fresh}
+                    />
+                  ) : (
+                    person.emergency_contact.phone
+                  )}
+                </Property>
+              )}
               <Property label="Certificates">
                 {certificates.length === 0
                   ? "None"
@@ -579,6 +633,20 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
                     ))}
               </Property>
             </Properties>
+            {record.reveals.length > 0 && (
+              <RecordSection id="team-reveals" title="Revealed here">
+                <ul className="side-list">
+                  {record.reveals.map((item) => (
+                    <li key={`${item.at}-${item.field}`} className="renewal">
+                      <span>
+                        {item.field_label} · {item.by_name || "Someone"}: “{item.reason}”
+                      </span>
+                      <span className="side-quiet">{item.at ? formatAbsolute(item.at) : ""}</span>
+                    </li>
+                  ))}
+                </ul>
+              </RecordSection>
+            )}
             {canWrite && (
               <RecordSection id="team-profile" title="Reporting line and contact">
                 <ProfileForm

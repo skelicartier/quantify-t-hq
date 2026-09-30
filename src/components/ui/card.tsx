@@ -106,6 +106,7 @@ export function Section({
   const headingId = `${id}-heading`;
   return (
     <section
+      id={id}
       className={["section", className ?? ""].filter(Boolean).join(" ")}
       aria-labelledby={headingId}
     >

@@ -181,6 +181,16 @@ const SIGNED_IN_PAGES: Shot[] = [
   },
   { name: "success-onboarding", path: "/success/onboarding", ready: "main#main-content" },
   { name: "service-status", path: "/service-status", ready: ".status-components" },
+  { name: "admin-privileged", path: "/admin/privileged", ready: "main#main-content" },
+  { name: "admin-ai", path: "/admin/ai", ready: "main#main-content" },
+  { name: "admin-rules", path: "/admin/rules", ready: "main#main-content" },
+  { name: "admin-webhooks", path: "/admin/webhooks", ready: "main#main-content" },
+  {
+    name: "admin-webhook",
+    path: "/admin/webhooks/f4000000-0000-4000-8000-000000000001",
+    ready: "main#main-content",
+  },
+  { name: "task-templates", path: "/tasks/templates", ready: "main#main-content" },
   {
     name: "service-status-incident",
     path: "/service-status/incidents/5d000000-0000-4000-8000-000000000001",
@@ -433,6 +443,9 @@ async function captureInteractions(page: Page, folder: string) {
   await captureInspectionFlows(page, folder);
   await captureSuccessFlows(page, folder);
   await captureStatusFlows(page, folder);
+  await capturePrivilegedFlows(page, folder);
+  await captureAiFlows(page, folder);
+  await capturePlatformFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -825,6 +838,221 @@ async function captureStatusPublic(page: Page, folder: string) {
   await page.locator("button", { hasText: "Stop the mail" }).click();
   await page.waitForSelector(".form-sent", { timeout: 15_000 });
   await shoot(page, `${folder}/status-stopped`);
+}
+
+/**
+ * Privileged access from the owner's side: someone made eligible to elevate, a break-glass
+ * test refused because the sealed account has not signed in, a colleague's export limit
+ * lifted for a day, and a masked phone number revealed for a reason.
+ */
+async function capturePrivilegedFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/admin/privileged`, { waitUntil: "networkidle" });
+  if ((await page.locator("#sudo-code").count()) > 0) {
+    await page.fill("#sudo-code", "000000");
+    await page.locator(".sudo-gate button[type=submit]").first().click();
+    await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  }
+  await page.locator("summary", { hasText: "Make someone eligible" }).click();
+  await page.selectOption("#grant-person", { label: "Sales Person" });
+  await page.fill("#grant-reason", "Covers renewals while the owner travels");
+  await page.locator("button", { hasText: "Make eligible" }).click();
+  // A second pass finds them eligible already, and says so.
+  await page.waitForSelector(
+    "form:has(#grant-reason) .form-sent, form:has(#grant-reason) [role=alert]",
+    {
+      timeout: 10_000,
+    },
+  );
+  await page.reload({ waitUntil: "networkidle" });
+
+  const test = page.locator("form:has(input[name=note])").first();
+  await test.locator("input[name=note]").fill("Checked the envelope is still sealed");
+  await test.locator("button", { hasText: "Record the test" }).click();
+  await test.locator("[role=alert]").waitFor({ timeout: 10_000 });
+  if (!/sign in with the sealed account first/i.test(await test.innerText()))
+    report(`${folder}/admin-privileged-test`, "a break-glass test was recorded without a sign-in");
+
+  await page.locator("summary", { hasText: "Lift a limit" }).click();
+  await page.selectOption("#lift-person", { label: "The Admin" });
+  await page.fill("#lift-rows", "2000");
+  await page.fill("#lift-reason", "Year-end archive for the accountant");
+  await page.locator("button", { hasText: "Lift for 24 hours" }).click();
+  await page.waitForSelector("form:has(#lift-reason) .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/admin-privileged-worked`);
+
+  await page.goto(`${BASE}/team/aa000000-0000-4000-8000-00000000000e`, {
+    waitUntil: "networkidle",
+  });
+  const phone = page.locator(".reveal").filter({ hasText: "\u2022\u2022\u2022\u2022 23" }).first();
+  if ((await phone.count()) === 0) {
+    report(`${folder}/team-member-revealed`, "the emergency contact's phone is not masked");
+    return;
+  }
+  await phone.locator("button", { hasText: "Reveal" }).click();
+  await phone.locator("input[name=reason]").fill("Calling their family after a fall at the office");
+  await phone.locator("button", { hasText: "Show it" }).click();
+  await page.waitForSelector(".reveal__value", { timeout: 10_000 });
+  if (!/\+44/.test(await page.locator(".reveal__value").first().innerText()))
+    report(`${folder}/team-member-revealed`, "the reveal did not show the number");
+  await shoot(page, `${folder}/team-member-revealed`);
+}
+
+/**
+ * Just-in-time elevation, as the person: the intern takes Support for an hour with a
+ * reason and a fresh code, the bar follows them to another page, and they end it.
+ */
+async function captureElevation(page: Page, folder: string) {
+  await page.goto(`${BASE}/me/security`, { waitUntil: "networkidle" });
+  const section = page.locator("#elevation");
+  if ((await section.count()) === 0) {
+    report(`${folder}/me-security-elevation`, "the eligible intern has no elevation section");
+    return;
+  }
+  if ((await section.locator(".elevation-live").count()) > 0) {
+    await section.locator("button", { hasText: "End it now" }).click();
+    await page.waitForSelector(".elevation-bar", { state: "detached", timeout: 15_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  if ((await section.locator("#sudo-code").count()) > 0) {
+    await section.locator("#sudo-code").fill("000000");
+    await section.locator(".sudo-gate button[type=submit]").click();
+    await section.locator(".sudo-gate--open").waitFor({ timeout: 10_000 });
+  }
+  await shoot(page, `${folder}/me-security-elevation`);
+  await section.locator("input[name=reason]").first().fill("Covering the desk this afternoon");
+  await section.locator("button", { hasText: "Take Support" }).first().click();
+  await page.waitForSelector(".elevation-bar", { timeout: 15_000 });
+  await page.goto(`${BASE}/support`, { waitUntil: "networkidle" });
+  if ((await page.locator(".elevation-bar").count()) === 0)
+    report(`${folder}/elevated-support`, "the elevation bar did not follow them to another page");
+  await shoot(page, `${folder}/elevated-support`);
+  await page.goto(`${BASE}/me/security`, { waitUntil: "networkidle" });
+  await page.locator("#elevation button", { hasText: "End it now" }).click();
+  await page.waitForSelector(".elevation-bar", { state: "detached", timeout: 15_000 });
+  await shoot(page, `${folder}/elevation-ended`);
+}
+
+/**
+ * AI assistance, with the mock's stand-in model (MOCK_AI=1): a reply drafted and put in the
+ * reply box, a filing suggestion applied, a brief read, tasks proposed from meeting notes and
+ * one added, and a filter described in words turned into the ordinary filter. Without the
+ * stand-in every control is absent, which is its own check: nothing is shown that no model wrote.
+ */
+async function captureAiFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/admin/ai`, { waitUntil: "networkidle" });
+  const configured = !(await page.locator("text=Not configured").count());
+  await shoot(page, `${folder}/admin-ai`);
+  if (!configured) return;
+
+  await page.goto(`${BASE}/support`, { waitUntil: "networkidle" });
+  const first = page.locator('a[href^="/support/sup_"]').first();
+  await page.goto(`${BASE}${await first.getAttribute("href")}`, { waitUntil: "networkidle" });
+  await page.locator("button", { hasText: "Draft a reply" }).click();
+  await page.waitForSelector(".ai-panel__text, .ai-panel .callout", { timeout: 15_000 });
+  if ((await page.locator(".ai-panel__text").count()) > 0) {
+    const draft = (await page.locator(".ai-panel__text").first().innerText()).trim();
+    await page.locator("button", { hasText: "Put it in the reply box" }).click();
+    const box = await page.locator(".composer textarea").first().inputValue();
+    if (!box.includes(draft.slice(0, 20)))
+      report(`${folder}/ticket-ai-draft`, "the draft did not reach the reply box");
+  }
+  await page.locator("button", { hasText: "Suggest filing" }).click();
+  await page.waitForSelector(".ai-facts, .ai-panel .callout", { timeout: 15_000 });
+  await shoot(page, `${folder}/ticket-ai`);
+
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002`, {
+    waitUntil: "networkidle",
+  });
+  await page.locator("button", { hasText: "Brief me" }).click();
+  await page.waitForSelector(".ai-panel__text, .ai-panel .callout", { timeout: 15_000 });
+  await shoot(page, `${folder}/company-brief`);
+
+  await page.goto(`${BASE}/meetings/ee100000-0000-4000-8000-0000000000a1`, {
+    waitUntil: "networkidle",
+  });
+  {
+    const ask = page.locator("button", { hasText: "Suggest tasks from the notes" });
+    if ((await ask.count()) === 0)
+      report(`${folder}/meeting-ai-tasks`, "no way to propose tasks from written-up notes");
+    else {
+      await ask.click();
+      await page.waitForSelector(".ai-proposals__item, .ai-panel .callout", { timeout: 15_000 });
+      const add = page.locator(".ai-proposals__item button", { hasText: "Add task" }).first();
+      if ((await add.count()) > 0) {
+        await add.click();
+        await page.waitForSelector(".ai-proposals__done", { timeout: 10_000 });
+      }
+      await shoot(page, `${folder}/meeting-ai-tasks`);
+    }
+  }
+
+  await page.goto(`${BASE}/leads`, { waitUntil: "networkidle" });
+  await page.fill("#ai-filter-leads", "new leads waiting over 60 minutes");
+  await page.locator(".ai-filter button", { hasText: "Filter" }).click();
+  await page
+    .waitForURL(/[?&]f=/, { timeout: 15_000 })
+    .catch(() => report(`${folder}/leads-ai-filter`, "the words did not become a filter"));
+  await shoot(page, `${folder}/leads-ai-filter`);
+}
+
+/**
+ * The platform layer: a validation rule added and one switched off; an outbound endpoint
+ * added (its signing secret shown once) and a test event queued on the seeded one; a
+ * thread started on a company, a thread resolved, and a template's tasks added to it.
+ */
+async function capturePlatformFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/admin/rules`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Add a rule" }).click();
+  await page.selectOption("#rule-target", "deal:expected_close_date");
+  await page.selectOption("#rule-check", "not_past");
+  await page.fill("#rule-message", "A close date already gone is not a forecast");
+  await page.locator("button", { hasText: "Add rule" }).click();
+  await page.waitForSelector("form:has(#rule-message) .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/admin-rules-worked`);
+
+  await page.goto(`${BASE}/admin/webhooks`, { waitUntil: "networkidle" });
+  if ((await page.locator("#sudo-code").count()) > 0) {
+    await page.fill("#sudo-code", "000000");
+    await page.locator(".sudo-gate button[type=submit]").first().click();
+    await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  }
+  await page.locator("summary", { hasText: "Add a receiver" }).click();
+  await page.fill("#hook-url", `https://hooks.example.com/harness-${Date.now().toString(36)}`);
+  await page.fill("#hook-desc", "Harness receiver");
+  await page.locator(".pick-list input[name=event_types]").first().check();
+  await page.locator("button", { hasText: "Add receiver" }).click();
+  await page.waitForSelector(".one-time-secret__value", { timeout: 10_000 });
+  if (!/^whsec_/.test((await page.locator(".one-time-secret__value").innerText()).trim()))
+    report(`${folder}/admin-webhook-added`, "the signing secret was not shown once");
+  await shoot(page, `${folder}/admin-webhook-added`);
+  await page.goto(`${BASE}/admin/webhooks/f4000000-0000-4000-8000-000000000001`, {
+    waitUntil: "networkidle",
+  });
+  await page.locator("button", { hasText: "Send a test event" }).click();
+  await page.waitForSelector(".webhook-acts .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/admin-webhook-tested`);
+
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002`, {
+    waitUntil: "networkidle",
+  });
+  const words = `Harness thread ${Date.now().toString(36)}`;
+  await page.fill("#comment-new", words);
+  await page.locator(".comments > .comment-form button", { hasText: "Post" }).click();
+  await page.waitForSelector(`.comment__body:has-text("${words}")`, { timeout: 10_000 });
+  const resolve = page.locator(".comment-thread button", { hasText: "Resolve" }).first();
+  if ((await resolve.count()) > 0) {
+    await resolve.click();
+    await page.waitForTimeout(500);
+  }
+  const apply = page.locator("#company-templates button", { hasText: "Add its tasks" });
+  if ((await apply.count()) > 0) {
+    await apply.click();
+    await page.waitForSelector("#company-templates .form-sent", { timeout: 10_000 });
+  }
+  await shoot(page, `${folder}/company-threads`);
 }
 
 /**
@@ -1355,6 +1583,7 @@ async function run(browser: Browser) {
         report(`${viewport.name}/intern/${shot.name}`, "a money figure is visible to the intern");
       }
     }
+    await captureElevation(intern, `${viewport.name}/intern`);
     await internContext.close();
 
     // First-run enrollment with the un-enrolled persona, in a fresh context.

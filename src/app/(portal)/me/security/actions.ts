@@ -3,12 +3,14 @@
 import { revalidatePath } from "next/cache";
 
 import * as authApi from "@/lib/api/auth";
+import * as privilegedApi from "@/lib/api/privileged";
 import * as securityApi from "@/lib/api/security";
 import { HqApiRequestError } from "@/lib/api/core";
 import { requireStaff } from "@/lib/access/core";
 import type { ActionState } from "@/lib/forms/action-state";
 import { fieldValue, refusalMessage, type AuthFormState } from "@/lib/auth/forms";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
+import { privilegedRefusal } from "@/lib/security/privileged-refusal";
 
 export async function revokeSessionAction(
   _previous: ActionState,
@@ -183,4 +185,30 @@ export async function forgetDeviceAction(
   }
   revalidatePath("/me/security");
   return { status: "sent", message: "Forgotten.", sentAt: Date.now() };
+}
+
+/** Take a role you are eligible for, for the hours chosen, with a reason. */
+export async function activateElevationAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const { token } = await requireStaff("/me/security");
+  const hours = Number.parseInt(fieldValue(formData, "hours", 3), 10);
+  try {
+    await privilegedApi.activateElevation(token, {
+      eligibility_id: fieldValue(formData, "eligibility_id", 64),
+      hours: Number.isNaN(hours) ? 1 : hours,
+      reason: fieldValue(formData, "reason", 400).trim(),
+    });
+  } catch (error) {
+    return privilegedRefusal(error);
+  }
+  revalidatePath("/", "layout");
+  return {
+    status: "sent",
+    message:
+      "Elevated. The owners have been told; everything you do until it ends is marked with it.",
+    sentAt: Date.now(),
+  };
 }

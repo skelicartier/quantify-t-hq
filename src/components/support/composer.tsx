@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 
 import { COMPOSER_MODE_EVENT } from "@/components/support/desk-keys";
+import { COMPOSER_INSERT_EVENT } from "@/components/ai/ai-assist";
 import { Button } from "@/components/ui/button";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { AttemptField } from "@/components/ui/attempt-field";
@@ -53,6 +54,20 @@ export function Composer({ ticketId, action, savedReplies, variables = {} }: Com
     };
     window.addEventListener(COMPOSER_MODE_EVENT, onMode);
     return () => window.removeEventListener(COMPOSER_MODE_EVENT, onMode);
+  }, []);
+
+  // A draft someone chose to use lands in the reply box, for them to edit and send.
+  useEffect(() => {
+    const onInsert = (event: Event) => {
+      const text = String((event as CustomEvent<string>).detail ?? "");
+      if (!text || !bodyRef.current) return;
+      setMode("reply");
+      const box = bodyRef.current;
+      box.value = box.value ? `${box.value.trimEnd()}\n\n${text}` : text;
+      box.focus();
+    };
+    window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
+    return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
   }, []);
 
   function insertSavedReply(replyId: string) {

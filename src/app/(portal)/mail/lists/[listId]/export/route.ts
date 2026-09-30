@@ -53,6 +53,7 @@ export async function POST(
   } catch (error) {
     if (error instanceof HqApiRequestError) {
       if (error.details["sudo_required"] === true) return back("sudo");
+      if (error.details["reason"] === "export-quota") return back("quota");
       if (error.status === 403) return back("forbidden");
       return back("failed");
     }
