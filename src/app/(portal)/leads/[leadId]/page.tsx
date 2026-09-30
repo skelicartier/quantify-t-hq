@@ -1,3 +1,4 @@
+import { CustomFieldsSection } from "@/components/platform/custom-fields-section";
 import { RecordMail } from "@/components/mail/record-mail";
 import Link from "next/link";
 import { RecordComments } from "@/components/platform/comments-section";
@@ -222,6 +223,12 @@ export default async function LeadPage({ params }: LeadPageProps) {
                 <Timestamp value={lead.created_at} mode="absolute" />
               </Property>
             </Properties>
+            <CustomFieldsSection
+              recordType="lead"
+              recordId={lead.lead_id}
+              fields={detail.custom_fields}
+              canWrite={canWrite}
+            />
             {lead.stage === "qualified" && (
               <Card title="Converted" titleAs="h3" important>
                 <ul className="side-list">

@@ -1,3 +1,6 @@
+import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
+import { readFields, type CustomField } from "@/lib/api/fields";
+import { CustomFieldsSection } from "@/components/platform/custom-fields-section";
 import Link from "next/link";
 import { RecordComments } from "@/components/platform/comments-section";
 import { RecordTemplates } from "@/components/platform/record-templates";
@@ -120,6 +123,16 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
   let settings: CrmSettings | null = null;
   try {
     settings = await readCrmSettings(context.token);
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
+  // The required fields of the deals and people this page creates.
+  let required: CustomField[] = [];
+  try {
+    required = (await readFields(context.token)).fields.filter(
+      (field) => field.required && !field.archived,
+    );
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
@@ -328,6 +341,12 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                   }))}
                   defaultDue={isoDayPlus(now, 3)}
                   plans={settings?.plans ?? []}
+                  extra={
+                    <CustomFieldInputs
+                      idPrefix="new-deal"
+                      fields={required.filter((field) => field.record_type === "deal")}
+                    />
+                  }
                 />
               </Popover>
             )}
@@ -337,6 +356,12 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                   action={createPersonAction}
                   companies={[]}
                   companyId={company.company_id}
+                  extra={
+                    <CustomFieldInputs
+                      idPrefix="new-person"
+                      fields={required.filter((field) => field.record_type === "person")}
+                    />
+                  }
                 />
               </Popover>
             )}
@@ -486,6 +511,12 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                 placeholder="What the next person to open this should know"
               />
             </Properties>
+            <CustomFieldsSection
+              recordType="company"
+              recordId={company.company_id}
+              fields={detail.custom_fields}
+              canWrite={canWrite}
+            />
             {detail.children.length > 0 && (
               <RecordSection id="company-group" title="Group">
                 <ul className="side-list">

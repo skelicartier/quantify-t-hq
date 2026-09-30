@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
+import { customFieldSchema, customMapSchema, customValueSchema } from "@/lib/api/fields";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
 
@@ -42,10 +43,16 @@ const companyRowSchema = companySchema.extend({
   open_deals: z.number(),
   /** What the ledger says the company pays today, per currency; null for a role that cannot read revenue. */
   mrr: moneyByCurrencySchema.nullable(),
+  /** Custom field values this reader may see: key → what the list shows. */
+  custom: customMapSchema.default({}),
 });
 export type CompanyRow = z.infer<typeof companyRowSchema>;
 
-const companiesSchema = okEnvelope.extend({ companies: z.array(companyRowSchema) });
+const companiesSchema = okEnvelope.extend({
+  companies: z.array(companyRowSchema),
+  custom_fields: z.array(customFieldSchema).default([]),
+});
+export type CompaniesPage = z.infer<typeof companiesSchema>;
 
 export function readCompanies(token: string, q = "") {
   return fetchHqJson("hq/companies", companiesSchema, { token, query: q ? { q } : {} });
@@ -173,6 +180,7 @@ const companyDetailSchema = okEnvelope.extend({
   ),
   open_tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
+  custom_fields: z.array(customValueSchema).default([]),
 });
 export type CompanyDetail = z.infer<typeof companyDetailSchema>;
 
@@ -295,7 +303,10 @@ export function linkCompanyAccount(token: string, companyId: string, accountUser
 // ---------------------------------------------------------------------------------------
 
 const peopleSchema = okEnvelope.extend({
-  people: z.array(personSchema.extend({ company_name: z.string() })),
+  people: z.array(
+    personSchema.extend({ company_name: z.string(), custom: customMapSchema.default({}) }),
+  ),
+  custom_fields: z.array(customFieldSchema).default([]),
 });
 
 export function readPeople(token: string, q = "") {
@@ -307,6 +318,7 @@ const personDetailSchema = okEnvelope.extend({
   company: companySchema.nullable(),
   activities: z.array(activitySchema),
   open_tasks: z.array(taskSchema),
+  custom_fields: z.array(customValueSchema).default([]),
 });
 export type PersonDetail = z.infer<typeof personDetailSchema>;
 
@@ -361,10 +373,11 @@ export const leadSchema = z.object({
 export type Lead = z.infer<typeof leadSchema>;
 
 const leadsSchema = okEnvelope.extend({
-  leads: z.array(leadSchema),
+  leads: z.array(leadSchema.extend({ custom: customMapSchema.default({}) })),
   counts: z.record(z.string(), z.number()),
   stages: z.array(z.string()),
   first_reply_target_minutes: z.number(),
+  custom_fields: z.array(customFieldSchema).default([]),
 });
 export type LeadsPage = z.infer<typeof leadsSchema>;
 
@@ -385,6 +398,7 @@ const leadDetailSchema = okEnvelope.extend({
   }),
   activities: z.array(activitySchema),
   first_reply_target_minutes: z.number().optional(),
+  custom_fields: z.array(customValueSchema).default([]),
 });
 export type LeadDetail = z.infer<typeof leadDetailSchema>;
 

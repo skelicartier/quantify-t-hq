@@ -22,10 +22,13 @@ const ROLE_CATEGORIES: ReadonlyArray<[string, string]> = [
 ];
 
 export function PersonCreateForm({
+  extra,
   action,
   companies,
   companyId,
 }: {
+  /** The record's required custom fields. */
+  extra?: React.ReactNode;
   action: Action;
   companies: readonly CompanyOption[];
   /** Fixed when adding from a company page. */
@@ -71,6 +74,7 @@ export function PersonCreateForm({
           </Select>
         </Field>
       )}
+      {extra}
       <Button variant="primary" type="submit" disabled={isPending}>
         {isPending ? "Adding…" : "Add person"}
       </Button>

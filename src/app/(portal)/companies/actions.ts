@@ -1,5 +1,6 @@
 "use server";
 
+import { customFromForm } from "@/lib/forms/custom-fields";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -44,7 +45,9 @@ export async function createCompanyAction(
   if (!fields.name) return { status: "error", message: "Give the firm a name." };
   let companyId: string;
   try {
-    companyId = (await crmApi.createCompany(context.token, fields)).company.company_id;
+    companyId = (
+      await crmApi.createCompany(context.token, { ...fields, custom: customFromForm(formData) })
+    ).company.company_id;
   } catch (error) {
     return crmRefusal(error);
   }

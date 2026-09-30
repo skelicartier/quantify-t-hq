@@ -9,6 +9,7 @@ const TABS = [
   { href: "/admin/ai", label: "AI assistance" },
   { href: "/admin/webhooks", label: "Webhooks" },
   { href: "/admin/rules", label: "Rules" },
+  { href: "/admin/fields", label: "Fields" },
   { href: "/admin/settings/pipeline", label: "Pipeline" },
   { href: "/admin/settings", label: "Settings" },
   { href: "/admin/audit", label: "Audit" },

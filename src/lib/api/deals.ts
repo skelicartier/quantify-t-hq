@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
+import { customFieldSchema, customMapSchema, customValueSchema } from "@/lib/api/fields";
 import { dealCompetitorSchema, interviewSchema } from "@/lib/api/inspection";
 import {
   activitySchema,
@@ -22,7 +23,9 @@ const boardColumnSchema = z.object({
   stale_after_days: z.number(),
   outcome: z.string(),
   exit_criteria: z.string(),
-  deals: z.array(dealSummarySchema.extend({ company_name: z.string() })),
+  deals: z.array(
+    dealSummarySchema.extend({ company_name: z.string(), custom: customMapSchema.default({}) }),
+  ),
   mrr_total: moneyByCurrencySchema.nullable(),
   weighted_total: moneyByCurrencySchema.nullable(),
 });
@@ -40,6 +43,7 @@ const boardSchema = okEnvelope.extend({
     rotting: z.number(),
     no_next_step: z.number(),
   }),
+  custom_fields: z.array(customFieldSchema).default([]),
 });
 export type DealsBoard = z.infer<typeof boardSchema>;
 
@@ -75,6 +79,7 @@ const dealDetailSchema = okEnvelope.extend({
   interviews: z.array(interviewSchema),
   forecast_categories: z.array(z.object({ value: z.string(), label: z.string() })),
   drivers: z.array(z.object({ value: z.string(), label: z.string() })),
+  custom_fields: z.array(customValueSchema).default([]),
 });
 export type DealDetail = z.infer<typeof dealDetailSchema>;
 

@@ -1,3 +1,4 @@
+import { CustomFieldsSection } from "@/components/platform/custom-fields-section";
 import Link from "next/link";
 import { RecordComments } from "@/components/platform/comments-section";
 import { RecordTemplates } from "@/components/platform/record-templates";
@@ -452,6 +453,12 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
                 placeholder="What the next person to open this should know"
               />
             </Properties>
+            <CustomFieldsSection
+              recordType="deal"
+              recordId={detail.deal.deal_id}
+              fields={detail.custom_fields}
+              canWrite={canDeal}
+            />
             {hasCapability(context, "audit:read") && (
               <ViewedBy token={context.token} entityType="deal" record={deal.deal_id} now={now} />
             )}

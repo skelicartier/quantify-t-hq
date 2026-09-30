@@ -1,3 +1,6 @@
+import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
+import { customFilterFields, readCustom } from "@/lib/lists/custom";
+import type { CustomField } from "@/lib/api/fields";
 import Link from "next/link";
 import { AiFilterBox } from "@/components/ai/ai-assist";
 import { filterAction } from "@/app/(portal)/_actions/ai";
@@ -94,8 +97,11 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
   };
 
   let companies: CompanyRow[] | null = null;
+  let customFields: CustomField[] = [];
   try {
-    companies = (await readCompanies(context.token, q)).companies;
+    const listed = await readCompanies(context.token, q);
+    companies = listed.companies;
+    customFields = listed.custom_fields;
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
@@ -116,6 +122,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
     { key: "people", label: "People", kind: "number" },
     { key: "deals", label: "Open deals", kind: "number" },
     { key: "mrr", label: "MRR", kind: "number" },
+    ...customFilterFields(customFields),
   ];
   const conditions = parseFilters(filterParams, filterFields);
   const readField = (row: CompanyRow, field: string): string | number | null => {
@@ -137,7 +144,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
       case "mrr":
         return row.mrr ? Object.values(row.mrr).reduce((sum, amount) => sum + amount, 0) : null;
       default:
-        return null;
+        return readCustom(row.custom, field) ?? null;
     }
   };
   const filtered = applyFilters(
@@ -209,7 +216,15 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
             )}
             {canWrite && (
               <Popover label="New company" variant="primary">
-                <CompanyCreateForm action={createCompanyAction} />
+                <CompanyCreateForm
+                  action={createCompanyAction}
+                  extra={
+                    <CustomFieldInputs
+                      idPrefix="new-company"
+                      fields={customFields.filter((field) => field.required)}
+                    />
+                  }
+                />
               </Popover>
             )}
           </>

@@ -143,6 +143,7 @@ and asked for gaps only. Section 8 of that file is the build order.
 | AI assistance        | migration 0038: one provider behind one interface, the key only in service settings; without it every feature says it is not configured; an owner switch and a capability per feature, daily and monthly caps; outside text wrapped as data; answers checked before they are shown — reply drafts cite the saved replies and past answers they used, briefs take every figure from the records, tasks quote the meeting notes, triage and filters choose only from the lists offered; nothing the model writes is stored; each call a run row and an audit row, with whether it was used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Admin → AI assistance, the desk (draft, filing), company/deal/meeting (brief me), meeting notes (tasks), leads/deals/companies (filter in plain words) | service `c90131c`; HQ: the commit adding this            |
 | Platform, part one   | migration 0039: stage rules (fields a deal needs to enter a stage — value, close date, seats, a contact — checked on a move AND on a create straight into the stage; no skipping, no moving back, each switchable per stage); validation rules an admin sets per field (filled in, not in the past, at least, one of, a pattern), enforced in every create and update handler, the website's intake exempt so a prospect is never lost; comment threads on companies, deals and leads (one level deep, resolve and reopen, mentions through the inbox, interns read-only); task templates applied from a record as ordinary dated tasks; outbound webhooks signed to the Standard Webhooks spec (a secret shown once, sealed at rest; the address checked against private networks at send time, no redirects followed; retries at 5 m, 30 m, 2 h, 5 h, 10 h, 10 h, switched off after three days failing; a test event)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Admin → Rules, Admin → Webhooks, Pipeline editor (Requirements, Order), company/deal/lead (comments, templates), Tasks → Templates                     | service `e72b9f0`; HQ: the commit adding this            |
 | Trust registers      | migration 0040: what a security review, an auditor or an insurer asks for, with dates and owners and never a "% compliant" — risks (likelihood × impact, banded, a heat map; the band sets the review, a worse score brings it forward; accepting one is a decision with a reason, a critical one the owner's), findings (fix-by 7/30/90/180 days from the day found; fixed with evidence or accepted with a reason), production changes (a way back for medium and high risk; high risk waits for someone other than its recorder, and one that went ahead unapproved stays flagged), continuity tests (restore quarterly, failover twice a year, tabletop and loss of access yearly; missing the recovery target is not a pass; anything short of a pass raises a finding), supplier reviews (a tier per sub-processor sets the cadence; concerns raise a finding; a proposed one is reviewed before it goes live), the answer library (sales drafts, an admin approves for a year, new words lapse the approval, copy an approved answer), the record of processing (UK GDPR Art 30, the privacy desk's, reviewed yearly)                                                                                                                                                                                                                                                                               | Trust (Due, Risks, Findings, Changes, Continuity, Suppliers, Answers, Processing); the sub-processor record shows its tier                             | service `78b045e`, `5f3dae1`; HQ: the commit adding this |
+| Custom fields        | migration 0041: an admin's own fields on companies, people, deals and leads (Admin → Fields, a page per field): nine kinds, values normalised by kind; key and kind fixed once made, fields archived never deleted, a choice retired never removed; required when a person creates or edits (imports, conversions, intake exempt; a sensitive required field never blocks someone who cannot see it); sensitive fields shown and written only by owners and admins, masked elsewhere and in the audit log; checked before anything is written; a merge fills the kept record's blanks; changes in the record's audit row; a Fields section on each record, required fields in the create forms, custom fields in the Companies and Leads filters                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Admin → Fields; company, person, deal and lead pages; the create forms; Companies and Leads filters                                                    | service `b6133b4`, `d9b3322`; HQ: the commit adding this |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
@@ -190,23 +191,23 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of the end of Trust registers** (the machine clock read 2026-10-01).
+**As of the end of Custom fields** (the machine clock read 2026-10-01).
 
-- HQ repo: Security 3, AI and platform part one went out as `1c0b0d6`; Trust registers go
-  out in the commit after it (harness 15: 802 checks, the one failure — the changes page's
-  seven filter links overflowing a phone — fixed and checked at 412px in both themes).
-  `next-env.d.ts` shows modified after every `next dev`; never commit it. `.env.local`
-  (HQ_DEV_AUTOLOGIN) never committed.
+- HQ repo: Trust registers `8b20719`; custom fields go out in the commit after it (harness
+  16: 822 checks, all clean). That commit's mock also carries the automations block (the
+  routes and the record handlers taught to fire triggers), which the next wave's pages use
+  and harness 17 first exercises. `next-env.d.ts` shows modified after every `next dev`;
+  never commit it. `.env.local` (HQ_DEV_AUTOLOGIN) never committed.
 - Product repo, local only: Security 3 `b1ee121`, AI `c90131c`, platform part one
-  `e72b9f0`, Trust `78b045e` + `5f3dae1`, index guards `d3f30d0` (every HQ index now under
-  its own `sys.indexes` guard — the schema test had been failing on 0019 onwards and the
-  HQ suite never ran it; run every file that imports `account_api`, not only
-  `tests/test_hq_*.py`: 1,777 pass), custom fields `b6133b4` + `d9b3322` (service and
-  tests; the portal is next). Uncommitted and not ours: the theses tab, `app_manager`,
-  examiner, memory service, `tests/_fabric_coverage_test.db` — never stage.
-- Migrations 0006–0041 unapplied (production blocked on Azure).
-- The payload contract test fails on `hq/settings/fields` until the custom fields portal
-  lands: the service sampler records it and no client parses it yet.
+  `e72b9f0`, Trust `78b045e` + `5f3dae1`, index guards `d3f30d0`, custom fields `b6133b4` +
+  `d9b3322`, automations `50c7019` (service and tests; the portal is next). Run every file
+  that imports `account_api`, not only `tests/test_hq_*.py` (1,793 pass). Uncommitted and
+  not ours: the theses tab, `app_manager`, examiner, memory service,
+  `tests/_fabric_coverage_test.db` — never stage.
+- Migrations 0006–0042 unapplied (production blocked on Azure). 0042 adds a nightly timer,
+  `hq_automation_sweeper` (04:11 UTC), for date triggers.
+- The payload contract test fails on the three automation reads until the automations
+  portal lands.
 - Local run: the console's dev server holds port 3000; HQ runs on 3001 with
   `PORT=3001 NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3001 npx next dev -p 3001`, the mock with
   `MOCK_AI=1 HQ_UI_BASE=http://127.0.0.1:3001 npm run mock:hq` (port 7071; `MOCK_AI=1` puts a
@@ -216,18 +217,21 @@ founder can fix.
   `HQ_UI_BASE=http://127.0.0.1:3001 npm run check:hq-ui`. If `next dev` fails with "Failed to
   open database … Unexpected file … CURRENT 2", cloud sync duplicated a cache file: stop the
   server and delete `.next` (build output only). Cloud sync also leaves `.next 2/` beside it,
-  which fails `prettier --check`: delete it. Warm new routes with curl first
-  (`-L -c /tmp/hq-cookies -b /tmp/hq-cookies`); in zsh never name a loop variable `path` (it
-  is `$PATH`). Run the harness with nothing heavy beside it. A harness step that waits for a
-  form's "sent" line fails when the act removes the form (a fixed finding has no fix form):
-  wait for the state the act produces instead.
-- The mock's custom fields block wraps the four record types' existing handlers (checked
-  before, written after, values added to lists and records) rather than editing each.
-- **Next step:** the custom fields portal — Admin → Fields (and a page per field), the
-  Fields section on company, person, deal and lead pages, required fields in the create
-  forms (the company page's deal and person forms too), custom fields in the Companies and
-  Leads filter builders, the mock (already written: `hq/settings/fields*` and the wrapped
-  handlers), the harness flow and the contract mapping. Then the automation builder, then
-  digests of saved views rendered by the portal (a saved view is a query only the portal
-  interprets, so the service cannot render it as the recipient without copying the
+  which fails `prettier --check`: delete it. Restart the dev server after `npm run build`.
+  Warm new routes with curl first (`-L -c /tmp/hq-cookies -b /tmp/hq-cookies`); in zsh never
+  name a loop variable `path` (it is `$PATH`). Run the harness with nothing heavy beside it.
+  A harness step that waits for a form's "sent" line fails when the act removes the form (a
+  fixed finding has no fix form): wait for the state the act produces instead. The running
+  mock and harness have loaded their code, so `scripts/` can be edited while a harness runs;
+  `src/` cannot.
+- The mock's custom fields and automations blocks wrap the four record types' existing
+  handlers (checked before, written after, triggers fired, values added to lists and
+  records) rather than editing each; the automations block sits after the custom fields
+  block because it reuses `cfWrap`.
+- **Next step:** the automations portal — Admin → Automations (list, start), the builder
+  (When · If · Then as rows, saved as the draft; try the saved draft on the last fifty;
+  publish the next version; pause, resume, archive), the Automations section on company,
+  person, deal and lead pages (its buttons, what ran), the contract mappings and the harness
+  flow. Then digests of saved views rendered by the portal (a saved view is a query only the
+  portal interprets, so the service cannot render it as the recipient without copying the
   filters).

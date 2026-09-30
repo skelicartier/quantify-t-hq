@@ -14,9 +14,12 @@ type Action = (previous: ActionState, formData: FormData) => Promise<ActionState
 type Option = { key: string; label: string };
 
 export function LeadCreateForm({
+  extra,
   action,
   sources,
 }: {
+  /** The record's required custom fields. */
+  extra?: React.ReactNode;
   action: Action;
   sources: readonly Option[];
 }) {
@@ -53,6 +56,7 @@ export function LeadCreateForm({
       <Field id="lead-message" label="Context">
         <Textarea id="lead-message" name="message" rows={3} maxLength={8000} disabled={isPending} />
       </Field>
+      {extra}
       <Button variant="primary" type="submit" disabled={isPending}>
         {isPending ? "Adding…" : "Add lead"}
       </Button>

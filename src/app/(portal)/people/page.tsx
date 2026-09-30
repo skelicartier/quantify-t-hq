@@ -1,3 +1,5 @@
+import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
+import type { CustomField } from "@/lib/api/fields";
 import Link from "next/link";
 
 import { createPersonAction } from "@/app/(portal)/people/actions";
@@ -39,8 +41,11 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
   const now = requestNow();
 
   let people: Awaited<ReturnType<typeof readPeople>>["people"] | null = null;
+  let customFields: CustomField[] = [];
   try {
-    people = (await readPeople(context.token, q)).people;
+    const listed = await readPeople(context.token, q);
+    people = listed.people;
+    customFields = listed.custom_fields;
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
@@ -68,7 +73,16 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
         actions={
           canWrite ? (
             <Popover label="Add person" variant="primary">
-              <PersonCreateForm action={createPersonAction} companies={companyOptions} />
+              <PersonCreateForm
+                action={createPersonAction}
+                companies={companyOptions}
+                extra={
+                  <CustomFieldInputs
+                    idPrefix="new-person"
+                    fields={customFields.filter((field) => field.required)}
+                  />
+                }
+              />
             </Popover>
           ) : undefined
         }

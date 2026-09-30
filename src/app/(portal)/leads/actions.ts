@@ -1,5 +1,6 @@
 "use server";
 
+import { customFromForm } from "@/lib/forms/custom-fields";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -33,6 +34,7 @@ export async function createLeadAction(
       company_name: fieldValue(formData, "company_name", 200).trim(),
       source_key: fieldValue(formData, "source_key", 32),
       message: fieldValue(formData, "message", 8_000).trim(),
+      custom: customFromForm(formData),
     });
     leadId = created.lead.lead_id;
   } catch (error) {

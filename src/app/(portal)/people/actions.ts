@@ -1,5 +1,6 @@
 "use server";
 
+import { customFromForm } from "@/lib/forms/custom-fields";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -32,7 +33,9 @@ export async function createPersonAction(
   if (companyId) input.company_id = companyId;
   let personId: string;
   try {
-    personId = (await crmApi.createPerson(context.token, input)).person.person_id;
+    personId = (
+      await crmApi.createPerson(context.token, { ...input, custom: customFromForm(formData) })
+    ).person.person_id;
   } catch (error) {
     return crmRefusal(error);
   }

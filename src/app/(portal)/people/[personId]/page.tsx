@@ -1,3 +1,4 @@
+import { CustomFieldsSection } from "@/components/platform/custom-fields-section";
 import { RecordMail } from "@/components/mail/record-mail";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -276,6 +277,12 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
                 placeholder="What the next person to open this should know"
               />
             </Properties>
+            <CustomFieldsSection
+              recordType="person"
+              recordId={person.person_id}
+              fields={detail.custom_fields}
+              canWrite={canWrite}
+            />
             {hasCapability(context, "audit:read") && (
               <ViewedBy
                 token={context.token}

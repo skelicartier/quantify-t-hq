@@ -105,6 +105,7 @@ import * as staff from "@/lib/api/staff";
 import * as team from "@/lib/api/team";
 import * as tickets from "@/lib/api/tickets";
 import * as trustApi from "@/lib/api/trust";
+import * as fieldsApi from "@/lib/api/fields";
 
 const fixture = shared.fixture;
 const ids = fixture?.ids ?? {};
@@ -191,6 +192,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/templates", () => platformApi.readTemplates(token)],
   ["hq/outbound-webhooks", () => platformApi.readWebhooks(token)],
   ["hq/outbound-webhooks/{endpoint_id}", () => platformApi.readWebhook(token, ids.endpoint_id!)],
+  ["hq/settings/fields", () => fieldsApi.readFields(token)],
   ["hq/trust", () => trustApi.readTrustOverview(token)],
   ["hq/trust/risks", () => trustApi.readRisks(token)],
   ["hq/trust/risks/{risk_id}", () => trustApi.readRisk(token, ids.risk_id!)],

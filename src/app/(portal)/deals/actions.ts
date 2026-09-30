@@ -1,5 +1,6 @@
 "use server";
 
+import { customFromForm } from "@/lib/forms/custom-fields";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -59,7 +60,9 @@ export async function createDealAction(
   if (planKey) input.plan_key = planKey;
   let dealId: string;
   try {
-    dealId = (await dealsApi.createDeal(context.token, input)).deal.deal_id;
+    dealId = (
+      await dealsApi.createDeal(context.token, { ...input, custom: customFromForm(formData) })
+    ).deal.deal_id;
   } catch (error) {
     return crmRefusal(error);
   }

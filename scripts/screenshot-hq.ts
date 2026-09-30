@@ -191,6 +191,12 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: "main#main-content",
   },
   { name: "task-templates", path: "/tasks/templates", ready: "main#main-content" },
+  { name: "admin-fields", path: "/admin/fields", ready: "main#main-content" },
+  {
+    name: "admin-field",
+    path: "/admin/fields/cf000001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
   { name: "trust", path: "/trust", ready: ".trust-registers" },
   { name: "trust-risks", path: "/trust/risks", ready: ".heatmap" },
   {
@@ -485,6 +491,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureAiFlows(page, folder);
   await capturePlatformFlows(page, folder);
   await captureTrustFlows(page, folder);
+  await captureFieldFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -1092,6 +1099,38 @@ async function capturePlatformFlows(page: Page, folder: string) {
     await page.waitForSelector("#company-templates .form-sent", { timeout: 10_000 });
   }
   await shoot(page, `${folder}/company-threads`);
+}
+
+/**
+ * Custom fields: one added on companies (a list), filled in on a company from its Fields
+ * section, then used as a filter on the companies list.
+ */
+async function captureFieldFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  await page.goto(`${BASE}/admin/fields`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Add a field" }).click();
+  await page.selectOption("#field-record", "company");
+  await page.selectOption("#field-kind", "choice");
+  await page.fill("#field-label", `Coverage ${stamp}`);
+  await page.fill("#field-options", "Europe\nAmericas\nAsia");
+  await page.locator("button", { hasText: "Add the field" }).click();
+  await page.waitForSelector(`a:has-text("Coverage ${stamp}")`, { timeout: 10_000 });
+  await shoot(page, `${folder}/admin-fields-added`);
+
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002`, {
+    waitUntil: "networkidle",
+  });
+  await page.locator("summary", { hasText: "Edit the fields" }).first().click();
+  await page.selectOption("#cf-company-strategy", "credit");
+  await page.fill("#cf-company-regulator", "SEC");
+  await page.locator("button", { hasText: "Save the fields" }).click();
+  await page.waitForSelector(".prop__value:has-text('SEC')", { timeout: 10_000 });
+  await shoot(page, `${folder}/company-fields-saved`);
+
+  await page.goto(`${BASE}/companies?f=custom.strategy:is:Credit`, { waitUntil: "networkidle" });
+  if ((await page.locator("tbody tr").count()) < 1)
+    report(`${folder}/companies-custom-filter`, "filtering on a custom field found nothing");
+  await shoot(page, `${folder}/companies-custom-filter`);
 }
 
 /**

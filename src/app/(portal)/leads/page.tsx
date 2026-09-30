@@ -1,3 +1,5 @@
+import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
+import { customFilterFields, readCustom } from "@/lib/lists/custom";
 import Link from "next/link";
 import { AiFilterBox } from "@/components/ai/ai-assist";
 import { filterAction } from "@/app/(portal)/_actions/ai";
@@ -147,9 +149,10 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
         { value: "no", label: "No" },
       ],
     },
+    ...customFilterFields(page?.custom_fields ?? []),
   ];
   const conditions = parseFilters(filterParams, filterFields);
-  const readField = (lead: Lead, field: string): string | number | null => {
+  const readField = (lead: LeadsPage["leads"][number], field: string): string | number | null => {
     switch (field) {
       case "stage":
         return lead.stage;
@@ -166,7 +169,7 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
       case "overdue":
         return lead.first_reply_overdue ? "yes" : "no";
       default:
-        return null;
+        return readCustom(lead.custom, field) ?? null;
     }
   };
   const filtered = applyFilters(page?.leads ?? [], conditions, readField);
@@ -211,7 +214,16 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
         actions={
           canWrite && settings ? (
             <Popover label="Add lead" variant="primary">
-              <LeadCreateForm action={createLeadAction} sources={settings.sources} />
+              <LeadCreateForm
+                action={createLeadAction}
+                sources={settings.sources}
+                extra={
+                  <CustomFieldInputs
+                    idPrefix="new-lead"
+                    fields={(page?.custom_fields ?? []).filter((field) => field.required)}
+                  />
+                }
+              />
             </Popover>
           ) : undefined
         }

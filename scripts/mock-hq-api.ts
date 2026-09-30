@@ -32747,8 +32747,1133 @@ for (const [recordType, list, listKey, idKey, detail, detailKey, create, update]
   });
 }
 
-// After its declarations: the seed reads the block's constants.
+// --- automations (mirrors account_api/hq/automations.py and automation_routes.py) ------------
+
+type AutoDefinition = {
+  trigger: { kind: string; field?: string; to?: string; stage_key?: string; days?: number };
+  conditions: Array<{ field: string; op: string; value: string }>;
+  actions: Array<Record<string, unknown> & { kind: string }>;
+};
+type AutoRow = {
+  id: string;
+  name: string;
+  record_type: string;
+  status: string;
+  draft: AutoDefinition;
+  version: number;
+  failure_streak: number;
+  paused_reason: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+type AutoVersionRow = {
+  automation_id: string;
+  version: number;
+  definition: AutoDefinition;
+  published_by: string;
+  published_at: string;
+};
+type AutoRunRow = {
+  id: string;
+  automation_id: string;
+  version: number;
+  record_type: string;
+  record_id: string;
+  trigger_kind: string;
+  outcome: string;
+  detail: string;
+  depth: number;
+  fire_key: string;
+  started_by: string | null;
+  at: string;
+};
+
+const AUTO_TYPES: Record<string, string> = {
+  company: "Company",
+  person: "Person",
+  deal: "Deal",
+  lead: "Lead",
+};
+const AUTO_TRIGGERS: Record<string, string> = {
+  created: "When one is created",
+  field_changed: "When a field changes",
+  stage_entered: "When a deal enters a stage",
+  date_before: "Days before a date",
+  button: "When someone presses its button",
+};
+const AUTO_OPS: Record<string, string> = {
+  is: "is",
+  not: "is not",
+  has: "contains",
+  gt: "is more than",
+  lt: "is less than",
+  empty: "is empty",
+  set: "is set",
+};
+const AUTO_VALUE_OPS = ["is", "not", "has", "gt", "lt"];
+const AUTO_ACTIONS: Record<string, string> = {
+  task: "Create a task",
+  set_field: "Set a field",
+  notify: "Notify someone",
+  webhook: "Send a webhook",
+};
+const AUTO_PRIORITIES = ["low", "medium", "high", "urgent"];
+const AUTO_LIFECYCLES = ["prospect", "early_access", "customer", "former_customer", "disqualified"];
+const AUTO_FIELDS: Record<string, Record<string, [string, string]>> = {
+  company: {
+    name: ["Name", "text"],
+    lifecycle: ["Lifecycle", "text"],
+    country: ["Country", "text"],
+    firm_type: ["Type", "text"],
+    team_size_band: ["Team size", "text"],
+    source_key: ["Source", "text"],
+    owner_staff_id: ["Owner", "staff"],
+  },
+  person: {
+    full_name: ["Name", "text"],
+    email: ["Email", "text"],
+    title: ["Job title", "text"],
+    role_category: ["Role", "text"],
+    do_not_contact: ["Do not contact", "bool"],
+  },
+  deal: {
+    name: ["Name", "text"],
+    stage_key: ["Stage", "text"],
+    status: ["Status", "text"],
+    mrr_amount: ["Monthly value", "number"],
+    seats: ["Seats", "number"],
+    owner_staff_id: ["Owner", "staff"],
+    expected_close_date: ["Close date", "date"],
+    next_step_due: ["Next step due", "date"],
+  },
+  lead: {
+    full_name: ["Name", "text"],
+    email: ["Email", "text"],
+    company_name: ["Company", "text"],
+    stage: ["Stage", "text"],
+    source_key: ["Source", "text"],
+    owner_staff_id: ["Owner", "staff"],
+  },
+};
+const AUTO_SETTABLE: Record<string, string[]> = {
+  company: ["lifecycle", "owner_staff_id", "country"],
+  person: ["title"],
+  deal: ["owner_staff_id"],
+  lead: ["owner_staff_id"],
+};
+
+const automationsStore: AutoRow[] = [];
+const automationVersions: AutoVersionRow[] = [];
+const automationRuns: AutoRunRow[] = [];
+let autoChain: string[] = [];
+
+function autoRecords(recordType: string): Array<Record<string, unknown> & { id: string }> {
+  const lists: Record<string, Array<Record<string, unknown> & { id: string }>> = {
+    company: companies as unknown as Array<Record<string, unknown> & { id: string }>,
+    person: people as unknown as Array<Record<string, unknown> & { id: string }>,
+    deal: deals as unknown as Array<Record<string, unknown> & { id: string }>,
+    lead: leads as unknown as Array<Record<string, unknown> & { id: string }>,
+  };
+  return lists[recordType] ?? [];
+}
+const autoRecord = (recordType: string, id: string) =>
+  autoRecords(recordType).find((row) => row.id === id);
+function autoLabel(recordType: string, row: Record<string, unknown>): string {
+  return recordType === "person" || recordType === "lead"
+    ? String(row.full_name || row.email || "Someone")
+    : String(row.name || "Untitled");
+}
+function autoFieldOptions(recordType: string): Record<string, [string, string]> {
+  const kinds: Record<string, string> = { number: "number", date: "date", checkbox: "bool" };
+  const out: Record<string, [string, string]> = { ...(AUTO_FIELDS[recordType] ?? {}) };
+  for (const row of cfLive(recordType))
+    out[`custom.${row.field_key}`] = [row.label, kinds[row.kind] ?? "text"];
+  return out;
+}
+function autoSnapshot(recordType: string, row: Record<string, unknown> & { id: string }) {
+  const out: Record<string, string> = {};
+  for (const name of Object.keys(AUTO_FIELDS[recordType] ?? {})) {
+    const value = row[name];
+    out[name] =
+      value === null || value === undefined
+        ? ""
+        : typeof value === "boolean"
+          ? String(value)
+          : String(value);
+  }
+  for (const field of cfLive(recordType))
+    out[`custom.${field.field_key}`] = customValues.get(cfKey(field.id, row.id)) ?? "";
+  return out;
+}
+function autoHolds(
+  condition: { field: string; op: string; value: string },
+  values: Record<string, string>,
+) {
+  const text = values[condition.field] ?? "";
+  const wanted = condition.value ?? "";
+  switch (condition.op) {
+    case "empty":
+      return text === "";
+    case "set":
+      return text !== "";
+    case "is":
+      return text.toLowerCase() === wanted.toLowerCase();
+    case "not":
+      return text.toLowerCase() !== wanted.toLowerCase();
+    case "has":
+      return text.toLowerCase().includes(wanted.toLowerCase());
+    case "gt":
+    case "lt": {
+      const left = Number(text.replace(/,/g, ""));
+      const right = Number(wanted.replace(/,/g, ""));
+      if (Number.isNaN(left) || Number.isNaN(right) || text === "" || wanted === "") {
+        if (/^\d{4}-/.test(text) && /^\d{4}-/.test(wanted))
+          return condition.op === "gt"
+            ? text.slice(0, 10) > wanted.slice(0, 10)
+            : text.slice(0, 10) < wanted.slice(0, 10);
+        return false;
+      }
+      return condition.op === "gt" ? left > right : left < right;
+    }
+    default:
+      return false;
+  }
+}
+const autoNames = () =>
+  new Map(staff.map((member) => [member.id, member.display_name || member.email]));
+function autoDescribe(action: Record<string, unknown>, recordType: string): string {
+  const names = autoNames();
+  const who =
+    action.to === "owner"
+      ? "the record's owner"
+      : (names.get(String(action.to ?? "")) ?? "someone");
+  switch (action.kind) {
+    case "task": {
+      const due = Number(action.due_in_days ?? 0);
+      return `Task for ${who}, due ${due === 0 ? "today" : `in ${due} day${due === 1 ? "" : "s"}`}: ${String(action.title ?? "")}`;
+    }
+    case "notify":
+      return `Tell ${who}: ${String(action.message ?? "")}`;
+    case "set_field": {
+      const field = String(action.field ?? "");
+      const value = String(action.value ?? "");
+      const label = autoFieldOptions(recordType)[field]?.[0] ?? field;
+      return `Set ${label} to ${field === "owner_staff_id" ? (names.get(value) ?? value) : value || "empty"}`;
+    }
+    case "webhook":
+      return `Send the automation.fired webhook${action.label ? ` (${String(action.label)})` : ""}`;
+    default:
+      return String(action.kind);
+  }
+}
+
+/** The service's validate(): the refusal it would give, keyed by the part that is wrong. */
+function autoValidate(
+  recordType: string,
+  raw: unknown,
+  publishing: boolean,
+): AutoDefinition | { status: number; body: unknown } {
+  const bad = (part: string, message: string) =>
+    refuse(400, "malformed_request", { [part]: message });
+  const body = (raw ?? {}) as Record<string, unknown>;
+  const fields = autoFieldOptions(recordType);
+  const active = new Set(staff.filter((member) => member.is_active).map((member) => member.id));
+  const rawTrigger = (body.trigger ?? {}) as Record<string, unknown>;
+  const kind = String(rawTrigger.kind ?? "");
+  if (!(kind in AUTO_TRIGGERS))
+    return bad("trigger", `one of ${Object.keys(AUTO_TRIGGERS).join(", ")}`);
+  const trigger: AutoDefinition["trigger"] = { kind };
+  if (kind === "field_changed") {
+    const field = String(rawTrigger.field ?? "");
+    if (!(field in fields)) return bad("trigger", "choose the field that changes");
+    trigger.field = field;
+    trigger.to = String(rawTrigger.to ?? "")
+      .trim()
+      .slice(0, 200);
+  } else if (kind === "stage_entered") {
+    if (recordType !== "deal") return bad("trigger", "only a deal has stages");
+    const stage = String(rawTrigger.stage_key ?? "");
+    if (!stages.some((row) => row.key === stage && !row.archived))
+      return bad("trigger", "choose a stage");
+    trigger.stage_key = stage;
+  } else if (kind === "date_before") {
+    const field = String(rawTrigger.field ?? "");
+    if (
+      !Object.entries(fields).some(([key, [, fieldKind]]) => key === field && fieldKind === "date")
+    )
+      return bad("trigger", "choose a date field");
+    const days = Number(rawTrigger.days ?? -1);
+    if (!Number.isInteger(days) || days < 0 || days > 365)
+      return bad("trigger", "days before, 0 to 365");
+    trigger.field = field;
+    trigger.days = days;
+  }
+  const rawConditions = Array.isArray(body.conditions)
+    ? (body.conditions as Array<Record<string, unknown>>)
+    : [];
+  if (rawConditions.length > 10) return bad("conditions", "at most 10");
+  const conditions: AutoDefinition["conditions"] = [];
+  for (const item of rawConditions) {
+    const field = String(item.field ?? "");
+    const op = String(item.op ?? "");
+    if (!(field in fields) || !(op in AUTO_OPS))
+      return bad("conditions", "each names a field and a test");
+    const value = String(item.value ?? "")
+      .trim()
+      .slice(0, 200);
+    if (AUTO_VALUE_OPS.includes(op) && !value)
+      return bad("conditions", `${fields[field]![0]} ${AUTO_OPS[op]} what?`);
+    conditions.push({ field, op, value: AUTO_VALUE_OPS.includes(op) ? value : "" });
+  }
+  const rawActions = Array.isArray(body.actions)
+    ? (body.actions as Array<Record<string, unknown>>)
+    : [];
+  if (rawActions.length > 5) return bad("actions", "at most 5");
+  if (publishing && rawActions.length === 0)
+    return bad("actions", "at least one, or it does nothing");
+  const settable = [
+    ...(AUTO_SETTABLE[recordType] ?? []),
+    ...Object.keys(fields).filter((key) => key.startsWith("custom.")),
+  ];
+  const actions: AutoDefinition["actions"] = [];
+  for (const item of rawActions) {
+    const actionKind = String(item.kind ?? "");
+    if (!(actionKind in AUTO_ACTIONS))
+      return bad("actions", `one of ${Object.keys(AUTO_ACTIONS).join(", ")}`);
+    const action: Record<string, unknown> & { kind: string } = { kind: actionKind };
+    if (actionKind === "task" || actionKind === "notify") {
+      const who = String(item.to ?? "owner");
+      if (who !== "owner" && !active.has(who))
+        return bad("actions", "the record's owner, or someone on the team");
+      action.to = who;
+    }
+    if (actionKind === "task") {
+      const title = String(item.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title) return bad("actions", "the task needs a title");
+      const due = Number(item.due_in_days ?? 0);
+      if (!Number.isInteger(due) || due < 0 || due > 365)
+        return bad("actions", "a task is due 0 to 365 days on");
+      const priority = String(item.priority ?? "medium");
+      if (!AUTO_PRIORITIES.includes(priority))
+        return bad("actions", `priority ${AUTO_PRIORITIES.join(", ")}`);
+      Object.assign(action, { title, due_in_days: due, priority });
+    } else if (actionKind === "notify") {
+      const message = String(item.message ?? "")
+        .trim()
+        .slice(0, 300);
+      if (!message) return bad("actions", "what the notification says");
+      action.message = message;
+    } else if (actionKind === "set_field") {
+      const field = String(item.field ?? "");
+      if (!settable.includes(field)) return bad("actions", "a field an automation may set");
+      let value = String(item.value ?? "")
+        .trim()
+        .slice(0, 2000);
+      if (field === "lifecycle" && !AUTO_LIFECYCLES.includes(value))
+        return bad("actions", `lifecycle is one of ${AUTO_LIFECYCLES.join(", ")}`);
+      if (field === "owner_staff_id" && !active.has(value))
+        return bad("actions", "the new owner is someone on the team");
+      if (field.startsWith("custom.")) {
+        const definition = cfLive(recordType).find((row) => row.field_key === field.slice(7));
+        const normal = definition ? cfNormalise(definition, value) : "";
+        if (typeof normal !== "string") return bad("actions", normal.refusal);
+        value = normal;
+      }
+      Object.assign(action, { field, value });
+    } else {
+      action.label = String(item.label ?? "")
+        .trim()
+        .slice(0, 80);
+    }
+    actions.push(action);
+  }
+  return { trigger, conditions, actions };
+}
+
+const autoPublished = (row: AutoRow) =>
+  row.version > 0
+    ? (automationVersions.find(
+        (item) => item.automation_id === row.id && item.version === row.version,
+      )?.definition ?? null)
+    : null;
+
+function autoRecordRun(
+  row: AutoRow,
+  recordType: string,
+  recordId: string,
+  trigger: string,
+  outcome: string,
+  detail: string,
+  startedBy: string | null,
+  fireKey = "",
+) {
+  automationRuns.unshift({
+    id: randomUUID(),
+    automation_id: row.id,
+    version: row.version,
+    record_type: recordType,
+    record_id: recordId,
+    trigger_kind: trigger,
+    outcome,
+    detail: detail.slice(0, 4000),
+    depth: autoChain.length,
+    fire_key: fireKey,
+    started_by: startedBy,
+    at: now(),
+  });
+}
+
+function autoRunOne(
+  row: AutoRow,
+  recordType: string,
+  recordId: string,
+  trigger: string,
+  startedBy: string | null,
+  actingId: string | null,
+  definition: AutoDefinition,
+): { outcome: string; detail: string[] } | null {
+  if (autoChain.includes(row.id) || autoChain.length >= 3) {
+    const reason = autoChain.includes(row.id)
+      ? "its own change would have started it again"
+      : "a chain of automations reached depth 3";
+    autoRecordRun(
+      row,
+      recordType,
+      recordId,
+      trigger,
+      "skipped_loop",
+      `Not run: ${reason}.`,
+      startedBy,
+    );
+    return { outcome: "skipped_loop", detail: [] };
+  }
+  const record = autoRecord(recordType, recordId);
+  if (!record) return null;
+  const values = autoSnapshot(recordType, record);
+  if (!definition.conditions.every((condition) => autoHolds(condition, values))) return null;
+  const actingIdFinal =
+    actingId ??
+    automationVersions.find((item) => item.automation_id === row.id && item.version === row.version)
+      ?.published_by ??
+    "";
+  const acting = staff.find((member) => member.id === actingIdFinal && member.is_active);
+  const lines: string[] = [];
+  let outcome = "done";
+  const changes: Record<string, [string, string]> = {};
+  autoChain = [...autoChain, row.id];
+  try {
+    if (!acting) throw new Error("the person it acts as is no longer on the team");
+    const names = autoNames();
+    for (const action of definition.actions) {
+      const owner = String(record.owner_staff_id ?? "");
+      const target = action.to === "owner" ? owner : String(action.to ?? "");
+      if (action.kind === "task") {
+        const assignee = target || acting.id;
+        tasks.push({
+          id: randomUUID(),
+          title: String(action.title ?? ""),
+          body: `From the automation “${row.name}”.`,
+          status: "open",
+          priority: String(action.priority ?? "medium"),
+          due_on: addDaysIso(todayIso(), Number(action.due_in_days ?? 0)),
+          assignee_staff_id: assignee,
+          company_id: recordType === "company" ? record.id : String(record.company_id ?? ""),
+          person_id: recordType === "person" ? record.id : "",
+          deal_id: recordType === "deal" ? record.id : "",
+          lead_id: recordType === "lead" ? record.id : "",
+          ticket_id: "",
+          origin: "automation",
+          completed_at: null,
+          created_at: now(),
+        } as TaskRow);
+        lines.push(`Task for ${names.get(assignee) ?? "someone"}: ${String(action.title ?? "")}`);
+      } else if (action.kind === "notify") {
+        if (!target) {
+          lines.push("Nobody told: the record has no owner");
+          continue;
+        }
+        inboxNotify({
+          recipients: [target],
+          subject_type: recordType,
+          subject_id: record.id,
+          subject_label: autoLabel(recordType, record),
+          reason: "state",
+          summary: String(action.message ?? "").slice(0, 300),
+        });
+        lines.push(`Told ${names.get(target) ?? "someone"}: ${String(action.message ?? "")}`);
+      } else if (action.kind === "set_field") {
+        const field = String(action.field ?? "");
+        const value = String(action.value ?? "");
+        const label = autoFieldOptions(recordType)[field]?.[0] ?? field;
+        if (field.startsWith("custom.")) {
+          const writes = cfCheck(
+            recordType,
+            record.id,
+            { [field.slice(7)]: value },
+            { authorization: "" },
+            false,
+          );
+          if (!Array.isArray(writes)) throw new Error(`${label} could not be set`);
+          for (const write of writes) changes[field] = [write.before, write.value];
+          cfWrite(record.id, writes);
+        } else if (String(record[field] ?? "") !== value) {
+          changes[field] = [String(record[field] ?? ""), value];
+          (record as Record<string, unknown>)[field] = value;
+        }
+        lines.push(changes[field] ? `Set ${label}` : `${label} already had that value`);
+      } else if (action.kind === "webhook") {
+        const before = webhookDeliveries.length;
+        mockEmit("automation.fired");
+        const queued = webhookDeliveries.length - before;
+        lines.push(`Webhook queued for ${queued} receiver${queued === 1 ? "" : "s"}`);
+      }
+    }
+    if (Object.keys(changes).length)
+      autoAfterWrite(recordType, record.id, false, changes, acting.id);
+  } catch (error) {
+    outcome = "failed";
+    lines.push(`Failed: ${error instanceof Error ? error.message : "an error"}`);
+  } finally {
+    autoChain = autoChain.slice(0, -1);
+  }
+  autoRecordRun(row, recordType, recordId, trigger, outcome, lines.join("\n"), startedBy);
+  row.failure_streak = outcome === "failed" ? row.failure_streak + 1 : 0;
+  if (row.failure_streak >= 5 && row.status === "active") {
+    row.status = "paused";
+    row.paused_reason =
+      `Paused after ${row.failure_streak} failed runs in a row. The last: ${lines.at(-1)}`.slice(
+        0,
+        400,
+      );
+  }
+  row.updated_at = now();
+  return { outcome, detail: lines };
+}
+
+function autoAfterWrite(
+  recordType: string,
+  recordId: string,
+  created: boolean,
+  changes: Record<string, [string, string]>,
+  actorId: string | null,
+) {
+  for (const row of automationsStore.filter(
+    (item) => item.record_type === recordType && item.status === "active",
+  )) {
+    const definition = autoPublished(row);
+    if (!definition) continue;
+    const trigger = definition.trigger;
+    const matches =
+      trigger.kind === "created"
+        ? created
+        : !created &&
+          (trigger.kind === "field_changed"
+            ? trigger.field! in changes &&
+              (!trigger.to ||
+                String(changes[trigger.field!]![1]).toLowerCase() === trigger.to.toLowerCase())
+            : trigger.kind === "stage_entered"
+              ? "stage_key" in changes && changes.stage_key![1] === trigger.stage_key
+              : false);
+    if (matches) autoRunOne(row, recordType, recordId, trigger.kind, actorId, null, definition);
+  }
+}
+
+function automationView(row: AutoRow) {
+  const runs = automationRuns.filter((run) => run.automation_id === row.id);
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const recent = runs.filter((run) => run.at >= since);
+  const published = autoPublished(row);
+  const trigger = (published ?? row.draft).trigger.kind;
+  return {
+    automation_id: row.id,
+    name: row.name,
+    record_type: row.record_type,
+    record_label: AUTO_TYPES[row.record_type] ?? row.record_type,
+    status: row.status,
+    version: row.version,
+    trigger,
+    trigger_label: AUTO_TRIGGERS[trigger] ?? "",
+    failure_streak: row.failure_streak,
+    paused_reason: row.paused_reason,
+    runs_30_days: recent.length,
+    failed_30_days: recent.filter((run) => run.outcome === "failed").length,
+    skipped_30_days: recent.filter((run) => run.outcome === "skipped_loop").length,
+    last_run_at: runs[0]?.at ?? null,
+    draft_differs: !published || JSON.stringify(published) !== JSON.stringify(row.draft),
+    created_by_name: nameOf(row.created_by),
+    updated_at: row.updated_at,
+  };
+}
+
+function autoRunView(run: AutoRunRow) {
+  const record = autoRecord(run.record_type, run.record_id);
+  return {
+    run_id: run.id,
+    automation_id: run.automation_id,
+    version: run.version,
+    record_type: run.record_type,
+    record_id: run.record_id,
+    record_label: record ? autoLabel(run.record_type, record) : "",
+    trigger: run.trigger_kind,
+    outcome: run.outcome,
+    detail: run.detail,
+    depth: run.depth,
+    started_by_name: run.started_by ? nameOf(run.started_by) : "",
+    at: run.at,
+  };
+}
+
+function seedAutomations() {
+  automationsStore.length = 0;
+  automationVersions.length = 0;
+  automationRuns.length = 0;
+  autoChain = [];
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const ADMIN = "aa000000-0000-4000-8000-00000000000b";
+  const add = (
+    id: string,
+    name: string,
+    record_type: string,
+    definition: AutoDefinition,
+    status: string,
+    by: string,
+  ) => {
+    const row: AutoRow = {
+      id,
+      name,
+      record_type,
+      status,
+      draft: definition,
+      version: status === "draft" ? 0 : 1,
+      failure_streak: 0,
+      paused_reason: "",
+      created_by: by,
+      created_at: agoIso(24 * 20),
+      updated_at: agoIso(24 * 2),
+    };
+    automationsStore.push(row);
+    if (row.version)
+      automationVersions.push({
+        automation_id: id,
+        version: 1,
+        definition,
+        published_by: by,
+        published_at: agoIso(24 * 19),
+      });
+    return row;
+  };
+  const proposal = add(
+    "a7000001-0000-4000-8000-000000000000",
+    "Pricing call when a proposal goes out",
+    "deal",
+    {
+      trigger: { kind: "stage_entered", stage_key: "proposal" },
+      conditions: [],
+      actions: [
+        {
+          kind: "task",
+          title: "Book the pricing call",
+          due_in_days: 2,
+          priority: "high",
+          to: "owner",
+        },
+      ],
+    },
+    "active",
+    ADMIN,
+  );
+  add(
+    "a7000002-0000-4000-8000-000000000000",
+    "Welcome pack for a new customer",
+    "company",
+    {
+      trigger: { kind: "field_changed", field: "lifecycle", to: "customer" },
+      conditions: [],
+      actions: [
+        {
+          kind: "task",
+          title: "Send the welcome pack",
+          due_in_days: 1,
+          priority: "medium",
+          to: "owner",
+        },
+        { kind: "notify", to: OWNER, message: "A new customer: say thank you." },
+      ],
+    },
+    "active",
+    OWNER,
+  );
+  add(
+    "a7000003-0000-4000-8000-000000000000",
+    "Renewal pack",
+    "company",
+    {
+      trigger: { kind: "button" },
+      conditions: [],
+      actions: [
+        {
+          kind: "task",
+          title: "Prepare the renewal pack",
+          due_in_days: 3,
+          priority: "medium",
+          to: "owner",
+        },
+      ],
+    },
+    "active",
+    OWNER,
+  );
+  const paused = add(
+    "a7000004-0000-4000-8000-000000000000",
+    "Chase quiet leads",
+    "lead",
+    {
+      trigger: { kind: "field_changed", field: "stage", to: "attempting" },
+      conditions: [{ field: "source_key", op: "is", value: "website" }],
+      actions: [{ kind: "notify", to: "owner", message: "Try them again tomorrow morning." }],
+    },
+    "paused",
+    ADMIN,
+  );
+  paused.failure_streak = 5;
+  paused.paused_reason =
+    "Paused after 5 failed runs in a row. The last: Failed: the person it acts as is no longer on the team";
+  add(
+    "a7000005-0000-4000-8000-000000000000",
+    "Security review on large deals",
+    "deal",
+    {
+      trigger: { kind: "created" },
+      conditions: [{ field: "mrr_amount", op: "gt", value: "2000" }],
+      actions: [],
+    },
+    "draft",
+    ADMIN,
+  );
+  const deal = deals[0];
+  if (deal)
+    automationRuns.push({
+      id: randomUUID(),
+      automation_id: proposal.id,
+      version: 1,
+      record_type: "deal",
+      record_id: deal.id,
+      trigger_kind: "stage_entered",
+      outcome: "done",
+      detail: "Task for The Owner: Book the pricing call",
+      depth: 0,
+      fire_key: "",
+      started_by: ADMIN,
+      at: agoIso(30),
+    });
+}
+
+WEBHOOK_EVENTS["automation.fired"] = "An automation's webhook action ran";
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/automations",
+    auth: true,
+    capability: "hq:admin",
+    handler: () => {
+      const order: Record<string, number> = { active: 0, paused: 1, draft: 2, archived: 3 };
+      return ok({
+        automations: automationsStore
+          .map(automationView)
+          .sort(
+            (a, b) =>
+              (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.name.localeCompare(b.name),
+          ),
+        record_types: Object.entries(AUTO_TYPES).map(([value, label]) => ({ value, label })),
+        paused: automationsStore.filter((row) => row.status === "paused").length,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/automations/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 120);
+      if (!name) return refuse(400, "malformed_request", { name: "what it does, in a line" });
+      const recordType = String(body.record_type ?? "");
+      if (!(recordType in AUTO_TYPES))
+        return refuse(400, "malformed_request", {
+          record_type: Object.keys(AUTO_TYPES).join(", "),
+        });
+      const who = caller(headers)?.member.id ?? "";
+      const row: AutoRow = {
+        id: randomUUID(),
+        name,
+        record_type: recordType,
+        status: "draft",
+        draft: { trigger: { kind: "created" }, conditions: [], actions: [] },
+        version: 0,
+        failure_streak: 0,
+        paused_reason: "",
+        created_by: who,
+        created_at: now(),
+        updated_at: now(),
+      };
+      automationsStore.push(row);
+      audit("automation.created", who || null, "automation", row.id);
+      return ok({ automation: automationView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/automations/{automation_id}",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params }) => {
+      const row = automationsStore.find((item) => item.id === params.automation_id);
+      if (!row) return refuse(404, "not_found");
+      const published = autoPublished(row);
+      const fields = autoFieldOptions(row.record_type);
+      const kinds = (options: Record<string, [string, string]>) =>
+        Object.entries(options).map(([value, [label, kind]]) => ({ value, label, kind }));
+      const settable = Object.fromEntries(
+        Object.entries(fields).filter(
+          ([key]) =>
+            (AUTO_SETTABLE[row.record_type] ?? []).includes(key) || key.startsWith("custom."),
+        ),
+      ) as Record<string, [string, string]>;
+      return ok({
+        automation: automationView(row),
+        draft: row.draft,
+        published,
+        published_summary: (published?.actions ?? []).map((action) =>
+          autoDescribe(action, row.record_type),
+        ),
+        versions: automationVersions
+          .filter((item) => item.automation_id === row.id)
+          .sort((a, b) => b.version - a.version)
+          .map((item) => ({
+            version: item.version,
+            published_by_name: nameOf(item.published_by),
+            published_at: item.published_at,
+          })),
+        runs: automationRuns
+          .filter((run) => run.automation_id === row.id)
+          .slice(0, 50)
+          .map(autoRunView),
+        options: {
+          triggers: Object.entries(AUTO_TRIGGERS)
+            .filter(([key]) => key !== "stage_entered" || row.record_type === "deal")
+            .map(([value, label]) => ({ value, label })),
+          ops: Object.entries(AUTO_OPS).map(([value, label]) => ({ value, label })),
+          action_kinds: Object.entries(AUTO_ACTIONS).map(([value, label]) => ({ value, label })),
+          fields: kinds(fields),
+          settable: kinds(settable),
+          date_fields: kinds(fields)
+            .filter((item) => item.kind === "date")
+            .map(({ value, label }) => ({ value, label })),
+          stages:
+            row.record_type === "deal"
+              ? stages
+                  .filter((stage) => !stage.archived)
+                  .sort((a, b) => a.position - b.position)
+                  .map((stage) => ({ value: stage.key, label: stage.label }))
+              : [],
+          lifecycles: AUTO_LIFECYCLES,
+          priorities: AUTO_PRIORITIES,
+          staff: staff
+            .filter((member) => member.is_active)
+            .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        },
+        limits: { conditions: 10, actions: 5, depth: 3, pause_after: 5, dry_run: 50 },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/automations/{automation_id}/draft",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const row = automationsStore.find((item) => item.id === params.automation_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.status === "archived")
+        return refuse(400, "malformed_request", { status: "archived; restore it first" });
+      if ("name" in body) {
+        const name = String(body.name ?? "")
+          .trim()
+          .slice(0, 120);
+        if (!name) return refuse(400, "malformed_request", { name: "cannot be empty" });
+        row.name = name;
+      }
+      if ("definition" in body) {
+        const checked = autoValidate(row.record_type, body.definition, false);
+        if ("status" in checked) return checked;
+        row.draft = checked;
+      }
+      row.updated_at = now();
+      audit("automation.draft_saved", caller(headers)?.member.id ?? null, "automation", row.id);
+      return ok({ automation: automationView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/automations/{automation_id}/publish",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, headers }) => {
+      const row = automationsStore.find((item) => item.id === params.automation_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.status === "archived")
+        return refuse(400, "malformed_request", { status: "archived; restore it first" });
+      const checked = autoValidate(row.record_type, row.draft, true);
+      if ("status" in checked) return checked;
+      const published = autoPublished(row);
+      if (published && JSON.stringify(published) === JSON.stringify(checked))
+        return refuse(400, "malformed_request", {
+          draft: "the same as the version running; change it first",
+        });
+      const who = caller(headers)?.member.id ?? "";
+      row.version += 1;
+      automationVersions.push({
+        automation_id: row.id,
+        version: row.version,
+        definition: checked,
+        published_by: who,
+        published_at: now(),
+      });
+      Object.assign(row, {
+        status: "active",
+        failure_streak: 0,
+        paused_reason: "",
+        updated_at: now(),
+      });
+      audit("automation.published", who || null, "automation", row.id, "", {
+        version: row.version,
+      });
+      return ok({ automation: automationView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/automations/{automation_id}/act",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const row = automationsStore.find((item) => item.id === params.automation_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      const from = row.status;
+      if (action === "pause") {
+        if (row.status !== "active")
+          return refuse(400, "malformed_request", { status: "only a running automation pauses" });
+        Object.assign(row, { status: "paused", paused_reason: reason || "Paused by hand." });
+      } else if (action === "resume") {
+        if (row.status !== "paused")
+          return refuse(400, "malformed_request", { status: "only a paused automation resumes" });
+        Object.assign(row, { status: "active", paused_reason: "", failure_streak: 0 });
+      } else if (action === "archive") {
+        if (row.status === "archived")
+          return refuse(400, "malformed_request", { status: "already archived" });
+        row.status = "archived";
+      } else if (action === "restore") {
+        if (row.status !== "archived")
+          return refuse(400, "malformed_request", { status: "not archived" });
+        Object.assign(row, {
+          status: row.version ? "paused" : "draft",
+          paused_reason: row.version ? "Restored from the archive." : "",
+        });
+      } else return refuse(400, "malformed_request", { action: "pause, resume, archive, restore" });
+      row.updated_at = now();
+      audit(
+        `automation.${action}`,
+        caller(headers)?.member.id ?? null,
+        "automation",
+        row.id,
+        reason,
+        {
+          from,
+          to: row.status,
+        },
+      );
+      return ok({ automation: automationView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/automations/{automation_id}/dry-run",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, headers }) => {
+      const row = automationsStore.find((item) => item.id === params.automation_id);
+      if (!row) return refuse(404, "not_found");
+      const checked = autoValidate(row.record_type, row.draft, false);
+      if ("status" in checked) return checked;
+      const fields = autoFieldOptions(row.record_type);
+      const records = [...autoRecords(row.record_type)]
+        .filter((record) => !record.archived && !record.archived_at)
+        .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+        .slice(0, 50);
+      const results = records.map((record) => {
+        const values = autoSnapshot(row.record_type, record);
+        const failing = checked.conditions.filter((condition) => !autoHolds(condition, values));
+        return {
+          record_id: record.id,
+          label: autoLabel(row.record_type, record),
+          matches: failing.length === 0,
+          why_not: failing.map((c) =>
+            `${fields[c.field]?.[0] ?? c.field} ${AUTO_OPS[c.op] ?? c.op} ${c.value}`.trim(),
+          ),
+          would: failing.length
+            ? []
+            : checked.actions.map((action) => autoDescribe(action, row.record_type)),
+        };
+      });
+      audit("automation.dry_run", caller(headers)?.member.id ?? null, "automation", row.id);
+      const notes: Record<string, string> = {
+        created: "Runs only as records are created; these are the last fifty for their conditions.",
+        date_before:
+          "Runs nightly on dates coming up; these are the last fifty for their conditions.",
+      };
+      return ok({
+        results,
+        checked: results.length,
+        would_match: results.filter((item) => item.matches).length,
+        trigger_note: notes[checked.trigger.kind] ?? "",
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/automations/{automation_id}/run",
+    auth: true,
+    handler: ({ params, body, headers }) => {
+      const row = automationsStore.find((item) => item.id === params.automation_id);
+      if (!row) return refuse(404, "not_found");
+      if (!hasCap(headers, row.record_type === "deal" ? "deals:write" : "crm:write"))
+        return refuse(403, "forbidden", {
+          action: "your role reads this record but does not change it",
+        });
+      const definition = autoPublished(row);
+      if (row.status !== "active" || definition?.trigger.kind !== "button")
+        return refuse(400, "malformed_request", {
+          automation: "not a running automation with a button",
+        });
+      const recordId = String(body.record_id ?? "");
+      if (!autoRecord(row.record_type, recordId)) return refuse(404, "not_found");
+      const who = caller(headers)?.member.id ?? null;
+      const run = autoRunOne(row, row.record_type, recordId, "button", who, who, definition);
+      audit("automation.pressed", who, "automation", row.id);
+      if (!run)
+        return ok({
+          outcome: "conditions_not_met",
+          detail: ["Its conditions do not hold for this record, so nothing ran."],
+        });
+      return ok({ outcome: run.outcome, detail: run.detail });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/record-automations",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query, headers }) => {
+      const recordType = query.record_type ?? "";
+      if (!(recordType in AUTO_TYPES))
+        return refuse(400, "malformed_request", {
+          record_type: Object.keys(AUTO_TYPES).join(", "),
+        });
+      const recordId = query.record_id ?? "";
+      const names = new Map(automationsStore.map((row) => [row.id, row.name]));
+      return ok({
+        buttons: automationsStore
+          .filter(
+            (row) =>
+              row.record_type === recordType &&
+              row.status === "active" &&
+              autoPublished(row)?.trigger.kind === "button",
+          )
+          .map((row) => ({ automation_id: row.id, name: row.name }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+        runs: automationRuns
+          .filter((run) => run.record_type === recordType && run.record_id === recordId)
+          .slice(0, 20)
+          .map((run) => ({
+            ...autoRunView(run),
+            automation_name: names.get(run.automation_id) ?? "",
+          })),
+        can_press: hasCap(headers, recordType === "deal" ? "deals:write" : "crm:write"),
+      });
+    },
+  },
+);
+
+// The record types' handlers fire triggers after they write, as the service's do.
+for (const [recordType, create, update, idKey, detailKey] of [
+  ["company", "hq/companies/create", "hq/companies/{company_id}/update", "company_id", "company"],
+  ["person", "hq/people/create", "hq/people/{person_id}/update", "person_id", "person"],
+  ["lead", "hq/leads/create", "hq/leads/{lead_id}/update", "lead_id", "lead"],
+  ["deal", "hq/deals/create", "hq/deals/{deal_id}/update", "deal_id", "deal"],
+] as const) {
+  cfWrap("POST", create, (original) => (context) => {
+    const answer = original(context);
+    if (answer.status !== 200) return answer;
+    const record = (answer.body as Record<string, unknown>)[detailKey] as Record<string, unknown>;
+    autoAfterWrite(
+      recordType,
+      String(record[idKey] ?? ""),
+      true,
+      {},
+      caller(context.headers)?.member.id ?? null,
+    );
+    return answer;
+  });
+  cfWrap("POST", update, (original) => (context) => {
+    const recordId = String(context.params[idKey] ?? "");
+    const record = autoRecord(recordType, recordId);
+    const before = record ? autoSnapshot(recordType, record) : {};
+    const answer = original(context);
+    if (answer.status !== 200 || !record) return answer;
+    const after = autoSnapshot(recordType, record);
+    const changes: Record<string, [string, string]> = {};
+    for (const [key, value] of Object.entries(after))
+      if (before[key] !== value) changes[key] = [before[key] ?? "", value];
+    if (Object.keys(changes).length)
+      autoAfterWrite(
+        recordType,
+        recordId,
+        false,
+        changes,
+        caller(context.headers)?.member.id ?? null,
+      );
+    return answer;
+  });
+}
+cfWrap("POST", "hq/deals/{deal_id}/stage", (original) => (context) => {
+  const record = autoRecord("deal", String(context.params.deal_id ?? ""));
+  const from = String(record?.stage_key ?? "");
+  const answer = original(context);
+  if (answer.status !== 200 || !record || record.stage_key === from) return answer;
+  autoAfterWrite(
+    "deal",
+    record.id,
+    false,
+    { stage_key: [from, String(record.stage_key)] },
+    caller(context.headers)?.member.id ?? null,
+  );
+  return answer;
+});
+
+// After their declarations: the seeds read the blocks' constants.
 seedCustomFields();
+seedAutomations();
 
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
@@ -32849,6 +33974,7 @@ function resetWorld() {
   seedPlatform();
   seedTrust();
   seedCustomFields();
+  seedAutomations();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

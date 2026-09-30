@@ -38,7 +38,14 @@ function TeamSizeOptions() {
   );
 }
 
-export function CompanyCreateForm({ action }: { action: Action }) {
+export function CompanyCreateForm({
+  extra,
+  action,
+}: {
+  /** The record's required custom fields. */
+  extra?: React.ReactNode;
+  action: Action;
+}) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
@@ -76,6 +83,7 @@ export function CompanyCreateForm({ action }: { action: Action }) {
       <Field id="company-country" label="Country">
         <Input id="company-country" name="country" maxLength={60} disabled={isPending} />
       </Field>
+      {extra}
       <Button variant="primary" type="submit" disabled={isPending}>
         {isPending ? "Creating…" : "Create company"}
       </Button>
