@@ -1,5 +1,6 @@
 import {
   Award,
+  Bell,
   Building2,
   CalendarClock,
   CalendarOff,
@@ -46,7 +47,11 @@ export type NavGroup = {
 export const NAV_GROUPS: readonly NavGroup[] = [
   {
     label: "Command",
-    links: [{ href: "/home", label: "Home", icon: LayoutDashboard, key: "h" }],
+    links: [
+      { href: "/home", label: "Home", icon: LayoutDashboard, key: "h" },
+      // Everyone's: what needs this person, with the reason it is here.
+      { href: "/inbox", label: "Inbox", icon: Bell, key: "i" },
+    ],
   },
   {
     label: "CRM",

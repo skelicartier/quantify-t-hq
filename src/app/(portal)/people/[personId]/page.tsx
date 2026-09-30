@@ -30,6 +30,7 @@ import {
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { RecordFollow } from "@/components/inbox/record-follow";
 import { ViewedBy } from "@/components/security/viewed-by";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompanies, readPerson, type PersonDetail } from "@/lib/api/crm";
@@ -159,6 +160,13 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
         ]}
         actions={
           <>
+            <RecordFollow
+              token={context.token}
+              subjectType="person"
+              subjectId={person.person_id}
+              label={person.full_name || person.email}
+              path={`/people/${person.person_id}`}
+            />
             {person.email && !person.do_not_contact && (
               <a className="btn btn--small" href={`mailto:${person.email}`}>
                 Email

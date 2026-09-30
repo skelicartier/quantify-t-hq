@@ -137,6 +137,9 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
   { name: "admin-approvals", path: "/admin/approvals", ready: "main#main-content" },
   { name: "admin-security", path: "/admin/security", ready: "main#main-content" },
+  { name: "inbox", path: "/inbox", ready: ".inbox-list, .empty-state" },
+  { name: "inbox-done", path: "/inbox?view=done", ready: "main#main-content" },
+  { name: "me-notifications", path: "/me/notifications", ready: ".prefs-modes" },
   { name: "confirm-reads", path: "/confirm-reads?next=%2Fcompanies", ready: "main#main-content" },
   { name: "confirm-reads-held", path: "/confirm-reads?held=1", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
@@ -343,6 +346,7 @@ async function captureInteractions(page: Page, folder: string) {
 
   await captureMailFlows(page, folder);
   await captureSecurityFlows(page, folder);
+  await captureInboxFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -395,6 +399,67 @@ async function captureInteractions(page: Page, folder: string) {
   await assertAccessible(page, `${folder}/lead-anonymised`);
   await page.screenshot({ path: `${OUT}/${folder}/lead-anonymised.png`, fullPage: true });
   console.log(`  ✓ ${folder}/lead-anonymised`);
+}
+
+/**
+ * The inbox, end to end: a line snoozed to tomorrow, a line opened (read, and the record
+ * it points at opens), a company followed and a reminder set on it, mail settings saved.
+ * Later passes find the work done and only look.
+ */
+async function captureInboxFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/inbox`, { waitUntil: "networkidle" });
+  const snooze = page.locator(".inbox-item .inbox-item__snooze").first();
+  if ((await snooze.count()) > 0) {
+    const before = await page.locator(".inbox-item").count();
+    await snooze.locator("summary").click();
+    await snooze.locator("button", { hasText: "Tomorrow, 09:00" }).click();
+    await page.waitForFunction(
+      (count) => document.querySelectorAll(".inbox-item").length < count,
+      before,
+      { timeout: 10_000 },
+    );
+  }
+  await assertNoOverflow(page, `${folder}/inbox-snoozed`);
+  await assertAccessible(page, `${folder}/inbox-snoozed`);
+  await page.screenshot({ path: `${OUT}/${folder}/inbox-snoozed.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/inbox-snoozed`);
+
+  const unread = page.locator(".inbox-item--unread .inbox-item__title").first();
+  if ((await unread.count()) > 0) {
+    await unread.click();
+    await page.waitForURL((url) => !url.pathname.startsWith("/inbox"), { timeout: 15_000 });
+    console.log(`  ✓ ${folder}/inbox-opened (${new URL(page.url()).pathname})`);
+  }
+
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002`, {
+    waitUntil: "networkidle",
+  });
+  const follow = page.locator(".follow-form button");
+  if ((await follow.getAttribute("aria-pressed")) !== "true") {
+    await follow.click();
+    await page.waitForSelector(".follow-form button[aria-pressed=true]", { timeout: 10_000 });
+  }
+  await page.locator("summary", { hasText: "Remind me" }).click();
+  await page.locator(".popover[open] input[name=note]").fill("Ask about the second desk");
+  await page.locator(".popover[open] button", { hasText: "Set reminder" }).click();
+  await page.waitForSelector(".popover[open] .form-sent", { timeout: 10_000 });
+  await assertAccessible(page, `${folder}/company-follow-remind`);
+  await page.screenshot({ path: `${OUT}/${folder}/company-follow-remind.png` });
+  console.log(`  ✓ ${folder}/company-follow-remind`);
+
+  await page.goto(`${BASE}/me/notifications`, { waitUntil: "networkidle" });
+  await page.locator("label.prefs-mode", { hasText: "One digest a day" }).click();
+  await page.selectOption("#prefs-quiet-from", "22");
+  await page.selectOption("#prefs-quiet-to", "7");
+  await page.locator("button", { hasText: "Save" }).click();
+  await page.waitForSelector(".form-sent", { timeout: 10_000 });
+  // Back to the default so the next pass starts where this one did.
+  await page.locator("label.prefs-mode", { hasText: "Mail me what stays unread" }).click();
+  await page.selectOption("#prefs-quiet-from", "");
+  await page.selectOption("#prefs-quiet-to", "");
+  await page.locator("button", { hasText: "Save" }).click();
+  await page.waitForSelector(".form-sent", { timeout: 10_000 });
+  console.log(`  ✓ ${folder}/me-notifications-saved`);
 }
 
 /**

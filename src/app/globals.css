@@ -4014,11 +4014,9 @@
   }
 
   .list-tools__label {
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--quiet);
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 600;
   }
 
   .list-tools__group a {
@@ -4962,6 +4960,190 @@
 
   .policy form {
     display: contents;
+  }
+
+  /* The inbox: one line per thing. Unread reads as a filled dot and a heavier title —
+     never a coloured edge. */
+  .inbox-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .inbox-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .inbox-item:last-child {
+    border-bottom: 0;
+  }
+
+  .inbox-item__main {
+    display: grid;
+    gap: 4px;
+    flex: 1 1 340px;
+    min-width: 0;
+  }
+
+  .inbox-item__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .inbox-item__open {
+    display: contents;
+  }
+
+  .inbox-item__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+
+  .inbox-item__title:hover,
+  .inbox-item__title:focus-visible {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .inbox-item--unread .inbox-item__title {
+    font-weight: 700;
+  }
+
+  .inbox-item__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .inbox-item__summary {
+    margin: 0;
+    color: var(--text);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .inbox-item--read .inbox-item__summary,
+  .inbox-item--done .inbox-item__summary,
+  .inbox-item--snoozed .inbox-item__summary {
+    color: var(--muted);
+  }
+
+  .inbox-item__meta {
+    margin: 0;
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  .inbox-item__controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .inbox-item__snooze-title {
+    margin: 0 0 6px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .inbox-item__snooze-choices {
+    display: grid;
+    gap: 4px;
+  }
+
+  .inbox-item__snooze-choices .btn {
+    justify-content: flex-start;
+  }
+
+  .inbox-bulk {
+    display: flex;
+    gap: 6px;
+  }
+
+  .prefs-modes {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .prefs-mode {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border: 1px solid var(--line-soft);
+    cursor: pointer;
+  }
+
+  .prefs-mode:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--surface);
+  }
+
+  .prefs-mode span {
+    display: grid;
+    gap: 2px;
+  }
+
+  .prefs-mode strong {
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+
+  .prefs-mode__hint {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .follow-form {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* The inbox's unread count in the rail: a figure, not a dot, so it says how many. */
+  .rail__count {
+    margin-left: auto;
+    min-width: 20px;
+    padding: 1px 6px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  [data-collapsed] .rail__count {
+    display: none;
   }
 
   .read-watch__clear {
@@ -6535,11 +6717,9 @@
   }
 
   .task-add__label {
-    color: var(--quiet);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
   }
 
   .task-add .input,

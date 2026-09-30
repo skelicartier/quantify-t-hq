@@ -50,6 +50,8 @@ type RailProps = {
   identity: ShellIdentity;
   capabilities: readonly string[];
   signOutAction: () => Promise<void>;
+  /** A number beside a link (the inbox's unread count), counted as the page rendered. */
+  counts?: Readonly<Record<string, number>> | undefined;
 };
 
 /**
@@ -57,7 +59,7 @@ type RailProps = {
  * Collapses to icons (56px) and remembers that per device; the collapsed state is
  * carried on the shell so the content column can take the width.
  */
-export function Rail({ identity, capabilities, signOutAction }: RailProps) {
+export function Rail({ identity, capabilities, signOutAction, counts }: RailProps) {
   const pathname = usePathname();
   const collapsed = useRailCollapsed();
   const groups = visibleNavGroups(capabilities);
@@ -118,10 +120,17 @@ export function Rail({ identity, capabilities, signOutAction }: RailProps) {
                     >
                       <Icon size={16} strokeWidth={1.8} aria-hidden="true" />
                       <span className="rail__link-label">{label}</span>
-                      {key && (
-                        <kbd className="keycap keycap--quiet" aria-hidden="true">
-                          g{key}
-                        </kbd>
+                      {(counts?.[href] ?? 0) > 0 ? (
+                        <span className="rail__count">
+                          {counts?.[href]}
+                          <span className="sr-only"> unread</span>
+                        </span>
+                      ) : (
+                        key && (
+                          <kbd className="keycap keycap--quiet" aria-hidden="true">
+                            g{key}
+                          </kbd>
+                        )
                       )}
                     </Link>
                   </li>

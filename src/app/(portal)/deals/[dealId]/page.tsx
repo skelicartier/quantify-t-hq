@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/record-shell";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { RecordFollow } from "@/components/inbox/record-follow";
 import { ViewedBy } from "@/components/security/viewed-by";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readDeal, type DealDetail } from "@/lib/api/deals";
@@ -197,24 +198,33 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
             : []),
         ]}
         actions={
-          open && canDeal ? (
-            <>
-              <Popover align="start" label="Move stage" variant="primary" width="wide">
-                <DealStageForm
-                  action={moveDealStageAction}
-                  deal={deal}
-                  stages={openStages}
-                  defaultDue={isoDayPlus(now, 3)}
-                />
-              </Popover>
-              <Popover align="start" label="Close" width="wide">
-                <p className="muted" style={{ marginBottom: 10 }}>
-                  Final. A loss records its reason.
-                </p>
-                <DealCloseForm action={closeDealAction} deal={deal} />
-              </Popover>
-            </>
-          ) : undefined
+          <>
+            <RecordFollow
+              token={context.token}
+              subjectType="deal"
+              subjectId={deal.deal_id}
+              label={deal.name}
+              path={`/deals/${deal.deal_id}`}
+            />
+            {open && canDeal && (
+              <>
+                <Popover align="start" label="Move stage" variant="primary" width="wide">
+                  <DealStageForm
+                    action={moveDealStageAction}
+                    deal={deal}
+                    stages={openStages}
+                    defaultDue={isoDayPlus(now, 3)}
+                  />
+                </Popover>
+                <Popover align="start" label="Close" width="wide">
+                  <p className="muted" style={{ marginBottom: 10 }}>
+                    Final. A loss records its reason.
+                  </p>
+                  <DealCloseForm action={closeDealAction} deal={deal} />
+                </Popover>
+              </>
+            )}
+          </>
         }
       />
       <StageRail stages={stages} currentKey={deal.stage_key} status={deal.status} />

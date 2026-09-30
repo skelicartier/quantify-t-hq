@@ -19,6 +19,8 @@ type HqShellProps = {
   themeAction?: ((formData: FormData) => Promise<void>) | undefined;
   /** The account's display preferences, brought onto this device on load. */
   preferences?: Readonly<Record<string, string>> | undefined;
+  /** Unread inbox rows, for the rail's badge. */
+  inboxUnread?: number | undefined;
   children: ReactNode;
 };
 
@@ -34,6 +36,7 @@ export function HqShell({
   theme = DEFAULT_HQ_THEME,
   themeAction,
   preferences,
+  inboxUnread,
   children,
 }: HqShellProps) {
   return (
@@ -41,7 +44,12 @@ export function HqShell({
       {preferences && Object.keys(preferences).length > 0 && (
         <PreferencesHydrator preferences={preferences} />
       )}
-      <Rail identity={identity} capabilities={capabilities} signOutAction={signOutAction} />
+      <Rail
+        identity={identity}
+        capabilities={capabilities}
+        signOutAction={signOutAction}
+        counts={{ "/inbox": inboxUnread ?? 0 }}
+      />
       <div className="shell__body">
         <ContextBar />
         <main className="shell__main" id="main-content" tabIndex={-1}>

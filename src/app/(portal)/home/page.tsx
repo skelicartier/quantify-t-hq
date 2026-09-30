@@ -290,7 +290,37 @@ export default async function HomePage() {
             </section>
 
             <aside className="briefing__side">
-              {home.mentions && home.mentions.unseen > 0 && (
+              {home.inbox?.available && (
+                <section className="briefing__block" aria-labelledby="inbox-title">
+                  <div className="briefing__head">
+                    <h2 id="inbox-title">Inbox</h2>
+                    {home.inbox.unread > 0 && (
+                      <span className="briefing__count">{home.inbox.unread}</span>
+                    )}
+                    <Link className="briefing__more" href="/inbox">
+                      Open the inbox
+                    </Link>
+                  </div>
+                  {home.inbox.items.length === 0 ? (
+                    <p className="briefing__clear">Nothing unread waits for you.</p>
+                  ) : (
+                    <ol className="agenda">
+                      {home.inbox.items.map((item) => (
+                        <li key={item.notification_id} className="agenda__row">
+                          <span className="agenda__time">{item.reason_label}</span>
+                          <span className="agenda__title">
+                            <Link href={item.link_path}>
+                              {item.subject_label || item.reason_label}
+                            </Link>
+                            <span className="quiet"> · {item.summary}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </section>
+              )}
+              {!home.inbox?.available && home.mentions && home.mentions.unseen > 0 && (
                 <section className="briefing__block" aria-labelledby="mentions-title">
                   <div className="briefing__head">
                     <h2 id="mentions-title">You were mentioned</h2>

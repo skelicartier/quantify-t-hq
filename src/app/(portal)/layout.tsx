@@ -33,6 +33,7 @@ export default async function PortalLayout({ children }: Readonly<{ children: Re
   return (
     <HqShell
       preferences={preferences}
+      inboxUnread={me.inbox_unread}
       identity={{
         email: me.staff.email,
         displayName: me.staff.display_name || me.staff.email,

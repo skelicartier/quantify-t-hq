@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/record-shell";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { RecordFollow } from "@/components/inbox/record-follow";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLead, type CrmSettings, type LeadDetail } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
@@ -137,11 +138,22 @@ export default async function LeadPage({ params }: LeadPageProps) {
           },
         ]}
         actions={
-          lead.email && !anonymised ? (
-            <a className="btn btn--small" href={`mailto:${lead.email}`}>
-              Email
-            </a>
-          ) : undefined
+          <>
+            {!anonymised && (
+              <RecordFollow
+                token={context.token}
+                subjectType="lead"
+                subjectId={lead.lead_id}
+                label={lead.full_name || lead.email}
+                path={`/leads/${lead.lead_id}`}
+              />
+            )}
+            {lead.email && !anonymised && (
+              <a className="btn btn--small" href={`mailto:${lead.email}`}>
+                Email
+              </a>
+            )}
+          </>
         }
       />
       {anonymised && (

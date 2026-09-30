@@ -1183,6 +1183,7 @@ const routes: Array<{
           absolute_hours: 12,
         },
         environment: "mock",
+        inbox_unread: inboxUnread(found.member.id),
       });
     },
   },
@@ -1925,6 +1926,15 @@ const routes: Array<{
             (candidate) => candidate.id === assignee && candidate.is_active,
           );
           if (!member) return refuse(400, "malformed_request");
+          if (member.id !== row.assignee_staff_id)
+            inboxAssigned(
+              member.id,
+              "ticket",
+              row.id,
+              found.member,
+              `${found.member.display_name || "A colleague"} gave you the ticket \u201c${row.subject.slice(0, 120)}\u201d.`,
+              row.subject,
+            );
           row.assignee_staff_id = member.id;
           row.assignee_name = member.display_name;
         } else {
@@ -2712,6 +2722,16 @@ function requestApproval(
     result_id: "",
   };
   approvals.unshift(row);
+  const summaryText = approvalSummary(kind, payload);
+  inboxNotify({
+    recipients: approvers(kind, requester.id, targetStaffId).map((member) => member.id),
+    subject_type: "approval",
+    subject_id: row.id,
+    subject_label: `${summaryText.charAt(0).toUpperCase()}${summaryText.slice(1)}`,
+    reason: "review",
+    summary: `${requester.display_name || requester.email} asked for your approval. Reason given: ${row.reason || "none"}.`,
+    actor_id: requester.id,
+  });
   audit("approval.requested", requester.id, "approval", row.id, row.reason, {
     kind,
     summary: approvalSummary(kind, payload),
@@ -2804,6 +2824,18 @@ function recordSecurityEvent(
     ...extra,
   };
   securityEvents.unshift(row);
+  if (row.severity === "critical")
+    inboxNotify({
+      recipients: staff
+        .filter((member) => member.role === "owner" && member.is_active)
+        .map((m) => m.id),
+      subject_type: "security",
+      subject_id: row.id,
+      subject_label: SECURITY_KINDS[kind]?.[1] ?? kind,
+      reason: "security",
+      summary: row.summary,
+      at: row.occurred_at,
+    });
   // The mail the service would send carries a lock link; the mock prints it instead.
   const token = `hqr_mock_${randomUUID().replace(/-/g, "")}`;
   reportTokens.set(token, { staffId: subjectStaffId, eventId: row.id });
@@ -3253,6 +3285,439 @@ function seedReadWatch() {
     "owner+decoy@quantifyterminal.com",
     "aa000000-0000-4000-8000-00000000000a",
   );
+}
+
+// --- the inbox (mirrors inbox.py) ----------------------------------------------------------------
+
+type NotificationRow = {
+  id: string;
+  recipient_id: string;
+  subject_type: string;
+  subject_id: string;
+  subject_label: string;
+  link_path: string;
+  reason: string;
+  actor_id: string;
+  summary: string;
+  event_count: number;
+  first_at: string;
+  last_at: string;
+  read_at: string | null;
+  done_at: string | null;
+  snoozed_until: string | null;
+  emailed_at: string | null;
+};
+const INBOX_REASONS: Record<string, [number, string]> = {
+  security: [90, "Security"],
+  review: [80, "Waiting on you"],
+  mention: [70, "Mentioned"],
+  assigned: [60, "Assigned"],
+  reply: [50, "Reply"],
+  reminder: [40, "Reminder"],
+  state: [30, "Update"],
+  activity: [20, "Activity"],
+};
+const INBOX_PAGES: Record<string, string> = {
+  company: "/companies/{id}",
+  person: "/people/{id}",
+  deal: "/deals/{id}",
+  lead: "/leads/{id}",
+  meeting: "/meetings/{id}",
+  ticket: "/support/{id}",
+  contract: "/revenue/contracts/{id}",
+  approval: "/admin/approvals",
+  security: "/admin/security",
+  task: "/tasks",
+};
+const INBOX_SPECIFICITY = ["deal", "lead", "meeting", "person", "company"];
+const notifications: NotificationRow[] = [];
+const inboxSubscriptions = new Map<
+  string,
+  { staff_id: string; subject_type: string; subject_id: string; reason: string; muted: boolean }
+>();
+type ReminderRow = {
+  id: string;
+  staff_id: string;
+  subject_type: string;
+  subject_id: string;
+  subject_label: string;
+  link_path: string;
+  note: string;
+  remind_at: string;
+  fired_at: string | null;
+  cancelled_at: string | null;
+};
+const inboxReminders: ReminderRow[] = [];
+const notificationPrefs = new Map<
+  string,
+  {
+    email_mode: string;
+    delay_minutes: number;
+    quiet_from: number | null;
+    quiet_to: number | null;
+    time_zone: string;
+  }
+>();
+
+function inboxLink(subjectType: string, subjectId: string): string {
+  const template = INBOX_PAGES[subjectType] ?? "/home";
+  return template.replace("{id}", subjectId);
+}
+
+function inboxLabel(subjectType: string, subjectId: string): string {
+  if (subjectType === "company") return companies.find((row) => row.id === subjectId)?.name ?? "";
+  if (subjectType === "person") return people.find((row) => row.id === subjectId)?.full_name ?? "";
+  if (subjectType === "deal") return deals.find((row) => row.id === subjectId)?.name ?? "";
+  if (subjectType === "lead") {
+    const lead = leads.find((row) => row.id === subjectId);
+    return lead ? lead.full_name || lead.company_name : "";
+  }
+  if (subjectType === "task") return tasks.find((row) => row.id === subjectId)?.title ?? "";
+  return "";
+}
+
+function subscriptionKey(staffId: string, subjectType: string, subjectId: string) {
+  return `${staffId}|${subjectType}|${subjectId.toLowerCase()}`;
+}
+
+/** Mirrors inbox.subscribe: never overrides a mute or an earlier choice. */
+function inboxSubscribe(staffId: string, subjectType: string, subjectId: string, reason: string) {
+  if (!staffId || !subjectId) return;
+  const key = subscriptionKey(staffId, subjectType, subjectId);
+  if (inboxSubscriptions.has(key)) return;
+  inboxSubscriptions.set(key, {
+    staff_id: staffId,
+    subject_type: subjectType,
+    subject_id: subjectId.toLowerCase(),
+    reason,
+    muted: false,
+  });
+}
+
+function inboxFollowers(subjectType: string, subjectId: string): string[] {
+  return [...inboxSubscriptions.values()]
+    .filter(
+      (row) =>
+        row.subject_type === subjectType &&
+        row.subject_id === subjectId.toLowerCase() &&
+        !row.muted,
+    )
+    .map((row) => row.staff_id);
+}
+
+function inboxState(row: NotificationRow): string {
+  if (row.done_at) return "done";
+  if (row.snoozed_until && row.snoozed_until > now()) return "snoozed";
+  return row.read_at ? "read" : "unread";
+}
+
+/** Mirrors inbox.notify: folds into the open row for the subject, unread again. */
+function inboxNotify(input: {
+  recipients: string[];
+  subject_type: string;
+  subject_id: string;
+  subject_label?: string;
+  reason: string;
+  summary: string;
+  actor_id?: string;
+  link_path?: string;
+  at?: string;
+}): number {
+  const at = input.at ?? now();
+  const subjectId = input.subject_id.toLowerCase();
+  const label = input.subject_label ?? inboxLabel(input.subject_type, subjectId);
+  const link = input.link_path || inboxLink(input.subject_type, subjectId);
+  let written = 0;
+  for (const recipient of new Set(input.recipients.filter(Boolean))) {
+    if (recipient === input.actor_id) continue;
+    if (!staff.some((member) => member.id === recipient && member.is_active)) continue;
+    const open = notifications.find(
+      (row) =>
+        row.recipient_id === recipient &&
+        row.subject_type === input.subject_type &&
+        row.subject_id === subjectId &&
+        !row.done_at,
+    );
+    if (open) {
+      const kept = INBOX_REASONS[open.reason]?.[0] ?? 0;
+      if ((INBOX_REASONS[input.reason]?.[0] ?? 0) >= kept) open.reason = input.reason;
+      open.event_count += 1;
+      open.last_at = at;
+      open.summary = input.summary.slice(0, 400);
+      open.actor_id = input.actor_id ?? "";
+      open.subject_label = label;
+      open.read_at = null;
+      open.snoozed_until = null;
+    } else {
+      notifications.push({
+        id: randomUUID(),
+        recipient_id: recipient,
+        subject_type: input.subject_type,
+        subject_id: subjectId,
+        subject_label: label,
+        link_path: link,
+        reason: input.reason,
+        actor_id: input.actor_id ?? "",
+        summary: input.summary.slice(0, 400),
+        event_count: 1,
+        first_at: at,
+        last_at: at,
+        read_at: null,
+        done_at: null,
+        snoozed_until: null,
+        emailed_at: null,
+      });
+    }
+    written += 1;
+  }
+  return written;
+}
+
+/** Mirrors inbox.assigned. */
+function inboxAssigned(
+  staffId: string,
+  subjectType: string,
+  subjectId: string,
+  actor: Staff | undefined,
+  summary: string,
+  label?: string,
+  linkPath?: string,
+) {
+  if (!staffId || staffId === actor?.id) return;
+  if (subjectType !== "task") inboxSubscribe(staffId, subjectType, subjectId, "assigned");
+  inboxNotify({
+    recipients: [staffId],
+    subject_type: subjectType,
+    subject_id: subjectId,
+    ...(label !== undefined ? { subject_label: label } : {}),
+    reason: "assigned",
+    summary,
+    actor_id: actor?.id ?? "",
+    ...(linkPath ? { link_path: linkPath } : {}),
+  });
+}
+
+/** Mirrors inbox.notify_linked. */
+function inboxNotifyLinked(
+  links: Record<string, string>,
+  summary: string,
+  actorId: string,
+  exclude: string[],
+) {
+  const present = INBOX_SPECIFICITY.filter((kind) => links[`${kind}_id`]).map(
+    (kind) => [kind, links[`${kind}_id`]!.toLowerCase()] as const,
+  );
+  if (!present.length) return;
+  inboxSubscribe(actorId, present[0]![0], present[0]![1], "author");
+  const seen = new Set<string>([...exclude, actorId]);
+  for (const [kind, id] of present) {
+    const recipients = inboxFollowers(kind, id).filter((staffId) => !seen.has(staffId));
+    recipients.forEach((staffId) => seen.add(staffId));
+    if (recipients.length)
+      inboxNotify({
+        recipients,
+        subject_type: kind,
+        subject_id: id,
+        reason: "activity",
+        summary,
+        actor_id: actorId,
+      });
+  }
+}
+
+function inboxFireReminders(staffId?: string) {
+  for (const row of inboxReminders) {
+    if (row.fired_at || row.cancelled_at || row.remind_at > now()) continue;
+    if (staffId && row.staff_id !== staffId) continue;
+    inboxNotify({
+      recipients: [row.staff_id],
+      subject_type: row.subject_type,
+      subject_id: row.subject_id,
+      subject_label: row.subject_label,
+      reason: "reminder",
+      summary: `You asked to be reminded${row.note ? `: ${row.note}` : "."}`,
+      link_path: row.link_path,
+    });
+    row.fired_at = now();
+  }
+}
+
+function notificationView(row: NotificationRow) {
+  return {
+    notification_id: row.id,
+    reason: row.reason,
+    reason_label: INBOX_REASONS[row.reason]?.[1] ?? row.reason,
+    subject_type: row.subject_type,
+    subject_id: row.subject_id,
+    subject_label: row.subject_label,
+    link_path: row.link_path,
+    actor: row.actor_id ? personOf(row.actor_id) : null,
+    summary: row.summary,
+    event_count: row.event_count,
+    first_at: row.first_at,
+    last_at: row.last_at,
+    state: inboxState(row),
+    snoozed_until: row.snoozed_until,
+  };
+}
+
+function inboxUnread(staffId: string): number {
+  return notifications.filter((row) => row.recipient_id === staffId && inboxState(row) === "unread")
+    .length;
+}
+
+function notificationPrefsFor(staffId: string) {
+  return (
+    notificationPrefs.get(staffId) ?? {
+      email_mode: "unread",
+      delay_minutes: 15,
+      quiet_from: null,
+      quiet_to: null,
+      time_zone: "UTC",
+    }
+  );
+}
+
+function resetInbox() {
+  notifications.length = 0;
+  inboxSubscriptions.clear();
+  inboxReminders.length = 0;
+  notificationPrefs.clear();
+}
+
+/** A morning's worth for the owner: something of every kind, a reminder waiting. */
+function seedInbox() {
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const ADMIN = "aa000000-0000-4000-8000-00000000000b";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const SUPPORT = "aa000000-0000-4000-8000-00000000000d";
+  // Security rows the seeds raised: anything older than a day is already dealt with.
+  for (const row of notifications)
+    if (row.reason === "security" && Date.parse(row.last_at) < Date.now() - 86_400_000) {
+      row.read_at = row.last_at;
+      row.done_at = row.last_at;
+    }
+  const firstDeal = deals.find((deal) => deal.status === "open");
+  const secondDeal = deals.filter((deal) => deal.status === "open")[3];
+  const firm = companies[2];
+  const ticket = tickets.find((row) => row.status !== "resolved");
+  const pendingApproval = approvals.find((row) => row.status === "pending");
+  if (pendingApproval)
+    inboxNotify({
+      recipients: [OWNER],
+      subject_type: "approval",
+      subject_id: pendingApproval.id,
+      subject_label: `${approvalSummary(pendingApproval.kind, pendingApproval.payload).charAt(0).toUpperCase()}${approvalSummary(pendingApproval.kind, pendingApproval.payload).slice(1)}`,
+      reason: "review",
+      summary: `${nameOf(pendingApproval.requested_by)} asked for your approval. Reason given: ${pendingApproval.reason}.`,
+      actor_id: pendingApproval.requested_by,
+      at: pendingApproval.requested_at,
+    });
+  if (firstDeal) {
+    inboxSubscribe(OWNER, "deal", firstDeal.id, "author");
+    inboxNotify({
+      recipients: [OWNER],
+      subject_type: "deal",
+      subject_id: firstDeal.id,
+      reason: "mention",
+      summary: `Sales Person: \u201c@owner their COO wants a call before the proposal — can you take Thursday?\u201d`,
+      actor_id: SALES,
+      at: agoIso(1.2),
+    });
+  }
+  if (secondDeal) {
+    inboxSubscribe(OWNER, "deal", secondDeal.id, "manual");
+    for (const [hours, text] of [
+      [7, "Sales Person logged a call: \u201cTrial seats used every day this week.\u201d"],
+      [
+        4,
+        "Sales Person logged an email sent: \u201cSent the security questionnaire answers.\u201d",
+      ],
+      [
+        2.5,
+        "Sales Person logged a note: \u201cProcurement wants the DPA redlines by Friday.\u201d",
+      ],
+    ] as const)
+      inboxNotify({
+        recipients: [OWNER],
+        subject_type: "deal",
+        subject_id: secondDeal.id,
+        reason: "activity",
+        summary: text,
+        actor_id: SALES,
+        at: agoIso(hours),
+      });
+  }
+  if (ticket) {
+    inboxSubscribe(OWNER, "ticket", ticket.id, "assigned");
+    inboxNotify({
+      recipients: [OWNER],
+      subject_type: "ticket",
+      subject_id: ticket.id,
+      subject_label: ticket.subject,
+      reason: "reply",
+      summary: `${ticket.contact_email || "The customer"} wrote: \u201cStill seeing the old prices after the update — screenshots attached.\u201d`,
+      at: agoIso(0.6),
+    });
+  }
+  inboxNotify({
+    recipients: [OWNER],
+    subject_type: "task",
+    subject_id: randomUUID(),
+    subject_label: "Sign the Q4 renewal letters",
+    reason: "assigned",
+    summary: "The Admin gave you a task: Sign the Q4 renewal letters, due in two days",
+    actor_id: ADMIN,
+    link_path: "/tasks",
+    at: agoIso(20),
+  });
+  if (firm) {
+    inboxSubscribe(OWNER, "company", firm.id, "manual");
+    const read = inboxNotify({
+      recipients: [OWNER],
+      subject_type: "company",
+      subject_id: firm.id,
+      reason: "activity",
+      summary:
+        "Desk Person logged a note: \u201cTheir analysts asked for the Asia session times.\u201d",
+      actor_id: SUPPORT,
+      at: agoIso(26),
+    });
+    void read;
+    const row = notifications.find(
+      (candidate) => candidate.subject_id === firm.id && candidate.recipient_id === OWNER,
+    );
+    if (row) row.read_at = agoIso(25);
+    inboxReminders.push({
+      id: "ae000000-0000-4000-8000-000000000001",
+      staff_id: OWNER,
+      subject_type: "company",
+      subject_id: firm.id,
+      subject_label: firm.name,
+      link_path: `/companies/${firm.id}`,
+      note: "Renewal call — ask about the second desk",
+      remind_at: new Date(Date.now() + 2 * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      fired_at: null,
+      cancelled_at: null,
+    });
+  }
+  // Something already done, for the Done view.
+  inboxNotify({
+    recipients: [OWNER],
+    subject_type: "task",
+    subject_id: randomUUID(),
+    subject_label: "Approve the September invoices",
+    reason: "assigned",
+    summary: "The Admin gave you a task: Approve the September invoices",
+    actor_id: ADMIN,
+    link_path: "/tasks",
+    at: agoIso(72),
+  });
+  const done = notifications[notifications.length - 1];
+  if (done) {
+    done.read_at = agoIso(70);
+    done.done_at = agoIso(70);
+  }
 }
 
 function seedSecurityFeed() {
@@ -4673,6 +5138,18 @@ function recordMentions(callerId: string, text: string, links: Record<string, st
     });
     mentioned.push(member.id);
   }
+  if (mentioned.length && entityId && entityType in INBOX_PAGES) {
+    const by = staff.find((member) => member.id === callerId);
+    for (const staffId of mentioned) inboxSubscribe(staffId, entityType, entityId, "mentioned");
+    inboxNotify({
+      recipients: mentioned,
+      subject_type: entityType,
+      subject_id: entityId,
+      reason: "mention",
+      summary: `${by?.display_name || by?.email || "A colleague"}: \u201c${text.slice(0, 300)}\u201d`,
+      actor_id: callerId,
+    });
+  }
   return mentioned;
 }
 
@@ -4723,6 +5200,15 @@ routes.push(
           unseen: unseenMentions.length,
           mentions: unseenMentions.slice(0, 5).map(mentionView),
         },
+      };
+      inboxFireReminders(found.member.id);
+      const unreadRows = notifications
+        .filter((row) => row.recipient_id === found.member.id && inboxState(row) === "unread")
+        .sort((a, b) => b.last_at.localeCompare(a.last_at));
+      payload.inbox = {
+        unread: unreadRows.length,
+        items: unreadRows.slice(0, 5).map(notificationView),
+        available: true,
       };
       if (capabilities.includes("tickets:read")) {
         // As the service counts: open-like and not snoozed; totals over the whole
@@ -5017,7 +5503,19 @@ routes.push(
       }
       if (badId(body.owner_staff_id))
         return refuse(400, "malformed_request", { owner_staff_id: "not an id" });
-      if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
+      if ("owner_staff_id" in body) {
+        const next = String(body.owner_staff_id ?? "");
+        const actor = caller(headers)?.member;
+        if (next && next !== row.owner_staff_id)
+          inboxAssigned(
+            next,
+            "company",
+            row.id,
+            actor,
+            `${actor?.display_name || "A colleague"} made you the owner of this company.`,
+          );
+        row.owner_staff_id = next;
+      }
       if ("archived" in body) row.archived = Boolean(body.archived);
       if ("parent_id" in body) {
         const parentId = String(body.parent_id ?? "").trim();
@@ -5924,7 +6422,19 @@ routes.push(
         }
         row.stage = stage;
       }
-      if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
+      if ("owner_staff_id" in body) {
+        const next = String(body.owner_staff_id ?? "");
+        const actor = caller(headers)?.member;
+        if (next && next !== row.owner_staff_id)
+          inboxAssigned(
+            next,
+            "lead",
+            row.id,
+            actor,
+            `${actor?.display_name || "A colleague"} made you the owner of this lead.`,
+          );
+        row.owner_staff_id = next;
+      }
       row.updated_at = now();
       if (stage) mailCrmEvent("lead_stage", { lead_id: row.id, stage });
       audit("lead.updated", caller(headers)?.member.id ?? null, "lead", row.id, "", {
@@ -6283,7 +6793,19 @@ routes.push(
         row.next_step = nextStep;
         row.next_step_due = nextStepDue;
       }
-      if ("owner_staff_id" in body) row.owner_staff_id = String(body.owner_staff_id ?? "");
+      if ("owner_staff_id" in body) {
+        const next = String(body.owner_staff_id ?? "");
+        const actor = caller(headers)?.member;
+        if (next && next !== row.owner_staff_id)
+          inboxAssigned(
+            next,
+            "deal",
+            row.id,
+            actor,
+            `${actor?.display_name || "A colleague"} made you the owner of this deal.`,
+          );
+        row.owner_staff_id = next;
+      }
       if ("primary_person_id" in body) row.primary_person_id = String(body.primary_person_id ?? "");
       if ("notes" in body) row.notes = String(body.notes ?? "");
       audit("deal.updated", caller(headers)?.member.id ?? null, "deal", row.id, "", {
@@ -6448,6 +6970,18 @@ routes.push(
         ...links,
         meeting_id: meetingId,
       });
+      const words: Record<string, string> = {
+        note: "a note",
+        call: "a call",
+        email_out: "an email sent",
+        email_in: "an email received",
+      };
+      inboxNotifyLinked(
+        { ...links, meeting_id: meetingId },
+        `${found?.member.display_name || found?.member.email || "A colleague"} logged ${words[kind] ?? "a note"}: \u201c${text.slice(0, 240)}\u201d`,
+        found?.member.id ?? "",
+        mentioned,
+      );
       const deal = deals.find((candidate) => candidate.id === links.deal_id);
       if (deal) deal.last_activity_at = now();
       const lead = leads.find((candidate) => candidate.id === links.lead_id);
@@ -6527,6 +7061,15 @@ routes.push(
         created_at: now(),
       };
       tasks.push(row);
+      inboxAssigned(
+        row.assignee_staff_id,
+        "task",
+        row.id,
+        found?.member,
+        `${found?.member.display_name || "A colleague"} gave you a task: ${title}${row.due_on ? `, due ${row.due_on}` : ""}`,
+        title,
+        "/tasks",
+      );
       audit("task.created", found?.member.id ?? null, "task", row.id);
       return ok({ task: taskView(row) });
     },
@@ -6554,7 +7097,21 @@ routes.push(
       }
       if ("title" in body) row.title = String(body.title ?? "").trim() || row.title;
       if ("due_on" in body) row.due_on = String(body.due_on ?? "");
-      if ("assignee_staff_id" in body) row.assignee_staff_id = String(body.assignee_staff_id ?? "");
+      if ("assignee_staff_id" in body) {
+        const next = String(body.assignee_staff_id ?? "");
+        const actor = caller(headers)?.member;
+        if (next && next !== row.assignee_staff_id)
+          inboxAssigned(
+            next,
+            "task",
+            row.id,
+            actor,
+            `${actor?.display_name || "A colleague"} passed you a task: ${row.title}`,
+            row.title,
+            "/tasks",
+          );
+        row.assignee_staff_id = next;
+      }
       audit("task.updated", caller(headers)?.member.id ?? null, "task", row.id);
       return ok({ task: taskView(row) });
     },
@@ -7226,6 +7783,291 @@ routes.push(
   },
   {
     method: "GET",
+    pattern: "hq/inbox",
+    auth: true,
+    handler: ({ headers, query }) => {
+      const viewer = caller(headers)!.member;
+      inboxFireReminders(viewer.id);
+      const view = query.view || "inbox";
+      if (!["inbox", "snoozed", "done"].includes(view))
+        return refuse(400, "malformed_request", { view: "inbox, snoozed or done" });
+      const mine = notifications
+        .filter((row) => row.recipient_id === viewer.id)
+        .sort((a, b) => b.last_at.localeCompare(a.last_at));
+      const views = mine.map(notificationView);
+      const wanted: Record<string, string[]> = {
+        inbox: ["unread", "read"],
+        snoozed: ["snoozed"],
+        done: ["done"],
+      };
+      let items = views.filter(
+        (item) =>
+          wanted[view]!.includes(item.state) && (!query.reason || item.reason === query.reason),
+      );
+      if (view === "done") items = items.slice(0, 100);
+      return ok({
+        items,
+        counts: {
+          unread: views.filter((item) => item.state === "unread").length,
+          inbox: views.filter((item) => item.state === "unread" || item.state === "read").length,
+          snoozed: views.filter((item) => item.state === "snoozed").length,
+        },
+        reminders: inboxReminders
+          .filter((row) => row.staff_id === viewer.id && !row.fired_at && !row.cancelled_at)
+          .sort((a, b) => a.remind_at.localeCompare(b.remind_at))
+          .map((row) => ({
+            reminder_id: row.id,
+            subject_type: row.subject_type,
+            subject_id: row.subject_id,
+            subject_label: row.subject_label,
+            link_path: row.link_path,
+            note: row.note,
+            remind_at: row.remind_at,
+          })),
+        reasons: Object.entries(INBOX_REASONS).map(([reason, [, label]]) => ({ reason, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/inbox/bulk",
+    auth: true,
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const action = String(body.action ?? "");
+      if (action !== "read_all" && action !== "clear_read")
+        return refuse(400, "malformed_request", { action: "read_all or clear_read" });
+      let changed = 0;
+      for (const row of notifications) {
+        if (row.recipient_id !== viewer.id) continue;
+        const state = inboxState(row);
+        if (action === "read_all" && state === "unread") {
+          row.read_at = now();
+          changed += 1;
+        } else if (action === "clear_read" && state === "read") {
+          row.done_at = now();
+          changed += 1;
+        }
+      }
+      audit(`inbox.${action}`, viewer.id, "notification", "bulk", "", { changed });
+      return ok({ changed });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/inbox/{notification_id}/update",
+    auth: true,
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = notifications.find(
+        (candidate) =>
+          candidate.id === params.notification_id && candidate.recipient_id === viewer.id,
+      );
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      if (action === "read") row.read_at = now();
+      else if (action === "unread") row.read_at = null;
+      else if (action === "done") {
+        row.done_at = now();
+        row.read_at = row.read_at ?? now();
+      } else if (action === "undone") {
+        if (!row.done_at) return refuse(400, "malformed_request", { state: "not done" });
+        const newer = notifications.some(
+          (candidate) =>
+            candidate.recipient_id === viewer.id &&
+            candidate.subject_type === row.subject_type &&
+            candidate.subject_id === row.subject_id &&
+            !candidate.done_at,
+        );
+        if (newer)
+          return refuse(400, "malformed_request", {
+            state: "a newer row for this is open; use that one",
+          });
+        row.done_at = null;
+      } else if (action === "snooze") {
+        const until = Date.parse(String(body.until ?? ""));
+        if (!Number.isFinite(until) || until <= Date.now() || until - Date.now() > 60 * 86_400_000)
+          return refuse(400, "malformed_request", { until: "a time in the next sixty days" });
+        row.snoozed_until = new Date(until).toISOString();
+      } else
+        return refuse(400, "malformed_request", { action: "read, unread, done, undone, snooze" });
+      if ((action === "read" || action === "done") && row.reason === "mention")
+        for (const mention of mentions)
+          if (
+            mention.staff_id === viewer.id &&
+            !mention.seen_at &&
+            mention.entity_id === row.subject_id
+          )
+            mention.seen_at = now();
+      audit(`inbox.${action}`, viewer.id, "notification", row.id);
+      return ok({ item: notificationView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/subscriptions/{subject_type}/{subject}",
+    auth: true,
+    handler: ({ headers, params }) => {
+      if (!(String(params.subject_type) in INBOX_PAGES)) return refuse(404, "not_found");
+      const viewer = caller(headers)!.member;
+      const row = inboxSubscriptions.get(
+        subscriptionKey(viewer.id, String(params.subject_type), String(params.subject)),
+      );
+      return ok({
+        following: Boolean(row) && !row!.muted,
+        reason: row?.reason ?? "",
+        muted: Boolean(row?.muted),
+        followers: inboxFollowers(String(params.subject_type), String(params.subject)).length,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/subscriptions/{subject_type}/{subject}/set",
+    auth: true,
+    handler: ({ headers, params, body }) => {
+      const subjectType = String(params.subject_type);
+      if (!(subjectType in INBOX_PAGES)) return refuse(404, "not_found");
+      const viewer = caller(headers)!.member;
+      const follow = Boolean(body.follow);
+      const key = subscriptionKey(viewer.id, subjectType, String(params.subject));
+      const existing = inboxSubscriptions.get(key);
+      inboxSubscriptions.set(key, {
+        staff_id: viewer.id,
+        subject_type: subjectType,
+        subject_id: String(params.subject).toLowerCase(),
+        reason: follow ? "manual" : (existing?.reason ?? "manual"),
+        muted: !follow,
+      });
+      audit(
+        follow ? "inbox.followed" : "inbox.unfollowed",
+        viewer.id,
+        subjectType,
+        String(params.subject),
+      );
+      return ok({
+        following: follow,
+        followers: inboxFollowers(subjectType, String(params.subject)).length,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/reminders/create",
+    auth: true,
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const subjectType = String(body.subject_type ?? "");
+      const subjectId = String(body.subject_id ?? "")
+        .trim()
+        .toLowerCase();
+      if (!(subjectType in INBOX_PAGES) || !subjectId)
+        return refuse(400, "malformed_request", { subject: "what to be reminded about" });
+      const at = Date.parse(String(body.remind_at ?? ""));
+      if (!Number.isFinite(at) || at <= Date.now() || at - Date.now() > 366 * 86_400_000)
+        return refuse(400, "malformed_request", { remind_at: "a time in the next year" });
+      let link = String(body.link_path ?? "").trim();
+      if (!link.startsWith("/") || link.startsWith("//")) link = inboxLink(subjectType, subjectId);
+      const row: ReminderRow = {
+        id: randomUUID(),
+        staff_id: viewer.id,
+        subject_type: subjectType,
+        subject_id: subjectId,
+        subject_label: String(body.subject_label ?? "").slice(0, 200),
+        link_path: link,
+        note: String(body.note ?? "")
+          .trim()
+          .slice(0, 400),
+        remind_at: new Date(at).toISOString(),
+        fired_at: null,
+        cancelled_at: null,
+      };
+      inboxReminders.push(row);
+      audit("inbox.reminder_set", viewer.id, subjectType, subjectId);
+      return ok({
+        reminder: {
+          reminder_id: row.id,
+          subject_type: row.subject_type,
+          subject_id: row.subject_id,
+          subject_label: row.subject_label,
+          link_path: row.link_path,
+          note: row.note,
+          remind_at: row.remind_at,
+        },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/reminders/{reminder_id}/cancel",
+    auth: true,
+    handler: ({ headers, params }) => {
+      const viewer = caller(headers)!.member;
+      const row = inboxReminders.find(
+        (candidate) =>
+          candidate.id === params.reminder_id &&
+          candidate.staff_id === viewer.id &&
+          !candidate.fired_at &&
+          !candidate.cancelled_at,
+      );
+      if (!row) return refuse(404, "not_found");
+      row.cancelled_at = now();
+      audit("inbox.reminder_cancelled", viewer.id, row.subject_type, row.subject_id);
+      return ok({ cancelled: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/me/notifications",
+    auth: true,
+    handler: ({ headers }) => ok({ prefs: notificationPrefsFor(caller(headers)!.member.id) }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/me/notifications/update",
+    auth: true,
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const current = notificationPrefsFor(viewer.id);
+      const mode = String(body.email_mode ?? current.email_mode);
+      if (!["unread", "digest", "off"].includes(mode))
+        return refuse(400, "malformed_request", { email_mode: "unread, digest or off" });
+      const delay = Number(body.delay_minutes ?? current.delay_minutes);
+      if (!Number.isInteger(delay) || delay < 5 || delay > 240)
+        return refuse(400, "malformed_request", { delay_minutes: "between 5 and 240" });
+      const hour = (raw: unknown, fallback: number | null) => {
+        if (raw === undefined) return fallback;
+        if (raw === "" || raw === null) return null;
+        const value = Number(raw);
+        return Number.isInteger(value) && value >= 0 && value <= 23 ? value : NaN;
+      };
+      const quietFrom = hour(body.quiet_from, current.quiet_from);
+      const quietTo = hour(body.quiet_to, current.quiet_to);
+      if (Number.isNaN(quietFrom) || Number.isNaN(quietTo))
+        return refuse(400, "malformed_request", { quiet_from: "an hour from 0 to 23" });
+      if ((quietFrom === null) !== (quietTo === null))
+        return refuse(400, "malformed_request", {
+          quiet_to: "set both ends of the quiet hours, or neither",
+        });
+      const zone = String(body.time_zone ?? current.time_zone) || "UTC";
+      try {
+        new Intl.DateTimeFormat("en-GB", { timeZone: zone });
+      } catch {
+        return refuse(400, "malformed_request", { time_zone: "a zone such as Europe/London" });
+      }
+      notificationPrefs.set(viewer.id, {
+        email_mode: mode,
+        delay_minutes: delay,
+        quiet_from: quietFrom,
+        quiet_to: quietTo,
+        time_zone: zone,
+      });
+      audit("inbox.prefs_updated", viewer.id, "staff", viewer.id);
+      return ok({ prefs: notificationPrefsFor(viewer.id) });
+    },
+  },
+  {
+    method: "GET",
     pattern: "hq/me/devices",
     auth: true,
     handler: ({ headers }) => {
@@ -7411,6 +8253,15 @@ routes.push(
       row.decided_by = viewer.id;
       row.decided_at = now();
       row.decision_note = note;
+      inboxNotify({
+        recipients: [row.requested_by],
+        subject_type: "approval",
+        subject_id: row.id,
+        subject_label: `${approvalSummary(row.kind, row.payload).charAt(0).toUpperCase()}${approvalSummary(row.kind, row.payload).slice(1)}`,
+        reason: "state",
+        summary: `${viewer.display_name || viewer.email} approved your request to ${approvalSummary(row.kind, row.payload)}.${note ? ` Note: ${note}` : ""}`,
+        actor_id: viewer.id,
+      });
       audit("approval.approved", viewer.id, "approval", row.id, note, {
         kind: row.kind,
         summary: approvalSummary(row.kind, row.payload),
@@ -7445,6 +8296,15 @@ routes.push(
       row.decision_note = String(body.note ?? "")
         .trim()
         .slice(0, 400);
+      inboxNotify({
+        recipients: [row.requested_by],
+        subject_type: "approval",
+        subject_id: row.id,
+        subject_label: `${approvalSummary(row.kind, row.payload).charAt(0).toUpperCase()}${approvalSummary(row.kind, row.payload).slice(1)}`,
+        reason: "state",
+        summary: `${viewer.display_name || viewer.email} declined your request to ${approvalSummary(row.kind, row.payload)}.${row.decision_note ? ` Note: ${row.decision_note}` : ""}`,
+        actor_id: viewer.id,
+      });
       audit("approval.declined", viewer.id, "approval", row.id, row.decision_note, {
         kind: row.kind,
         summary: approvalSummary(row.kind, row.payload),
@@ -17655,6 +18515,10 @@ seedPasskeys();
 seedApprovals();
 seedSecurityEvents();
 seedMail();
+// Seeded after everything they point at (companies, deals, tickets, approvals).
+seedSecurityFeed();
+seedReadWatch();
+seedInbox();
 
 function accessView(row: AccessRow) {
   const todayIso = today();
@@ -19004,6 +19868,7 @@ const server = createServer((request, response) => {
 });
 
 function resetWorld() {
+  resetInbox();
   pendings.clear();
   sessions.clear();
   invites.clear();
@@ -19028,6 +19893,7 @@ function resetWorld() {
   resetDeskRules();
   seedSources();
   seedPlans();
+  seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;
   for (const member of staff) {

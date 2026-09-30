@@ -52,6 +52,8 @@ export const meSchema = okEnvelope.extend({
   /** How long this role's session may sit idle, and its absolute life. */
   session_policy: z.object({ idle_minutes: z.number(), absolute_hours: z.number() }).optional(),
   environment: z.string(),
+  /** Unread inbox rows, counted as this page rendered; absent from an older service. */
+  inbox_unread: z.number().optional(),
 });
 export type HqMe = z.infer<typeof meSchema>;
 

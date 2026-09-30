@@ -34,6 +34,7 @@ import {
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { RecordFollow } from "@/components/inbox/record-follow";
 import { ViewedBy } from "@/components/security/viewed-by";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
@@ -290,6 +291,13 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
         ]}
         actions={
           <>
+            <RecordFollow
+              token={context.token}
+              subjectType="company"
+              subjectId={company.company_id}
+              label={company.name}
+              path={`/companies/${company.company_id}`}
+            />
             {canWrite && people.some((person) => person.email && !person.do_not_contact) && (
               <Link
                 className="btn btn--small"
