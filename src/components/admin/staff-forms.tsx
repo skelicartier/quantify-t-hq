@@ -296,6 +296,60 @@ export function StaffReasonForm({
   );
 }
 
+/**
+ * Reset a colleague's second factors. When it happens, the one-time enrolment link comes
+ * back here, once, for handing over in person; when it must wait for a second owner, the
+ * feedback says so and the link comes later, from Approvals.
+ */
+export function ResetAuthenticatorForm({
+  action,
+  staffId,
+  disabled,
+  again = false,
+}: {
+  action: Action;
+  staffId: string;
+  disabled: boolean;
+  /** Already reset and not yet enrolled: the same act issues a fresh link. */
+  again?: boolean;
+}) {
+  const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  const done = state.status === "sent" && Boolean(state.secret);
+  const off = isPending || disabled || done;
+  return (
+    <>
+      <form className="stack-form stack-form--tight" action={formAction}>
+        <AttemptField state={state} />
+        <input type="hidden" name="staff_id" value={staffId} />
+        <Field id="reset-reason" label="Reason" hint="Kept in the audit log.">
+          <Input id="reset-reason" name="reason" maxLength={400} required disabled={off} />
+        </Field>
+        <Button type="submit" variant="danger" disabled={off}>
+          {isPending ? "Resetting…" : again ? "Issue a new link" : "Reset authenticator"}
+        </Button>
+        {!done && <FormFeedback state={state} />}
+      </form>
+      {done && <EnrolLink message={state.message} link={state.secret ?? ""} />}
+    </>
+  );
+}
+
+/** The one-time enrolment link from a reset, with how to hand it over. */
+export function EnrolLink({ message, link }: { message: string | null | undefined; link: string }) {
+  return (
+    <div className="one-time-secret" role="status">
+      <p className="one-time-secret__label">
+        {message || "Copy the link now. It will not be shown again."}
+      </p>
+      <code className="one-time-secret__value">{link}</code>
+      <p className="one-time-secret__hint">
+        Hand it to them after you have seen them — on a video call, not by forwarding a mail. It
+        works once, within a day. Their password alone no longer sets up an authenticator.
+      </p>
+    </div>
+  );
+}
+
 /** A fresh invite for someone who never joined; the old link stops working. */
 export function ReinviteForm({
   action,

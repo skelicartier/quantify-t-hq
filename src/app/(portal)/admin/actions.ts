@@ -11,6 +11,7 @@ import { HqApiRequestError } from "@/lib/api/core";
 import * as crmApi from "@/lib/api/crm";
 import * as integrationsApi from "@/lib/api/integrations";
 import * as keysApi from "@/lib/api/keys";
+import * as securityApi from "@/lib/api/security";
 import * as settingsApi from "@/lib/api/settings";
 import * as staffApi from "@/lib/api/staff";
 import * as teamApi from "@/lib/api/team";
@@ -179,6 +180,9 @@ function approvalRefusal(error: unknown): ActionState {
       message: "A request is decided by somebody else, never by the one who made it.",
     };
   }
+  if (details["reason"] === "own-subject") {
+    return { status: "error", message: "The person a request is about never decides it." };
+  }
   if (details["reason"] === "not-yours") {
     return { status: "error", message: "Only the person who asked can do that." };
   }
@@ -265,6 +269,15 @@ export async function collectApprovalAction(
     return approvalRefusal(error);
   }
   refreshApprovals();
+  if ("enrol_url" in collected) {
+    refreshStaff(collected.approval.target_staff_id);
+    return {
+      status: "sent",
+      message: `Reset. ${resetSummary(collected.sessions_revoked, collected.passkeys_removed)} Copy the one-time link now; it will not be shown again.`,
+      sentAt: Date.now(),
+      secret: collected.enrol_url,
+    };
+  }
   return { status: "sent", message: null, sentAt: Date.now(), secret: collected.secret };
 }
 
@@ -419,6 +432,20 @@ export async function reactivateStaffAction(
   return { status: "sent", message: "Reactivated.", sentAt: Date.now() };
 }
 
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** "2 sessions ended and 1 passkey removed." — or "No session was open." */
+function resetSummary(sessions: number, passkeys: number): string {
+  const ended = sessions
+    ? `${plural(sessions, "session", "sessions")} ended`
+    : "No session was open";
+  return passkeys
+    ? `${ended}, and ${plural(passkeys, "passkey", "passkeys")} removed.`
+    : `${ended}.`;
+}
+
 export async function resetAuthenticatorAction(
   _previous: ActionState,
   formData: FormData,
@@ -429,16 +456,27 @@ export async function resetAuthenticatorAction(
   const staffId = fieldValue(formData, "staff_id", 64);
   const reason = fieldValue(formData, "reason", 400).trim();
   if (!reason) return { status: "error", message: "Say why the authenticator is being reset." };
+  let done: Awaited<ReturnType<typeof staffApi.resetStaffAuthenticator>>;
   try {
-    await staffApi.resetStaffAuthenticator(context.token, staffId, reason);
+    done = await staffApi.resetStaffAuthenticator(context.token, staffId, reason);
   } catch (error) {
     return staffRefusal(error);
   }
   refreshStaff(staffId);
+  if ("pending_approval" in done) {
+    refreshApprovals();
+    return {
+      status: "sent",
+      message:
+        "Sent for approval. A second owner decides; once they approve, carry it out under Approvals and the one-time link is shown to you there.",
+      sentAt: Date.now(),
+    };
+  }
   return {
     status: "sent",
-    message: "Reset. They enrol a new authenticator at their next sign-in.",
+    message: `Reset. ${resetSummary(done.sessions_revoked, done.passkeys_removed)} Copy the one-time link now; it will not be shown again.`,
     sentAt: Date.now(),
+    secret: done.enrol_url,
   };
 }
 
@@ -827,4 +865,39 @@ export async function signEveryoneOutAction(
   } catch (error) {
     return dangerRefusal(error);
   }
+}
+
+// --- the security feed ------------------------------------------------------------------
+
+/** Acknowledge, resolve or reopen one security event, with a note. */
+export async function updateSecurityEventAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/security");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const state = fieldValue(formData, "state", 20);
+  const note = fieldValue(formData, "note", 400).trim();
+  try {
+    await securityApi.updateSecurityEvent(
+      context.token,
+      fieldValue(formData, "event_id", 64),
+      state,
+      note,
+    );
+  } catch (error) {
+    if (error instanceof HqApiRequestError && typeof error.details["note"] === "string") {
+      return { status: "error", message: "Say what was found before resolving a critical event." };
+    }
+    return { status: "error", message: refusalMessage(error) };
+  }
+  revalidatePath("/admin/security");
+  revalidatePath("/home");
+  const done: Record<string, string> = {
+    acknowledged: "Acknowledged.",
+    resolved: "Resolved.",
+    open: "Reopened.",
+  };
+  return { status: "sent", message: done[state] ?? "Saved.", sentAt: Date.now() };
 }

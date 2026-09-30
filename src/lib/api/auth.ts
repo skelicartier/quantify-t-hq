@@ -92,19 +92,30 @@ const passwordChangedSchema = okEnvelope.extend({
   other_sessions_revoked: z.number(),
 });
 
-export function login(email: string, password: string) {
-  return postHqJson("hq/auth/login", pendingSchema, { body: { email, password } });
-}
-
-export function verifyTotp(pendingToken: string, code: string) {
-  return postHqJson("hq/auth/totp", sessionSchema, {
-    body: { pending_token: pendingToken, code },
+/**
+ * `enrolTicket` is the one-time link's ticket after an authenticator reset: without it a
+ * password alone never reaches enrolment again.
+ */
+export function login(email: string, password: string, enrolTicket = "") {
+  return postHqJson("hq/auth/login", pendingSchema, {
+    body: { email, password, ...(enrolTicket ? { enrol_ticket: enrolTicket } : {}) },
   });
 }
 
-export function useRecoveryCode(pendingToken: string, recoveryCode: string) {
+/** Each step that opens a session names the browser, so the service can say "new device". */
+export function verifyTotp(pendingToken: string, code: string, deviceId = "") {
+  return postHqJson("hq/auth/totp", sessionSchema, {
+    body: { pending_token: pendingToken, code, ...(deviceId ? { device_id: deviceId } : {}) },
+  });
+}
+
+export function useRecoveryCode(pendingToken: string, recoveryCode: string, deviceId = "") {
   return postHqJson("hq/auth/recovery", sessionSchema, {
-    body: { pending_token: pendingToken, recovery_code: recoveryCode },
+    body: {
+      pending_token: pendingToken,
+      recovery_code: recoveryCode,
+      ...(deviceId ? { device_id: deviceId } : {}),
+    },
   });
 }
 
@@ -114,9 +125,9 @@ export function beginEnrollment(pendingToken: string) {
   });
 }
 
-export function confirmEnrollment(pendingToken: string, code: string) {
+export function confirmEnrollment(pendingToken: string, code: string, deviceId = "") {
   return postHqJson("hq/auth/enroll/confirm", enrolledSessionSchema, {
-    body: { pending_token: pendingToken, code },
+    body: { pending_token: pendingToken, code, ...(deviceId ? { device_id: deviceId } : {}) },
   });
 }
 
@@ -192,9 +203,10 @@ export function signInWithPasskey(
     authenticator_data: string;
     signature: string;
   },
+  deviceId = "",
 ) {
   return postHqJson("hq/auth/passkey", sessionSchema, {
-    body: { pending_token: pendingToken, ...input },
+    body: { pending_token: pendingToken, ...input, ...(deviceId ? { device_id: deviceId } : {}) },
   });
 }
 

@@ -41,6 +41,7 @@ dashboard template. This file is the contract every screen is held to.
 | `--fs-label`                  | 10.5px                    | mono uppercase readouts and table heads                          |
 | form field names              | 13.5px                    | body type, sentence case, full text colour — never mono capitals |
 | card and panel titles         | 15px                      | one step above the field names they head                         |
+| section headings (`Section`)  | 17px, weight 600          | below the page title, above cards; 32px between sections         |
 | spacing                       | 4 · 8 · 12 · 16 · 24 · 32 | the only gaps used                                               |
 | radius                        | 0                         | everywhere                                                       |
 

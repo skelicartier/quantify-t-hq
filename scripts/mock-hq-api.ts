@@ -86,6 +86,8 @@ type Staff = {
   ends_on: string | null;
   starts_on?: string | null;
   personal_email?: string;
+  /** Mirrors a credential row: false for an invitee until they accept; absent = set. */
+  password_set?: boolean;
   recovery_codes_remaining?: number;
   manager_id?: string | null;
   probation_ends_on?: string | null;
@@ -968,6 +970,13 @@ const routes: Array<{
         return refuse(401, "unauthenticated");
       const kind = member.enrolled ? "totp" : "enroll";
       void headers;
+      const ticket = enrolTickets.get(member.id);
+      if (!member.enrolled && ticket) {
+        if (String(body.enrol_ticket ?? "") !== ticket.ticket)
+          return refuse(403, "forbidden", { reason: "enrol-ticket-required" });
+        if (Date.parse(ticket.expires_at) <= Date.now())
+          return refuse(403, "forbidden", { reason: "enrol-ticket-expired" });
+      }
       return ok({
         mfa: kind,
         pending_token: mintPending(member.id, kind),
@@ -982,6 +991,12 @@ const routes: Array<{
       const member = pendingFor(String(body.pending_token ?? ""), "totp");
       if (!member) return refuse(401, "unauthenticated");
       if (String(body.code ?? "") !== "000000") return refuse(401, "unauthenticated");
+      noteDevice(
+        member,
+        String(body.device_id ?? ""),
+        clientAddress(headers),
+        clientAgent(headers),
+      );
       return ok(mintSession(member, clientAddress(headers), clientAgent(headers)));
     },
   },
@@ -993,6 +1008,15 @@ const routes: Array<{
       if (!member) return refuse(401, "unauthenticated");
       if (!RECOVERY_CODES.includes(String(body.recovery_code ?? "")))
         return refuse(401, "unauthenticated");
+      noteDevice(
+        member,
+        String(body.device_id ?? ""),
+        clientAddress(headers),
+        clientAgent(headers),
+      );
+      recordSecurityEvent("recovery.used", member.id, "A recovery code was used to sign in.", {
+        ip: clientAddress(headers),
+      });
       return ok(mintSession(member, clientAddress(headers), clientAgent(headers)));
     },
   },
@@ -1052,6 +1076,12 @@ const routes: Array<{
         factor: "passkey",
         passkey_id: row.id,
       });
+      noteDevice(
+        member,
+        String(body.device_id ?? ""),
+        clientAddress(headers),
+        clientAgent(headers),
+      );
       return ok(mintSession(member, clientAddress(headers), clientAgent(headers)));
     },
   },
@@ -1076,6 +1106,21 @@ const routes: Array<{
       if (!member) return refuse(401, "unauthenticated");
       if (String(body.code ?? "") !== "000000") return refuse(401, "unauthenticated");
       member.enrolled = true;
+      const afterReset = enrolTickets.delete(member.id);
+      noteDevice(
+        member,
+        String(body.device_id ?? ""),
+        clientAddress(headers),
+        clientAgent(headers),
+      );
+      recordSecurityEvent(
+        "factor.enrolled",
+        member.id,
+        afterReset
+          ? "A new authenticator was enrolled on your account with the one-time link from your reset, and fresh recovery codes were issued."
+          : "Your authenticator was enrolled and your recovery codes were issued.",
+        { detail: { after_reset: afterReset } },
+      );
       audit("auth.totp_enrolled", member.id, "staff", member.id);
       return ok({
         ...mintSession(member, clientAddress(headers), clientAgent(headers)),
@@ -1095,6 +1140,7 @@ const routes: Array<{
       const member = staff.find((row) => row.id === invite.staffId);
       if (!member) return refuse(401, "unauthenticated");
       member.is_active = true;
+      member.password_set = true;
       audit("auth.invite_accepted", member.id, "staff", member.id);
       return ok({ mfa: "enroll", pending_token: mintPending(member.id, "enroll") });
     },
@@ -1414,6 +1460,7 @@ const routes: Array<{
         role: role as Staff["role"],
         kind: String(body.kind ?? "employee"),
         is_active: false,
+        password_set: false,
         enrolled: false,
         last_login_at: null,
         created_at: now(),
@@ -1450,7 +1497,8 @@ const routes: Array<{
           ...staffView(member),
           live_sessions: live.length,
           personal_email: member.personal_email ?? "",
-          joined: member.enrolled || Boolean(member.last_login_at),
+          // Mirrors staff_routes: joined = a password exists.
+          joined: member.password_set !== false,
         },
       });
     },
@@ -1494,7 +1542,10 @@ const routes: Array<{
           return refuse(403, "forbidden", { required_role: "owner" });
         if (member.role === "owner" && found.member.role !== "owner")
           return refuse(403, "forbidden", { required_role: "owner" });
-        if (["owner", "admin"].includes(role) && approvers("role_grant", found.member.id).length) {
+        if (
+          ["owner", "admin"].includes(role) &&
+          approvers("role_grant", found.member.id, member.id).length
+        ) {
           pendingApproval = requestApproval(
             "role_grant",
             found.member,
@@ -1593,7 +1644,8 @@ const routes: Array<{
       const found = caller(headers)!;
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
-      if (member.is_active || member.enrolled || member.last_login_at)
+      // Mirrors staff_routes: refused for anyone who has ever set a password.
+      if (member.is_active || member.password_set !== false)
         return refuse(400, "malformed_request", { reason: "already-joined" });
       if (["owner", "admin"].includes(member.role) && found.member.role !== "owner")
         return refuse(403, "forbidden", { required_role: "owner" });
@@ -1615,19 +1667,27 @@ const routes: Array<{
     auth: true,
     capability: "hq:admin",
     sudo: true,
-    handler: ({ headers, params }) => {
+    handler: ({ headers, params, body }) => {
       const member = staff.find((row) => row.id === params.staff_id);
       if (!member) return refuse(404, "not_found");
       const self = caller(headers)!.member;
-      if (
-        ["owner", "admin"].includes(member.role) &&
-        self.role !== "owner" &&
-        self.id !== member.id
-      )
+      const privileged = ["owner", "admin"].includes(member.role);
+      if (privileged && self.role !== "owner" && self.id !== member.id)
         return refuse(403, "forbidden", { required_role: "owner" });
-      member.enrolled = false;
-      audit("staff.totp_reset", caller(headers)!.member.id, "staff", member.id);
-      return ok({ reset: true, sessions_revoked: 0 });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (privileged && approvers("factor_reset", self.id, member.id).length > 0) {
+        const approval = requestApproval(
+          "factor_reset",
+          self,
+          { target_label: member.email, target_role: member.role },
+          reason,
+          member.id,
+        );
+        return ok({ pending_approval: true, approval });
+      }
+      return ok(performFactorReset(self, member, reason, null));
     },
   },
   {
@@ -2507,7 +2567,7 @@ const apiKeys: ApiKeyRow[] = [];
 
 type ApprovalRow = {
   id: string;
-  kind: "role_grant" | "api_key";
+  kind: "role_grant" | "api_key" | "factor_reset";
   status: "pending" | "approved" | "declined" | "withdrawn" | "expired" | "done";
   requested_by: string;
   requested_at: string;
@@ -2528,13 +2588,17 @@ function hoursFromNowIso(hours: number): string {
 }
 
 function approverRoles(kind: ApprovalRow["kind"]): string[] {
-  return kind === "role_grant" ? ["owner"] : ["owner", "admin"];
+  return kind === "api_key" ? ["owner", "admin"] : ["owner"];
 }
 
-/** Active colleagues, other than `excluding`, with the standing to approve. */
-function approvers(kind: ApprovalRow["kind"], excluding: string): Staff[] {
+/** Active colleagues, other than the requester and the person it is about, who may approve. */
+function approvers(kind: ApprovalRow["kind"], excluding: string, targetStaffId = ""): Staff[] {
   return staff.filter(
-    (row) => row.is_active && row.id !== excluding && approverRoles(kind).includes(row.role),
+    (row) =>
+      row.is_active &&
+      row.id !== excluding &&
+      row.id !== targetStaffId &&
+      approverRoles(kind).includes(row.role),
   );
 }
 
@@ -2548,6 +2612,8 @@ function personOf(staffId: string) {
 }
 
 function approvalSummary(kind: ApprovalRow["kind"], payload: Record<string, unknown>): string {
+  if (kind === "factor_reset")
+    return `reset ${String(payload.target_label ?? "a colleague")}'s authenticator`;
   if (kind === "api_key") {
     const scopes = Array.isArray(payload.scopes) ? payload.scopes.join(", ") : "";
     return `mint an intake key \u201c${String(payload.name ?? "")}\u201d for ${scopes} lasting ${String(payload.expires_in_days ?? 0)} days`;
@@ -2557,6 +2623,12 @@ function approvalSummary(kind: ApprovalRow["kind"], payload: Record<string, unkn
 }
 
 function approvalPayloadView(kind: ApprovalRow["kind"], payload: Record<string, unknown>) {
+  if (kind === "factor_reset") {
+    return {
+      target_label: String(payload.target_label ?? ""),
+      target_role: String(payload.target_role ?? ""),
+    };
+  }
   if (kind === "api_key") {
     return {
       name: String(payload.name ?? ""),
@@ -2606,9 +2678,13 @@ function approvalView(row: ApprovalRow, viewer?: Staff) {
   if (viewer) {
     const mine = row.requested_by === viewer.id;
     view.can_decide =
-      status === "pending" && !mine && approverRoles(row.kind).includes(viewer.role);
+      status === "pending" &&
+      !mine &&
+      row.target_staff_id !== viewer.id &&
+      approverRoles(row.kind).includes(viewer.role);
     view.can_withdraw = mine && ["pending", "approved"].includes(status);
-    view.can_collect = mine && status === "approved" && row.kind === "api_key";
+    view.can_collect =
+      mine && status === "approved" && (row.kind === "api_key" || row.kind === "factor_reset");
   }
   return view;
 }
@@ -2641,6 +2717,290 @@ function requestApproval(
     summary: approvalSummary(kind, payload),
   });
   return approvalView(row, requester);
+}
+
+// --- security 2: enrolment tickets, devices, the feed -----------------------------------------
+
+type SecurityEventRow = {
+  id: string;
+  kind: string;
+  severity: "info" | "warning" | "critical";
+  subject_staff_id: string;
+  actor_staff_id: string;
+  summary: string;
+  detail: Record<string, unknown>;
+  ip: string;
+  occurred_at: string;
+  state: "open" | "acknowledged" | "resolved";
+  handled_by: string;
+  handled_at: string | null;
+  note: string;
+  reported_at: string | null;
+};
+type DeviceRow = {
+  id: string;
+  staff_id: string;
+  device_hash: string;
+  label: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  last_ip: string;
+};
+
+/** Mirrors security_feed.KINDS: kind -> [severity, what the feed calls it]. */
+const SECURITY_KINDS: Record<string, [SecurityEventRow["severity"], string]> = {
+  "sign_in.new_device": ["info", "Sign-in from a new device"],
+  "sign_in.unusual": ["warning", "Unusual sign-in"],
+  "factor.enrolled": ["info", "Authenticator enrolled"],
+  "factor.reset": ["warning", "Authenticator reset"],
+  "passkey.added": ["info", "Passkey added"],
+  "passkey.removed": ["warning", "Passkey removed"],
+  "recovery.used": ["warning", "Recovery code used"],
+  "recovery.regenerated": ["info", "Recovery codes replaced"],
+  "password.changed": ["info", "Password changed"],
+  "password.reset": ["info", "Password reset by link"],
+  "account.reported": ["critical", "\u201cThis wasn't me\u201d pressed"],
+  "device.forgotten": ["info", "Device forgotten"],
+};
+
+const securityEvents: SecurityEventRow[] = [];
+const staffDevices: DeviceRow[] = [];
+/** staff id -> the reset's one-time ticket and when it lapses. */
+const enrolTickets = new Map<string, { ticket: string; expires_at: string }>();
+/** "This wasn't me" tokens the mock hands out: token -> the person and the event. */
+const reportTokens = new Map<string, { staffId: string; eventId: string }>();
+const ENROL_TICKET_HOURS = 24;
+
+function recordSecurityEvent(
+  kind: string,
+  subjectStaffId: string,
+  summary: string,
+  extra: Partial<SecurityEventRow> = {},
+): SecurityEventRow {
+  const row: SecurityEventRow = {
+    id: randomUUID(),
+    kind,
+    severity: SECURITY_KINDS[kind]?.[0] ?? "info",
+    subject_staff_id: subjectStaffId,
+    actor_staff_id: "",
+    summary: summary.slice(0, 400),
+    detail: {},
+    ip: "",
+    occurred_at: now(),
+    state: "open",
+    handled_by: "",
+    handled_at: null,
+    note: "",
+    reported_at: null,
+    ...extra,
+  };
+  securityEvents.unshift(row);
+  // The mail the service would send carries a lock link; the mock prints it instead.
+  const token = `hqr_mock_${randomUUID().replace(/-/g, "")}`;
+  reportTokens.set(token, { staffId: subjectStaffId, eventId: row.id });
+  console.log(`[mock-hq] security ${kind}: lock link ${PORTAL_ORIGIN}/report/${token}`);
+  return row;
+}
+
+function securityEventView(row: SecurityEventRow) {
+  return {
+    event_id: row.id,
+    kind: row.kind,
+    label: SECURITY_KINDS[row.kind]?.[1] ?? row.kind,
+    severity: row.severity,
+    summary: row.summary,
+    subject: personOf(row.subject_staff_id),
+    actor: personOf(row.actor_staff_id),
+    ip: row.ip,
+    occurred_at: row.occurred_at,
+    state: row.state,
+    handled_by: personOf(row.handled_by),
+    handled_at: row.handled_at,
+    note: row.note,
+    reported_at: row.reported_at,
+    detail: row.detail,
+  };
+}
+
+function deviceHash(deviceId: string): string {
+  return createHash("sha256").update(deviceId, "utf8").digest("hex");
+}
+
+/** Mirrors auth_routes._unfamiliar_device with the portal's cookie. */
+function noteDevice(member: Staff, deviceId: string, ip: string, agent: string) {
+  if (deviceId.length < 16 || deviceId.length > 128) return;
+  const hash = deviceHash(deviceId);
+  const mine = staffDevices.filter((row) => row.staff_id === member.id);
+  const match = mine.find((row) => row.device_hash === hash);
+  const label = deviceLabel(agent);
+  if (match) {
+    match.last_seen_at = now();
+    match.last_ip = ip;
+    match.label = label;
+    return;
+  }
+  staffDevices.push({
+    id: randomUUID(),
+    staff_id: member.id,
+    device_hash: hash,
+    label,
+    first_seen_at: now(),
+    last_seen_at: now(),
+    last_ip: ip,
+  });
+  const earlier = [...sessions.values()].some((session) => session.staffId === member.id);
+  if (mine.length > 0 || earlier) {
+    audit("auth.new_device", member.id, "session", member.id, "", { device: label, mailed: false });
+    recordSecurityEvent(
+      "sign_in.new_device",
+      member.id,
+      `Signed in from ${label}, a device this account had not used, from ${ip}.`,
+      { ip, detail: { device: label } },
+    );
+  }
+}
+
+/** Mirrors staff_routes.perform_factor_reset. */
+function performFactorReset(
+  actor: Staff,
+  target: Staff,
+  reason: string,
+  approval: ApprovalRow | null,
+) {
+  target.enrolled = false;
+  let passkeysRemoved = 0;
+  for (let index = passkeys.length - 1; index >= 0; index -= 1) {
+    if (passkeys[index]!.staff_id === target.id) {
+      passkeys.splice(index, 1);
+      passkeysRemoved += 1;
+    }
+  }
+  let revoked = 0;
+  for (const session of sessions.values()) {
+    if (session.staffId === target.id && !session.revoked_at) {
+      session.revoked_at = now();
+      revoked += 1;
+    }
+  }
+  const ticket = `hqe_${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "").slice(0, 11)}`;
+  const expires = hoursFromNowIso(ENROL_TICKET_HOURS);
+  enrolTickets.set(target.id, { ticket, expires_at: expires });
+  const detail: Record<string, unknown> = {
+    sessions_revoked: revoked,
+    passkeys_removed: passkeysRemoved,
+  };
+  if (approval)
+    detail.dual_control = { approval_id: approval.id, approved_by: approval.decided_by };
+  else if (["owner", "admin"].includes(target.role)) detail.dual_control = "sole_approver";
+  audit("staff.totp_reset", actor.id, "staff", target.id, reason, detail);
+  const who = actor.display_name || "an administrator";
+  recordSecurityEvent(
+    "factor.reset",
+    target.id,
+    `Your authenticator, recovery codes and passkeys were reset by ${who}, and every session on your account was ended. ${who} will give you a one-time link to enrol a new authenticator; it works once, within ${ENROL_TICKET_HOURS} hours.`,
+    {
+      actor_staff_id: actor.id,
+      detail: { sessions_revoked: revoked, passkeys_removed: passkeysRemoved },
+    },
+  );
+  return {
+    reset: true,
+    sessions_revoked: revoked,
+    passkeys_removed: passkeysRemoved,
+    enrol_url: `${PORTAL_ORIGIN}/login?ticket=${ticket}`,
+    enrol_expires_at: expires,
+    shown_once: ["enrol_url"],
+  };
+}
+
+function seedSecurityFeed() {
+  securityEvents.length = 0;
+  staffDevices.length = 0;
+  enrolTickets.clear();
+  reportTokens.clear();
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const ADMIN = "aa000000-0000-4000-8000-00000000000b";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const SUPPORT = "aa000000-0000-4000-8000-00000000000d";
+  const INTERN = "aa000000-0000-4000-8000-00000000000e";
+  const seeded: Array<[string, string, string, Partial<SecurityEventRow>]> = [
+    [
+      "account.reported",
+      SALES,
+      "Sales Person said this wasn't them: Signed in from Firefox on Windows, a device this account had not used, from 192.0.2.66.",
+      {
+        occurred_at: agoIso(24 * 12),
+        ip: "192.0.2.66",
+        state: "resolved",
+        handled_by: OWNER,
+        handled_at: agoIso(24 * 12 - 3),
+        note: "A family laptop signed in with a saved password. Password changed; the audit log shows two reads, no exports.",
+        detail: { sessions_revoked: 2 },
+      },
+    ],
+    [
+      "recovery.used",
+      INTERN,
+      "A recovery code was used to sign in.",
+      {
+        occurred_at: agoIso(26),
+        ip: "81.2.69.160",
+        state: "acknowledged",
+        handled_by: ADMIN,
+        handled_at: agoIso(25),
+        note: "Phone in for repair; confirmed with them on a call.",
+        detail: { remaining: 9 },
+      },
+    ],
+    [
+      "passkey.added",
+      OWNER,
+      "A passkey named \u201cWork laptop\u201d was added to your account; it can stand in for your authenticator code.",
+      { occurred_at: agoIso(72), ip: "198.51.100.20", detail: { label: "Work laptop" } },
+    ],
+    [
+      "sign_in.unusual",
+      ADMIN,
+      "Your account was signed in to from the address 203.0.113.9, and it followed six failed sign-ins from that address within the hour.",
+      {
+        occurred_at: agoIso(5),
+        ip: "203.0.113.9",
+        detail: { rules: ["failures_first"] },
+      },
+    ],
+    [
+      "sign_in.new_device",
+      SUPPORT,
+      "Signed in from Safari on iOS, a device this account had not used, from 198.51.100.7.",
+      { occurred_at: agoIso(2), ip: "198.51.100.7", detail: { device: "Safari on iOS" } },
+    ],
+  ];
+  for (const [kind, subject, summary, extra] of seeded)
+    recordSecurityEvent(kind, subject, summary, extra);
+  securityEvents.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+  // A stable lock link the harness can open: the new-device event above.
+  const newest = securityEvents.find((row) => row.kind === "sign_in.new_device");
+  if (newest) reportTokens.set("hqr_mock_demo", { staffId: SUPPORT, eventId: newest.id });
+  staffDevices.push(
+    {
+      id: "dd000000-0000-4000-8000-000000000001",
+      staff_id: OWNER,
+      device_hash: deviceHash("mock-device-owner-laptop-000000000"),
+      label: "Chrome on macOS",
+      first_seen_at: agoIso(24 * 28),
+      last_seen_at: agoIso(1),
+      last_ip: "198.51.100.20",
+    },
+    {
+      id: "dd000000-0000-4000-8000-000000000002",
+      staff_id: OWNER,
+      device_hash: deviceHash("mock-device-owner-phone-0000000000"),
+      label: "Safari on iOS",
+      first_seen_at: agoIso(24 * 9),
+      last_seen_at: agoIso(30),
+      last_ip: "81.2.69.160",
+    },
+  );
 }
 
 /** The key a collected request mints; the same shape the create route makes. */
@@ -4158,7 +4518,10 @@ routes.push(
           .filter((row) => row.action === "auth.anomalous")
           .sort((a, b) => String(b.occurred_at).localeCompare(String(a.occurred_at)))
           .slice(0, 5);
+        const openEvents = securityEvents.filter((row) => row.state === "open");
         payload.security = {
+          open_events: openEvents.length,
+          critical_open: openEvents.filter((row) => row.severity === "critical").length,
           anomalies_7d: countAudit("auth.anomalous", 24 * 7),
           new_devices_7d: countAudit("auth.new_device", 24 * 7),
           failed_logins_24h: countAudit("auth.login_failed", 24),
@@ -6280,6 +6643,148 @@ routes.push(
   },
   {
     method: "GET",
+    pattern: "hq/security/events",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ query }) => {
+      const states = ["open", "acknowledged", "resolved"];
+      if (query.state && !states.includes(query.state))
+        return refuse(400, "malformed_request", { state: "open, acknowledged or resolved" });
+      const rows = securityEvents.filter(
+        (row) =>
+          (!query.state || row.state === query.state) &&
+          (!query.severity || row.severity === query.severity) &&
+          (!query.kind || row.kind === query.kind),
+      );
+      const since = Date.now() - 90 * 86_400_000;
+      const counts: Record<string, number> = { open: 0, acknowledged: 0, resolved: 0 };
+      for (const row of securityEvents)
+        if (Date.parse(row.occurred_at) >= since) counts[row.state] = (counts[row.state] ?? 0) + 1;
+      return ok({
+        events: rows.slice(0, 300).map(securityEventView),
+        counts_90d: counts,
+        kinds: Object.entries(SECURITY_KINDS).map(([kind, [severity, label]]) => ({
+          kind,
+          label,
+          severity,
+        })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/security/events/{event_id}/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = securityEvents.find((candidate) => candidate.id === params.event_id);
+      if (!row) return refuse(404, "not_found");
+      const state = String(body.state ?? "");
+      if (!["open", "acknowledged", "resolved"].includes(state))
+        return refuse(400, "malformed_request", { state: "open, acknowledged or resolved" });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      if (state === "resolved" && !note && row.severity === "critical")
+        return refuse(400, "malformed_request", {
+          note: "say what was found before resolving a critical event",
+        });
+      const from = row.state;
+      row.state = state as SecurityEventRow["state"];
+      if (note) row.note = note;
+      row.handled_by = state === "open" ? "" : viewer.id;
+      row.handled_at = state === "open" ? null : now();
+      audit("security.event_updated", viewer.id, "security_event", row.id, note, {
+        kind: row.kind,
+        from,
+        to: state,
+      });
+      return ok({ event: securityEventView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/me/devices",
+    auth: true,
+    handler: ({ headers }) => {
+      const viewer = caller(headers)!.member;
+      return ok({
+        devices: staffDevices
+          .filter((row) => row.staff_id === viewer.id)
+          .sort((a, b) => b.last_seen_at.localeCompare(a.last_seen_at))
+          .map((row) => ({
+            device_id: row.id,
+            device_hash: row.device_hash,
+            label: row.label,
+            first_seen_at: row.first_seen_at,
+            last_seen_at: row.last_seen_at,
+            last_ip: row.last_ip,
+          })),
+        events: securityEvents
+          .filter((row) => row.subject_staff_id === viewer.id)
+          .slice(0, 20)
+          .map(securityEventView),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/me/devices/{device_id}/forget",
+    auth: true,
+    handler: ({ headers, params }) => {
+      const viewer = caller(headers)!.member;
+      const index = staffDevices.findIndex(
+        (row) => row.id === params.device_id && row.staff_id === viewer.id,
+      );
+      if (index < 0) return refuse(404, "not_found");
+      const [row] = staffDevices.splice(index, 1);
+      audit("auth.device_forgotten", viewer.id, "staff", viewer.id, "", {
+        device_id: row!.id,
+        label: row!.label,
+      });
+      recordSecurityEvent(
+        "device.forgotten",
+        viewer.id,
+        `${row!.label || "A device"} was forgotten; its next sign-in will count as new.`,
+      );
+      return ok({ forgotten: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/auth/report",
+    handler: ({ body }) => {
+      const found = reportTokens.get(String(body.token ?? ""));
+      if (!found) return refuse(401, "unauthenticated");
+      const member = staff.find((row) => row.id === found.staffId);
+      if (!member) return refuse(401, "unauthenticated");
+      const event = securityEvents.find((row) => row.id === found.eventId);
+      if (event?.reported_at) return ok({ locked: true, already: true });
+      let revoked = 0;
+      for (const session of sessions.values()) {
+        if (session.staffId === member.id && !session.revoked_at) {
+          session.revoked_at = now();
+          revoked += 1;
+        }
+      }
+      enrolTickets.delete(member.id);
+      if (event) event.reported_at = now();
+      recordSecurityEvent(
+        "account.reported",
+        member.id,
+        `${member.display_name || member.email} said this wasn't them: ${event?.summary ?? "a security mail"}`,
+        { detail: { about_event: found.eventId, sessions_revoked: revoked } },
+      );
+      audit("auth.reported", member.id, "staff", member.id, "", {
+        about_event: found.eventId,
+        sessions_revoked: revoked,
+      });
+      return ok({ locked: true, already: false });
+    },
+  },
+  {
+    method: "GET",
     pattern: "hq/approvals",
     auth: true,
     capability: "hq:admin",
@@ -6298,7 +6803,11 @@ routes.push(
         awaiting_me: pending.filter((view) => view.can_decide).length,
         to_collect: views.filter((view) => view.can_collect).length,
         ttl_hours: APPROVAL_TTL_HOURS,
-        approver_roles: { role_grant: ["owner"], api_key: ["owner", "admin"] },
+        approver_roles: {
+          role_grant: ["owner"],
+          api_key: ["owner", "admin"],
+          factor_reset: ["owner"],
+        },
       });
     },
   },
@@ -6317,6 +6826,8 @@ routes.push(
         return refuse(400, "malformed_request", { status: `already ${status}` });
       if (row.requested_by === viewer.id)
         return refuse(403, "forbidden", { reason: "own-request" });
+      if (row.target_staff_id === viewer.id)
+        return refuse(403, "forbidden", { reason: "own-subject" });
       if (!approverRoles(row.kind).includes(viewer.role))
         return refuse(403, "forbidden", { required_role: approverRoles(row.kind).join(" or ") });
       const note = String(body.note ?? "")
@@ -6333,6 +6844,7 @@ routes.push(
             role: String(payload.role) as Staff["role"],
             kind: String(payload.kind || "employee"),
             is_active: false,
+            password_set: false,
             enrolled: false,
             last_login_at: null,
             created_at: now(),
@@ -6402,6 +6914,8 @@ routes.push(
         return refuse(400, "malformed_request", { status: `already ${status}` });
       if (row.requested_by === viewer.id)
         return refuse(403, "forbidden", { reason: "own-request" });
+      if (row.target_staff_id === viewer.id)
+        return refuse(403, "forbidden", { reason: "own-subject" });
       if (!approverRoles(row.kind).includes(viewer.role))
         return refuse(403, "forbidden", { required_role: approverRoles(row.kind).join(" or ") });
       row.status = "declined";
@@ -6452,11 +6966,26 @@ routes.push(
       const row = approvals.find((candidate) => candidate.id === params.approval_id);
       if (!row) return refuse(404, "not_found");
       if (row.requested_by !== viewer.id) return refuse(403, "forbidden", { reason: "not-yours" });
-      if (row.kind !== "api_key")
-        return refuse(400, "malformed_request", { kind: "only an intake key is collected" });
+      if (row.kind !== "api_key" && row.kind !== "factor_reset")
+        return refuse(400, "malformed_request", {
+          kind: "only an intake key or an authenticator reset is collected",
+        });
       const status = approvalStatus(row);
       if (status !== "approved")
         return refuse(400, "malformed_request", { status: `${status}, not approved` });
+      if (row.kind === "factor_reset") {
+        const target = staff.find((candidate) => candidate.id === row.target_staff_id);
+        if (!target) return refuse(404, "not_found");
+        const done = performFactorReset(viewer, target, row.reason, row);
+        row.status = "done";
+        row.result_id = target.id;
+        audit("approval.collected", viewer.id, "approval", row.id, "", {
+          kind: "factor_reset",
+          target_staff_id: target.id,
+          approved_by: row.decided_by,
+        });
+        return ok({ ...done, approval: approvalView(row, viewer) });
+      }
       const minted = mintKeyRow(
         String(row.payload.name ?? ""),
         Number(row.payload.expires_in_days ?? KEY_LIFETIME_DAYS),
@@ -17961,6 +18490,7 @@ function resetWorld() {
   seedPasskeys();
   seedApprovals();
   seedSecurityEvents();
+  seedSecurityFeed();
   seedMail();
   seedSla();
   resetDeskRules();

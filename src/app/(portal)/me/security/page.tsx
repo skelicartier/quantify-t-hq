@@ -1,6 +1,7 @@
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import {
   changePasswordAction,
+  forgetDeviceAction,
   regenerateRecoveryCodesAction,
   revokeSessionAction,
 } from "@/app/(portal)/me/security/actions";
@@ -28,9 +29,28 @@ import { formatDate } from "@/lib/format";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { requireStaff } from "@/lib/access/core";
 import { formatAbsolute } from "@/lib/format";
+import { readMyDevices, type MyDevices } from "@/lib/api/security";
+import { currentDeviceHash } from "@/lib/auth/session";
+import { SeverityPill } from "@/components/admin/security-pills";
 
 export const metadata = { title: "My security" };
 export const dynamic = "force-dynamic";
+
+const DEVICE_COLUMNS = [
+  { key: "device", label: "Device" },
+  { key: "first", label: "First signed in" },
+  { key: "last", label: "Last signed in" },
+  { key: "address", label: "Last address" },
+  { key: "state", label: "State" },
+  { key: "actions", label: "Actions", align: "end" as const },
+];
+
+const EVENT_COLUMNS = [
+  { key: "when", label: "When" },
+  { key: "what", label: "What" },
+  { key: "detail", label: "Detail" },
+  { key: "severity", label: "Level" },
+];
 
 const SESSION_COLUMNS = [
   { key: "started", label: "Started" },
@@ -62,6 +82,14 @@ export default async function SecurityPage() {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
+  let devices: MyDevices | null = null;
+  try {
+    devices = await readMyDevices(context.token);
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
+  const thisBrowser = await currentDeviceHash();
   let policies: PolicyState[] | null = null;
   try {
     policies = (await readPolicies(context.token)).policies;
@@ -131,6 +159,82 @@ export default async function SecurityPage() {
           </DataTable>
         )}
       </Section>
+      <Section id="devices" title="Devices">
+        <p className="page-note">
+          Each browser you finish a sign-in on. A sign-in from one not listed here is mailed to you
+          with a “this wasn&apos;t me” link that locks the account at once.
+        </p>
+        {devices === null ? (
+          <Callout tone="danger" role="alert">
+            Devices could not be read just now. This is a read failure, not an empty list.
+          </Callout>
+        ) : (
+          <DataTable
+            caption="Browsers your account has signed in on"
+            columns={DEVICE_COLUMNS}
+            isEmpty={devices.devices.length === 0}
+            empty={
+              <EmptyState
+                compact
+                title="None recorded yet"
+                description="Your next sign-in records this browser."
+              />
+            }
+          >
+            {devices.devices.map((device) => (
+              <tr key={device.device_id}>
+                <td>{device.label || "Unknown browser"}</td>
+                <td>
+                  <Timestamp value={device.first_seen_at} mode="both" />
+                </td>
+                <td>
+                  <Timestamp value={device.last_seen_at} mode="relative" />
+                </td>
+                <td className="mono">{device.last_ip || "—"}</td>
+                <td>
+                  {device.device_hash === thisBrowser ? (
+                    <StatusPill value="active" label="This browser" tone="live" />
+                  ) : (
+                    <StatusPill value="known" label="Known" tone="neutral" />
+                  )}
+                </td>
+                <td className="data-table__num">
+                  <RowAction
+                    action={forgetDeviceAction}
+                    fields={{ device_id: device.device_id }}
+                    buttons={[
+                      {
+                        label: "Forget",
+                        pendingLabel: "Forgetting…",
+                        className: "btn btn--small btn--ghost",
+                        ariaLabel: `Forget ${device.label || "this device"}`,
+                      },
+                    ]}
+                  />
+                </td>
+              </tr>
+            ))}
+          </DataTable>
+        )}
+      </Section>
+      {devices !== null && devices.events.length > 0 && (
+        <Section id="account-events" title="What happened to your sign-in">
+          <DataTable caption="Recent security events on your account" columns={EVENT_COLUMNS}>
+            {devices.events.map((event) => (
+              <tr key={event.event_id}>
+                <td>
+                  <Timestamp value={event.occurred_at} mode="both" />
+                </td>
+                <td>{event.label}</td>
+                <td>{event.summary}</td>
+                <td>
+                  <SeverityPill severity={event.severity} />
+                </td>
+              </tr>
+            ))}
+          </DataTable>
+        </Section>
+      )}
       <Section id="password" title="Password">
         <Card>
           <PasswordForm action={changePasswordAction} />

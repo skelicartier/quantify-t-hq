@@ -101,6 +101,9 @@ const homeSchema = z.object({
   /** What the sign-in rules and the new-device mail found lately; owners and admins only. */
   security: z
     .object({
+      /** Security feed events nobody has acknowledged yet, and the critical ones among them. */
+      open_events: z.number(),
+      critical_open: z.number(),
       anomalies_7d: z.number(),
       new_devices_7d: z.number(),
       failed_logins_24h: z.number(),

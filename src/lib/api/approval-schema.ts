@@ -1,13 +1,13 @@
 import { z } from "zod";
 
 /**
- * A request under dual control: an Owner or Admin seat, or an intake key, waiting for a
- * second person with the standing to approve. A leaf module, so the key, staff and Home
+ * A request under dual control: an Owner or Admin seat, an intake key, or an Owner's or
+ * Admin's authenticator reset, waiting for a second person with the standing to approve. A leaf module, so the key, staff and Home
  * clients can all share it without importing one another.
  */
 export const approvalSchema = z.object({
   approval_id: z.string(),
-  kind: z.enum(["role_grant", "api_key"]),
+  kind: z.enum(["role_grant", "api_key", "factor_reset"]),
   status: z.enum(["pending", "approved", "declined", "withdrawn", "expired", "done"]),
   /** One clause, as a person would say it: "invite x as admin". */
   summary: z.string(),
@@ -21,6 +21,7 @@ export const approvalSchema = z.object({
     kind: z.string().optional(),
     from: z.string().optional(),
     target_label: z.string().optional(),
+    target_role: z.string().optional(),
   }),
   reason: z.string(),
   requested_by: z.object({ staff_id: z.string(), name: z.string() }).nullable(),
@@ -38,6 +39,21 @@ export const approvalSchema = z.object({
   can_collect: z.boolean().optional(),
 });
 export type Approval = z.infer<typeof approvalSchema>;
+
+/**
+ * An authenticator reset carried out: the one-time enrolment link rides this response and
+ * no other, for the person who reset it to hand over after seeing the colleague.
+ */
+export const factorResetSchema = z.object({
+  ok: z.literal(true),
+  reset: z.literal(true),
+  sessions_revoked: z.number(),
+  passkeys_removed: z.number(),
+  enrol_url: z.string(),
+  enrol_expires_at: z.string().nullable(),
+  shown_once: z.array(z.string()),
+});
+export type FactorReset = z.infer<typeof factorResetSchema>;
 
 /** What a request that had to wait comes back as, in place of the act's own payload. */
 export const pendingApprovalSchema = z.object({

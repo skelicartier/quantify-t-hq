@@ -4,7 +4,11 @@ import { cache } from "react";
 import { z } from "zod";
 
 import { HqApiRequestError, HqApiUnavailableError, fetchHqJson, postHqJson } from "@/lib/api/core";
-import { approvalSchema, pendingApprovalSchema } from "@/lib/api/approval-schema";
+import {
+  approvalSchema,
+  factorResetSchema,
+  pendingApprovalSchema,
+} from "@/lib/api/approval-schema";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
 
@@ -94,10 +98,14 @@ export function reactivateStaffMember(token: string, staffId: string, reason: st
   );
 }
 
+/**
+ * Either the reset happened (with its one-time link) or, for an Owner or Admin while a
+ * second Owner exists, it waits for them.
+ */
 export function resetStaffAuthenticator(token: string, staffId: string, reason: string) {
   return postHqJson(
     `hq/staff/${staffId}/totp/reset`,
-    okEnvelope.extend({ reset: z.boolean(), sessions_revoked: z.number() }),
+    z.union([factorResetSchema, pendingApprovalSchema]),
     { token, body: { reason } },
   );
 }

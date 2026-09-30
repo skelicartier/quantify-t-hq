@@ -14,6 +14,10 @@ export const SERVICE_UNAVAILABLE =
   "The service could not be reached. Nothing was changed — try again shortly.";
 export const ALREADY_ENROLLED =
   "This account already has an authenticator. Sign in with it, or ask an Owner to reset it.";
+export const ENROL_TICKET_REQUIRED =
+  "Your authenticator was reset. Open the one-time link the owner who reset it gave you, then sign in from that page.";
+export const ENROL_TICKET_EXPIRED =
+  "The one-time link from your reset has expired. Ask an owner to reset your authenticator again for a new one.";
 
 export function refusalMessage(error: unknown): string {
   if (error instanceof HqApiRequestError) {
@@ -23,7 +27,12 @@ export function refusalMessage(error: unknown): string {
     }
     if (error.code === "unauthenticated") return GENERIC_REFUSAL;
     if (error.code === "malformed_request") return GENERIC_REFUSAL;
-    if (error.code === "forbidden") return ALREADY_ENROLLED;
+    if (error.code === "forbidden") {
+      const reason = error.details["reason"];
+      if (reason === "enrol-ticket-required") return ENROL_TICKET_REQUIRED;
+      if (reason === "enrol-ticket-expired") return ENROL_TICKET_EXPIRED;
+      return ALREADY_ENROLLED;
+    }
     return SERVICE_UNAVAILABLE;
   }
   if (error instanceof HqApiUnavailableError) return SERVICE_UNAVAILABLE;

@@ -1,27 +1,10 @@
 import type { NextConfig } from "next";
 
-const developmentScriptSource = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
-
-// No Turnstile frames here and no third-party scripts at all: HQ is staff-only, and the
-// public certificate check is a plain page. The connect-src still names the Functions
-// host because every read the portal renders comes from it server-side in production —
-// but the browser itself never calls it, so this stays as tight as the console's.
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "font-src 'self' data:",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-  "img-src 'self' data: blob:",
-  "object-src 'none'",
-  `script-src 'self' 'unsafe-inline'${developmentScriptSource}`,
-  "style-src 'self' 'unsafe-inline'",
-  "connect-src 'self'",
-  "upgrade-insecure-requests",
-].join("; ");
+// The content security policy is not here: it carries a fresh script nonce on every
+// request, so the proxy writes it (`src/lib/security/csp.ts`). Next's own assets, which
+// the proxy skips, are scripts and styles the policy governs, not documents that need one.
 
 const securityHeaders = [
-  { key: "Content-Security-Policy", value: contentSecurityPolicy },
   // "same-origin", not "no-referrer": under no-referrer a browser sends `Origin: null` on
   // a plain same-origin form POST (the CSV export), which the same-origin check must then
   // refuse. same-origin still sends nothing to other sites, so record URLs never leave.

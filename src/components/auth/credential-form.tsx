@@ -12,15 +12,18 @@ import { INITIAL_AUTH_STATE, type AuthFormState } from "@/lib/auth/form-state";
 type CredentialFormProps = {
   action: (previous: AuthFormState, formData: FormData) => Promise<AuthFormState>;
   nextPath: string;
+  /** The one-time ticket from a reset link, carried to the service with the password. */
+  enrolTicket?: string;
 };
 
-export function CredentialForm({ action, nextPath }: CredentialFormProps) {
+export function CredentialForm({ action, nextPath, enrolTicket }: CredentialFormProps) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_AUTH_STATE);
   return (
     <>
       <form className="auth-form" action={formAction} noValidate>
         <AttemptField state={state} />
         <input type="hidden" name="next" value={nextPath} />
+        {enrolTicket && <input type="hidden" name="enrol_ticket" value={enrolTicket} />}
         <Field id="email" label="Email address">
           <Input
             id="email"

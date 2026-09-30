@@ -30,8 +30,12 @@ type LoginPageProps = {
     next?: string | string[];
     notice?: string | string[];
     form?: string | string[];
+    ticket?: string | string[];
   }>;
 };
+
+/** The shape of the ticket in a reset's one-time link; anything else is ignored. */
+const TICKET_SHAPE = /^hqe_[A-Za-z0-9_-]{20,80}$/;
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const parameters = await searchParams;
@@ -39,9 +43,12 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const noticeKey = Array.isArray(parameters.notice) ? parameters.notice[0] : parameters.notice;
   const nextPath = sanitizeNextPath(requested);
   const notice = noticeKey ? NOTICES[noticeKey] : undefined;
+  const rawTicket = Array.isArray(parameters.ticket) ? parameters.ticket[0] : parameters.ticket;
+  const ticket = rawTicket && TICKET_SHAPE.test(rawTicket) ? rawTicket : "";
   // Development only: with the demo sign-in on, the form is skipped unless asked for
-  // (`?form=1`, as the harness and scripts do) or a notice has something to say.
-  if (devAutologinPersona() && !noticeKey && !parameters.form) {
+  // (`?form=1`, as the harness and scripts do), a notice has something to say, or a
+  // reset link brought a ticket.
+  if (devAutologinPersona() && !noticeKey && !parameters.form && !ticket) {
     redirect(`/dev/signin?next=${encodeURIComponent(nextPath)}`);
   }
   return (
@@ -56,7 +63,15 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           </Callout>
         </div>
       )}
-      <CredentialForm action={login} nextPath={nextPath} />
+      {ticket && (
+        <div className="auth-form">
+          <Callout tone="neutral" compact>
+            Your authenticator was reset. Sign in with your password, then set up a new
+            authenticator. This link works once, within a day of the reset.
+          </Callout>
+        </div>
+      )}
+      <CredentialForm action={login} nextPath={nextPath} enrolTicket={ticket} />
     </AuthShell>
   );
 }

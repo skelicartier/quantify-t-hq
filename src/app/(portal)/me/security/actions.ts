@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import * as authApi from "@/lib/api/auth";
+import * as securityApi from "@/lib/api/security";
 import { HqApiRequestError } from "@/lib/api/core";
 import { requireStaff } from "@/lib/access/core";
 import type { ActionState } from "@/lib/forms/action-state";
@@ -166,4 +167,20 @@ export async function deletePasskeyAction(
   }
   revalidatePath("/me/security");
   return { status: "sent", message: "Removed.", sentAt: Date.now() };
+}
+
+/** Forget a device: its next sign-in counts as new again, and is mailed. */
+export async function forgetDeviceAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const { token } = await requireStaff("/me/security");
+  try {
+    await securityApi.forgetDevice(token, fieldValue(formData, "device_id", 64));
+  } catch (error) {
+    return { status: "error", message: refusalMessage(error) };
+  }
+  revalidatePath("/me/security");
+  return { status: "sent", message: "Forgotten.", sentAt: Date.now() };
 }

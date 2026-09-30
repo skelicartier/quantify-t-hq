@@ -2,7 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
-import { approvalSchema } from "@/lib/api/approval-schema";
+import { approvalSchema, factorResetSchema } from "@/lib/api/approval-schema";
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
 import { apiKeySchema } from "@/lib/api/keys";
 
@@ -48,13 +48,20 @@ export function withdrawRequest(token: string, approvalId: string) {
   return postHqJson(`hq/approvals/${approvalId}/withdraw`, decidedSchema, { token, body: {} });
 }
 
-const collectedSchema = okEnvelope.extend({
+const collectedKeySchema = okEnvelope.extend({
   approval: approvalSchema,
   key: apiKeySchema,
   /** The full key, in the only response that ever carries it. */
   secret: z.string(),
 });
 
+const collectedResetSchema = factorResetSchema.extend({ approval: approvalSchema });
+
+/** A key is minted, or a reset carried out, as the requester collects it. */
 export function collectRequest(token: string, approvalId: string) {
-  return postHqJson(`hq/approvals/${approvalId}/collect`, collectedSchema, { token, body: {} });
+  return postHqJson(
+    `hq/approvals/${approvalId}/collect`,
+    z.union([collectedKeySchema, collectedResetSchema]),
+    { token, body: {} },
+  );
 }

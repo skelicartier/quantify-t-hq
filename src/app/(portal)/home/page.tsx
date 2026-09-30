@@ -373,11 +373,14 @@ export default async function HomePage() {
                 <section className="briefing__block" aria-labelledby="security-title">
                   <div className="briefing__head">
                     <h2 id="security-title">Sign-in watch</h2>
-                    <Link className="briefing__more" href="/admin/audit?action=auth.anomalous">
-                      Audit log
+                    <Link className="briefing__more" href="/admin/security?state=open">
+                      Security feed
                     </Link>
                   </div>
                   <p className="briefing__clear">
+                    {home.security.open_events === 0
+                      ? "Nothing in the security feed is waiting. "
+                      : `${home.security.open_events} security ${home.security.open_events === 1 ? "event waits" : "events wait"} for someone to look${home.security.critical_open ? `, ${home.security.critical_open} critical` : ""}. `}
                     {home.security.anomalies_7d} unusual and {home.security.new_devices_7d}{" "}
                     new-device sign-ins this week; {home.security.failed_logins_24h} failed in the
                     last day.

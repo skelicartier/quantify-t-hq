@@ -9,6 +9,7 @@ import { sanitizeNextPath } from "@/lib/auth/route-policy";
 import {
   clearPendingCookie,
   clearSessionCookie,
+  readOrMintDeviceId,
   readPendingCookie,
   setPendingCookie,
   setSessionCookie,
@@ -25,12 +26,13 @@ export async function login(_previous: AuthFormState, formData: FormData): Promi
   const email = fieldValue(formData, "email", 254).trim().toLowerCase();
   const password = fieldValue(formData, "password");
   const next = sanitizeNextPath(fieldValue(formData, "next", 512));
+  const enrolTicket = fieldValue(formData, "enrol_ticket", 128).trim();
   if (!email || !email.includes("@") || !password) {
     return { status: "error", message: "Enter your email address and password." };
   }
   let pending: authApi.PendingLogin;
   try {
-    pending = await authApi.login(email, password);
+    pending = await authApi.login(email, password, enrolTicket);
   } catch (error) {
     return { status: "error", message: refusalMessage(error) };
   }
@@ -58,7 +60,7 @@ export async function verifyCode(
   const next = sanitizeNextPath(fieldValue(formData, "next", 512));
   let session: authApi.MintedSession;
   try {
-    session = await authApi.verifyTotp(pending.token, code);
+    session = await authApi.verifyTotp(pending.token, code, await readOrMintDeviceId());
   } catch (error) {
     return { status: "error", message: refusalMessage(error) };
   }
@@ -81,7 +83,11 @@ export async function verifyRecoveryCode(
   const next = sanitizeNextPath(fieldValue(formData, "next", 512));
   let session: authApi.MintedSession;
   try {
-    session = await authApi.useRecoveryCode(pending.token, recoveryCode);
+    session = await authApi.useRecoveryCode(
+      pending.token,
+      recoveryCode,
+      await readOrMintDeviceId(),
+    );
   } catch (error) {
     return { status: "error", message: refusalMessage(error) };
   }
@@ -135,7 +141,11 @@ export async function confirmEnrollment(
   const code = fieldValue(formData, "code", 8).trim();
   const next = sanitizeNextPath(fieldValue(formData, "next", 512));
   try {
-    const session = await authApi.confirmEnrollment(pending.token, code);
+    const session = await authApi.confirmEnrollment(
+      pending.token,
+      code,
+      await readOrMintDeviceId(),
+    );
     // The pending cookie is deliberately NOT cleared here: mutating it re-renders the
     // enroll page on the server, whose guard would redirect and unmount this screen
     // before the recovery codes were ever seen. It is five minutes long and spent
@@ -197,14 +207,19 @@ export async function verifyPasskey(formData: FormData): Promise<void> {
   }
   const next = sanitizeNextPath(fieldValue(formData, "next", 512));
   let session: authApi.MintedSession;
+  const deviceId = await readOrMintDeviceId();
   try {
-    session = await authApi.signInWithPasskey(pending.token, {
-      challenge_token: fieldValue(formData, "challenge_token", 2_000),
-      credential_id: fieldValue(formData, "credential_id", 2_000),
-      client_data_json: fieldValue(formData, "client_data_json", 8_000),
-      authenticator_data: fieldValue(formData, "authenticator_data", 8_000),
-      signature: fieldValue(formData, "signature", 4_000),
-    });
+    session = await authApi.signInWithPasskey(
+      pending.token,
+      {
+        challenge_token: fieldValue(formData, "challenge_token", 2_000),
+        credential_id: fieldValue(formData, "credential_id", 2_000),
+        client_data_json: fieldValue(formData, "client_data_json", 8_000),
+        authenticator_data: fieldValue(formData, "authenticator_data", 8_000),
+        signature: fieldValue(formData, "signature", 4_000),
+      },
+      deviceId,
+    );
   } catch {
     redirect(`/login/verify?notice=passkey-refused&next=${encodeURIComponent(next)}`);
   }

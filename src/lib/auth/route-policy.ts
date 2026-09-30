@@ -14,7 +14,8 @@ const PUBLIC_EXACT = new Set([
 ]);
 
 // "/u/": the recipient's stop page and the one-click endpoint mailbox providers POST to.
-const PUBLIC_PREFIXES = ["/verify/", "/u/"];
+// "/report/": "this wasn't me" from a security mail — the person may be locked out.
+const PUBLIC_PREFIXES = ["/verify/", "/u/", "/report/"];
 
 export function isPublicPath(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;

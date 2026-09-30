@@ -136,6 +136,7 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "access-review", path: "/access-review", ready: "main#main-content" },
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
   { name: "admin-approvals", path: "/admin/approvals", ready: "main#main-content" },
+  { name: "admin-security", path: "/admin/security", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
   { name: "admin-settings", path: "/admin/settings", ready: ".sla-rows" },
   { name: "admin-danger", path: "/admin/danger", ready: "main#main-content" },
@@ -339,6 +340,7 @@ async function captureInteractions(page: Page, folder: string) {
   console.log(`  ✓ ${folder}/admin-key-minted`);
 
   await captureMailFlows(page, folder);
+  await captureSecurityFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -391,6 +393,99 @@ async function captureInteractions(page: Page, folder: string) {
   await assertAccessible(page, `${folder}/lead-anonymised`);
   await page.screenshot({ path: `${OUT}/${folder}/lead-anonymised.png`, fullPage: true });
   console.log(`  ✓ ${folder}/lead-anonymised`);
+}
+
+/**
+ * Security 2, end to end: an owner acknowledges an event in the feed; resets the desk
+ * persona's authenticator and is shown the one-time link; then, in a separate browser,
+ * that person's password alone is refused and the link carries them to enrolment.
+ */
+async function captureSecurityFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/admin/security`, { waitUntil: "networkidle" });
+  const acknowledge = page.locator(".security-event button", { hasText: "Acknowledge" }).first();
+  if ((await acknowledge.count()) > 0) {
+    const acknowledged = () =>
+      page.evaluate(
+        () =>
+          Array.from(document.querySelectorAll(".security-event .pill")).filter(
+            (pill) => pill.textContent?.trim() === "Acknowledged",
+          ).length,
+      );
+    const before = await acknowledged();
+    await acknowledge.click();
+    await page.waitForFunction(
+      (count) =>
+        Array.from(document.querySelectorAll(".security-event .pill")).filter(
+          (pill) => pill.textContent?.trim() === "Acknowledged",
+        ).length > count,
+      before,
+      { timeout: 10_000 },
+    );
+  }
+  await assertNoOverflow(page, `${folder}/admin-security-acknowledged`);
+  await assertAccessible(page, `${folder}/admin-security-acknowledged`);
+  await page.screenshot({
+    path: `${OUT}/${folder}/admin-security-acknowledged.png`,
+    fullPage: true,
+  });
+  console.log(`  ✓ ${folder}/admin-security-acknowledged`);
+
+  await page.goto(`${BASE}/admin/staff/aa000000-0000-4000-8000-00000000000d`, {
+    waitUntil: "networkidle",
+  });
+  await page.fill("#reset-reason", "Phone replaced — screenshot run");
+  await page.locator("form:has(#reset-reason) button[type=submit]").click();
+  await page.waitForSelector(".one-time-secret, form:has(#reset-reason) [role=alert]", {
+    timeout: 10_000,
+  });
+  const link = ((await page.locator(".one-time-secret__value").first().textContent()) ?? "").trim();
+  await assertNoOverflow(page, `${folder}/staff-reset-link`);
+  await assertAccessible(page, `${folder}/staff-reset-link`);
+  await page.screenshot({ path: `${OUT}/${folder}/staff-reset-link.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/staff-reset-link`);
+  if (!/\/login\?ticket=hqe_/.test(link)) {
+    report(`${folder}/staff-reset-link`, `no one-time link shown (got "${link.slice(0, 60)}")`);
+    return;
+  }
+
+  const browser = page.context().browser();
+  if (!browser) return;
+  const other = await browser.newContext({ viewport: page.viewportSize() ?? null });
+  try {
+    const person = await other.newPage();
+    watchConsole(person);
+    await person.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
+    await person.fill("#email", "support@hq.test");
+    await person.fill("#password", "password-123");
+    await person.click("button[type=submit]");
+    await person.waitForSelector(".auth__note", { timeout: 15_000 });
+    const refusal = (await person.locator(".auth__note").textContent()) ?? "";
+    if (!refusal.includes("Your authenticator was reset")) {
+      report(`${folder}/login-reset-refused`, `the password alone was not refused: "${refusal}"`);
+    }
+    await assertAccessible(person, `${folder}/login-reset-refused`);
+    await person.screenshot({ path: `${OUT}/${folder}/login-reset-refused.png`, fullPage: true });
+    console.log(`  ✓ ${folder}/login-reset-refused`);
+
+    await person.goto(link.replace(/^https?:\/\/[^/]+/, BASE), { waitUntil: "networkidle" });
+    await assertAccessible(person, `${folder}/login-reset-ticket`);
+    await person.screenshot({ path: `${OUT}/${folder}/login-reset-ticket.png`, fullPage: true });
+    console.log(`  ✓ ${folder}/login-reset-ticket`);
+    await person.fill("#email", "support@hq.test");
+    await person.fill("#password", "password-123");
+    await person.click("button[type=submit]");
+    await person.waitForURL("**/login/enroll**", { timeout: 15_000 }).catch(() => undefined);
+    if (!person.url().includes("/login/enroll")) {
+      report(
+        `${folder}/login-reset-enrol`,
+        `the one-time link did not reach enrolment (${person.url()})`,
+      );
+    } else {
+      console.log(`  ✓ ${folder}/login-reset-enrol`);
+    }
+  } finally {
+    await other.close();
+  }
 }
 
 /**
@@ -586,6 +681,29 @@ async function captureUnsubscribe(page: Page, folder: string) {
 }
 
 /**
+ * "This wasn't me", signed out: the page as the mail opens it (nothing happens yet),
+ * then the press, which locks the account the link names. A second viewport finds the
+ * link already used and says so.
+ */
+async function captureReport(page: Page, folder: string) {
+  await capture(page, folder, {
+    name: "report",
+    path: "/report/hqr_mock_demo",
+    ready: ".auth-form",
+  });
+  await page.locator("button", { hasText: "This wasn't me" }).click();
+  await page.waitForSelector("[role=status], .auth__note", { timeout: 15_000 });
+  const answer = (await page.locator("main").innerText()) ?? "";
+  if (!/Done\.|already locked/.test(answer)) {
+    report(`${folder}/report-done`, "pressing the lock did not say the account was locked");
+  }
+  await assertNoOverflow(page, `${folder}/report-done`);
+  await assertAccessible(page, `${folder}/report-done`);
+  await page.screenshot({ path: `${OUT}/${folder}/report-done.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/report-done`);
+}
+
+/**
  * Compile the sign-in routes before any timed step reaches them. On a freshly started
  * dev server the enrolment page took eighteen seconds to compile on first hit — past
  * the fifteen-second wait after the sign-in click — and the harness failed a step the
@@ -639,6 +757,7 @@ async function run(browser: Browser) {
       path: "/verify/QT-2026-0001",
     });
     await captureUnsubscribe(page, `${viewport.name}/auth`);
+    await captureReport(page, `${viewport.name}/auth`);
 
     // The two-step and the code screen, mid-flow.
     await page.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });

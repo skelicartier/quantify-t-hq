@@ -13,6 +13,7 @@ describe("default-deny route policy", () => {
       "/verify/QT-2026-0001",
       "/u/dTEBfb56jBDzRbafTujEGst",
       "/u/dTEBfb56jBDzRbafTujEGst/one-click",
+      "/report/eyJhbGciOiJIUzI1NiJ9.e30.sig",
     ]) {
       expect(isPublicPath(path)).toBe(true);
     }
@@ -28,6 +29,7 @@ describe("default-deny route policy", () => {
       "/loginx",
       "/me/security",
       "/u",
+      "/report",
       "/mail",
       "/mail/campaigns",
     ]) {

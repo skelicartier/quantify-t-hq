@@ -90,6 +90,7 @@ import * as mail from "@/lib/api/mail";
 import * as meetings from "@/lib/api/meetings";
 import * as reports from "@/lib/api/reports";
 import * as revenue from "@/lib/api/revenue";
+import * as security from "@/lib/api/security";
 import * as settings from "@/lib/api/settings";
 import * as staff from "@/lib/api/staff";
 import * as team from "@/lib/api/team";
@@ -128,6 +129,8 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/settings/mail", () => mail.readMailSettings(token)],
   ["hq/mail/lists", () => mail.readLists(token)],
   ["hq/mail/lists/{list_id}", () => mail.readList(token, ids.mail_list_id!)],
+  ["hq/security/events", () => security.readSecurityEvents(token)],
+  ["hq/me/devices", () => security.readMyDevices(token)],
   ["hq/tickets", () => tickets.readQueue(token, {})],
   ["hq/tickets/{ticket_id}", () => tickets.readTicket(token, ids.ticket_id!)],
   ["hq/tickets/{ticket_id}/context", () => tickets.readTicketContext(token, ids.ticket_id!)],

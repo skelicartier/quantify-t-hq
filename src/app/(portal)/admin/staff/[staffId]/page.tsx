@@ -10,7 +10,12 @@ import {
   resetAuthenticatorAction,
   updateStaffDetailsAction,
 } from "@/app/(portal)/admin/actions";
-import { ReinviteForm, StaffReasonForm, StaffRoleForm } from "@/components/admin/staff-forms";
+import {
+  ReinviteForm,
+  ResetAuthenticatorForm,
+  StaffReasonForm,
+  StaffRoleForm,
+} from "@/components/admin/staff-forms";
 import { SudoGate } from "@/components/admin/sudo-gate";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
@@ -335,20 +340,21 @@ export default async function StaffMemberPage({ params, searchParams }: StaffMem
                       />
                     </Card>
                   )}
-                  {(mayManage || isSelf) && member.totp_enrolled && (
+                  {(mayManage || isSelf) && member.joined && (
                     <Card
                       title="Reset authenticator"
                       titleAs="h3"
-                      description="For a lost or replaced phone. Their sessions and recovery codes end; they enrol again at next sign-in."
+                      description={
+                        member.totp_enrolled
+                          ? "For a lost or replaced phone. Their sessions, recovery codes and passkeys end, and you get a one-time link to hand them: their password alone no longer sets up a new authenticator. An owner's or admin's reset waits for a second owner."
+                          : "They have no authenticator now and can only enrol one with the one-time link from their reset. If that link was lost or has lapsed, reset again for a new one; the old link stops working."
+                      }
                     >
-                      <StaffReasonForm
+                      <ResetAuthenticatorForm
                         action={resetAuthenticatorAction}
                         staffId={member.staff_id}
-                        label="Reset authenticator"
-                        pendingLabel="Resetting…"
-                        hint="Kept in the audit log."
-                        danger
                         disabled={!fresh}
+                        again={!member.totp_enrolled}
                       />
                     </Card>
                   )}

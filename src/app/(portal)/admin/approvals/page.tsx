@@ -80,7 +80,7 @@ export default async function ApprovalsPage() {
       <PageHeader
         eyebrow="Admin"
         title="Approvals"
-        description="An Owner or Admin seat, or an intake key, waits here for a second person with the standing to approve. Alone, an owner acts at once and the audit log says so."
+        description="An Owner or Admin seat, an intake key, or an Owner's or Admin's authenticator reset waits here for a second person with the standing to approve. Alone, an owner acts at once and the audit log says so."
         actions={<AdminTabs current="/admin/approvals" />}
       />
       {page === null ? (
@@ -97,7 +97,7 @@ export default async function ApprovalsPage() {
             />
             <Stat label="Waiting on others" value={page.pending - page.awaiting_me} />
             <Stat
-              label="Keys to collect"
+              label="To collect"
               value={page.to_collect}
               hint={`Within ${page.ttl_hours} hours of approval`}
             />
@@ -107,7 +107,7 @@ export default async function ApprovalsPage() {
             fresh={fresh}
             untilLabel={untilLabel}
             returnPath="/admin/approvals"
-            purpose="Deciding a request, or collecting an approved key, needs a fresh code from your authenticator app."
+            purpose="Deciding a request, or carrying out an approved one, needs a fresh code from your authenticator app."
           />
           <div className="record-layout">
             <div className="record-layout__main">
@@ -173,7 +173,7 @@ export default async function ApprovalsPage() {
               <Card
                 title="Your requests"
                 titleAs="h3"
-                description="An approved key is minted when you collect it, and its secret is shown to you alone. Withdraw a request that no longer applies."
+                description="An approved key is minted, or an approved reset carried out, when you collect it; the key or the one-time link is shown to you alone. Withdraw a request that no longer applies."
               >
                 {mine.length === 0 ? (
                   <p className="muted">None open.</p>
@@ -195,6 +195,7 @@ export default async function ApprovalsPage() {
                             action={collectApprovalAction}
                             approvalId={row.approval_id}
                             disabled={!fresh}
+                            kind={row.kind === "factor_reset" ? "factor_reset" : "api_key"}
                           />
                         )}
                         <RowAction

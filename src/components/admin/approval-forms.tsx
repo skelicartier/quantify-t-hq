@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { EnrolLink } from "@/components/admin/staff-forms";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { Field, Input } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
@@ -58,18 +59,24 @@ export function DecideApprovalForm({
   );
 }
 
-/** The requester mints an approved key. The secret is shown here, to them, once. */
+/**
+ * The requester carries out an approved request that ends in a secret: an intake key is
+ * minted, or an authenticator reset done and its one-time link shown. Here, to them, once.
+ */
 export function CollectKeyForm({
   action,
   approvalId,
   disabled,
+  kind = "api_key",
 }: {
   action: Action;
   approvalId: string;
   disabled: boolean;
+  kind?: "api_key" | "factor_reset";
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   const minted = state.status === "sent" && Boolean(state.secret);
+  const reset = kind === "factor_reset";
   return (
     <>
       <form className="approval__collect" action={formAction}>
@@ -80,20 +87,29 @@ export function CollectKeyForm({
           className="btn btn--small btn--primary"
           disabled={isPending || disabled || minted}
         >
-          {isPending ? "Minting…" : "Collect the key"}
+          {isPending
+            ? reset
+              ? "Resetting…"
+              : "Minting…"
+            : reset
+              ? "Reset it now"
+              : "Collect the key"}
         </button>
         {!minted && <FormFeedback state={state} />}
       </form>
-      {minted && (
-        <div className="one-time-secret" role="status">
-          <p className="one-time-secret__label">Copy it now. It will not be shown again.</p>
-          <code className="one-time-secret__value">{state.secret}</code>
-          <p className="one-time-secret__hint">
-            Store it as the website&apos;s intake key. Only the first eight characters after the
-            prefix stay visible in HQ.
-          </p>
-        </div>
-      )}
+      {minted &&
+        (reset ? (
+          <EnrolLink message={state.message} link={state.secret ?? ""} />
+        ) : (
+          <div className="one-time-secret" role="status">
+            <p className="one-time-secret__label">Copy it now. It will not be shown again.</p>
+            <code className="one-time-secret__value">{state.secret}</code>
+            <p className="one-time-secret__hint">
+              Store it as the website&apos;s intake key. Only the first eight characters after the
+              prefix stay visible in HQ.
+            </p>
+          </div>
+        ))}
     </>
   );
 }
