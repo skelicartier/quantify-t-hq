@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/record-shell";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { ViewedBy } from "@/components/security/viewed-by";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readDeal, type DealDetail } from "@/lib/api/deals";
 import { readContracts } from "@/lib/api/revenue";
@@ -378,6 +379,9 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
                 placeholder="What the next person to open this should know"
               />
             </Properties>
+            {hasCapability(context, "audit:read") && (
+              <ViewedBy token={context.token} entityType="deal" record={deal.deal_id} now={now} />
+            )}
             {tab !== "tasks" && tasks}
           </>
         }

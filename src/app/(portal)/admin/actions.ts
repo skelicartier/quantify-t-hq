@@ -901,3 +901,97 @@ export async function updateSecurityEventAction(
   };
   return { status: "sent", message: done[state] ?? "Saved.", sentAt: Date.now() };
 }
+
+function securityRefusal(error: unknown): ActionState {
+  if (error instanceof HqApiRequestError) {
+    if (error.details["sudo_required"]) {
+      return { status: "error", message: "Confirm it's you first: enter a fresh code above." };
+    }
+    if (error.details["required_role"] === "owner") {
+      return { status: "error", message: "Only an Owner can do that." };
+    }
+    if (error.details["reason"] === "own-hold") {
+      return { status: "error", message: "Another owner or admin clears your own hold." };
+    }
+    const field = Object.values(error.details).find((value) => typeof value === "string");
+    if (error.code === "malformed_request" && typeof field === "string") {
+      return { status: "error", message: `${field.charAt(0).toUpperCase()}${field.slice(1)}.` };
+    }
+  }
+  return { status: "error", message: refusalMessage(error) };
+}
+
+/** Let a held colleague read again, with the reason it was real work. */
+export async function clearReadHoldAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/security");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (!reason) return { status: "error", message: "Say why reading may go on." };
+  try {
+    await securityApi.clearReadHold(context.token, fieldValue(formData, "staff_id", 64), reason);
+  } catch (error) {
+    return securityRefusal(error);
+  }
+  revalidatePath("/admin/security");
+  return { status: "sent", message: "Cleared. They can read again.", sentAt: Date.now() };
+}
+
+/** Plant a decoy company (with its contact) or a decoy intake key. Owners only. */
+export async function plantDecoyAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/security");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  const kind = fieldValue(formData, "kind", 20);
+  try {
+    if (kind === "api_key") {
+      const planted = await securityApi.plantDecoy(context.token, {
+        kind: "api_key",
+        label: fieldValue(formData, "label", 120).trim(),
+      });
+      revalidatePath("/admin/security");
+      return {
+        status: "sent",
+        message: "Planted. Copy the key now and leave it where an intruder would look.",
+        sentAt: Date.now(),
+        secret: planted.secret ?? "",
+      };
+    }
+    await securityApi.plantDecoy(context.token, {
+      kind: "company",
+      firm_name: fieldValue(formData, "firm_name", 200).trim(),
+      contact_name: fieldValue(formData, "contact_name", 160).trim(),
+      contact_email: fieldValue(formData, "contact_email", 254).trim().toLowerCase(),
+    });
+  } catch (error) {
+    return securityRefusal(error);
+  }
+  revalidatePath("/admin/security");
+  return {
+    status: "sent",
+    message: "Planted. It sits in the lists like any prospect.",
+    sentAt: Date.now(),
+  };
+}
+
+export async function removeDecoyAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/security");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN;
+  try {
+    await securityApi.removeDecoy(context.token, fieldValue(formData, "decoy_id", 64));
+  } catch (error) {
+    return securityRefusal(error);
+  }
+  revalidatePath("/admin/security");
+  return { status: "sent", message: "Removed.", sentAt: Date.now() };
+}

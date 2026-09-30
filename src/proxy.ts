@@ -17,6 +17,8 @@ function pass(request: NextRequest): NextResponse {
   });
   const headers = new Headers(request.headers);
   headers.set(NONCE_HEADER, nonce);
+  // Where the page is, for a read the service refuses mid-render to come back to.
+  headers.set("x-hq-path", `${request.nextUrl.pathname}${request.nextUrl.search}`);
   headers.set("Content-Security-Policy", policy);
   const response = NextResponse.next({ request: { headers } });
   response.headers.set("Content-Security-Policy", policy);

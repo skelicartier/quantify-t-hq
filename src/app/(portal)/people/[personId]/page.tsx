@@ -30,6 +30,7 @@ import {
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { ViewedBy } from "@/components/security/viewed-by";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompanies, readPerson, type PersonDetail } from "@/lib/api/crm";
 import { directoryOrNull } from "@/lib/api/staff";
@@ -267,6 +268,14 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
                 placeholder="What the next person to open this should know"
               />
             </Properties>
+            {hasCapability(context, "audit:read") && (
+              <ViewedBy
+                token={context.token}
+                entityType="person"
+                record={person.person_id}
+                now={now}
+              />
+            )}
             {tab !== "tasks" && tasks}
           </>
         }

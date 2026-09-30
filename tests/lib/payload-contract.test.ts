@@ -83,6 +83,7 @@ import * as auth from "@/lib/api/auth";
 import * as crm from "@/lib/api/crm";
 import * as deals from "@/lib/api/deals";
 import * as home from "@/lib/api/home";
+import * as inboxApi from "@/lib/api/inbox";
 import * as integrations from "@/lib/api/integrations";
 import * as approvals from "@/lib/api/approvals";
 import * as keys from "@/lib/api/keys";
@@ -131,6 +132,18 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/mail/lists/{list_id}", () => mail.readList(token, ids.mail_list_id!)],
   ["hq/security/events", () => security.readSecurityEvents(token)],
   ["hq/me/devices", () => security.readMyDevices(token)],
+  ["hq/security/reads", () => security.readReadWatch(token)],
+  ["hq/inbox", () => inboxApi.readInbox(token)],
+  ["hq/me/notifications", () => inboxApi.readNotificationPrefs(token)],
+  [
+    "hq/subscriptions/company/{company_id}",
+    () => inboxApi.readSubscription(token, "company", ids.company_id!),
+  ],
+  ["hq/security/decoys", () => security.readDecoys(token)],
+  [
+    "hq/records/company/{company_id}/reads",
+    () => security.readRecordReads(token, "company", ids.company_id!),
+  ],
   ["hq/tickets", () => tickets.readQueue(token, {})],
   ["hq/tickets/{ticket_id}", () => tickets.readTicket(token, ids.ticket_id!)],
   ["hq/tickets/{ticket_id}/context", () => tickets.readTicketContext(token, ids.ticket_id!)],

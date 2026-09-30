@@ -4964,6 +4964,14 @@
     display: contents;
   }
 
+  .read-watch__clear {
+    flex-basis: 100%;
+  }
+
+  .policy .read-watch__clear form {
+    display: grid;
+  }
+
   .report-effects {
     margin: 0;
     padding-left: 18px;

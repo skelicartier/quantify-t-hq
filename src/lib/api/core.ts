@@ -3,6 +3,7 @@ import "server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 
 /**
@@ -199,12 +200,41 @@ async function call(route: string, method: "GET" | "POST", options: CallOptions)
  * response that fails its schema is reported as the service being unavailable — a
  * shape drift is an outage, never data.
  */
+/** The page being rendered, as the proxy recorded it, for sending someone back to it. */
+export const PATH_HEADER = "x-hq-path";
+
+/**
+ * A record read the service refused because of the read watch — past the step-up with
+ * no fresh code, or held — goes to the page that says so and offers the code, rather
+ * than rendering as "could not be read".
+ */
+async function redirectIfReadWatch(error: unknown): Promise<void> {
+  if (!(error instanceof HqApiRequestError) || error.status !== 403) return;
+  const reason = error.details["reason"];
+  if (reason !== "reads-volume" && reason !== "reads-held") return;
+  let path = "/home";
+  try {
+    path = (await headers()).get(PATH_HEADER) || "/home";
+  } catch {
+    // Outside a request (a script, a test): the home page is the safe place to return.
+  }
+  const query = new URLSearchParams({ next: path });
+  if (reason === "reads-held") query.set("held", "1");
+  redirect(`/confirm-reads?${query.toString()}`);
+}
+
 export async function fetchHqJson<T>(
   route: string,
   schema: z.ZodType<T>,
   options: Omit<CallOptions, "body" | "idempotencyKey"> = {},
 ): Promise<T> {
-  const payload = await call(route, "GET", options);
+  let payload: unknown;
+  try {
+    payload = await call(route, "GET", options);
+  } catch (error) {
+    await redirectIfReadWatch(error);
+    throw error;
+  }
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
     console.error(`[hq-api] route=${route} method=GET outcome=schema-mismatch`);

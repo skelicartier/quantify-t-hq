@@ -137,6 +137,8 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "admin-integrations", path: "/admin/integrations", ready: "main#main-content" },
   { name: "admin-approvals", path: "/admin/approvals", ready: "main#main-content" },
   { name: "admin-security", path: "/admin/security", ready: "main#main-content" },
+  { name: "confirm-reads", path: "/confirm-reads?next=%2Fcompanies", ready: "main#main-content" },
+  { name: "confirm-reads-held", path: "/confirm-reads?held=1", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
   { name: "admin-settings", path: "/admin/settings", ready: ".sla-rows" },
   { name: "admin-danger", path: "/admin/danger", ready: "main#main-content" },
@@ -429,6 +431,49 @@ async function captureSecurityFlows(page: Page, folder: string) {
     fullPage: true,
   });
   console.log(`  ✓ ${folder}/admin-security-acknowledged`);
+
+  // The seeded sales persona passed six hundred records this hour and is held: clear it
+  // (the first pass does; later passes find nobody held and only look).
+  await page.goto(`${BASE}/admin/security`, { waitUntil: "networkidle" });
+  const held = page.locator(".read-watch", { hasText: "Sales Person" }).locator("form");
+  if ((await held.count()) > 0) {
+    await held.locator("input[name=reason]").fill("Building the renewal list for Q4");
+    await held.locator("button[type=submit]").click();
+    // Cleared, the row re-renders without its form: wait for the hold to be gone.
+    await page.waitForFunction(
+      () =>
+        !Array.from(document.querySelectorAll(".read-watch")).some(
+          (row) =>
+            row.textContent?.includes("Sales Person") &&
+            Array.from(row.querySelectorAll(".pill")).some(
+              (pill) => pill.textContent?.trim() === "Held",
+            ),
+        ),
+      undefined,
+      { timeout: 10_000 },
+    );
+  }
+  await assertNoOverflow(page, `${folder}/admin-security-cleared`);
+  await assertAccessible(page, `${folder}/admin-security-cleared`);
+  await page.screenshot({ path: `${OUT}/${folder}/admin-security-cleared.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/admin-security-cleared`);
+
+  // A decoy key, planted: its secret is shown once.
+  await page.selectOption("#decoy-kind", "api_key");
+  await page.locator("button", { hasText: "Plant the decoy" }).click();
+  await page.waitForSelector(".one-time-secret, form:has(#decoy-kind) [role=alert]", {
+    timeout: 10_000,
+  });
+  const decoyKey = (await page.locator(".one-time-secret__value").first().textContent()) ?? "";
+  if (!decoyKey.startsWith("qthq_")) report(`${folder}/admin-security-decoy`, "no decoy key shown");
+  // A full-page capture taken scrolled draws the sticky bar halfway down the image.
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    window.scrollTo(0, 0);
+  });
+  await assertAccessible(page, `${folder}/admin-security-decoy`);
+  await page.screenshot({ path: `${OUT}/${folder}/admin-security-decoy.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/admin-security-decoy`);
 
   await page.goto(`${BASE}/admin/staff/aa000000-0000-4000-8000-00000000000d`, {
     waitUntil: "networkidle",

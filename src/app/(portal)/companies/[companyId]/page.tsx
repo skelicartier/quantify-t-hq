@@ -34,6 +34,7 @@ import {
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { ViewedBy } from "@/components/security/viewed-by";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
   readCompanies,
@@ -502,6 +503,14 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                 ))
               )}
             </Properties>
+            {hasCapability(context, "audit:read") && (
+              <ViewedBy
+                token={context.token}
+                entityType="company"
+                record={company.company_id}
+                now={now}
+              />
+            )}
             <RecordSection id="company-tasks" title="Open tasks">
               <TaskList
                 tasks={openTasks}

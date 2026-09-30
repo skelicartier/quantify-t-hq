@@ -2761,6 +2761,15 @@ const SECURITY_KINDS: Record<string, [SecurityEventRow["severity"], string]> = {
   "password.reset": ["info", "Password reset by link"],
   "account.reported": ["critical", "\u201cThis wasn't me\u201d pressed"],
   "device.forgotten": ["info", "Device forgotten"],
+  "reads.volume": ["warning", "Many records opened"],
+  "reads.step_up": ["warning", "Reading needs a fresh code"],
+  "reads.held": ["critical", "Reading held"],
+  "reads.cleared": ["info", "Reading cleared"],
+  "decoy.touched": ["critical", "Decoy opened"],
+  "decoy.exported": ["critical", "Decoy exported"],
+  "decoy.key_used": ["critical", "Decoy key used"],
+  "key.expiring": ["info", "Intake key expiring"],
+  "key.disabled_unused": ["warning", "Unused key revoked"],
 };
 
 const securityEvents: SecurityEventRow[] = [];
@@ -2911,6 +2920,339 @@ function performFactorReset(
     enrol_expires_at: expires,
     shown_once: ["enrol_url"],
   };
+}
+
+// --- security 2, part two: the read watch and decoys (mirrors read_watch.py, decoys.py) --------
+
+/** Mirrors routes.py `reads=`: record detail reads, written down and counted. */
+const WATCHED_READS: Record<string, [string, string]> = {
+  "hq/staff/{staff_id}": ["staff", "staff_id"],
+  "hq/tickets/{ticket_id}": ["ticket", "ticket_id"],
+  "hq/companies/{company_id}": ["company", "company_id"],
+  "hq/people/{person_id}": ["person", "person_id"],
+  "hq/leads/{lead_id}": ["lead", "lead_id"],
+  "hq/deals/{deal_id}": ["deal", "deal_id"],
+  "hq/meetings/{meeting_id}": ["meeting", "meeting_id"],
+  "hq/contracts/{contract_id}": ["contract", "contract_id"],
+  "hq/team/{staff_id}": ["team_member", "staff_id"],
+};
+const READ_ENTITY_TYPES = [
+  "company",
+  "person",
+  "lead",
+  "deal",
+  "contract",
+  "ticket",
+  "meeting",
+  "staff",
+  "team_member",
+];
+const READ_WINDOW_MS = 60 * 60_000;
+const READ_NOTIFY_AT = 150;
+const READ_INTERN_NOTIFY_AT = 60;
+const READ_STEP_UP_AT = 300;
+const READ_HOLD_AT = 600;
+const READ_KEEP_DAYS = 90;
+
+type ReadWatchRow = {
+  notified_at: string | null;
+  stepped_up_at: string | null;
+  held_at: string | null;
+  cleared_at: string | null;
+  cleared_by: string;
+  peak: number;
+};
+const recordReads: Array<{
+  staff_id: string;
+  entity_type: string;
+  entity_id: string;
+  read_at: string;
+}> = [];
+const readWatch = new Map<string, ReadWatchRow>();
+
+type DecoyRow = {
+  id: string;
+  entity_type: "company" | "person" | "api_key";
+  entity_id: string;
+  label: string;
+  planted_by: string;
+  planted_at: string;
+  last_touched_at: string | null;
+  touches: number;
+};
+const decoyRows: DecoyRow[] = [];
+const DECOY_FIRMS = [
+  "Harrowgate Capital Partners",
+  "Ellison Rowe Asset Management",
+  "Kestrel Point Advisors",
+  "Marlow & Ashby Investments",
+  "Northfield Crest Capital",
+];
+
+function readNotifyAt(member: Staff): number {
+  return member.role === "intern_readonly" ? READ_INTERN_NOTIFY_AT : READ_NOTIFY_AT;
+}
+
+function distinctReads(staffId: string, sinceMs: number): number {
+  const seen = new Set<string>();
+  for (const row of recordReads)
+    if (row.staff_id === staffId && Date.parse(row.read_at) >= sinceMs)
+      seen.add(`${row.entity_type}:${row.entity_id}`);
+  return seen.size;
+}
+
+function readHeld(row: ReadWatchRow | undefined): boolean {
+  if (!row?.held_at) return false;
+  return !row.cleared_at || row.cleared_at < row.held_at;
+}
+
+function tellOwners(subject: string, body: string) {
+  console.log(`[mock-hq] mail to owners: ${subject} — ${body.slice(0, 120)}`);
+}
+
+/** Mirrors read_watch.gate: refused before it is served. */
+function gateRead(found: { member: Staff; session: Session }) {
+  if (found.member.role !== "owner" && readHeld(readWatch.get(found.member.id)))
+    return refuse(403, "forbidden", { reason: "reads-held" });
+  const fresh = Boolean(found.session.sudo_until && found.session.sudo_until > now());
+  if (!fresh) {
+    const opened = distinctReads(found.member.id, Date.now() - READ_WINDOW_MS);
+    if (opened >= READ_STEP_UP_AT)
+      return refuse(403, "forbidden", { sudo_required: true, reason: "reads-volume", opened });
+  }
+  return null;
+}
+
+/** Mirrors decoys.spring. */
+function springDecoy(
+  actor: Staff | null,
+  entityType: string,
+  entityId: string,
+  how: string,
+  ip = "",
+) {
+  const decoy = decoyRows.find(
+    (row) => row.entity_type === entityType && row.entity_id === entityId.toLowerCase(),
+  );
+  if (!decoy) return false;
+  decoy.last_touched_at = now();
+  decoy.touches += 1;
+  const kind =
+    how === "used" ? "decoy.key_used" : how === "exported" ? "decoy.exported" : "decoy.touched";
+  const who = actor ? actor.display_name || actor.email : "someone outside HQ";
+  const summary =
+    how === "used"
+      ? `The decoy intake key \u201c${decoy.label}\u201d was presented from ${ip || "an unknown address"}.`
+      : `${who} ${how} the decoy ${entityType} \u201c${decoy.label}\u201d.`;
+  recordSecurityEvent(kind, actor?.id ?? "", summary, {
+    ip,
+    detail: { decoy: decoy.label, entity_type: entityType, how },
+  });
+  tellOwners("A decoy was touched", summary);
+  return true;
+}
+
+/** Mirrors read_watch.note. */
+function noteRead(found: { member: Staff }, entityType: string, entityId: string, ip: string) {
+  const member = found.member;
+  recordReads.push({
+    staff_id: member.id,
+    entity_type: entityType,
+    entity_id: entityId.toLowerCase(),
+    read_at: now(),
+  });
+  springDecoy(member, entityType, entityId, "opened", ip);
+  const opened = distinctReads(member.id, Date.now() - READ_WINDOW_MS);
+  const watch = readWatch.get(member.id) ?? {
+    notified_at: null,
+    stepped_up_at: null,
+    held_at: null,
+    cleared_at: null,
+    cleared_by: "",
+    peak: 0,
+  };
+  watch.peak = Math.max(watch.peak, opened);
+  const fresh = (at: string | null) => Boolean(at && Date.now() - Date.parse(at) < READ_WINDOW_MS);
+  const who = member.display_name || member.email;
+  if (opened >= readNotifyAt(member) && !fresh(watch.notified_at)) {
+    watch.notified_at = now();
+    recordSecurityEvent(
+      "reads.volume",
+      member.id,
+      `${who} opened ${opened} different records in the last hour.`,
+      { ip, detail: { opened, threshold: readNotifyAt(member) } },
+    );
+    tellOwners("A colleague is opening many records", `${who} opened ${opened} records.`);
+  }
+  if (opened >= READ_STEP_UP_AT && !fresh(watch.stepped_up_at)) {
+    watch.stepped_up_at = now();
+    recordSecurityEvent(
+      "reads.step_up",
+      member.id,
+      `${who} passed ${READ_STEP_UP_AT} records in an hour; each further record needs a fresh code.`,
+      { ip, detail: { opened } },
+    );
+  }
+  if (opened >= READ_HOLD_AT && member.role !== "owner" && !readHeld(watch)) {
+    watch.held_at = now();
+    recordSecurityEvent(
+      "reads.held",
+      member.id,
+      `${who} passed ${READ_HOLD_AT} records in an hour; reading is held until an owner clears it.`,
+      { ip, detail: { opened } },
+    );
+    tellOwners("Reading held for a colleague", `${who} opened ${opened} records within an hour.`);
+  }
+  readWatch.set(member.id, watch);
+}
+
+function readWatchView(member: Staff) {
+  const watch = readWatch.get(member.id);
+  const opened = distinctReads(member.id, Date.now() - READ_WINDOW_MS);
+  const held = readHeld(watch);
+  return {
+    staff_id: member.id,
+    name: member.display_name || member.email,
+    role: member.role,
+    opened_last_hour: opened,
+    notify_at: readNotifyAt(member),
+    state: held
+      ? "held"
+      : opened >= READ_STEP_UP_AT
+        ? "step_up"
+        : opened >= readNotifyAt(member)
+          ? "notified"
+          : "normal",
+    peak: watch?.peak ?? 0,
+    held_at: watch?.held_at ?? null,
+    cleared_at: watch?.cleared_at ?? null,
+    cleared_by: watch?.cleared_by ? personOf(watch.cleared_by) : null,
+  };
+}
+
+function decoyView(row: DecoyRow) {
+  return {
+    decoy_id: row.id,
+    entity_type: row.entity_type,
+    entity_id: row.entity_id,
+    label: row.label,
+    planted_by: personOf(row.planted_by),
+    planted_at: row.planted_at,
+    last_touched_at: row.last_touched_at,
+    touches: row.touches,
+  };
+}
+
+/** Mirrors decoys.plant_company. */
+function plantDecoyCompany(firm: string, contact: string, email: string, by: string) {
+  const companyId = randomUUID();
+  const personId = randomUUID();
+  companies.push({
+    id: companyId,
+    name: firm,
+    domain: "",
+    firm_type: "Hedge fund",
+    team_size_band: "",
+    country: "United Kingdom",
+    lifecycle: "prospect",
+    owner_staff_id: "",
+    source_key: "other",
+    notes: "",
+    customer_since: null,
+    archived: false,
+    created_at: now(),
+    updated_at: now(),
+  });
+  people.push({
+    id: personId,
+    company_id: companyId,
+    full_name: contact,
+    email,
+    title: "Chief Operating Officer",
+    role_category: "",
+    phone: "",
+    account_user_id: "",
+    do_not_contact: true,
+    source_key: "other",
+    notes: "",
+    last_contacted_at: null,
+    created_at: now(),
+  });
+  const decoy: DecoyRow = {
+    id: randomUUID(),
+    entity_type: "company",
+    entity_id: companyId,
+    label: firm,
+    planted_by: by,
+    planted_at: now(),
+    last_touched_at: null,
+    touches: 0,
+  };
+  decoyRows.push(decoy, {
+    id: randomUUID(),
+    entity_type: "person",
+    entity_id: personId,
+    label: `${contact} (${firm})`,
+    planted_by: by,
+    planted_at: now(),
+    last_touched_at: null,
+    touches: 0,
+  });
+  return { decoy, companyId };
+}
+
+function seedReadWatch() {
+  recordReads.length = 0;
+  readWatch.clear();
+  decoyRows.length = 0;
+  // The sales persona opened 612 different records within the hour: the owners were
+  // told at 150, a code was asked for at 300, and reading was held at 600, so the demo
+  // can show the hold being cleared.
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  for (let index = 0; index < 612; index += 1) {
+    const firm = companies[index];
+    recordReads.push({
+      staff_id: SALES,
+      entity_type: firm ? "company" : "person",
+      entity_id: firm ? firm.id : `ee${String(index).padStart(6, "0")}-0000-4000-8000-000000000000`,
+      read_at: agoIso(0.6 - (index / 612) * 0.4),
+    });
+  }
+  readWatch.set(SALES, {
+    notified_at: agoIso(0.55),
+    stepped_up_at: agoIso(0.4),
+    held_at: agoIso(0.2),
+    cleared_at: null,
+    cleared_by: "",
+    peak: 612,
+  });
+  recordSecurityEvent(
+    "reads.held",
+    SALES,
+    "Sales Person passed 600 records in an hour; reading is held until an owner clears it.",
+    { occurred_at: agoIso(0.2), detail: { opened: 612 } },
+  );
+  // A few ordinary reads so "Viewed by" has something to say on the first company.
+  const first = companies[0];
+  if (first) {
+    for (const [staffId, hours] of [
+      ["aa000000-0000-4000-8000-00000000000c", 3],
+      ["aa000000-0000-4000-8000-00000000000c", 26],
+      ["aa000000-0000-4000-8000-00000000000d", 50],
+    ] as const)
+      recordReads.push({
+        staff_id: staffId,
+        entity_type: "company",
+        entity_id: first.id,
+        read_at: agoIso(hours),
+      });
+  }
+  plantDecoyCompany(
+    "Kestrel Point Advisors",
+    "Ruth Ellery",
+    "owner+decoy@quantifyterminal.com",
+    "aa000000-0000-4000-8000-00000000000a",
+  );
 }
 
 function seedSecurityFeed() {
@@ -6705,6 +7047,185 @@ routes.push(
   },
   {
     method: "GET",
+    pattern: "hq/security/reads",
+    auth: true,
+    capability: "hq:admin",
+    handler: () =>
+      ok({
+        people: staff
+          .filter((member) => member.is_active)
+          .map(readWatchView)
+          .sort((a, b) => b.opened_last_hour - a.opened_last_hour || a.name.localeCompare(b.name)),
+        thresholds: {
+          notify: READ_NOTIFY_AT,
+          intern_notify: READ_INTERN_NOTIFY_AT,
+          step_up: READ_STEP_UP_AT,
+          hold: READ_HOLD_AT,
+          window_minutes: READ_WINDOW_MS / 60_000,
+        },
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/security/reads/{staff_id}/clear",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const target = staff.find((member) => member.id === params.staff_id);
+      if (!target) return refuse(404, "not_found");
+      if (target.id === viewer.id) return refuse(403, "forbidden", { reason: "own-hold" });
+      const watch = readWatch.get(target.id);
+      if (!readHeld(watch)) return refuse(400, "malformed_request", { state: "not held" });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (!reason) return refuse(400, "malformed_request", { reason: "say why reading may go on" });
+      watch!.cleared_at = now();
+      watch!.cleared_by = viewer.id;
+      audit("security.reads_cleared", viewer.id, "staff", target.id, reason);
+      recordSecurityEvent(
+        "reads.cleared",
+        target.id,
+        `${viewer.display_name || viewer.email} cleared the hold on ${target.display_name || target.email}: ${reason}`,
+        { actor_staff_id: viewer.id },
+      );
+      return ok({ person: readWatchView(target) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/records/{entity_type}/{record}/reads",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ params }) => {
+      if (!READ_ENTITY_TYPES.includes(String(params.entity_type))) return refuse(404, "not_found");
+      const since = Date.now() - READ_KEEP_DAYS * 86_400_000;
+      const rows = recordReads
+        .filter(
+          (row) =>
+            row.entity_type === params.entity_type &&
+            row.entity_id === String(params.record).toLowerCase() &&
+            Date.parse(row.read_at) >= since,
+        )
+        .sort((a, b) => b.read_at.localeCompare(a.read_at));
+      const readers = new Map<
+        string,
+        { staff_id: string; name: string; reads: number; last_read_at: string | null }
+      >();
+      for (const row of rows) {
+        const entry = readers.get(row.staff_id) ?? {
+          staff_id: row.staff_id,
+          name: nameOf(row.staff_id),
+          reads: 0,
+          last_read_at: row.read_at,
+        };
+        entry.reads += 1;
+        readers.set(row.staff_id, entry);
+      }
+      return ok({ readers: [...readers.values()], reads: rows.length, days: READ_KEEP_DAYS });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/security/decoys",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers }) => {
+      if (caller(headers)!.member.role !== "owner")
+        return refuse(403, "forbidden", { required_role: "owner" });
+      return ok({
+        decoys: decoyRows.filter((row) => row.entity_type !== "person").map(decoyView),
+        suggested_firms: DECOY_FIRMS,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/security/decoys/plant",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      if (viewer.role !== "owner") return refuse(403, "forbidden", { required_role: "owner" });
+      const kind = String(body.kind ?? "");
+      if (kind === "company") {
+        const firm = String(body.firm_name ?? "").trim();
+        const contact = String(body.contact_name ?? "").trim();
+        const email = String(body.contact_email ?? "")
+          .trim()
+          .toLowerCase();
+        if (!firm || !contact)
+          return refuse(400, "malformed_request", { firm_name: "name the firm and its contact" });
+        if (!email.includes("@"))
+          return refuse(400, "malformed_request", { contact_email: "an address you watch" });
+        if (companies.some((row) => row.name.toLowerCase() === firm.toLowerCase()))
+          return refuse(400, "malformed_request", {
+            firm_name: "a company with this name exists",
+          });
+        const planted = plantDecoyCompany(firm, contact, email, viewer.id);
+        audit("security.decoy_planted", viewer.id, "security", "decoy", "", { kind });
+        return ok({ decoy_id: planted.decoy.id, company_id: planted.companyId });
+      }
+      if (kind === "api_key") {
+        const label = String(body.label ?? "").trim() || "Website intake (legacy)";
+        const minted = mintKeyRow(label, KEY_LIFETIME_DAYS, viewer.id);
+        const decoy: DecoyRow = {
+          id: randomUUID(),
+          entity_type: "api_key",
+          entity_id: minted.row.key_id,
+          label,
+          planted_by: viewer.id,
+          planted_at: now(),
+          last_touched_at: null,
+          touches: 0,
+        };
+        decoyRows.push(decoy);
+        audit("security.decoy_planted", viewer.id, "security", "decoy", "", { kind });
+        return ok({ decoy_id: decoy.id, secret: minted.secret, shown_once: ["secret"] });
+      }
+      return refuse(400, "malformed_request", { kind: "company or api_key" });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/security/decoys/{decoy_id}/remove",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, params }) => {
+      const viewer = caller(headers)!.member;
+      if (viewer.role !== "owner") return refuse(403, "forbidden", { required_role: "owner" });
+      const index = decoyRows.findIndex(
+        (row) => row.id === params.decoy_id && row.entity_type !== "person",
+      );
+      if (index < 0) return refuse(404, "not_found");
+      const [decoy] = decoyRows.splice(index, 1);
+      if (decoy!.entity_type === "api_key") {
+        const key = apiKeys.find((row) => row.key_id === decoy!.entity_id);
+        if (key) key.revoked_at = now();
+      } else {
+        const company = companies.find((row) => row.id === decoy!.entity_id);
+        if (company) company.archived = true;
+        for (const person of people) {
+          if (person.company_id !== decoy!.entity_id) continue;
+          person.archived = true;
+          const partner = decoyRows.findIndex(
+            (row) => row.entity_type === "person" && row.entity_id === person.id,
+          );
+          if (partner >= 0) decoyRows.splice(partner, 1);
+        }
+      }
+      audit("security.decoy_removed", viewer.id, "security", "decoy", "", {
+        kind: decoy!.entity_type,
+      });
+      return ok({ removed: true });
+    },
+  },
+  {
+    method: "GET",
     pattern: "hq/me/devices",
     auth: true,
     handler: ({ headers }) => {
@@ -7108,6 +7629,8 @@ routes.push(
       // The seeded key's secret is not known; the mock accepts any qthq_ key whose
       // prefix matches a live row, which is enough to exercise both refusal paths.
       if (!presented.startsWith("qthq_") || !live)
+        return refuse(403, "forbidden", { api_key: "unknown or revoked" });
+      if (springDecoy(null, "api_key", live.key_id, "used", clientAddress(headers)))
         return refuse(403, "forbidden", { api_key: "unknown or revoked" });
       if (keyView(live).expired) return refuse(403, "forbidden", { api_key: "expired" });
       if (String(body.website ?? "").trim()) return ok({ received: true });
@@ -10644,6 +11167,14 @@ routes.push(
       const table = tables[String(params.kind)];
       if (!table) return refuse(404, "not_found");
       const [header, rows] = table;
+      const decoyType = ({ companies: "company", people: "person" } as Record<string, string>)[
+        String(params.kind)
+      ];
+      if (decoyType) {
+        const exporter = caller(headers)!.member;
+        for (const row of rows)
+          springDecoy(exporter, decoyType, String(row[0]), "exported", clientAddress(headers));
+      }
       const csv =
         [header.join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\r\n") + "\r\n";
       audit(
@@ -18491,6 +19022,7 @@ function resetWorld() {
   seedApprovals();
   seedSecurityEvents();
   seedSecurityFeed();
+  seedReadWatch();
   seedMail();
   seedSla();
   resetDeskRules();
@@ -18533,6 +19065,15 @@ function respond(
     }
     if (method === "POST" && !headers["idempotency-key"]) {
       return refuse(400, "idempotency_key_required");
+    }
+    const watched = method === "GET" ? WATCHED_READS[entry.pattern] : undefined;
+    if (watched) {
+      const refused = gateRead(found);
+      if (refused) return refused;
+      const answer = entry.handler({ method, route, params, query, body, headers });
+      if (answer.status === 200)
+        noteRead(found, watched[0], String(params[watched[1]] ?? ""), clientAddress(headers));
+      return answer;
     }
   }
   return entry.handler({ method, route, params, query, body, headers });
