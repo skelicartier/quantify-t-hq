@@ -2577,7 +2577,7 @@ const apiKeys: ApiKeyRow[] = [];
 
 type ApprovalRow = {
   id: string;
-  kind: "role_grant" | "api_key" | "factor_reset";
+  kind: "role_grant" | "api_key" | "factor_reset" | "write_off";
   status: "pending" | "approved" | "declined" | "withdrawn" | "expired" | "done";
   requested_by: string;
   requested_at: string;
@@ -2598,7 +2598,7 @@ function hoursFromNowIso(hours: number): string {
 }
 
 function approverRoles(kind: ApprovalRow["kind"]): string[] {
-  return kind === "api_key" ? ["owner", "admin"] : ["owner"];
+  return kind === "api_key" || kind === "write_off" ? ["owner", "admin"] : ["owner"];
 }
 
 /** Active colleagues, other than the requester and the person it is about, who may approve. */
@@ -2624,6 +2624,8 @@ function personOf(staffId: string) {
 function approvalSummary(kind: ApprovalRow["kind"], payload: Record<string, unknown>): string {
   if (kind === "factor_reset")
     return `reset ${String(payload.target_label ?? "a colleague")}'s authenticator`;
+  if (kind === "write_off")
+    return `write off invoice ${String(payload.number ?? "")} (${String(payload.currency ?? "")} ${String(payload.amount ?? "")}) for ${String(payload.company ?? "a customer")}`;
   if (kind === "api_key") {
     const scopes = Array.isArray(payload.scopes) ? payload.scopes.join(", ") : "";
     return `mint an intake key \u201c${String(payload.name ?? "")}\u201d for ${scopes} lasting ${String(payload.expires_in_days ?? 0)} days`;
@@ -2637,6 +2639,14 @@ function approvalPayloadView(kind: ApprovalRow["kind"], payload: Record<string, 
     return {
       target_label: String(payload.target_label ?? ""),
       target_role: String(payload.target_role ?? ""),
+    };
+  }
+  if (kind === "write_off") {
+    return {
+      number: String(payload.number ?? ""),
+      currency: String(payload.currency ?? ""),
+      amount: String(payload.amount ?? ""),
+      company: String(payload.company ?? ""),
     };
   }
   if (kind === "api_key") {
@@ -3285,6 +3295,522 @@ function seedReadWatch() {
     "owner+decoy@quantifyterminal.com",
     "aa000000-0000-4000-8000-00000000000a",
   );
+}
+
+// --- receivables (mirrors receivables.py; money in cents here, decimal text on the wire) ----------
+
+type BillingProfileRow = {
+  company_id: string;
+  legal_name: string;
+  billing_address: string;
+  country: string;
+  state_code: string;
+  tax_id: string;
+  tax_treatment: string;
+  ap_emails: string;
+  po_required: boolean;
+  po_number: string;
+  po_amount_cents: number | null;
+  po_expires_on: string | null;
+  portal_instructions: string;
+  payment_terms_days: number;
+  invoice_currency: string;
+  withholds_tax: boolean;
+  withholding_rate_bp: number | null;
+  updated_at: string;
+};
+type InvoiceRow = {
+  id: string;
+  company_id: string;
+  contract_id: string;
+  number: string;
+  issued_on: string;
+  period_start: string | null;
+  period_end: string | null;
+  due_on: string;
+  currency: string;
+  net_cents: number;
+  tax_cents: number;
+  po_number: string;
+  status: string;
+  collection_state: string;
+  reminders_sent: number;
+  last_reminder_at: string | null;
+  promised_on: string | null;
+  promised_cents: number | null;
+  dispute_reason: string;
+  void_reason: string;
+  paid_on: string | null;
+  notes: string;
+};
+type ReceiptRow = {
+  id: string;
+  company_id: string;
+  received_on: string;
+  currency: string;
+  amount_cents: number;
+  charges_cents: number;
+  withheld_cents: number;
+  certificate_received_on: string | null;
+  bank_reference: string;
+  notes: string;
+};
+const billingProfiles = new Map<string, BillingProfileRow>();
+const invoicesRx: InvoiceRow[] = [];
+const receiptsRx: ReceiptRow[] = [];
+const allocationsRx: Array<{ receipt_id: string; invoice_id: string; cents: number }> = [];
+const invoiceEvents: Array<{
+  invoice_id: string;
+  kind: string;
+  detail: string;
+  staff_id: string;
+  at: string;
+}> = [];
+const RX_BUCKETS: Array<[string, string, number, number | null]> = [
+  ["current", "Not yet due", -10_000, 0],
+  ["1_30", "1–30 days", 1, 30],
+  ["31_60", "31–60 days", 31, 60],
+  ["61_90", "61–90 days", 61, 90],
+  ["90_plus", "Over 90 days", 91, null],
+];
+const RX_REMINDER_OFFSETS = [-7, 0, 7, 14, 30];
+const RX_TREATMENTS: Record<string, string> = {
+  uk_standard: "UK VAT, standard rate",
+  outside_scope: "Outside the scope of UK VAT (overseas business)",
+  eu_reverse_charge: "EU business, reverse charge",
+  gst_intra: "India GST, same state (CGST + SGST)",
+  gst_inter: "India GST, another state (IGST)",
+  export_lut: "Export of services under a Letter of Undertaking",
+  other: "Other",
+};
+
+function cents(value: unknown): number {
+  const text = String(value ?? "").trim() || "0";
+  if (!/^-?\d+(\.\d{1,2})?$/.test(text)) return NaN;
+  return Math.round(Number(text) * 100);
+}
+function centsText(value: number): string {
+  return (value / 100).toFixed(2);
+}
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function addDaysIso(day: string, days: number): string {
+  const at = new Date(`${day}T00:00:00Z`);
+  at.setUTCDate(at.getUTCDate() + days);
+  return at.toISOString().slice(0, 10);
+}
+function addMonthsIso(day: string, months: number): string {
+  const [y, m, d] = day.split("-").map(Number) as [number, number, number];
+  const index = m - 1 + months;
+  const year = y + Math.floor(index / 12);
+  const month = ((index % 12) + 12) % 12;
+  const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(d, last))).toISOString().slice(0, 10);
+}
+function rxDaysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
+function allocatedCents(invoiceId: string): number {
+  return allocationsRx
+    .filter((row) => row.invoice_id === invoiceId)
+    .reduce((total, row) => total + row.cents, 0);
+}
+function owedCents(row: InvoiceRow): number {
+  if (row.status === "void" || row.status === "uncollectible") return 0;
+  return Math.max(0, row.net_cents + row.tax_cents - allocatedCents(row.id));
+}
+function rxStatus(row: InvoiceRow): string {
+  if (row.status === "void" || row.status === "uncollectible") return row.status;
+  const paid = allocatedCents(row.id);
+  if (paid >= row.net_cents + row.tax_cents) return "paid";
+  return paid > 0 ? "partially_paid" : "open";
+}
+function rxBucket(days: number): string {
+  for (const [key, , low, high] of RX_BUCKETS)
+    if (days >= low && (high === null || days <= high)) return key;
+  return "current";
+}
+function rxReminder(row: InvoiceRow) {
+  const owed = owedCents(row);
+  if (owed <= 0 || !["open", "partially_paid"].includes(rxStatus(row))) return null;
+  if (["disputed", "escalated", "written_off"].includes(row.collection_state)) return null;
+  if (
+    row.collection_state === "promised" &&
+    row.promised_on &&
+    todayIso() <= addDaysIso(row.promised_on, 3)
+  )
+    return null;
+  if (row.reminders_sent >= RX_REMINDER_OFFSETS.length) return null;
+  const ahead = RX_REMINDER_OFFSETS.map((offset, index) => [index, offset] as const).slice(
+    row.reminders_sent,
+  );
+  const passed = ahead.filter(([, offset]) => addDaysIso(row.due_on, offset) <= todayIso());
+  const [index, offset] = passed.length ? passed[passed.length - 1]! : ahead[0]!;
+  const on = addDaysIso(row.due_on, offset);
+  return { offset, on, due_now: todayIso() >= on, number: row.reminders_sent + 1, step: index + 1 };
+}
+function rxExportFlag(row: InvoiceRow): string {
+  const profile = billingProfiles.get(row.company_id);
+  if (owedCents(row) <= 0 || profile?.tax_treatment !== "export_lut") return "";
+  const deadline = addMonthsIso(row.issued_on, 9);
+  if (todayIso() >= addMonthsIso(row.issued_on, 8))
+    return `Export proceeds must be received by ${deadline} — under a month left.`;
+  if (todayIso() >= addMonthsIso(row.issued_on, 6))
+    return `Export proceeds must be received by ${deadline}.`;
+  return "";
+}
+function rxReliefFrom(row: InvoiceRow): string | null {
+  const supply = row.period_end ?? row.issued_on;
+  return addMonthsIso(row.due_on > supply ? row.due_on : supply, 6);
+}
+function companyName(id: string): string {
+  return companies.find((row) => row.id === id)?.name ?? "";
+}
+function invoiceViewRx(row: InvoiceRow) {
+  const owed = owedCents(row);
+  const days = rxDaysBetween(row.due_on, todayIso());
+  return {
+    invoice_id: row.id,
+    company: { company_id: row.company_id, name: companyName(row.company_id) },
+    contract_id: row.contract_id,
+    number: row.number,
+    issued_on: row.issued_on,
+    period_start: row.period_start,
+    period_end: row.period_end,
+    due_on: row.due_on,
+    currency: row.currency,
+    net: centsText(row.net_cents),
+    tax: centsText(row.tax_cents),
+    gross: centsText(row.net_cents + row.tax_cents),
+    paid: centsText(allocatedCents(row.id)),
+    outstanding: centsText(owed),
+    status: rxStatus(row),
+    collection_state: row.collection_state,
+    days_past_due: owed > 0 ? days : 0,
+    bucket: owed > 0 ? rxBucket(days) : "",
+    po_number: row.po_number,
+    reminders_sent: row.reminders_sent,
+    last_reminder_at: row.last_reminder_at,
+    next_reminder: rxReminder(row),
+    promised_on: row.promised_on,
+    promised_amount: row.promised_cents === null ? null : centsText(row.promised_cents),
+    dispute_reason: row.dispute_reason,
+    void_reason: row.void_reason,
+    paid_on: row.paid_on,
+    export_flag: rxExportFlag(row),
+    bad_debt_relief_from: row.collection_state === "written_off" ? rxReliefFrom(row) : null,
+    notes: row.notes,
+  };
+}
+function rxGaps(profile: BillingProfileRow | undefined): string[] {
+  if (!profile)
+    return ["No billing profile yet: the legal name and address an invoice must carry."];
+  const gaps: string[] = [];
+  if (!profile.legal_name.trim()) gaps.push("The legal entity's name");
+  if (!profile.billing_address.trim()) gaps.push("The billing address");
+  if (!profile.country.trim()) gaps.push("The country");
+  if (!profile.tax_treatment) gaps.push("How the invoice is taxed");
+  if (
+    ["eu_reverse_charge", "gst_intra", "gst_inter"].includes(profile.tax_treatment) &&
+    !profile.tax_id.trim()
+  )
+    gaps.push(
+      "The customer's tax number (VAT number or GSTIN), which this treatment needs on the invoice",
+    );
+  if (["gst_intra", "gst_inter"].includes(profile.tax_treatment) && !profile.state_code.trim())
+    gaps.push("The state code for the place of supply");
+  if (profile.po_required && !profile.po_number.trim())
+    gaps.push(
+      "A purchase order number — this customer's accounts team rejects invoices without one",
+    );
+  if (!profile.ap_emails.trim())
+    gaps.push("Where invoices and reminders go (the accounts payable address)");
+  return gaps;
+}
+function profileViewRx(companyId: string) {
+  const row = billingProfiles.get(companyId);
+  return {
+    company_id: companyId,
+    exists: Boolean(row),
+    legal_name: row?.legal_name ?? "",
+    billing_address: row?.billing_address ?? "",
+    country: row?.country ?? "",
+    state_code: row?.state_code ?? "",
+    tax_id: row?.tax_id ?? "",
+    tax_treatment: row?.tax_treatment ?? "",
+    ap_emails: row?.ap_emails ?? "",
+    po_required: row?.po_required ?? false,
+    po_number: row?.po_number ?? "",
+    po_amount:
+      row?.po_amount_cents === null || row?.po_amount_cents === undefined
+        ? null
+        : centsText(row.po_amount_cents),
+    po_expires_on: row?.po_expires_on ?? null,
+    portal_instructions: row?.portal_instructions ?? "",
+    payment_terms_days: row?.payment_terms_days ?? 30,
+    invoice_currency: row?.invoice_currency ?? "USD",
+    withholds_tax: row?.withholds_tax ?? false,
+    withholding_rate_percent:
+      row?.withholding_rate_bp === null || row?.withholding_rate_bp === undefined
+        ? null
+        : row.withholding_rate_bp / 100,
+    updated_at: row?.updated_at ?? null,
+    gaps: rxGaps(row),
+  };
+}
+function receiptViewRx(row: ReceiptRow) {
+  const mine = allocationsRx.filter((item) => item.receipt_id === row.id);
+  const applied = mine.reduce((total, item) => total + item.cents, 0);
+  return {
+    receipt_id: row.id,
+    company: { company_id: row.company_id, name: companyName(row.company_id) },
+    received_on: row.received_on,
+    currency: row.currency,
+    amount: centsText(row.amount_cents),
+    bank_charges: centsText(row.charges_cents),
+    tax_withheld: centsText(row.withheld_cents),
+    certificate_received_on: row.certificate_received_on,
+    bank_reference: row.bank_reference,
+    notes: row.notes,
+    allocations: mine.map((item) => ({
+      invoice_id: item.invoice_id,
+      number: invoicesRx.find((invoice) => invoice.id === item.invoice_id)?.number ?? "",
+      amount: centsText(item.cents),
+    })),
+    unapplied: centsText(
+      Math.max(0, row.amount_cents + row.charges_cents + row.withheld_cents - applied),
+    ),
+  };
+}
+function rxEvent(invoiceId: string, kind: string, detail: string, staffId: string) {
+  invoiceEvents.push({ invoice_id: invoiceId, kind, detail, staff_id: staffId, at: now() });
+}
+function rxSchedule() {
+  const today = todayIso();
+  const horizon = addDaysIso(today, 30);
+  const tracked = invoicesRx.map((row) => row.issued_on).sort()[0] ?? null;
+  const billed = new Set(
+    invoicesRx
+      .filter((row) => row.contract_id && row.status !== "void")
+      .map((row) => `${row.contract_id}|${row.period_start}`),
+  );
+  const toBill: Array<Record<string, unknown>> = [];
+  const late: Array<Record<string, unknown>> = [];
+  for (const contract of contracts) {
+    if (contract.status !== "active") continue;
+    const annual = contract.billing_cadence === "annual";
+    const step = annual ? 12 : 1;
+    for (let index = 0; index < 600; index += 1) {
+      const period = addMonthsIso(contract.starts_on, step * index);
+      if (period > horizon) break;
+      if (contract.ends_on && period >= contract.ends_on) break;
+      if (billed.has(`${contract.id}|${period}`)) continue;
+      const item = {
+        contract_id: contract.id,
+        company_id: contract.company_id,
+        company_name: companyName(contract.company_id),
+        plan_name: contract.plan_name,
+        period_start: period,
+        period_end: addDaysIso(addMonthsIso(contract.starts_on, step * (index + 1)), -1),
+        currency: contract.currency,
+        amount: centsText(contract.mrr_cents * (annual ? 12 : 1)),
+        cadence: annual ? "annual" : "monthly",
+      };
+      if (period > today) toBill.push(item);
+      else if (tracked && period >= tracked && period <= addDaysIso(today, -3))
+        late.push({ ...item, days_late: rxDaysBetween(period, today) });
+    }
+  }
+  toBill.sort((a, b) => String(a.period_start).localeCompare(String(b.period_start)));
+  late.sort((a, b) => String(a.period_start).localeCompare(String(b.period_start)));
+  return { to_bill: toBill, billed_late: late, tracked_from: tracked };
+}
+
+/**
+ * Every active contract invoiced for each period since recording began 95 days ago —
+ * older ones paid, the latest open — with a few stories on top: reminded and late,
+ * promised, part-paid with India's tax withheld, disputed; and two periods deliberately
+ * left unbilled, which is what "billed late" exists to catch.
+ */
+function seedReceivables() {
+  billingProfiles.clear();
+  invoicesRx.length = 0;
+  receiptsRx.length = 0;
+  allocationsRx.length = 0;
+  invoiceEvents.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const today = todayIso();
+  const recordingBegan = addDaysIso(today, -95);
+  const active = contracts.filter((row) => row.status === "active");
+  let serial = 400;
+  // Stories are dealt only to contracts with an invoice already past due (and the skipped
+  // periods only to monthly ones), so every story shows whatever the contract mix is.
+  let worked = 0;
+  let monthly = 0;
+  active.forEach((contract, index) => {
+    const company = companies.find((row) => row.id === contract.company_id);
+    if (!company) return;
+    const terms = index === 0 ? 45 : 30;
+    const annual = contract.billing_cadence === "annual";
+    const step = annual ? 12 : 1;
+    const amount = contract.mrr_cents * (annual ? 12 : 1);
+    const periods: string[] = [];
+    for (let n = 0; n < 600; n += 1) {
+      const period = addMonthsIso(contract.starts_on, step * n);
+      if (period > today) break;
+      if (contract.ends_on && period >= contract.ends_on) break;
+      if (period >= recordingBegan) periods.push(period);
+    }
+    // The stories sit on the latest invoice already past its due date.
+    const lastOverdue = periods
+      .map((period) => addDaysIso(period, terms) < today)
+      .lastIndexOf(true);
+    const storyIndex = lastOverdue >= 0 ? worked++ : -1;
+    // Two periods nobody invoiced: the 3rd and 9th monthly contracts miss the latest one that
+    // began at least three days ago — the "billed late" the schedule exists to catch.
+    const monthlyIndex = annual ? -1 : monthly++;
+    const skipIndex =
+      monthlyIndex === 3 || monthlyIndex === 9
+        ? periods.map((period) => period <= addDaysIso(today, -3)).lastIndexOf(true)
+        : -1;
+    const india = storyIndex === 4;
+    billingProfiles.set(contract.company_id, {
+      company_id: contract.company_id,
+      legal_name: index === 3 ? "" : `${company.name}${index % 2 ? " LLP" : " Ltd"}`,
+      billing_address: index === 3 ? "" : `${10 + (index % 40)} Finsbury Circus, London EC2M 7EB`,
+      country: india ? "India" : company.country || "United Kingdom",
+      state_code: india ? "27" : "",
+      tax_id: india ? "27AABCU9603R1ZM" : "",
+      tax_treatment: india ? "gst_inter" : index === 2 ? "eu_reverse_charge" : "outside_scope",
+      ap_emails: index === 3 ? "" : `accounts@${company.domain || "example.test"}`,
+      po_required: index === 1,
+      po_number: "",
+      po_amount_cents: null,
+      po_expires_on: null,
+      portal_instructions:
+        index === 5 ? "Upload to their supplier portal as well as mailing it." : "",
+      payment_terms_days: terms,
+      invoice_currency: contract.currency,
+      withholds_tax: india,
+      withholding_rate_bp: india ? 1000 : null,
+      updated_at: agoIso(24 * 20),
+    });
+    periods.forEach((period, position) => {
+      if (position === skipIndex) return;
+      const latest = position === lastOverdue;
+      serial += 1;
+      const row: InvoiceRow = {
+        id: `ab${String(serial).padStart(6, "0")}-0000-4000-8000-000000000000`,
+        company_id: contract.company_id,
+        contract_id: contract.id,
+        number: `QT-2026-${String(serial).padStart(4, "0")}`,
+        issued_on: period,
+        period_start: period,
+        period_end: addDaysIso(addMonthsIso(period, step), -1),
+        due_on: addDaysIso(period, terms),
+        currency: contract.currency,
+        net_cents: amount,
+        tax_cents: 0,
+        po_number: "",
+        status: "open",
+        collection_state: "none",
+        reminders_sent: 0,
+        last_reminder_at: null,
+        promised_on: null,
+        promised_cents: null,
+        dispute_reason: "",
+        void_reason: "",
+        paid_on: null,
+        notes: "",
+      };
+      invoicesRx.push(row);
+      invoiceEvents.push({
+        invoice_id: row.id,
+        kind: "recorded",
+        detail: `Recorded as issued on ${period}, due ${row.due_on}.`,
+        staff_id: OWNER,
+        at: `${period}T09:00:00Z`,
+      });
+      const overdue = row.due_on < today;
+      // The story for this row: the first contracts' latest overdue invoices are worked.
+      const story = !overdue
+        ? "open"
+        : latest && storyIndex === 0
+          ? "late"
+          : latest && storyIndex === 1
+            ? "promised"
+            : latest && storyIndex === 4
+              ? "part"
+              : latest && storyIndex === 6
+                ? "disputed"
+                : latest && storyIndex % 5 === 2
+                  ? "late"
+                  : "paid";
+      if (story === "paid" || story === "part") {
+        const received = addDaysIso(row.due_on, story === "paid" ? -2 : 3);
+        if (received > today) return;
+        const withheld = india ? Math.round(amount * 0.1) : 0;
+        const settled = story === "paid" ? amount : Math.round(amount / 2);
+        const receipt: ReceiptRow = {
+          id: `ac${String(serial).padStart(6, "0")}-0000-4000-8000-000000000000`,
+          company_id: contract.company_id,
+          received_on: received,
+          currency: contract.currency,
+          amount_cents: settled - withheld,
+          charges_cents: 0,
+          withheld_cents: withheld,
+          certificate_received_on: india && position === 0 ? addDaysIso(received, 40) : null,
+          bank_reference: `WIRE-${row.number.slice(-4)}`,
+          notes: "",
+        };
+        receiptsRx.push(receipt);
+        allocationsRx.push({ receipt_id: receipt.id, invoice_id: row.id, cents: settled });
+        row.status = story === "paid" ? "paid" : "partially_paid";
+        if (story === "paid") row.paid_on = received;
+        invoiceEvents.push({
+          invoice_id: row.id,
+          kind: "payment",
+          detail: `${row.currency} ${centsText(settled)} from a receipt of ${received}${story === "paid" ? ". Paid in full." : "."}`,
+          staff_id: OWNER,
+          at: `${received}T10:00:00Z`,
+        });
+      } else if (story === "late") {
+        row.reminders_sent = 2;
+        row.collection_state = "reminded";
+        row.last_reminder_at = `${row.due_on}T09:30:00Z`;
+        invoiceEvents.push({
+          invoice_id: row.id,
+          kind: "send_reminder",
+          detail: `Reminder 2 sent to accounts@${company.domain || "example.test"}: Invoice ${row.number} due today`,
+          staff_id: OWNER,
+          at: `${row.due_on}T09:30:00Z`,
+        });
+      } else if (story === "promised") {
+        row.collection_state = "promised";
+        row.promised_on = addDaysIso(today, 4);
+        row.promised_cents = amount;
+        invoiceEvents.push({
+          invoice_id: row.id,
+          kind: "promise",
+          detail: `Promised ${row.currency} ${centsText(amount)} by ${row.promised_on}. Reminders pause until then.`,
+          staff_id: OWNER,
+          at: agoIso(26),
+        });
+      } else if (story === "disputed") {
+        row.collection_state = "disputed";
+        row.dispute_reason = "They say two seats were removed in August";
+        invoiceEvents.push({
+          invoice_id: row.id,
+          kind: "dispute",
+          detail:
+            "Disputed: They say two seats were removed in August. Reminders pause until it is resumed.",
+          staff_id: OWNER,
+          at: agoIso(50),
+        });
+      }
+    });
+  });
 }
 
 // --- the inbox (mirrors inbox.py) ----------------------------------------------------------------
@@ -7783,6 +8309,531 @@ routes.push(
   },
   {
     method: "GET",
+    pattern: "hq/receivables",
+    auth: true,
+    capability: "revenue:read",
+    handler: () => {
+      const views = invoicesRx.map(invoiceViewRx);
+      const open = views.filter((view) => Number(view.outstanding) > 0);
+      const ageing: Record<string, Record<string, number>> = {};
+      for (const view of open) {
+        const row = (ageing[view.currency] ??= {
+          current: 0,
+          "1_30": 0,
+          "31_60": 0,
+          "61_90": 0,
+          "90_plus": 0,
+          total: 0,
+        });
+        const owed = Math.round(Number(view.outstanding) * 100);
+        row[rxBucket(view.days_past_due)]! += owed;
+        row.total! += owed;
+      }
+      const worklist = [...open].sort(
+        (a, b) =>
+          Number(b.outstanding) * Math.max(b.days_past_due, 0) -
+            Number(a.outstanding) * Math.max(a.days_past_due, 0) ||
+          String(a.due_on).localeCompare(String(b.due_on)),
+      );
+      const withheld: Record<string, number> = {};
+      for (const receipt of receiptsRx)
+        if (!receipt.certificate_received_on && receipt.withheld_cents > 0)
+          withheld[receipt.currency] = (withheld[receipt.currency] ?? 0) + receipt.withheld_cents;
+      const plan = rxSchedule();
+      return ok({
+        as_of: todayIso(),
+        ageing: Object.fromEntries(
+          Object.entries(ageing)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([currency, row]) => [
+              currency,
+              Object.fromEntries(
+                Object.entries(row).map(([key, value]) => [key, centsText(value)]),
+              ),
+            ]),
+        ),
+        buckets: RX_BUCKETS.map(([key, label]) => ({ key, label })),
+        worklist: worklist.slice(0, 100),
+        reminders_due: open.filter((view) => view.next_reminder?.due_now).length,
+        disputed: open.filter((view) => view.collection_state === "disputed").length,
+        promised: open.filter((view) => view.collection_state === "promised").length,
+        to_bill: plan.to_bill,
+        billed_late: plan.billed_late,
+        tracked_from: plan.tracked_from,
+        withheld_awaiting_certificate: Object.fromEntries(
+          Object.entries(withheld).map(([currency, value]) => [currency, centsText(value)]),
+        ),
+        invoices: invoicesRx.length,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/invoices",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query }) =>
+      ok({
+        invoices: invoicesRx
+          .filter((row) => !query.company_id || row.company_id === query.company_id)
+          .sort((a, b) => b.issued_on.localeCompare(a.issued_on))
+          .map(invoiceViewRx)
+          .filter((view) => !query.status || view.status === query.status),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/invoices/create",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const companyId = String(body.company_id ?? "");
+      if (!companies.some((row) => row.id === companyId))
+        return refuse(400, "malformed_request", { company_id: "choose the customer" });
+      const number = String(body.number ?? "")
+        .trim()
+        .slice(0, 40);
+      if (!number)
+        return refuse(400, "malformed_request", {
+          number: "the number the accounting system gave it",
+        });
+      if (invoicesRx.some((row) => row.number === number))
+        return refuse(400, "malformed_request", {
+          number: "an invoice with this number is already recorded",
+        });
+      const contractId = String(body.contract_id ?? "");
+      if (
+        contractId &&
+        !contracts.some((row) => row.id === contractId && row.company_id === companyId)
+      )
+        return refuse(400, "malformed_request", { contract_id: "not a contract of this customer" });
+      const issued = String(body.issued_on ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(issued))
+        return refuse(400, "malformed_request", { issued_on: "a date, YYYY-MM-DD" });
+      const profile = billingProfiles.get(companyId);
+      const due =
+        String(body.due_on ?? "") || addDaysIso(issued, profile?.payment_terms_days ?? 30);
+      if (due < issued)
+        return refuse(400, "malformed_request", {
+          due_on: "cannot be before the invoice was issued",
+        });
+      const net = cents(body.net);
+      const tax = cents(body.tax ?? "0");
+      if (!Number.isFinite(net) || net < 0 || !Number.isFinite(tax) || tax < 0)
+        return refuse(400, "malformed_request", { net: "an amount such as 1250.00" });
+      const row: InvoiceRow = {
+        id: randomUUID(),
+        company_id: companyId,
+        contract_id: contractId,
+        number,
+        issued_on: issued,
+        period_start: String(body.period_start ?? "") || null,
+        period_end: String(body.period_end ?? "") || null,
+        due_on: due,
+        currency: String(body.currency ?? profile?.invoice_currency ?? "USD").toUpperCase(),
+        net_cents: net,
+        tax_cents: tax,
+        po_number: String(body.po_number ?? profile?.po_number ?? ""),
+        status: "open",
+        collection_state: "none",
+        reminders_sent: 0,
+        last_reminder_at: null,
+        promised_on: null,
+        promised_cents: null,
+        dispute_reason: "",
+        void_reason: "",
+        paid_on: null,
+        notes: String(body.notes ?? ""),
+      };
+      invoicesRx.push(row);
+      rxEvent(row.id, "recorded", `Recorded as issued on ${issued}, due ${due}.`, viewer.id);
+      audit("invoice.recorded", viewer.id, "invoice", row.id, "", { number });
+      return ok({ invoice: invoiceViewRx(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/invoices/{invoice_id}",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ params }) => {
+      const row = invoicesRx.find((candidate) => candidate.id === params.invoice_id);
+      if (!row) return refuse(404, "not_found");
+      const view = invoiceViewRx(row);
+      const profile = billingProfiles.get(row.company_id);
+      const reminder = view.next_reminder;
+      let draft: { subject: string; body: string } | null = null;
+      if (reminder) {
+        const due = new Date(`${row.due_on}T00:00:00Z`).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "long",
+          year: "numeric",
+          timeZone: "UTC",
+        });
+        const owed = `${row.currency} ${view.outstanding}`;
+        const opening =
+          reminder.offset < 0
+            ? `A note ahead of time: invoice ${row.number} for ${owed} falls due on ${due}.`
+            : reminder.offset === 0
+              ? `Invoice ${row.number} for ${owed} is due today, ${due}.`
+              : `Invoice ${row.number} for ${owed} was due on ${due} and is now ${view.days_past_due} ${view.days_past_due === 1 ? "day" : "days"} overdue.`;
+        draft = {
+          subject:
+            reminder.offset < 0
+              ? `Invoice ${row.number} due ${due}`
+              : reminder.offset === 0
+                ? `Invoice ${row.number} due today`
+                : `Invoice ${row.number} is overdue`,
+          body: `Hello ${companyName(row.company_id)} accounts team,\n\n${opening}\n\n${row.po_number ? `Your PO reference: ${row.po_number}.\n\n` : ""}If it is already on its way, thank you, and please ignore this. If anything stands in the way of payment, reply and tell us what it is.\n\nKind regards,\nQuantify Terminal accounts`,
+        };
+      }
+      return ok({
+        invoice: view,
+        events: invoiceEvents
+          .filter((event) => event.invoice_id === row.id)
+          .sort((a, b) => a.at.localeCompare(b.at))
+          .map((event) => ({
+            kind: event.kind,
+            detail: event.detail,
+            by: nameOf(event.staff_id),
+            at: event.at,
+          })),
+        payments: allocationsRx
+          .filter((item) => item.invoice_id === row.id)
+          .map((item) => {
+            const receipt = receiptsRx.find((candidate) => candidate.id === item.receipt_id);
+            return {
+              receipt_id: item.receipt_id,
+              amount: centsText(item.cents),
+              received_on: receipt?.received_on ?? null,
+              bank_reference: receipt?.bank_reference ?? "",
+            };
+          }),
+        reminder_draft: draft,
+        send_to: (profile?.ap_emails ?? "")
+          .split(",")
+          .map((part) => part.trim().toLowerCase())
+          .filter((part) => part.includes("@")),
+        profile_gaps: rxGaps(profile),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/invoices/{invoice_id}/collection",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = invoicesRx.find((candidate) => candidate.id === params.invoice_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      if (["void", "uncollectible"].includes(row.status) && action !== "note")
+        return refuse(400, "malformed_request", { status: `this invoice is ${row.status}` });
+      const today = todayIso();
+      let detail = "";
+      if (action === "send_reminder") {
+        const reminder = rxReminder(row);
+        if (!reminder)
+          return refuse(400, "malformed_request", {
+            reminder: "nothing to remind: paid, paused, or all reminders sent",
+          });
+        const to = (billingProfiles.get(row.company_id)?.ap_emails ?? "")
+          .split(",")
+          .map((part) => part.trim())
+          .filter((part) => part.includes("@"));
+        if (!to.length)
+          return refuse(400, "malformed_request", {
+            send_to: "add the accounts payable address to the billing profile first",
+          });
+        const subject = String(body.subject ?? "").trim();
+        if (!subject || !String(body.body ?? "").trim())
+          return refuse(400, "malformed_request", {
+            body: "read the draft and send it as you want it to go",
+          });
+        row.reminders_sent = reminder.step;
+        row.last_reminder_at = now();
+        if (["none", "promised"].includes(row.collection_state)) row.collection_state = "reminded";
+        detail = `Reminder ${reminder.number} sent to ${to.join(", ")}: ${subject} (the mock sends nothing)`;
+      } else if (action === "promise") {
+        const promised = String(body.promised_on ?? "");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(promised) || promised < today)
+          return refuse(400, "malformed_request", {
+            promised_on: "a promise is for today or later",
+          });
+        const amount = body.promised_amount ? cents(body.promised_amount) : owedCents(row);
+        row.collection_state = "promised";
+        row.promised_on = promised;
+        row.promised_cents = amount;
+        detail = `Promised ${row.currency} ${centsText(amount)} by ${promised}. Reminders pause until then.`;
+      } else if (action === "dispute") {
+        const reason = String(body.reason ?? "").trim();
+        if (!reason)
+          return refuse(400, "malformed_request", { reason: "what the customer disputes" });
+        row.collection_state = "disputed";
+        row.dispute_reason = reason;
+        detail = `Disputed: ${reason}. Reminders pause until it is resumed.`;
+      } else if (action === "escalate") {
+        row.collection_state = "escalated";
+        detail = String(body.note ?? "Escalated for a call.");
+      } else if (action === "resume") {
+        row.collection_state = row.reminders_sent ? "reminded" : "none";
+        row.promised_on = null;
+        row.promised_cents = null;
+        detail = "Collection resumed; reminders go on from where they stood.";
+      } else if (action === "void") {
+        if (allocatedCents(row.id) > 0)
+          return refuse(400, "malformed_request", {
+            status:
+              "payments are allocated to it; issue a credit note in the accounting system instead",
+          });
+        const reason = String(body.reason ?? "").trim();
+        if (!reason)
+          return refuse(400, "malformed_request", {
+            reason: "why it is void (as the accounting system records it)",
+          });
+        row.status = "void";
+        row.void_reason = reason;
+        detail = `Voided: ${reason}`;
+      } else if (action === "note") {
+        detail = String(body.note ?? "").trim();
+        if (!detail) return refuse(400, "malformed_request", { note: "write the note" });
+      } else return refuse(400, "malformed_request", { action: "not a collection act" });
+      rxEvent(row.id, action, detail, viewer.id);
+      audit(`invoice.${action}`, viewer.id, "invoice", row.id, "", { number: row.number });
+      return ok({ invoice: invoiceViewRx(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/invoices/{invoice_id}/write-off",
+    auth: true,
+    capability: "revenue:write",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = invoicesRx.find((candidate) => candidate.id === params.invoice_id);
+      if (!row) return refuse(404, "not_found");
+      if (!["open", "partially_paid"].includes(rxStatus(row)))
+        return refuse(400, "malformed_request", { status: `this invoice is ${rxStatus(row)}` });
+      const reason = String(body.reason ?? "").trim();
+      if (!reason) return refuse(400, "malformed_request", { reason: "why it will not be paid" });
+      if (approvers("write_off", viewer.id).length) {
+        const approval = requestApproval(
+          "write_off",
+          viewer,
+          {
+            invoice_id: row.id,
+            number: row.number,
+            currency: row.currency,
+            amount: centsText(owedCents(row)),
+            company: companyName(row.company_id),
+          },
+          reason,
+        );
+        return ok({ pending_approval: true, approval });
+      }
+      row.status = "uncollectible";
+      row.collection_state = "written_off";
+      const relief = rxReliefFrom(row);
+      rxEvent(
+        row.id,
+        "written_off",
+        `Written off: ${reason}. UK VAT bad-debt relief can be claimed from ${relief}.`,
+        viewer.id,
+      );
+      audit("invoice.written_off", viewer.id, "invoice", row.id, reason, {
+        dual_control: "sole_approver",
+      });
+      return ok({ written_off: true, bad_debt_relief_from: relief });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/receipts",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query }) =>
+      ok({
+        receipts: receiptsRx
+          .filter((row) => !query.company_id || row.company_id === query.company_id)
+          .sort((a, b) => b.received_on.localeCompare(a.received_on))
+          .map(receiptViewRx),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/receipts/create",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const companyId = String(body.company_id ?? "");
+      if (!companies.some((row) => row.id === companyId))
+        return refuse(400, "malformed_request", { company_id: "choose the customer" });
+      const received = String(body.received_on ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(received) || received > todayIso())
+        return refuse(400, "malformed_request", {
+          received_on: "a receipt is recorded once the money is in",
+        });
+      const currency = String(body.currency ?? "").toUpperCase();
+      const amount = cents(body.amount);
+      const charges = cents(body.bank_charges ?? "0");
+      const withheld = cents(body.tax_withheld ?? "0");
+      if (![amount, charges, withheld].every((value) => Number.isFinite(value) && value >= 0))
+        return refuse(400, "malformed_request", { amount: "an amount such as 1250.00" });
+      if (amount + charges + withheld <= 0)
+        return refuse(400, "malformed_request", { amount: "nothing was received" });
+      const planned: Array<{ invoice_id: string; cents: number }> = [];
+      for (const item of Array.isArray(body.allocations) ? body.allocations.slice(0, 50) : []) {
+        const entry = item as Record<string, unknown>;
+        const invoice = invoicesRx.find(
+          (row) => row.id === String(entry.invoice_id ?? "") && row.company_id === companyId,
+        );
+        if (!invoice)
+          return refuse(400, "malformed_request", {
+            allocations: "an invoice of another customer, or none",
+          });
+        if (invoice.currency !== currency)
+          return refuse(400, "malformed_request", {
+            allocations: `invoice ${invoice.number} is in ${invoice.currency}, the receipt in ${currency}`,
+          });
+        const part = cents(entry.amount);
+        if (!Number.isFinite(part) || part <= 0) continue;
+        if (part > owedCents(invoice))
+          return refuse(400, "malformed_request", {
+            allocations: `more than invoice ${invoice.number} still owes`,
+          });
+        planned.push({ invoice_id: invoice.id, cents: part });
+      }
+      if (planned.reduce((total, item) => total + item.cents, 0) > amount + charges + withheld)
+        return refuse(400, "malformed_request", {
+          allocations: "allocated more than the receipt, its charges and the tax withheld",
+        });
+      const receipt: ReceiptRow = {
+        id: randomUUID(),
+        company_id: companyId,
+        received_on: received,
+        currency,
+        amount_cents: amount,
+        charges_cents: charges,
+        withheld_cents: withheld,
+        certificate_received_on: null,
+        bank_reference: String(body.bank_reference ?? "").slice(0, 80),
+        notes: String(body.notes ?? "").slice(0, 400),
+      };
+      receiptsRx.push(receipt);
+      for (const item of planned) {
+        allocationsRx.push({
+          receipt_id: receipt.id,
+          invoice_id: item.invoice_id,
+          cents: item.cents,
+        });
+        const invoice = invoicesRx.find((row) => row.id === item.invoice_id)!;
+        invoice.status = rxStatus(invoice);
+        if (invoice.status === "paid") invoice.paid_on = received;
+        rxEvent(
+          invoice.id,
+          "payment",
+          `${currency} ${centsText(item.cents)} from a receipt of ${received}${invoice.status === "paid" ? ". Paid in full." : "."}`,
+          viewer.id,
+        );
+      }
+      audit("receipt.recorded", viewer.id, "receipt", receipt.id, "", {
+        allocations: planned.length,
+      });
+      return ok({ receipt: receiptViewRx(receipt) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/receipts/{receipt_id}/certificate",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ headers, params, body }) => {
+      const row = receiptsRx.find((candidate) => candidate.id === params.receipt_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.withheld_cents <= 0)
+        return refuse(400, "malformed_request", {
+          receipt: "no tax was withheld from this receipt",
+        });
+      row.certificate_received_on = String(body.received_on ?? "") || todayIso();
+      audit("receipt.certificate", caller(headers)!.member.id, "receipt", row.id);
+      return ok({ certificate_received_on: row.certificate_received_on });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/companies/{company_id}/billing",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ params }) => {
+      if (!companies.some((row) => row.id === params.company_id)) return refuse(404, "not_found");
+      return ok({
+        profile: profileViewRx(String(params.company_id)),
+        treatments: Object.entries(RX_TREATMENTS).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/{company_id}/billing/update",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ headers, params, body }) => {
+      const companyId = String(params.company_id);
+      if (!companies.some((row) => row.id === companyId)) return refuse(404, "not_found");
+      const current = billingProfiles.get(companyId);
+      const text = (name: string, limit: number) =>
+        String(body[name] ?? (current as Record<string, unknown> | undefined)?.[name] ?? "")
+          .trim()
+          .slice(0, limit);
+      const treatment = text("tax_treatment", 20);
+      if (treatment && !(treatment in RX_TREATMENTS))
+        return refuse(400, "malformed_request", {
+          tax_treatment: "choose how invoices to them are taxed",
+        });
+      const terms = Number(body.payment_terms_days ?? current?.payment_terms_days ?? 30);
+      if (!Number.isInteger(terms) || terms < 0 || terms > 120)
+        return refuse(400, "malformed_request", { payment_terms_days: "between 0 and 120 days" });
+      const emails = text("ap_emails", 400)
+        .replace(/;/g, ",")
+        .split(",")
+        .map((part) => part.trim().toLowerCase())
+        .filter(Boolean);
+      if (emails.some((part) => !part.includes("@") || part.includes(" ")))
+        return refuse(400, "malformed_request", { ap_emails: "addresses separated by commas" });
+      const rate = String(body.withholding_rate_percent ?? "");
+      const poAmount = String(body.po_amount ?? "");
+      billingProfiles.set(companyId, {
+        company_id: companyId,
+        legal_name: text("legal_name", 200),
+        billing_address: text("billing_address", 400),
+        country: text("country", 60),
+        state_code: text("state_code", 8),
+        tax_id: text("tax_id", 40),
+        tax_treatment: treatment,
+        ap_emails: emails.join(", "),
+        po_required: Boolean(body.po_required),
+        po_number: text("po_number", 60),
+        po_amount_cents: poAmount ? cents(poAmount) : null,
+        po_expires_on: String(body.po_expires_on ?? "") || null,
+        portal_instructions: text("portal_instructions", 400),
+        payment_terms_days: terms,
+        invoice_currency: String(
+          body.invoice_currency ?? current?.invoice_currency ?? "USD",
+        ).toUpperCase(),
+        withholds_tax: Boolean(body.withholds_tax),
+        withholding_rate_bp: rate ? Math.round(Number(rate) * 100) : null,
+        updated_at: now(),
+      });
+      audit("billing.profile_updated", caller(headers)!.member.id, "company", companyId);
+      return ok({ profile: profileViewRx(companyId) });
+    },
+  },
+  {
+    method: "GET",
     pattern: "hq/inbox",
     auth: true,
     handler: ({ headers, query }) => {
@@ -8170,6 +9221,7 @@ routes.push(
           role_grant: ["owner"],
           api_key: ["owner", "admin"],
           factor_reset: ["owner"],
+          write_off: ["owner", "admin"],
         },
       });
     },
@@ -8246,6 +9298,27 @@ routes.push(
         }
         row.status = "done";
         row.result_id = String(executed.staff_id ?? "");
+      } else if (row.kind === "write_off") {
+        const invoice = invoicesRx.find((candidate) => candidate.id === row.payload.invoice_id);
+        if (!invoice) return refuse(404, "not_found");
+        if (!["open", "partially_paid"].includes(rxStatus(invoice)))
+          return refuse(400, "malformed_request", {
+            status: `the invoice is ${rxStatus(invoice)} now`,
+          });
+        invoice.status = "uncollectible";
+        invoice.collection_state = "written_off";
+        rxEvent(
+          invoice.id,
+          "written_off",
+          `Written off: ${row.reason}. UK VAT bad-debt relief can be claimed from ${rxReliefFrom(invoice)}.`,
+          viewer.id,
+        );
+        audit("invoice.written_off", viewer.id, "invoice", invoice.id, row.reason, {
+          dual_control: { approval_id: row.id, requested_by: row.requested_by },
+        });
+        executed = { written_off: true };
+        row.status = "done";
+        row.result_id = invoice.id;
       } else {
         row.status = "approved";
         row.expires_at = hoursFromNowIso(APPROVAL_TTL_HOURS);
@@ -18516,6 +19589,7 @@ seedApprovals();
 seedSecurityEvents();
 seedMail();
 // Seeded after everything they point at (companies, deals, tickets, approvals).
+seedReceivables();
 seedSecurityFeed();
 seedReadWatch();
 seedInbox();
@@ -19893,6 +20967,7 @@ function resetWorld() {
   resetDeskRules();
   seedSources();
   seedPlans();
+  seedReceivables();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

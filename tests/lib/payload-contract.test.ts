@@ -91,6 +91,7 @@ import * as mail from "@/lib/api/mail";
 import * as meetings from "@/lib/api/meetings";
 import * as reports from "@/lib/api/reports";
 import * as revenue from "@/lib/api/revenue";
+import * as receivablesApi from "@/lib/api/receivables";
 import * as security from "@/lib/api/security";
 import * as settings from "@/lib/api/settings";
 import * as staff from "@/lib/api/staff";
@@ -134,6 +135,11 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/me/devices", () => security.readMyDevices(token)],
   ["hq/security/reads", () => security.readReadWatch(token)],
   ["hq/inbox", () => inboxApi.readInbox(token)],
+  ["hq/receivables", () => receivablesApi.readReceivables(token)],
+  ["hq/invoices", () => receivablesApi.readInvoices(token)],
+  ["hq/invoices/{invoice_id}", () => receivablesApi.readInvoice(token, ids.invoice_id!)],
+  ["hq/receipts", () => receivablesApi.readReceipts(token)],
+  ["hq/companies/{company_id}/billing", () => receivablesApi.readBilling(token, ids.company_id!)],
   ["hq/me/notifications", () => inboxApi.readNotificationPrefs(token)],
   [
     "hq/subscriptions/company/{company_id}",

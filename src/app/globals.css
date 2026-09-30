@@ -5121,6 +5121,86 @@
     font-size: 12.5px;
   }
 
+  /* Receivables: a receipt's allocation rows, each an invoice and the part it settles. */
+  .receipt-allocations {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .receipt-allocation {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .receipt-allocation label {
+    font-size: 13px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .receipt-allocation__input {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .receipt-allocation__input .input {
+    width: 120px;
+  }
+
+  .gap-list {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 2px;
+  }
+
+  .pill-pair {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .invoice-timeline {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .invoice-timeline__row {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 13px;
+  }
+
+  .invoice-timeline__kind {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .invoice-timeline__detail {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 640px) {
+    .invoice-timeline__row {
+      grid-template-columns: 1fr;
+      gap: 2px;
+    }
+  }
+
   .follow-form {
     display: inline-flex;
     align-items: center;

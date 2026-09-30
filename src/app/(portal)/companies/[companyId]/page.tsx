@@ -36,6 +36,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { RecordFollow } from "@/components/inbox/record-follow";
 import { ViewedBy } from "@/components/security/viewed-by";
+import { CompanyBilling } from "@/components/revenue/company-billing";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
   readCompanies,
@@ -81,6 +82,7 @@ const TABS = [
   { key: "deals", label: "Deals" },
   { key: "people", label: "People" },
   { key: "history", label: "History" },
+  { key: "billing", label: "Billing" },
 ];
 
 type CompanyPageProps = {
@@ -355,6 +357,7 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
           { ...TABS[2]!, count: deals.length },
           { ...TABS[3]!, count: people.length },
           TABS[4]!,
+          ...(hasCapability(context, "revenue:read") ? [TABS[5]!] : []),
         ]}
         current={tab}
         label="Company sections"
@@ -563,6 +566,19 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
         {tab === "people" && (
           <RecordSection id="company-people" title="People">
             {peopleTable}
+          </RecordSection>
+        )}
+        {tab === "billing" && (
+          <RecordSection id="company-billing" title="Billing">
+            {hasCapability(context, "revenue:read") ? (
+              <CompanyBilling
+                token={context.token}
+                companyId={company.company_id}
+                canWrite={hasCapability(context, "revenue:write")}
+              />
+            ) : (
+              <Callout tone="neutral">Billing is visible to Sales, Admins and Owners.</Callout>
+            )}
           </RecordSection>
         )}
         {tab === "history" && (

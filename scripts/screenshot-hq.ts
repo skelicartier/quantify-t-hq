@@ -140,6 +140,12 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "inbox", path: "/inbox", ready: ".inbox-list, .empty-state" },
   { name: "inbox-done", path: "/inbox?view=done", ready: "main#main-content" },
   { name: "me-notifications", path: "/me/notifications", ready: ".prefs-modes" },
+  { name: "revenue-receivables", path: "/revenue/receivables", ready: "main#main-content" },
+  {
+    name: "company-billing",
+    path: "/companies/c0000000-0000-4000-8000-000000000002?tab=billing",
+    ready: "main#main-content",
+  },
   { name: "confirm-reads", path: "/confirm-reads?next=%2Fcompanies", ready: "main#main-content" },
   { name: "confirm-reads-held", path: "/confirm-reads?held=1", ready: "main#main-content" },
   { name: "admin-pipeline", path: "/admin/settings/pipeline", ready: ".stage-editor" },
@@ -347,6 +353,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureMailFlows(page, folder);
   await captureSecurityFlows(page, folder);
   await captureInboxFlows(page, folder);
+  await captureReceivableFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -399,6 +406,47 @@ async function captureInteractions(page: Page, folder: string) {
   await assertAccessible(page, `${folder}/lead-anonymised`);
   await page.screenshot({ path: `${OUT}/${folder}/lead-anonymised.png`, fullPage: true });
   console.log(`  ✓ ${folder}/lead-anonymised`);
+}
+
+/**
+ * Receivables, end to end: an invoice recorded from the Receivables page (it lands on its
+ * own record), a dispute recorded on it, then money received against an open invoice
+ * from the customer's Billing tab, allocated with "All of it".
+ */
+async function captureReceivableFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/revenue/receivables`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Record an invoice" }).click();
+  await page.selectOption("#invoice-company", { index: 1 });
+  await page.fill("#invoice-number", `QT-HARNESS-${Date.now().toString(36).toUpperCase()}`);
+  await page.fill("#invoice-net", "1250.00");
+  await page.locator("button", { hasText: "Record the invoice" }).click();
+  await page.waitForURL("**/revenue/invoices/**", { timeout: 15_000 });
+  await page.fill("#dispute-reason", "Seat count differs from their PO");
+  await page.locator("button", { hasText: "Record the dispute" }).click();
+  await page.waitForSelector(".invoice-timeline__row:has-text('Disputed')", { timeout: 10_000 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await assertNoOverflow(page, `${folder}/invoice-recorded`);
+  await assertAccessible(page, `${folder}/invoice-recorded`);
+  await page.screenshot({ path: `${OUT}/${folder}/invoice-recorded.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/invoice-recorded`);
+
+  // Money received from the customer just invoiced: the receipt settles that invoice in full.
+  const customer = await page.locator('main a[href^="/companies/"]').first().getAttribute("href");
+  if (!customer) throw new Error(`${folder}: the invoice page links to no customer`);
+  await page.goto(`${BASE}${customer.split("?")[0]}?tab=billing`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Record money received from them" }).click();
+  const all = page.locator(".receipt-allocation button", { hasText: "All of it" }).first();
+  if ((await all.count()) === 0) throw new Error(`${folder}: no open invoice to settle`);
+  await all.click();
+  const owed = await page.locator(".receipt-allocation__input input").first().inputValue();
+  await page.fill("#receipt-amount", owed);
+  await page.fill("#receipt-reference", "WIRE-HARNESS");
+  await page.locator("button", { hasText: "Record the receipt" }).click();
+  await page.waitForSelector(".disclosure .form-sent", { timeout: 10_000 });
+  await assertNoOverflow(page, `${folder}/company-billing-received`);
+  await assertAccessible(page, `${folder}/company-billing-received`);
+  await page.screenshot({ path: `${OUT}/${folder}/company-billing-received.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/company-billing-received`);
 }
 
 /**
