@@ -172,6 +172,14 @@ const SIGNED_IN_PAGES: Shot[] = [
     path: "/deals/d0000000-0000-4000-8000-000000000001?tab=competition",
     ready: ".competitor-list, main#main-content",
   },
+  { name: "success", path: "/success", ready: "main#main-content" },
+  { name: "success-requests", path: "/success/requests", ready: "main#main-content" },
+  {
+    name: "success-request",
+    path: "/success/requests/ce000001-0000-4000-8000-000000000000",
+    ready: ".ask-list, main#main-content",
+  },
+  { name: "success-onboarding", path: "/success/onboarding", ready: "main#main-content" },
   { name: "privacy", path: "/privacy", ready: "main#main-content" },
   { name: "privacy-closed", path: "/privacy?scope=closed", ready: "main#main-content" },
   {
@@ -417,6 +425,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureReceivableFlows(page, folder);
   await capturePrivacyFlows(page, folder);
   await captureInspectionFlows(page, folder);
+  await captureSuccessFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -650,6 +659,71 @@ async function captureInspectionFlows(page: Page, folder: string) {
     await page.waitForSelector("form:has(#interview-reason) .form-sent", { timeout: 10_000 });
   }
   await shoot(page, `${folder}/deal-interviewed`);
+}
+
+/**
+ * Customer success, end to end: a customer's Success tab opened from the signals; a feature
+ * request added, asked for by a firm, and shipped with a note to the asker; an onboarding
+ * step ticked; a renewal playbook put on the calendar from a contract.
+ */
+async function captureSuccessFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/success`, { waitUntil: "networkidle" });
+  const firm = page.locator("tbody tr a").nth(4);
+  if ((await firm.count()) > 0) {
+    await firm.click();
+    await page.waitForURL("**/companies/**", { timeout: 15_000 });
+    await page.waitForSelector(".signal-list, main#main-content", { timeout: 10_000 });
+  }
+  await shoot(page, `${folder}/company-success`);
+
+  await page.goto(`${BASE}/success/requests`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "New request" }).click();
+  await page.fill("#request-title", `Harness request ${Date.now().toString(36)}`);
+  await page.fill("#request-description", "A harness walk through the request flow.");
+  await page.locator("button", { hasText: "Add the request" }).click();
+  await page.waitForURL("**/success/requests/**", { timeout: 15_000 });
+  await page.selectOption("#ask-company", { index: 1 });
+  await page.fill("#ask-quote", "We would use this every day.");
+  await page.selectOption("#ask-importance", "blocker");
+  await page.locator("button", { hasText: "Add the ask" }).click();
+  await page.waitForSelector(".ask-list__item", { timeout: 10_000 });
+  await page.selectOption("#ship-tell", "recorded");
+  await page.locator("button", { hasText: "Mark shipped" }).click();
+  await page.waitForSelector("form:has(#ship-on) .form-sent, .ask-list__item :text('told')", {
+    timeout: 10_000,
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/success-request-shipped`);
+
+  await page.goto(`${BASE}/success/onboarding`, { waitUntil: "networkidle" });
+  const done = page.locator(".step-list__item button", { hasText: "Done" }).first();
+  if ((await done.count()) > 0) {
+    const before = await page.locator(".step-list__title--done").count();
+    await done.click();
+    await page.waitForFunction(
+      (count) => document.querySelectorAll(".step-list__title--done").length > count,
+      before,
+      { timeout: 10_000 },
+    );
+  }
+  await shoot(page, `${folder}/success-onboarding-ticked`);
+
+  await page.goto(`${BASE}/revenue/renewals`, { waitUntil: "networkidle" });
+  const contract = page.locator('tbody tr a[href^="/revenue/contracts/"]').first();
+  if ((await contract.count()) > 0) {
+    await page.goto(`${BASE}${await contract.getAttribute("href")}`, { waitUntil: "networkidle" });
+    const start = page.locator("button", { hasText: "Start the playbook" });
+    if ((await start.count()) > 0) {
+      await start.click();
+      await page.waitForSelector(
+        "form:has(input[value=start]) .form-sent, :text('Running since')",
+        {
+          timeout: 10_000,
+        },
+      );
+    }
+  }
+  await shoot(page, `${folder}/contract-playbook`);
 }
 
 /**

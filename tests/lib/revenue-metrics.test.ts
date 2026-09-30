@@ -135,6 +135,9 @@ function contract(over: Partial<Contract> & { contract_id: string }): Contract {
     cancel_reason: "",
     notes: "",
     created_at: null,
+    notice_days: null,
+    notice_date: null,
+    playbook_started_at: null,
     ...over,
   };
 }

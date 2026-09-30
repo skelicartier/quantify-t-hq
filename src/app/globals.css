@@ -9528,3 +9528,130 @@
     }
   }
 }
+
+/* Customer success: signals with their evidence, asks in the asker's words, onboardings. */
+@layer pages {
+  .signal-list {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .signal-list__item {
+    display: grid;
+    gap: 2px;
+    justify-items: start;
+  }
+
+  .signal-list__evidence {
+    color: var(--text);
+    font-size: 12.5px;
+  }
+
+  .signal-list__rule {
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  .ask-list {
+    display: grid;
+    margin: 0 0 16px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ask-list__item {
+    display: grid;
+    gap: 6px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .ask-list__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+  }
+
+  .ask-list__quote {
+    margin: 0;
+    padding: 0;
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .onboarding-list {
+    display: grid;
+    gap: 24px;
+  }
+
+  .onboarding-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .milestones {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0 0 10px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .milestones__item {
+    display: grid;
+    gap: 2px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-soft);
+    font-size: 13.5px;
+  }
+
+  .milestones__label {
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  .step-list {
+    display: grid;
+    margin: 0 0 10px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .step-list__item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 13.5px;
+  }
+
+  .step-list__title {
+    color: var(--text);
+  }
+
+  .step-list__title--done {
+    color: var(--text-muted);
+    text-decoration: line-through;
+  }
+
+  @media (max-width: 720px) {
+    .milestones {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .step-list__item {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+  }
+}

@@ -22,6 +22,7 @@ const LEAF_LABELS: Record<string, string> = {
   subprocessors: "Sub-processors",
   "win-loss": "Win/loss",
   changes: "What changed",
+  requests: "Feature requests",
 };
 
 /** The section and page a path sits under, from the navigation table; records add their own name in the page bar. */

@@ -37,6 +37,7 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { RecordFollow } from "@/components/inbox/record-follow";
 import { ViewedBy } from "@/components/security/viewed-by";
 import { CompanyPrivacy } from "@/components/privacy/company-privacy";
+import { CompanySuccess } from "@/components/success/company-success";
 import { CompanyBilling } from "@/components/revenue/company-billing";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
@@ -85,6 +86,7 @@ const TABS = [
   { key: "history", label: "History" },
   { key: "billing", label: "Billing" },
   { key: "privacy", label: "Privacy" },
+  { key: "success", label: "Success" },
 ];
 
 type CompanyPageProps = {
@@ -361,6 +363,7 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
           TABS[4]!,
           ...(hasCapability(context, "revenue:read") ? [TABS[5]!] : []),
           ...(hasCapability(context, "privacy:read") ? [TABS[6]!] : []),
+          TABS[7]!,
         ]}
         current={tab}
         label="Company sections"
@@ -582,6 +585,11 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
             ) : (
               <Callout tone="neutral">Billing is visible to Sales, Admins and Owners.</Callout>
             )}
+          </RecordSection>
+        )}
+        {tab === "success" && (
+          <RecordSection id="company-success" title="Customer success">
+            <CompanySuccess token={context.token} companyId={company.company_id} />
           </RecordSection>
         )}
         {tab === "privacy" && (

@@ -94,6 +94,7 @@ import * as revenue from "@/lib/api/revenue";
 import * as inspectionApi from "@/lib/api/inspection";
 import * as privacyApi from "@/lib/api/privacy";
 import * as receivablesApi from "@/lib/api/receivables";
+import * as successApi from "@/lib/api/success";
 import * as security from "@/lib/api/security";
 import * as settings from "@/lib/api/settings";
 import * as staff from "@/lib/api/staff";
@@ -160,6 +161,17 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/competitors", () => inspectionApi.readCompetitors(token)],
   ["hq/competitors/{competitor_id}", () => inspectionApi.readCompetitor(token, ids.competitor_id!)],
   ["hq/win-loss", () => inspectionApi.readWinLoss(token)],
+  ["hq/success", () => successApi.readSuccess(token)],
+  [
+    "hq/companies/{company_id}/success",
+    () => successApi.readCompanySuccess(token, ids.company_id!),
+  ],
+  ["hq/feature-requests", () => successApi.readFeatureRequests(token)],
+  [
+    "hq/feature-requests/{request_id}",
+    () => successApi.readFeatureRequest(token, ids.feature_request_id!),
+  ],
+  ["hq/onboardings", () => successApi.readOnboardings(token)],
   [
     "hq/subprocessors/{subprocessor_id}",
     () => privacyApi.readSubprocessor(token, ids.subprocessor_id!),

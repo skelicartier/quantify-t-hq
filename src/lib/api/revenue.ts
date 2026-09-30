@@ -42,6 +42,11 @@ export const contractSchema = z.object({
   cancel_reason: z.string(),
   notes: z.string(),
   created_at: z.string().nullable(),
+  /** Days before the renewal date by which notice must be given; null when none is written. */
+  notice_days: z.number().nullable(),
+  /** The last day to give notice: the renewal date less the notice period. */
+  notice_date: z.string().nullable(),
+  playbook_started_at: z.string().nullable(),
 });
 export type Contract = z.infer<typeof contractSchema>;
 

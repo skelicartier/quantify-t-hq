@@ -145,6 +145,7 @@ export async function updateContractAction(
     ["seats", 6],
     ["billing_cadence", 10],
     ["renews_on", 10],
+    ["notice_days", 4],
     ["notes", 2_000],
   ] as const) {
     if (formData.has(name)) input[name] = fieldValue(formData, name, limit).trim();

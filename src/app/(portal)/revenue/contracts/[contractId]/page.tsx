@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { startPlaybookAction } from "@/app/(portal)/success/actions";
+import { ActForm } from "@/components/ui/act-form";
 import { notFound } from "next/navigation";
 
 import {
@@ -108,6 +110,7 @@ export default async function ContractPage({ params, searchParams }: ContractPag
   }
   const { contract, movements } = detail;
   const canWrite = hasCapability(context, "revenue:write");
+  const canPlaybook = hasCapability(context, "crm:write");
   const names = await directoryOrNull(context.token);
   let plans: Plan[] = [];
   try {
@@ -245,6 +248,40 @@ export default async function ContractPage({ params, searchParams }: ContractPag
               ) : (
                 <Property label={contract.state === "ending" ? "Ends" : "Ended"}>
                   {formatDate(contract.ends_on, "—")}
+                </Property>
+              )}
+              {active && (
+                <InlineField
+                  {...inline}
+                  name="notice_days"
+                  label="Notice period"
+                  type="number"
+                  value={contract.notice_days === null ? "" : String(contract.notice_days)}
+                  display={
+                    contract.notice_days === null
+                      ? "None written"
+                      : `${contract.notice_days} days · by ${formatDate(contract.notice_date)}`
+                  }
+                  placeholder="Days before the renewal date"
+                />
+              )}
+              {active && contract.renews_on && (
+                <Property label="Renewal playbook">
+                  {contract.playbook_started_at ? (
+                    <>
+                      Running since {formatDate(contract.playbook_started_at)}{" "}
+                      <Link href={`/tasks?company_id=${contract.company_id}`}>Its tasks</Link>
+                    </>
+                  ) : canPlaybook ? (
+                    <ActForm
+                      action={startPlaybookAction}
+                      hidden={{ contract_id: contract.contract_id }}
+                      act="start"
+                      label="Start the playbook"
+                    />
+                  ) : (
+                    "Not started"
+                  )}
                 </Property>
               )}
               {contract.cancel_reason && (

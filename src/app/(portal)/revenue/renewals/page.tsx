@@ -29,6 +29,7 @@ const WINDOWS = [60, 120, 180, 365] as const;
 const COLUMNS = [
   { key: "customer", label: "Customer", sortable: true },
   { key: "renews", label: "Renews", sortable: true },
+  { key: "notice", label: "Notice by" },
   { key: "plan", label: "Plan", sortable: true },
   { key: "mrr", label: "Monthly value", align: "end" as const, sortable: true },
   { key: "expectation", label: "Expectation", sortable: true },
@@ -306,6 +307,18 @@ export default async function RenewalsIndexPage({ searchParams }: RenewalsPagePr
                         ) : (
                           `in ${row.renews_in_days}d`
                         )}
+                      </span>
+                    </td>
+                    <td>
+                      {row.notice_date && row.notice_date !== row.renews_on ? (
+                        formatDate(row.notice_date)
+                      ) : row.notice_days === null ? (
+                        <span className="table-sub">No period written</span>
+                      ) : (
+                        formatDate(row.notice_date)
+                      )}
+                      <span className="table-sub">
+                        {row.playbook_started_at ? "Playbook running" : "No playbook"}
                       </span>
                     </td>
                     <td>{row.plan_name || <span className="table-sub">—</span>}</td>

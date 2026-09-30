@@ -3832,6 +3832,490 @@ function seedReceivables() {
   });
 }
 
+// --- customer success (mirrors success.py and success_routes.py) -----------------------------------
+
+const CS_SIGNALS: Record<string, string> = {
+  unlinked: "No product accounts linked",
+  no_sign_in: "Nobody signing in",
+  seat_use_low: "Seats going unused",
+  renewal_risk: "Renewal at risk",
+  no_contact: "No contact",
+  near_limit: "Near the seat limit",
+};
+const CS_REQUEST_STATUSES: Record<string, string> = {
+  open: "Open",
+  planned: "Planned",
+  building: "Building",
+  shipped: "Shipped",
+  declined: "Declined",
+};
+const CS_SOURCES = ["call", "meeting", "ticket", "email", "other"];
+const CS_IMPORTANCE: Record<string, string> = {
+  nice: "Nice to have",
+  important: "Important",
+  blocker: "Blocks them",
+};
+const CS_STEPS = [
+  "Kickoff call booked",
+  "Accounts created for every paid seat",
+  "Data sources and watchlists set up",
+  "First research workflow run together",
+  "Week-two review",
+];
+const CS_PLAYBOOK: Array<[number, string]> = [
+  [90, "Read the firm's signals and usage before the renewal conversation"],
+  [60, "Renewal conversation: what worked, what they need next year"],
+  [30, "Send the renewal terms in writing"],
+  [7, "Confirm their answer; escalate if none"],
+  [0, "Notice deadline: after today they renew on the current terms"],
+];
+
+type FeatureRequestRow = {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  shipped_on: string | null;
+  declined_reason: string;
+  owner_staff_id: string;
+  created_at: string;
+};
+type FeatureAskRow = {
+  id: string;
+  request_id: string;
+  company_id: string;
+  person_id: string;
+  source: string;
+  quote: string;
+  importance: string;
+  deal_id: string;
+  recorded_by: string;
+  recorded_at: string;
+  notified_at: string | null;
+};
+type OnboardingRow = {
+  id: string;
+  company_id: string;
+  contract_id: string;
+  owner_staff_id: string;
+  starts_on: string;
+  kickoff_on: string | null;
+  first_sign_in_on: string | null;
+  live_on: string | null;
+  target_live_on: string | null;
+  status: string;
+  notes: string;
+};
+type OnboardingStepRow = {
+  id: string;
+  onboarding_id: string;
+  position: number;
+  title: string;
+  due_on: string | null;
+  done_on: string | null;
+};
+
+const featureRequests: FeatureRequestRow[] = [];
+const featureAsks: FeatureAskRow[] = [];
+const onboardings: OnboardingRow[] = [];
+const onboardingSteps: OnboardingStepRow[] = [];
+/** The last sign-in of each product account linked to a firm (null: never). */
+const csLogins = new Map<string, Array<string | null>>();
+
+function csActiveContracts(): Map<string, ContractRow[]> {
+  const by = new Map<string, ContractRow[]>();
+  for (const row of contracts) {
+    if (row.status !== "active" || (row.ends_on && row.ends_on < today())) continue;
+    by.set(row.company_id, [...(by.get(row.company_id) ?? []), row]);
+  }
+  return by;
+}
+function csNoticeDate(row: {
+  renews_on: string | null;
+  notice_days?: number | null;
+}): string | null {
+  if (!row.renews_on) return null;
+  return row.notice_days !== null && row.notice_days !== undefined
+    ? addDaysIso(row.renews_on, -row.notice_days)
+    : row.renews_on;
+}
+function csUsage(seats: number, logins: Array<string | null>) {
+  const cutoff = Date.now() - 30 * 86_400_000;
+  const active = logins.filter((at) => at && Date.parse(at) >= cutoff).length;
+  const latest =
+    logins
+      .filter((at): at is string => Boolean(at))
+      .sort()
+      .at(-1) ?? null;
+  return {
+    seats_paid: seats,
+    accounts: logins.length,
+    active_30d: active,
+    last_sign_in: latest,
+    live: seats > 0 && active >= 0.8 * seats,
+  };
+}
+function csSignals(
+  seats: number,
+  logins: Array<string | null>,
+  renewsOn: string | null,
+  renewalStatus: string,
+  lastContact: string | null,
+) {
+  const found: Array<{ key: string; label: string; rule: string; evidence: string }> = [];
+  const nowMs = Date.now();
+  const usage = csUsage(seats, logins);
+  if (logins.length === 0) {
+    found.push({
+      key: "unlinked",
+      label: "",
+      rule: "No product account is linked to this firm.",
+      evidence: "Link the accounts on the company page so usage can be read.",
+    });
+  } else {
+    if (!usage.last_sign_in || nowMs - Date.parse(usage.last_sign_in) > 14 * 86_400_000)
+      found.push({
+        key: "no_sign_in",
+        label: "",
+        rule: "No linked account has signed in for 14 days.",
+        evidence: usage.last_sign_in
+          ? `Last sign-in ${pvDay(usage.last_sign_in)}.`
+          : "No linked account has ever signed in.",
+      });
+    if (seats > 0 && usage.active_30d / seats < 0.5)
+      found.push({
+        key: "seat_use_low",
+        label: "",
+        rule: "Fewer than half the paid seats signed in within 30 days.",
+        evidence: `${usage.active_30d} of ${seats} paid seats signed in within 30 days.`,
+      });
+    if (seats > 0 && logins.length >= 0.9 * seats)
+      found.push({
+        key: "near_limit",
+        label: "",
+        rule: "Linked accounts at 90 % or more of the seats paid for.",
+        evidence: `${logins.length} accounts on ${seats} paid seats.`,
+      });
+  }
+  if (renewsOn) {
+    const inDays = rxDaysBetween(today(), renewsOn);
+    if (inDays >= 0 && inDays <= 90 && (renewalStatus === "" || renewalStatus === "at_risk"))
+      found.push({
+        key: "renewal_risk",
+        label: "",
+        rule: "Renews within 90 days and the renewal is at risk or not yet called.",
+        evidence: `Renews ${pvDay(renewsOn)} (${inDays} days); ${renewalStatus === "at_risk" ? "marked at risk." : "no renewal call recorded."}`,
+      });
+  }
+  if (!lastContact || nowMs - Date.parse(lastContact) > 30 * 86_400_000)
+    found.push({
+      key: "no_contact",
+      label: "",
+      rule: "Nothing logged with the firm for 30 days.",
+      evidence: lastContact ? `Last logged ${pvDay(lastContact)}.` : "Nothing logged yet.",
+    });
+  const order = Object.keys(CS_SIGNALS);
+  return found
+    .map((item) => ({ ...item, label: CS_SIGNALS[item.key]! }))
+    .sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+}
+function csLastContact(companyId: string): string | null {
+  return (
+    activities
+      .filter((row) => row.company_id === companyId)
+      .map((row) => row.at)
+      .sort()
+      .at(-1) ?? null
+  );
+}
+function csCustomerView(companyId: string, rows: ContractRow[], moneyOk: boolean) {
+  const company = companies.find((row) => row.id === companyId);
+  const seats = rows.reduce((total, row) => total + row.seats, 0);
+  const renewing = rows
+    .filter((row) => row.renews_on)
+    .sort((a, b) => a.renews_on!.localeCompare(b.renews_on!));
+  const next = renewing[0];
+  const logins = csLogins.get(companyId) ?? [];
+  const mrr: Record<string, string> = {};
+  if (moneyOk) {
+    const totals: Record<string, number> = {};
+    for (const row of rows) totals[row.currency] = (totals[row.currency] ?? 0) + row.mrr_cents;
+    for (const [code, cents] of Object.entries(totals).sort()) mrr[code] = centsText(cents);
+  }
+  return {
+    company: { id: companyId, name: company?.name ?? "" },
+    owner: staff.find((member) => member.id === company?.owner_staff_id)?.display_name ?? "",
+    mrr,
+    usage: csUsage(seats, logins),
+    renews_on: next?.renews_on ?? null,
+    notice_date: next ? csNoticeDate(next) : null,
+    renewal_status: next?.renewal_status ?? "",
+    signals: csSignals(
+      seats,
+      logins,
+      next?.renews_on ?? null,
+      next?.renewal_status ?? "",
+      csLastContact(companyId),
+    ),
+  };
+}
+function csRollup(request: FeatureRequestRow, moneyOk: boolean) {
+  const asks = featureAsks.filter((ask) => ask.request_id === request.id);
+  const firms = new Set(asks.map((ask) => ask.company_id).filter(Boolean));
+  const active = csActiveContracts();
+  const mrr: Record<string, number> = {};
+  for (const firm of firms)
+    for (const row of active.get(firm) ?? [])
+      mrr[row.currency] = (mrr[row.currency] ?? 0) + row.mrr_cents;
+  const blocked = new Set(asks.map((ask) => ask.deal_id).filter(Boolean));
+  const pipeline: Record<string, number> = {};
+  let openDeals = 0;
+  for (const deal of deals) {
+    if (deal.status !== "open") continue;
+    if (blocked.has(deal.id) || firms.has(deal.company_id)) {
+      pipeline[deal.currency] = (pipeline[deal.currency] ?? 0) + Math.round(deal.mrr_amount * 100);
+      openDeals += 1;
+    }
+  }
+  const text = (values: Record<string, number>) =>
+    Object.fromEntries(
+      Object.entries(values)
+        .sort()
+        .map(([code, cents]) => [code, centsText(cents)]),
+    );
+  return {
+    asks: asks.length,
+    firms: firms.size,
+    blockers: asks.filter((ask) => ask.importance === "blocker").length,
+    deals_blocked: blocked.size,
+    open_deals: openDeals,
+    mrr: moneyOk ? text(mrr) : {},
+    pipeline: moneyOk ? text(pipeline) : {},
+  };
+}
+function csRequestView(row: FeatureRequestRow, moneyOk: boolean) {
+  const owner = staff.find((member) => member.id === row.owner_staff_id);
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    status_label: CS_REQUEST_STATUSES[row.status] ?? row.status,
+    shipped_on: row.shipped_on,
+    declined_reason: row.declined_reason,
+    owner: owner ? { id: owner.id, name: owner.display_name } : null,
+    created_at: row.created_at,
+    ...csRollup(row, moneyOk),
+  };
+}
+function csOnboardingView(row: OnboardingRow) {
+  const steps = onboardingSteps
+    .filter((step) => step.onboarding_id === row.id)
+    .sort((a, b) => a.position - b.position);
+  const gap = (a: string | null, b: string | null) => (a && b ? rxDaysBetween(a, b) : null);
+  const owner = staff.find((member) => member.id === row.owner_staff_id);
+  return {
+    id: row.id,
+    company: { id: row.company_id, name: companyName(row.company_id) },
+    contract_id: row.contract_id,
+    owner: owner ? { id: owner.id, name: owner.display_name } : null,
+    starts_on: row.starts_on,
+    kickoff_on: row.kickoff_on,
+    first_sign_in_on: row.first_sign_in_on,
+    live_on: row.live_on,
+    target_live_on: row.target_live_on,
+    status: row.status,
+    notes: row.notes,
+    durations: {
+      to_kickoff: gap(row.starts_on, row.kickoff_on),
+      to_first_sign_in: gap(row.kickoff_on ?? row.starts_on, row.first_sign_in_on),
+      to_live: gap(row.first_sign_in_on ?? row.kickoff_on ?? row.starts_on, row.live_on),
+      total: gap(row.starts_on, row.live_on),
+    },
+    steps: steps.map((step) => ({
+      id: step.id,
+      title: step.title,
+      due_on: step.due_on,
+      done_on: step.done_on,
+    })),
+    steps_done: steps.filter((step) => step.done_on).length,
+  };
+}
+
+/**
+ * A customer book with something to read: sign-ins per firm (some quiet, some near their
+ * seat limit, a few never linked), notice periods on some contracts, requests with asks
+ * from real firms (one shipped, one blocking a deal), and onboardings at each stage.
+ */
+function seedSuccess() {
+  featureRequests.length = 0;
+  featureAsks.length = 0;
+  onboardings.length = 0;
+  onboardingSteps.length = 0;
+  csLogins.clear();
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const SUPPORT = "aa000000-0000-4000-8000-00000000000d";
+  const active = csActiveContracts();
+  [...active.entries()].forEach(([companyId, rows], index) => {
+    const seats = rows.reduce((total, row) => total + row.seats, 0);
+    // Most firms are touched: a check-in logged within the last few weeks.
+    if (
+      index % 4 !== 0 &&
+      !activities.some((row) => row.company_id === companyId && row.body.startsWith("Check-in:"))
+    )
+      activities.push({
+        kind: "call",
+        at: agoIso(24 * (3 + ((index * 5) % 24))),
+        staff_id: index % 2 ? SALES : SUPPORT,
+        staff_name: index % 2 ? "Sales Person" : "Desk Person",
+        body: "Check-in: usage and anything they need from us.",
+        company_id: companyId,
+        person_id: "",
+        deal_id: "",
+        lead_id: "",
+      });
+    if (index % 13 === 12) return; // never linked
+    // Accounts linked: from 60 % to all of the seats paid for.
+    const accounts = Math.max(1, Math.round(seats * (0.6 + (index % 5) * 0.1)));
+    const logins: Array<string | null> = [];
+    for (let n = 0; n < accounts; n += 1) {
+      if (index % 11 === 3)
+        logins.push(agoIso(24 * (18 + n))); // gone quiet
+      else if (index % 7 === 5 && n > 0)
+        logins.push(n % 2 ? agoIso(24 * (40 + n)) : null); // seats unused
+      else logins.push(agoIso(2 + ((index * 7 + n * 13) % 96)));
+    }
+    csLogins.set(companyId, logins);
+    rows.forEach((row, position) => {
+      if (position === 0 && index % 3 === 0) row.notice_days = 30;
+      if (position === 0 && index % 5 === 1) row.notice_days = 60;
+    });
+  });
+
+  const customers = [...active.keys()];
+  const firstDeal = deals.find((deal) => deal.status === "open");
+  const requestsSeed: Array<[string, string, string]> = [
+    [
+      "Fixed-income coverage with ten years of history",
+      "Bonds and credit alongside equities, with the same filings workflow.",
+      "planned",
+    ],
+    [
+      "Excel add-in that refreshes from a watchlist",
+      "Pull prices and filings into a workbook without copying by hand.",
+      "building",
+    ],
+    [
+      "Single sign-on through the firm's identity provider",
+      "SAML for firms whose security team will not allow passwords.",
+      "open",
+    ],
+    [
+      "Shared notes on a company across the desk",
+      "One research note per company that the whole desk edits.",
+      "shipped",
+    ],
+  ];
+  requestsSeed.forEach(([title, description, status], index) => {
+    const id = `ce00000${index + 1}-0000-4000-8000-000000000000`;
+    featureRequests.push({
+      id,
+      title,
+      description,
+      status,
+      shipped_on: status === "shipped" ? addDaysIso(today(), -12) : null,
+      declined_reason: "",
+      owner_staff_id: index % 2 ? SALES : OWNER,
+      created_at: agoIso(24 * (60 - index * 9)),
+    });
+    const askers = customers.slice(index * 3, index * 3 + 3 + (index === 0 ? 2 : 0));
+    askers.forEach((companyId, position) => {
+      const person = people.find((row) => row.company_id === companyId && row.email);
+      featureAsks.push({
+        id: randomUUID(),
+        request_id: id,
+        company_id: companyId,
+        person_id: person?.id ?? "",
+        source: CS_SOURCES[(index + position) % CS_SOURCES.length]!,
+        quote: [
+          [
+            "We cannot move the whole desk until bonds are in.",
+            "Credit research is half our coverage; without it we keep the old terminal.",
+            "Ten years of history or the backtests are meaningless.",
+            "Our fixed-income desk would take ten seats tomorrow.",
+            "Bonds alongside equities is the whole point for us.",
+          ],
+          [
+            "Our analysts live in Excel; this would save them an hour a day.",
+            "We rebuild the same workbook every Monday from copied prices.",
+            "If it refreshed from a watchlist we would drop our data macro.",
+          ],
+          [
+            "Security will not sign off on passwords.",
+            "Our identity team requires SAML for every vendor.",
+            "Onboarding waits on single sign-on; it is policy.",
+          ],
+          [
+            "We keep duplicating notes in three places.",
+            "The PMs want one note per company the whole desk edits.",
+            "Shared notes would replace our research wiki.",
+          ],
+        ][index]![position % (index === 0 ? 5 : 3)]!,
+        importance: position === 0 && index === 0 ? "blocker" : position % 2 ? "nice" : "important",
+        deal_id: index === 0 && position === 0 && firstDeal ? firstDeal.id : "",
+        recorded_by: position % 2 ? SUPPORT : SALES,
+        recorded_at: agoIso(24 * (50 - index * 8 - position)),
+        notified_at: status === "shipped" ? agoIso(24 * 11) : null,
+      });
+    });
+  });
+
+  // Onboardings: the newest customers, at each stage.
+  const newest = [...active.entries()]
+    .map(([companyId, rows]) => ({
+      companyId,
+      rows,
+      starts: rows.map((row) => row.starts_on).sort()[0]!,
+    }))
+    .sort((a, b) => b.starts.localeCompare(a.starts))
+    .slice(0, 4);
+  newest.forEach((item, index) => {
+    if (index === 3) return; // one recent customer with none started, to show the prompt
+    const id = `cd00000${index + 1}-0000-4000-8000-000000000000`;
+    const kickoff = index >= 0 ? addDaysIso(item.starts, 3 + index) : null;
+    const first = index >= 1 ? addDaysIso(item.starts, 6 + index) : null;
+    const live = index === 2 ? addDaysIso(item.starts, 24) : null;
+    onboardings.push({
+      id,
+      company_id: item.companyId,
+      contract_id: item.rows[0]!.id,
+      owner_staff_id: index === 1 ? SUPPORT : SALES,
+      starts_on: item.starts,
+      kickoff_on: kickoff && kickoff <= today() ? kickoff : null,
+      first_sign_in_on: first && first <= today() ? first : null,
+      live_on: live && live <= today() ? live : null,
+      target_live_on: addDaysIso(item.starts, 30),
+      status: live && live <= today() ? "live" : "active",
+      notes: "",
+    });
+    CS_STEPS.forEach((title, position) =>
+      onboardingSteps.push({
+        id: `cd0${index + 1}0${position + 1}00-0000-4000-8000-000000000000`,
+        onboarding_id: id,
+        position,
+        title,
+        due_on: addDaysIso(item.starts, 3 + position * 5),
+        // Done only when that day has come: a customer starting today has done nothing yet.
+        done_on:
+          position < 2 + index && addDaysIso(item.starts, 3 + position * 4) <= today()
+            ? addDaysIso(item.starts, 3 + position * 4)
+            : null,
+      }),
+    );
+  });
+}
+
 // --- pipeline inspection (mirrors inspection.py and inspection_routes.py) --------------------------
 
 const IN_CATEGORIES: Record<string, string> = {
@@ -10765,6 +11249,568 @@ routes.push(
       });
     },
   },
+  // --- customer success (mirrors success_routes.py) ------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/success",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers }) => {
+      const moneyOk = seesMoney(headers);
+      const views = [...csActiveContracts().entries()]
+        .filter(([companyId]) => companies.some((row) => row.id === companyId))
+        .map(([companyId, rows]) => csCustomerView(companyId, rows, moneyOk));
+      const order = Object.keys(CS_SIGNALS);
+      const worst = (view: (typeof views)[number]) =>
+        Math.min(
+          99,
+          ...view.signals
+            .filter((item) => item.key !== "near_limit")
+            .map((item) => order.indexOf(item.key)),
+        );
+      views.sort(
+        (a, b) =>
+          worst(a) - worst(b) ||
+          a.company.name.toLowerCase().localeCompare(b.company.name.toLowerCase()),
+      );
+      return ok({
+        customers: views,
+        counts: Object.fromEntries(
+          Object.keys(CS_SIGNALS).map((key) => [
+            key,
+            views.filter((view) => view.signals.some((item) => item.key === key)).length,
+          ]),
+        ),
+        signals: Object.entries(CS_SIGNALS).map(([key, label]) => ({ key, label })),
+        rules: { active_days: 30, silent_days: 14, quiet_days: 30, renewal_days: 90 },
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/companies/{company_id}/success",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, params }) => {
+      const companyId = String(params.company_id);
+      if (!companies.some((row) => row.id === companyId)) return refuse(404, "not_found");
+      const rows = csActiveContracts().get(companyId) ?? [];
+      return ok({
+        customer: csCustomerView(companyId, rows, seesMoney(headers)),
+        customer_of_ours: rows.length > 0,
+        onboardings: onboardings
+          .filter((row) => row.company_id === companyId)
+          .map(csOnboardingView),
+        asks: featureAsks
+          .filter((ask) => ask.company_id === companyId)
+          .map((ask) => {
+            const request = featureRequests.find((row) => row.id === ask.request_id);
+            return {
+              request_id: ask.request_id,
+              title: request?.title ?? "",
+              status: request?.status ?? "",
+              importance: ask.importance,
+              quote: ask.quote,
+              recorded_at: ask.recorded_at,
+            };
+          }),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/feature-requests",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, query }) => {
+      const moneyOk = seesMoney(headers);
+      let views = featureRequests.map((row) => csRequestView(row, moneyOk));
+      const status = query.status ?? "";
+      if (status === "active")
+        views = views.filter((view) => ["open", "planned", "building"].includes(view.status));
+      else if (status) views = views.filter((view) => view.status === status);
+      views.sort(
+        (a, b) =>
+          b.firms - a.firms ||
+          b.deals_blocked - a.deals_blocked ||
+          b.asks - a.asks ||
+          a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
+      );
+      return ok({
+        requests: views,
+        statuses: Object.entries(CS_REQUEST_STATUSES).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/feature-requests/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title) return refuse(400, "malformed_request", { title: "what they want, in a line" });
+      if (featureRequests.some((row) => row.title.trim().toLowerCase() === title.toLowerCase()))
+        return refuse(400, "malformed_request", {
+          title: "already on the list: add the ask to it",
+        });
+      const row: FeatureRequestRow = {
+        id: randomUUID(),
+        title,
+        description: String(body.description ?? "")
+          .trim()
+          .slice(0, 4000),
+        status: "open",
+        shipped_on: null,
+        declined_reason: "",
+        owner_staff_id: viewer.id,
+        created_at: now(),
+      };
+      featureRequests.push(row);
+      audit("feature_request.created", viewer.id, "feature_request", row.id, "", { title });
+      return ok({ request: csRequestView(row, seesMoney(headers)) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/feature-requests/{request_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, params }) => {
+      const row = featureRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      const viewer = caller(headers)!.member;
+      const order: Record<string, number> = { blocker: 0, important: 1, nice: 2 };
+      const asks = featureAsks
+        .filter((ask) => ask.request_id === row.id)
+        .map((ask) => {
+          const person = people.find((item) => item.id === ask.person_id);
+          const deal = deals.find((item) => item.id === ask.deal_id);
+          return {
+            id: ask.id,
+            company: { id: ask.company_id, name: companyName(ask.company_id) },
+            person: person ? { id: person.id, name: person.full_name, email: person.email } : null,
+            source: ask.source,
+            quote: ask.quote,
+            importance: ask.importance,
+            importance_label: CS_IMPORTANCE[ask.importance] ?? "",
+            deal: deal ? { id: deal.id, name: deal.name, status: deal.status } : null,
+            recorded_by: staff.find((member) => member.id === ask.recorded_by)?.display_name ?? "",
+            recorded_at: ask.recorded_at,
+            notified_at: ask.notified_at,
+          };
+        })
+        .sort(
+          (a, b) =>
+            (order[a.importance] ?? 3) - (order[b.importance] ?? 3) ||
+            a.company.name.toLowerCase().localeCompare(b.company.name.toLowerCase()),
+        );
+      const title = row.title;
+      return ok({
+        request: csRequestView(row, seesMoney(headers)),
+        asks,
+        // People, not asks: one who asked twice hears once; do-not-contact is nobody to tell.
+        to_tell: new Set(
+          asks
+            .filter(
+              (ask) =>
+                ask.person?.email &&
+                !ask.notified_at &&
+                !people.find((item) => item.id === ask.person?.id)?.do_not_contact,
+            )
+            .map((ask) => ask.person!.email.toLowerCase()),
+        ).size,
+        draft: {
+          subject: `You asked for it: ${title}`,
+          body: `Hello,\n\nYou asked us for ${title ? title[0]!.toLowerCase() + title.slice(1) : "this"}. It is now in Quantify Terminal.\n\nThank you for telling us what you needed. If it is not quite what you had in mind, reply to this message and say so.\n\nQuantify Terminal`,
+        },
+        mail_ready: MOCK_MAIL_READY,
+        may_send: (CAPABILITIES[viewer.role] ?? []).includes("mail:send"),
+        sources: CS_SOURCES,
+        importance: Object.entries(CS_IMPORTANCE).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/feature-requests/{request_id}/update",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = featureRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      let changed = false;
+      if ("title" in body) {
+        const title = String(body.title ?? "")
+          .trim()
+          .slice(0, 200);
+        if (!title) return refuse(400, "malformed_request", { title: "what they want, in a line" });
+        row.title = title;
+        changed = true;
+      }
+      if ("description" in body) {
+        row.description = String(body.description ?? "")
+          .trim()
+          .slice(0, 4000);
+        changed = true;
+      }
+      if ("status" in body) {
+        const status = String(body.status ?? "");
+        if (!CS_REQUEST_STATUSES[status] || status === "shipped")
+          return refuse(400, "malformed_request", {
+            status: "open, planned, building or declined (ship it through /ship)",
+          });
+        if (status === "declined") {
+          const reason = String(body.declined_reason ?? "")
+            .trim()
+            .slice(0, 1000);
+          if (!reason)
+            return refuse(400, "malformed_request", {
+              declined_reason: "why not, as the people who asked will hear it",
+            });
+          row.declined_reason = reason;
+        }
+        row.status = status;
+        changed = true;
+      }
+      if (!changed) return refuse(400, "malformed_request", { fields: "nothing to change" });
+      audit("feature_request.updated", viewer.id, "feature_request", row.id, "", {});
+      return ok({ updated: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/feature-requests/{request_id}/asks",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = featureRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      for (const name of ["company_id", "person_id", "deal_id"])
+        if (badId(body[name])) return refuse(400, "malformed_request", { [name]: "not an id" });
+      const personId = String(body.person_id ?? "");
+      const person = personId ? people.find((item) => item.id === personId) : undefined;
+      if (personId && !person)
+        return refuse(400, "malformed_request", { person_id: "no such person" });
+      const companyId = String(body.company_id ?? "") || person?.company_id || "";
+      if (!companyId && !personId)
+        return refuse(400, "malformed_request", {
+          company_id: "which firm, or which person, asked",
+        });
+      if (companyId && !companies.some((item) => item.id === companyId))
+        return refuse(400, "malformed_request", { company_id: "no such company" });
+      const source = String(body.source ?? "call");
+      if (!CS_SOURCES.includes(source))
+        return refuse(400, "malformed_request", { source: CS_SOURCES.join(", ") });
+      const importance = String(body.importance ?? "important");
+      if (!CS_IMPORTANCE[importance])
+        return refuse(400, "malformed_request", {
+          importance: Object.keys(CS_IMPORTANCE).join(", "),
+        });
+      const dealId = String(body.deal_id ?? "");
+      if (dealId && !deals.some((item) => item.id === dealId && item.status === "open"))
+        return refuse(400, "malformed_request", { deal_id: "an open deal" });
+      const quote = String(body.quote ?? "")
+        .trim()
+        .slice(0, 1000);
+      if (!quote)
+        return refuse(400, "malformed_request", { quote: "what they said, in their words" });
+      const ask: FeatureAskRow = {
+        id: randomUUID(),
+        request_id: row.id,
+        company_id: companyId,
+        person_id: personId,
+        source,
+        quote,
+        importance,
+        deal_id: dealId,
+        recorded_by: viewer.id,
+        recorded_at: now(),
+        notified_at: null,
+      };
+      featureAsks.push(ask);
+      audit("feature_request.asked", viewer.id, "feature_request", row.id, "", {
+        company_id: companyId,
+        importance,
+      });
+      return ok({ ask_id: ask.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/feature-requests/{request_id}/ship",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = featureRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.status === "declined")
+        return refuse(400, "malformed_request", { status: "it was declined; reopen it first" });
+      const shipped = String(body.shipped_on ?? "") || today();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(shipped) || shipped > today())
+        return refuse(400, "malformed_request", { shipped_on: "a date, not in the future" });
+      const mode = String(body.tell ?? "mail");
+      if (!["mail", "recorded", "none"].includes(mode))
+        return refuse(400, "malformed_request", { tell: "mail, recorded or none" });
+      const asks = featureAsks.filter((ask) => ask.request_id === row.id);
+      let told = 0;
+      let skipped = 0;
+      if (mode === "mail") {
+        if (!(CAPABILITIES[viewer.role] ?? []).includes("mail:send"))
+          return refuse(400, "malformed_request", {
+            tell: "mailing customers is for people who may send mail; record it instead",
+          });
+        if (!MOCK_MAIL_READY)
+          return refuse(400, "malformed_request", {
+            tell: "mail is not set up, so nothing can leave HQ; record it instead",
+          });
+        if (!String(body.subject ?? "").trim() || !String(body.body ?? "").trim())
+          return refuse(400, "malformed_request", {
+            body: "read the draft and send it as you want it to go",
+          });
+        for (const ask of asks) {
+          if (ask.notified_at) continue;
+          const person = people.find((item) => item.id === ask.person_id);
+          const email = (person?.email ?? "").toLowerCase();
+          if (
+            !email ||
+            person?.do_not_contact ||
+            mailSuppressions.some(
+              (item) => item.email_norm === email && item.scope === "global" && !item.released_at,
+            )
+          ) {
+            skipped += 1;
+            continue;
+          }
+          ask.notified_at = now();
+          told += 1;
+        }
+      } else if (mode === "recorded") {
+        for (const ask of asks)
+          if (!ask.notified_at) {
+            ask.notified_at = now();
+            told += 1;
+          }
+      }
+      row.status = "shipped";
+      row.shipped_on = shipped;
+      audit("feature_request.shipped", viewer.id, "feature_request", row.id, "", {
+        tell: mode,
+        told,
+        skipped,
+      });
+      return ok({ shipped_on: shipped, told, skipped });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/onboardings",
+    auth: true,
+    capability: "crm:read",
+    handler: () => {
+      const active = csActiveContracts();
+      const views = onboardings.map((row) => {
+        const view = csOnboardingView(row);
+        const seats = (active.get(row.company_id) ?? []).reduce(
+          (total, item) => total + item.seats,
+          0,
+        );
+        const usage = csUsage(seats, csLogins.get(row.company_id) ?? []);
+        return {
+          ...view,
+          usage,
+          suggest:
+            view.status === "active" && usage.live && !view.live_on
+              ? "live"
+              : !view.first_sign_in_on && usage.last_sign_in
+                ? "first_sign_in"
+                : "",
+        };
+      });
+      const rank: Record<string, number> = { active: 0, stalled: 1, live: 2, cancelled: 3 };
+      views.sort(
+        (a, b) =>
+          (rank[a.status] ?? 4) - (rank[b.status] ?? 4) ||
+          String(a.starts_on).localeCompare(String(b.starts_on)),
+      );
+      const started = new Set(views.map((view) => view.company.id));
+      const notStarted = [...active.entries()]
+        .filter(([companyId]) => !started.has(companyId))
+        .map(([companyId, rows]) => ({
+          company_id: companyId,
+          company_name: companyName(companyId),
+          starts_on: rows.map((item) => item.starts_on).sort()[0]!,
+        }))
+        .filter((item) => rxDaysBetween(item.starts_on, today()) <= 120)
+        .sort((a, b) => b.starts_on.localeCompare(a.starts_on));
+      return ok({ onboardings: views, not_started: notStarted, default_steps: CS_STEPS });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/onboardings/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const companyId = String(body.company_id ?? "");
+      if (!companies.some((row) => row.id === companyId))
+        return refuse(400, "malformed_request", { company_id: "choose the customer" });
+      if (
+        onboardings.some(
+          (row) => row.company_id === companyId && ["active", "stalled"].includes(row.status),
+        )
+      )
+        return refuse(400, "malformed_request", {
+          company_id: "an onboarding is already running for them",
+        });
+      const rows = csActiveContracts().get(companyId) ?? [];
+      const starts =
+        String(body.starts_on ?? "") || rows.map((row) => row.starts_on).sort()[0] || today();
+      const row: OnboardingRow = {
+        id: randomUUID(),
+        company_id: companyId,
+        contract_id: rows[0]?.id ?? "",
+        owner_staff_id: String(body.owner_staff_id ?? "") || viewer.id,
+        starts_on: starts,
+        kickoff_on: String(body.kickoff_on ?? "") || null,
+        first_sign_in_on: null,
+        live_on: null,
+        target_live_on: String(body.target_live_on ?? "") || addDaysIso(starts, 30),
+        status: "active",
+        notes: String(body.notes ?? "").slice(0, 2000),
+      };
+      onboardings.push(row);
+      CS_STEPS.forEach((title, position) =>
+        onboardingSteps.push({
+          id: randomUUID(),
+          onboarding_id: row.id,
+          position,
+          title,
+          due_on: addDaysIso(starts, 3 + position * 5),
+          done_on: null,
+        }),
+      );
+      audit("onboarding.started", viewer.id, "company", companyId, "", { onboarding_id: row.id });
+      return ok({ onboarding: csOnboardingView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/onboardings/{onboarding_id}/act",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = onboardings.find((item) => item.id === params.onboarding_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      if (action === "dates") {
+        for (const name of [
+          "kickoff_on",
+          "first_sign_in_on",
+          "live_on",
+          "target_live_on",
+        ] as const) {
+          if (!(name in body)) continue;
+          const raw = String(body[name] ?? "").trim();
+          if (raw && !/^\d{4}-\d{2}-\d{2}$/.test(raw))
+            return refuse(400, "malformed_request", { [name]: "a date, YYYY-MM-DD" });
+          if (raw && name !== "target_live_on" && raw > today())
+            return refuse(400, "malformed_request", { [name]: "has not happened yet" });
+          row[name] = raw || null;
+        }
+        if (row.live_on) row.status = "live";
+      } else if (action === "status") {
+        const status = String(body.status ?? "");
+        if (!["active", "live", "stalled", "cancelled"].includes(status))
+          return refuse(400, "malformed_request", { status: "active, live, stalled or cancelled" });
+        row.status = status;
+        if (status === "live" && !row.live_on) row.live_on = today();
+      } else if (action === "step_done" || action === "step_undone") {
+        const step = onboardingSteps.find(
+          (item) => item.id === String(body.step_id ?? "") && item.onboarding_id === row.id,
+        );
+        if (!step)
+          return refuse(400, "malformed_request", { step_id: "not a step of this onboarding" });
+        step.done_on = action === "step_done" ? today() : null;
+      } else if (action === "add_step") {
+        const title = String(body.title ?? "")
+          .trim()
+          .slice(0, 200);
+        if (!title) return refuse(400, "malformed_request", { title: "the step" });
+        onboardingSteps.push({
+          id: randomUUID(),
+          onboarding_id: row.id,
+          position: onboardingSteps.filter((item) => item.onboarding_id === row.id).length,
+          title,
+          due_on: String(body.due_on ?? "") || null,
+          done_on: null,
+        });
+      } else if (action === "notes") {
+        row.notes = String(body.notes ?? "").slice(0, 2000);
+      } else
+        return refuse(400, "malformed_request", {
+          action: "dates, status, step_done, step_undone, add_step, notes",
+        });
+      audit(`onboarding.${action}`, viewer.id, "company", row.company_id, "", {
+        onboarding_id: row.id,
+      });
+      return ok({ onboarding: csOnboardingView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/contracts/{contract_id}/playbook",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params }) => {
+      const viewer = caller(headers)!.member;
+      const contract = contracts.find((row) => row.id === params.contract_id);
+      if (!contract) return refuse(404, "not_found");
+      if (contract.status !== "active")
+        return refuse(400, "malformed_request", { contract: "only a contract in force renews" });
+      if (contract.playbook_started_at)
+        return refuse(400, "malformed_request", { contract: "the playbook is already running" });
+      const notice = csNoticeDate(contract);
+      if (!notice)
+        return refuse(400, "malformed_request", { renews_on: "set the renewal date first" });
+      const company = companies.find((row) => row.id === contract.company_id);
+      const assignee = company?.owner_staff_id || viewer.id;
+      for (const [before, title] of CS_PLAYBOOK) {
+        const due = addDaysIso(notice, -before);
+        tasks.push({
+          id: randomUUID(),
+          title,
+          body: `Renewal of ${company?.name ?? "the customer"}: notice by ${pvDay(notice)}.`,
+          status: "open",
+          priority: due < today() ? "high" : "medium",
+          due_on: due < today() ? today() : due,
+          assignee_staff_id: assignee,
+          company_id: contract.company_id,
+          person_id: "",
+          deal_id: "",
+          lead_id: "",
+          ticket_id: "",
+          origin: "renewal_playbook",
+          completed_at: null,
+          created_at: now(),
+        });
+      }
+      contract.playbook_started_at = now();
+      audit("contract.playbook_started", viewer.id, "contract", contract.id, "", {
+        tasks: CS_PLAYBOOK.length,
+        notice_date: notice,
+      });
+      return ok({ tasks: CS_PLAYBOOK.length, notice_date: notice });
+    },
+  },
   // --- pipeline inspection (mirrors inspection_routes.py) ------------------------------------------
   {
     method: "GET",
@@ -14266,6 +15312,9 @@ type ContractRow = {
   cancel_reason: string;
   notes: string;
   created_at: string;
+  /** Mirrors 0035: the notice period in days (null: none written) and the playbook. */
+  notice_days?: number | null;
+  playbook_started_at?: string | null;
 };
 type MovementRow = {
   contract_id: string;
@@ -16200,6 +17249,9 @@ function contractView(row: ContractRow) {
     cancel_reason: row.cancel_reason,
     notes: row.notes,
     created_at: row.created_at,
+    notice_days: row.notice_days ?? null,
+    notice_date: csNoticeDate(row),
+    playbook_started_at: row.playbook_started_at ?? null,
   };
 }
 
@@ -16507,6 +17559,15 @@ routes.push(
       }
       if ("notes" in body) {
         row.notes = String(body.notes ?? "");
+        changed = true;
+      }
+      if ("notice_days" in body) {
+        const raw = String(body.notice_days ?? "").trim();
+        if (raw && (!/^\d+$/.test(raw) || Number(raw) > 365))
+          return refuse(400, "malformed_request", {
+            notice_days: "days before the renewal date, 0 to 365",
+          });
+        row.notice_days = raw ? Number(raw) : null;
         changed = true;
       }
       if ("seats" in body) {
@@ -23600,6 +24661,7 @@ seedMail();
 seedReceivables();
 seedPrivacy();
 seedInspection();
+seedSuccess();
 seedSecurityFeed();
 seedReadWatch();
 seedInbox();
@@ -24980,6 +26042,7 @@ function resetWorld() {
   seedReceivables();
   seedPrivacy();
   seedInspection();
+  seedSuccess();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;
