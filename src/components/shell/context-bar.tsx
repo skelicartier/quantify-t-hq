@@ -28,6 +28,13 @@ const LEAF_LABELS: Record<string, string> = {
   templates: "Task templates",
 };
 
+/** Where one word means different pages: `changes` is "What changed" under Deals. */
+const SCOPED_LABELS: Record<string, string> = {
+  "/trust/changes": "Changes",
+  "/trust/answers": "Answer library",
+  "/trust/processing": "Record of processing",
+};
+
 /** The section and page a path sits under, from the navigation table; records add their own name in the page bar. */
 function crumbsFor(pathname: string): Crumb[] {
   for (const group of NAV_GROUPS) {
@@ -51,7 +58,9 @@ function crumbsFor(pathname: string): Crumb[] {
         crumbs.push({
           href: `${owned}/${leaf}`,
           label:
-            LEAF_LABELS[leaf] ?? leaf.replace(/-/g, " ").replace(/^\w/, (c) => c.toUpperCase()),
+            SCOPED_LABELS[`${owned}/${leaf}`] ??
+            LEAF_LABELS[leaf] ??
+            leaf.replace(/-/g, " ").replace(/^\w/, (c) => c.toUpperCase()),
         });
       }
       // "Team › Team" says nothing twice: a group named after its only link is one crumb.

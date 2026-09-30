@@ -191,6 +191,44 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: "main#main-content",
   },
   { name: "task-templates", path: "/tasks/templates", ready: "main#main-content" },
+  { name: "trust", path: "/trust", ready: ".trust-registers" },
+  { name: "trust-risks", path: "/trust/risks", ready: ".heatmap" },
+  {
+    name: "trust-risk",
+    path: "/trust/risks/b7000001-0000-4000-8000-000000000000",
+    ready: ".event-timeline",
+  },
+  { name: "trust-findings", path: "/trust/findings", ready: "main#main-content" },
+  {
+    name: "trust-finding-continuity",
+    path: "/trust/findings/c5000001-0000-4000-8000-000000000000",
+    ready: ".event-timeline",
+  },
+  { name: "trust-changes", path: "/trust/changes", ready: "main#main-content" },
+  {
+    name: "trust-change-unapproved",
+    path: "/trust/changes/c6000002-0000-4000-8000-000000000000",
+    ready: ".event-timeline",
+  },
+  { name: "trust-continuity", path: "/trust/continuity", ready: "main#main-content" },
+  { name: "trust-suppliers", path: "/trust/suppliers", ready: "main#main-content" },
+  {
+    name: "trust-supplier",
+    path: "/trust/suppliers/af000001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "trust-answers", path: "/trust/answers", ready: ".answer-card" },
+  {
+    name: "trust-answer-expired",
+    path: "/trust/answers/ba000002-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "trust-processing", path: "/trust/processing", ready: "main#main-content" },
+  {
+    name: "trust-processing-activity",
+    path: "/trust/processing/bb000001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
   {
     name: "service-status-incident",
     path: "/service-status/incidents/5d000000-0000-4000-8000-000000000001",
@@ -446,6 +484,7 @@ async function captureInteractions(page: Page, folder: string) {
   await capturePrivilegedFlows(page, folder);
   await captureAiFlows(page, folder);
   await capturePlatformFlows(page, folder);
+  await captureTrustFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -1056,6 +1095,131 @@ async function capturePlatformFlows(page: Page, folder: string) {
 }
 
 /**
+ * The trust registers: a risk recorded (opening on its own page) and reviewed; a finding
+ * fixed with its evidence; a high-risk change another person recorded approved, then
+ * done; a failed failover test that raises its finding; a supplier review with concerns;
+ * an answer drafted and approved; a processing line reviewed. Later passes find each
+ * seeded record already worked and only look.
+ */
+async function captureTrustFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  await page.goto(`${BASE}/trust/risks`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Record a risk" }).click();
+  await page.fill("#risk-title", `Harness risk ${stamp}`);
+  await page.selectOption("#risk-category", "security");
+  await page.selectOption("#risk-likelihood", "4");
+  await page.selectOption("#risk-impact", "4");
+  await page.fill("#risk-plan", "Second factor on every account");
+  await page.locator("button", { hasText: "Record the risk" }).click();
+  await page
+    .waitForURL(/\/trust\/risks\/[0-9a-f-]{36}$/, { timeout: 15_000 })
+    .catch(() => report(`${folder}/trust-risk-recorded`, "recording a risk did not open it"));
+  await page.fill("#review-note", "Checked every account has a second factor");
+  await page.locator("button", { hasText: "Record the review" }).click();
+  await page.waitForSelector("form:has(#review-note) .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  if ((await page.locator(".event-timeline__row").count()) < 2)
+    report(`${folder}/trust-risk-recorded`, "the review is not on the timeline");
+  await shoot(page, `${folder}/trust-risk-recorded`);
+
+  await page.goto(`${BASE}/trust/findings/c5000002-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("#fix-evidence").count()) > 0) {
+    await page.fill("#fix-evidence", "SameSite=Lax set on every cookie; rescan clean");
+    await page.locator("button", { hasText: "Mark fixed" }).click();
+    // A fixed finding has no fix form: the evidence section replacing it is the answer.
+    await page.waitForSelector("h2#evidence", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/trust-finding-fixed`);
+
+  // Recorded by the admin, so the owner may approve it; its recorder never could.
+  await page.goto(`${BASE}/trust/changes/c6000001-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  const approve = page.locator("button:not([disabled])", { hasText: /^Approve$/ });
+  if ((await approve.count()) > 0) {
+    await page.fill("#approve-note", "Window agreed for Sunday morning");
+    await approve.click();
+    // Approved, the approve card goes: its absence is the answer.
+    await page.waitForSelector("#approve-note", { state: "detached", timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.selectOption("#outcome-value", "done");
+    await page.locator("button", { hasText: "Record the outcome" }).click();
+    await page.waitForSelector(".rhead__status :text('Done')", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/trust-change-approved`);
+  // The owner recorded this one, so their approve button is off.
+  await page.goto(`${BASE}/trust/changes/c6000002-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("button:not([disabled])", { hasText: /^Approve$/ }).count()) > 0)
+    report(`${folder}/trust-change-self`, "the recorder was offered their own approval");
+
+  await page.goto(`${BASE}/trust/continuity`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Record a test" }).click();
+  await page.selectOption("#test-kind", "failover");
+  await page.fill("#test-scenario", `Fail the database over to the standby ${stamp}`);
+  await page.fill("#test-target", "15");
+  await page.fill("#test-actual", "40");
+  await page.selectOption("#test-outcome", "partial");
+  await page.fill("#test-finding", "Standby needs its connection string by hand");
+  await page.locator("button", { hasText: "Record the test" }).click();
+  await page.waitForSelector(`td:has-text("${stamp}")`, { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/trust-continuity-recorded`);
+
+  await page.goto(`${BASE}/trust/suppliers/af000002-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.getByText("Review was due").count()) > 0) {
+    await page.selectOption("#review-outcome", "concerns");
+    await page.fill("#review-evidence", "Their 2026 assurance report");
+    await page.fill("#review-notes", "Two exceptions on access reviews");
+    await page.fill("#review-finding", "Ask for their access-review remediation");
+    await page.locator("button", { hasText: "Record the review" }).click();
+    await page.waitForSelector("form:has(#review-evidence) .form-sent", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/trust-supplier-reviewed`);
+
+  await page.goto(`${BASE}/trust/answers`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Draft an answer" }).click();
+  await page.fill("#answer-question", `Do you test your backups? ${stamp}`);
+  await page.fill("#answer-text", "Yes. A restore from backup is tried every quarter.");
+  await page.locator("button", { hasText: "Save the draft" }).click();
+  await page
+    .waitForURL(/\/trust\/answers\/[0-9a-f-]{36}$/, { timeout: 15_000 })
+    .catch(() => report(`${folder}/trust-answer-approved`, "drafting did not open the answer"));
+  await page.locator("button", { hasText: /^Approve$/ }).click();
+  await page.waitForSelector("button:has-text('Copy the answer')", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  if ((await page.locator("button", { hasText: "Copy the answer" }).count()) === 0)
+    report(`${folder}/trust-answer-approved`, "an approved answer offers no copy");
+  await shoot(page, `${folder}/trust-answer-approved`);
+  await page.goto(`${BASE}/trust/answers?q=encrypt+rest`, { waitUntil: "networkidle" });
+  if ((await page.locator(".answer-card").count()) !== 1)
+    report(`${folder}/trust-answers-search`, "searching two words did not find the one answer");
+  await shoot(page, `${folder}/trust-answers-search`);
+
+  await page.goto(`${BASE}/trust/processing/bb000003-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if (
+    (await page.locator("#review-note").count()) > 0 &&
+    (await page.getByText("Not reviewed this year").count()) > 0
+  ) {
+    await page.fill("#review-note", "Matches the desk's two-year retention rule");
+    await page.locator("button", { hasText: "Record the review" }).click();
+    await page.waitForSelector("form:has(#review-note) .form-sent", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/trust-processing-reviewed`);
+}
+
+/**
  * The inbox, end to end: a line snoozed to tomorrow, a line opened (read, and the record
  * it points at opens), a company followed and a reminder set on it, mail settings saved.
  * Later passes find the work done and only look.
@@ -1583,6 +1747,16 @@ async function run(browser: Browser) {
         report(`${viewport.name}/intern/${shot.name}`, "a money figure is visible to the intern");
       }
     }
+    // Trust opens the answer library for the intern: read, never drafted.
+    await capture(intern, `${viewport.name}/intern`, {
+      name: "trust",
+      path: "/trust",
+      ready: ".answer-card, main#main-content",
+    });
+    if (!intern.url().includes("/trust/answers"))
+      report(`${viewport.name}/intern/trust`, "Trust did not open the answer library");
+    if ((await intern.locator("summary", { hasText: "Draft an answer" }).count()) > 0)
+      report(`${viewport.name}/intern/trust`, "the intern was offered a draft");
     await captureElevation(intern, `${viewport.name}/intern`);
     await internContext.close();
 

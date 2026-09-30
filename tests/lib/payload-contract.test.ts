@@ -104,6 +104,7 @@ import * as settings from "@/lib/api/settings";
 import * as staff from "@/lib/api/staff";
 import * as team from "@/lib/api/team";
 import * as tickets from "@/lib/api/tickets";
+import * as trustApi from "@/lib/api/trust";
 
 const fixture = shared.fixture;
 const ids = fixture?.ids ?? {};
@@ -190,6 +191,23 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/templates", () => platformApi.readTemplates(token)],
   ["hq/outbound-webhooks", () => platformApi.readWebhooks(token)],
   ["hq/outbound-webhooks/{endpoint_id}", () => platformApi.readWebhook(token, ids.endpoint_id!)],
+  ["hq/trust", () => trustApi.readTrustOverview(token)],
+  ["hq/trust/risks", () => trustApi.readRisks(token)],
+  ["hq/trust/risks/{risk_id}", () => trustApi.readRisk(token, ids.risk_id!)],
+  ["hq/trust/findings", () => trustApi.readFindings(token)],
+  ["hq/trust/findings/{finding_id}", () => trustApi.readFinding(token, ids.finding_id!)],
+  ["hq/trust/changes", () => trustApi.readChanges(token)],
+  ["hq/trust/changes/{change_id}", () => trustApi.readChange(token, ids.change_id!)],
+  ["hq/trust/continuity", () => trustApi.readContinuity(token)],
+  ["hq/trust/suppliers", () => trustApi.readSuppliers(token)],
+  [
+    "hq/trust/suppliers/{subprocessor_id}",
+    () => trustApi.readSupplier(token, ids.subprocessor_id!),
+  ],
+  ["hq/trust/answers", () => trustApi.readAnswers(token)],
+  ["hq/trust/answers/{answer_id}", () => trustApi.readAnswer(token, ids.answer_id!)],
+  ["hq/trust/processing", () => trustApi.readProcessing(token)],
+  ["hq/trust/processing/{activity_id}", () => trustApi.readActivity(token, ids.activity_id!)],
   [
     "hq/subprocessors/{subprocessor_id}",
     () => privacyApi.readSubprocessor(token, ids.subprocessor_id!),

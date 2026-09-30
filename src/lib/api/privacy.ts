@@ -398,6 +398,8 @@ export const subprocessorSchema = z.object({
   locations: z.string(),
   transfer_mechanism: z.string(),
   transfer_label: z.string(),
+  /** How often it is reviewed as a supplier; set on the trust registers. */
+  tier: z.string(),
   dpa_signed_on: z.string().nullable(),
   status: z.enum(["proposed", "notice_sent", "active", "retired"]),
   notice_sent_on: z.string().nullable(),

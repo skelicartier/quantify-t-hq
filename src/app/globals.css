@@ -10200,3 +10200,155 @@
     }
   }
 }
+
+/* The trust registers: the risk heat map and the due list. */
+@layer pages {
+  .heatmap {
+    border-collapse: separate;
+    border-spacing: 3px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .heatmap__caption {
+    caption-side: bottom;
+    padding-top: 8px;
+    color: var(--muted);
+    font-family: var(--font-body);
+    font-size: var(--fs-ui);
+    text-align: left;
+  }
+
+  .heatmap__axis {
+    padding: 0 8px;
+    color: var(--muted);
+    font-weight: 500;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  thead .heatmap__axis {
+    padding: 0 0 4px;
+    text-align: center;
+  }
+
+  .heatmap__cell {
+    width: 64px;
+    height: 40px;
+    border: 1px solid var(--line);
+    color: var(--text);
+    text-align: center;
+  }
+
+  .heatmap__cell--low {
+    background: color-mix(in srgb, var(--success) 8%, transparent);
+  }
+
+  .heatmap__cell--medium {
+    background: color-mix(in srgb, var(--info) 10%, transparent);
+  }
+
+  .heatmap__cell--high {
+    background: color-mix(in srgb, var(--attention) 14%, transparent);
+  }
+
+  .heatmap__cell--critical {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+  }
+
+  .heatmap__cell--filled {
+    border-color: var(--line-strong);
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  /* Hairlines drawn by the cells, so a short last row leaves plain page, not a grey block. */
+  .trust-registers {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    border-top: 1px solid var(--line);
+    border-left: 1px solid var(--line);
+  }
+
+  .trust-registers__cell {
+    display: grid;
+    gap: 6px;
+    padding: 14px 16px;
+    border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .trust-registers__cell:hover {
+    background: var(--panel-soft);
+  }
+
+  .trust-registers__name {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .trust-registers__figure {
+    font-family: var(--font-heading);
+    font-size: 22px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  .trust-registers__note {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .trust-registers__note--due {
+    color: var(--danger);
+  }
+
+  .answer-card {
+    display: grid;
+    gap: 8px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .answer-card__question {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .answer-card__answer {
+    margin: 0;
+    white-space: pre-wrap;
+  }
+
+  .answer-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    align-items: center;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  @media (max-width: 640px) {
+    .heatmap__cell {
+      width: 40px;
+      height: 34px;
+    }
+
+    .heatmap__axis {
+      padding: 0 6px;
+    }
+
+    /* The caption names the axes; the cells keep only their numbers. */
+    .heatmap__word {
+      display: none;
+    }
+  }
+}

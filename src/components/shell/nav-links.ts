@@ -1,6 +1,7 @@
 import {
   Activity,
   Award,
+  BadgeCheck,
   Bell,
   Building2,
   CalendarClock,
@@ -156,6 +157,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         activePrefix: "/privacy/",
         capability: "privacy:read",
         key: "v",
+      },
+      // Sales opens it for the answer library; the registers behind it are the owners'.
+      {
+        href: "/trust",
+        label: "Trust",
+        icon: BadgeCheck,
+        activePrefix: "/trust/",
+        capability: "crm:read",
       },
       {
         href: "/service-status",

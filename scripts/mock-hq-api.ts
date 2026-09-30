@@ -5358,6 +5358,8 @@ type SubprocessorRow = {
   effective_on: string | null;
   activated_on: string | null;
   retired_on: string | null;
+  /** The supplier-review tier (trust registers); a new one starts standard. */
+  tier?: string;
 };
 type NoticeRow = {
   subprocessor_id: string;
@@ -5749,6 +5751,7 @@ function pvSubprocessorView(row: SubprocessorRow, today = todayIso()) {
     locations: row.locations,
     transfer_mechanism: row.transfer_mechanism,
     transfer_label: PV_TRANSFERS[row.transfer_mechanism] ?? "",
+    tier: row.tier ?? "standard",
     dpa_signed_on: row.dpa_signed_on,
     status: row.status,
     notice_sent_on: row.notice_sent_on,
@@ -28243,6 +28246,2524 @@ function templateItems(
   return items;
 }
 
+// --- the trust registers (mirrors account_api/hq/trust.py and trust_routes.py) --------------
+
+type TrustEventRow = {
+  register: string;
+  subject_id: string;
+  kind: string;
+  detail: string;
+  staff_id: string;
+  at: string;
+};
+type RiskRow = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  likelihood: number;
+  impact: number;
+  owner_staff_id: string | null;
+  treatment: string;
+  treatment_plan: string;
+  status: string;
+  review_due: string | null;
+  last_reviewed_at: string | null;
+  decided_by: string | null;
+  decision_reason: string;
+  created_at: string;
+  updated_at: string;
+};
+type FindingRow = {
+  id: string;
+  title: string;
+  description: string;
+  source: string;
+  severity: string;
+  owner_staff_id: string | null;
+  found_on: string;
+  due_on: string;
+  status: string;
+  fixed_on: string | null;
+  evidence: string;
+  decided_by: string | null;
+  decision_reason: string;
+  continuity_test_id: string | null;
+  created_at: string;
+};
+type ChangeRow = {
+  id: string;
+  title: string;
+  description: string;
+  kind: string;
+  system: string;
+  risk: string;
+  rollback_plan: string;
+  approved_by: string | null;
+  approved_at: string | null;
+  happened_at: string;
+  outcome: string;
+  incident_id: string;
+  recorded_by: string;
+  created_at: string;
+};
+type ContinuityRow = {
+  id: string;
+  kind: string;
+  scenario: string;
+  performed_on: string;
+  participants: string;
+  outcome: string;
+  target_minutes: number | null;
+  actual_minutes: number | null;
+  notes: string;
+  next_due: string | null;
+  recorded_by: string;
+};
+type SupplierReviewRow = {
+  id: string;
+  subprocessor_id: string;
+  reviewed_on: string;
+  reviewer_staff_id: string;
+  outcome: string;
+  evidence: string;
+  notes: string;
+};
+type AnswerRow = {
+  id: string;
+  question: string;
+  answer: string;
+  topic: string;
+  evidence: string;
+  owner_staff_id: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  review_due: string | null;
+  archived_at: string | null;
+  updated_at: string;
+};
+type ProcessingRow = {
+  id: string;
+  name: string;
+  purpose: string;
+  lawful_basis: string;
+  data_subjects: string;
+  data_categories: string;
+  recipients: string;
+  transfers: string;
+  retention: string;
+  security_measures: string;
+  owner_staff_id: string | null;
+  reviewed_at: string | null;
+  archived_at: string | null;
+  updated_at: string;
+};
+
+const TR_CATEGORIES: Record<string, string> = {
+  security: "Security",
+  privacy: "Privacy",
+  availability: "Availability",
+  supplier: "Supplier",
+  people: "People",
+  legal: "Legal and regulatory",
+  financial: "Financial",
+};
+const TR_TREATMENTS: Record<string, string> = {
+  mitigate: "Reduce it",
+  accept: "Accept it",
+  transfer: "Transfer it (insurance or contract)",
+  avoid: "Stop the activity",
+};
+const TR_REVIEW_DAYS: Record<string, number> = { critical: 30, high: 90, medium: 180, low: 365 };
+const TR_TIERS: Record<string, [string, number]> = {
+  critical: ["Critical — holds customer data or runs the service", 12],
+  high: ["High — would hurt if it failed", 24],
+  standard: ["Standard", 36],
+};
+const TR_REVIEW_OUTCOMES: Record<string, string> = {
+  satisfactory: "Satisfactory",
+  concerns: "Concerns",
+  unacceptable: "Unacceptable",
+};
+const TR_CHANGE_KINDS: Record<string, string> = {
+  deploy: "Release",
+  config: "Configuration",
+  migration: "Database change",
+  access: "Access",
+  infrastructure: "Infrastructure",
+};
+const TR_CHANGE_RISKS = ["low", "medium", "high"];
+const TR_CHANGE_OUTCOMES: Record<string, string> = {
+  planned: "Planned",
+  done: "Done",
+  rolled_back: "Rolled back",
+  failed: "Failed",
+};
+const TR_SOURCES: Record<string, string> = {
+  pen_test: "Penetration test",
+  audit: "Audit",
+  internal: "Found by us",
+  customer: "Reported by a customer",
+  incident: "From an incident",
+  continuity: "From a continuity test",
+  supplier: "From a supplier review",
+};
+const TR_SEVERITIES = ["critical", "high", "medium", "low"];
+const TR_FINDING_DAYS: Record<string, number> = { critical: 7, high: 30, medium: 90, low: 180 };
+const TR_CONTINUITY: Record<string, [string, number]> = {
+  restore: ["Restore from backup", 91],
+  failover: ["Failover", 182],
+  tabletop: ["Tabletop exercise", 365],
+  access_loss: ["Loss of access", 365],
+};
+const TR_EXPECTED_TESTS = ["restore", "tabletop"];
+const TR_CONTINUITY_OUTCOMES: Record<string, string> = {
+  passed: "Passed",
+  partial: "Partly worked",
+  failed: "Failed",
+};
+const TR_TOPICS: Record<string, string> = {
+  security: "Security",
+  privacy: "Privacy",
+  infrastructure: "Infrastructure",
+  company: "Company",
+  legal: "Legal",
+  product: "Product",
+};
+const TR_BASES: Record<string, string> = {
+  consent: "Consent",
+  contract: "Contract",
+  legal_obligation: "Legal obligation",
+  vital_interests: "Vital interests",
+  public_task: "Public task",
+  legitimate_interests: "Legitimate interests",
+};
+
+const trustEvents: TrustEventRow[] = [];
+const risks: RiskRow[] = [];
+const trustFindings: FindingRow[] = [];
+const changes: ChangeRow[] = [];
+const continuityTests: ContinuityRow[] = [];
+const supplierReviews: SupplierReviewRow[] = [];
+const answers: AnswerRow[] = [];
+const processing: ProcessingRow[] = [];
+
+const trOptions = (labels: Record<string, string | [string, number]>) =>
+  Object.entries(labels).map(([value, label]) => ({
+    value,
+    label: Array.isArray(label) ? label[0] : label,
+  }));
+const trText = (body: Record<string, unknown>, name: string, limit = 2000) =>
+  String(body[name] ?? "")
+    .trim()
+    .slice(0, limit);
+const trBand = (score: number) =>
+  score >= 15 ? "critical" : score >= 8 ? "high" : score >= 4 ? "medium" : "low";
+const trIsDay = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+function trActiveStaff() {
+  return staff
+    .filter((member) => member.is_active)
+    .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
+    .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+}
+/** The body's owner, or a refusal when it names someone off the team. */
+function trOwner(body: Record<string, unknown>, field = "owner_staff_id"): string | null | false {
+  const value = String(body[field] ?? "").trim();
+  if (!value) return null;
+  return staff.some((member) => member.id === value && member.is_active) ? value : false;
+}
+function trRecord(
+  headers: Record<string, string | string[] | undefined>,
+  register: string,
+  subjectId: string,
+  kind: string,
+  detail: string,
+  action: string,
+  auditDetail: Record<string, unknown> = {},
+  reason = "",
+) {
+  const who = caller(headers)?.member.id ?? "";
+  trustEvents.push({
+    register,
+    subject_id: subjectId,
+    kind,
+    detail: detail.slice(0, 2000),
+    staff_id: who,
+    at: now(),
+  });
+  audit(action, who || null, register, subjectId, reason, auditDetail);
+}
+function trEvents(register: string, subjectId: string) {
+  return trustEvents
+    .filter((row) => row.register === register && row.subject_id === subjectId)
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .map((row) => ({ kind: row.kind, detail: row.detail, by: nameOf(row.staff_id), at: row.at }));
+}
+function trRole(headers: Record<string, string | string[] | undefined>): string {
+  return caller(headers)?.member.role ?? "";
+}
+
+function riskView(row: RiskRow, day = todayIso()) {
+  const score = row.likelihood * row.impact;
+  return {
+    risk_id: row.id,
+    title: row.title,
+    description: row.description,
+    category: row.category,
+    category_label: TR_CATEGORIES[row.category] ?? row.category,
+    likelihood: row.likelihood,
+    impact: row.impact,
+    score,
+    band: trBand(score),
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    treatment: row.treatment,
+    treatment_label: TR_TREATMENTS[row.treatment] ?? row.treatment,
+    treatment_plan: row.treatment_plan,
+    status: row.status,
+    review_due: row.review_due,
+    review_overdue: row.status !== "closed" && !!row.review_due && row.review_due < day,
+    last_reviewed_at: row.last_reviewed_at,
+    decided_by_name: row.decided_by ? nameOf(row.decided_by) : "",
+    decision_reason: row.decision_reason,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+const riskOptions = () => ({
+  categories: trOptions(TR_CATEGORIES),
+  treatments: trOptions(TR_TREATMENTS),
+  review_days: TR_REVIEW_DAYS,
+  staff: trActiveStaff(),
+});
+
+function findingView(row: FindingRow, day = todayIso()) {
+  const live = row.status === "open" || row.status === "in_progress";
+  return {
+    finding_id: row.id,
+    title: row.title,
+    description: row.description,
+    source: row.source,
+    source_label: TR_SOURCES[row.source] ?? row.source,
+    severity: row.severity,
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    found_on: row.found_on,
+    due_on: row.due_on,
+    days_left: live ? rxDaysBetween(day, row.due_on) : null,
+    overdue: live && row.due_on < day,
+    status: row.status,
+    fixed_on: row.fixed_on,
+    evidence: row.evidence,
+    decided_by_name: row.decided_by ? nameOf(row.decided_by) : "",
+    decision_reason: row.decision_reason,
+    continuity_test_id: row.continuity_test_id,
+    created_at: row.created_at,
+  };
+}
+const findingOptions = () => ({
+  sources: trOptions(TR_SOURCES),
+  severities: TR_SEVERITIES,
+  windows: TR_FINDING_DAYS,
+  staff: trActiveStaff(),
+});
+
+function changeApproval(row: ChangeRow): string {
+  if (row.approved_by) return "approved";
+  if (row.risk !== "high") return "not_needed";
+  return row.outcome === "planned" ? "awaiting" : "retrospective";
+}
+function changeView(row: ChangeRow, viewer = "") {
+  return {
+    change_id: row.id,
+    title: row.title,
+    description: row.description,
+    kind: row.kind,
+    kind_label: TR_CHANGE_KINDS[row.kind] ?? row.kind,
+    system: row.system,
+    risk: row.risk,
+    rollback_plan: row.rollback_plan,
+    approval: changeApproval(row),
+    approved_by_name: row.approved_by ? nameOf(row.approved_by) : "",
+    approved_at: row.approved_at,
+    happened_at: row.happened_at,
+    outcome: row.outcome,
+    outcome_label: TR_CHANGE_OUTCOMES[row.outcome] ?? row.outcome,
+    incident_reference: row.incident_id,
+    recorded_by_name: nameOf(row.recorded_by),
+    recorded_by_you: row.recorded_by === viewer,
+    created_at: row.created_at,
+  };
+}
+const changeOptions = () => ({
+  kinds: trOptions(TR_CHANGE_KINDS),
+  risks: TR_CHANGE_RISKS,
+  outcomes: trOptions(TR_CHANGE_OUTCOMES),
+});
+
+function continuityView(row: ContinuityRow) {
+  return {
+    test_id: row.id,
+    kind: row.kind,
+    kind_label: TR_CONTINUITY[row.kind]?.[0] ?? row.kind,
+    scenario: row.scenario,
+    performed_on: row.performed_on,
+    participants: row.participants,
+    outcome: row.outcome,
+    outcome_label: TR_CONTINUITY_OUTCOMES[row.outcome] ?? row.outcome,
+    target_minutes: row.target_minutes,
+    actual_minutes: row.actual_minutes,
+    met_target:
+      row.target_minutes !== null && row.actual_minutes !== null
+        ? row.actual_minutes <= row.target_minutes
+        : null,
+    notes: row.notes,
+    next_due: row.next_due,
+    recorded_by_name: nameOf(row.recorded_by),
+  };
+}
+function continuityPlan(day = todayIso()) {
+  return Object.entries(TR_CONTINUITY).map(([kind, [label, every]]) => {
+    const done = continuityTests
+      .filter((row) => row.kind === kind)
+      .sort((a, b) => a.performed_on.localeCompare(b.performed_on));
+    const last = done.at(-1) ?? null;
+    const due = last?.next_due ?? null;
+    const state = !last
+      ? TR_EXPECTED_TESTS.includes(kind)
+        ? "due"
+        : "not_started"
+      : due && due < day
+        ? "due"
+        : "ok";
+    return {
+      kind,
+      label,
+      every_days: every,
+      last_performed_on: last?.performed_on ?? null,
+      last_outcome: last?.outcome ?? null,
+      next_due: due,
+      state,
+    };
+  });
+}
+
+function supplierView(row: SubprocessorRow, day = todayIso()) {
+  const tier = row.tier ?? "standard";
+  const [tierLabel, months] = TR_TIERS[tier] ?? TR_TIERS.standard!;
+  const reviews = supplierReviews
+    .filter((item) => item.subprocessor_id === row.id)
+    .sort((a, b) => a.reviewed_on.localeCompare(b.reviewed_on));
+  const last = reviews.at(-1) ?? null;
+  const next = last ? addMonthsIso(last.reviewed_on, months) : null;
+  let state = "ok";
+  let reason = "";
+  if (!last) {
+    state = "due";
+    reason =
+      row.status === "proposed" || row.status === "notice_sent"
+        ? "Review it before it goes live"
+        : "Never reviewed";
+  } else if (next && next < day) {
+    state = "due";
+    reason = `Review was due ${pvDay(next)}`;
+  }
+  return {
+    subprocessor_id: row.id,
+    legal_name: row.legal_name,
+    service: row.service,
+    status: row.status,
+    tier,
+    tier_label: tierLabel,
+    every_months: months,
+    last_reviewed_on: last?.reviewed_on ?? null,
+    last_outcome: last?.outcome ?? null,
+    last_reviewer_name: last ? nameOf(last.reviewer_staff_id) : "",
+    next_due: next,
+    state,
+    reason,
+    reviews: reviews.length,
+  };
+}
+
+function answerState(row: AnswerRow, day = todayIso()): string {
+  if (row.archived_at) return "archived";
+  if (!row.approved_at) return "draft";
+  if (row.review_due && row.review_due < day) return "expired";
+  return "approved";
+}
+function answerView(row: AnswerRow, day = todayIso()) {
+  return {
+    answer_id: row.id,
+    question: row.question,
+    answer: row.answer,
+    topic: row.topic,
+    topic_label: TR_TOPICS[row.topic] ?? row.topic,
+    evidence: row.evidence,
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    state: answerState(row, day),
+    approved_by_name: row.approved_by ? nameOf(row.approved_by) : "",
+    approved_at: row.approved_at,
+    review_due: row.review_due,
+    updated_at: row.updated_at,
+  };
+}
+
+const PROCESSING_TEXT: Array<[string, number, string]> = [
+  ["name", 160, "what the activity is called"],
+  ["purpose", 1000, "why the data is used"],
+  ["data_subjects", 400, "whose data: customers' staff, prospects, applicants"],
+  ["data_categories", 400, "which data: names, work email, usage"],
+  ["retention", 400, "how long it is kept, or the rule that decides"],
+];
+const PROCESSING_OPTIONAL: Array<[string, number]> = [
+  ["recipients", 400],
+  ["transfers", 400],
+  ["security_measures", 1000],
+];
+function processingView(row: ProcessingRow, day = todayIso()) {
+  const due = row.reviewed_at ? addMonthsIso(row.reviewed_at.slice(0, 10), 12) : null;
+  return {
+    activity_id: row.id,
+    name: row.name,
+    purpose: row.purpose,
+    data_subjects: row.data_subjects,
+    data_categories: row.data_categories,
+    retention: row.retention,
+    recipients: row.recipients,
+    transfers: row.transfers,
+    security_measures: row.security_measures,
+    lawful_basis: row.lawful_basis,
+    lawful_basis_label: TR_BASES[row.lawful_basis] ?? row.lawful_basis,
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    reviewed_at: row.reviewed_at,
+    review_due: due,
+    review_owed: !row.archived_at && (due === null || due < day),
+    archived: !!row.archived_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function trRaiseFinding(
+  headers: Record<string, string | string[] | undefined>,
+  body: Record<string, unknown>,
+  source: string,
+  foundOn: string,
+  context: string,
+  continuityTestId: string | null = null,
+): FindingRow | { status: number; body: unknown } {
+  const title = trText(body, "finding_title", 200);
+  if (!title) return refuse(400, "malformed_request", { finding_title: "what has to be fixed" });
+  const severity = String(body.finding_severity ?? "");
+  if (!TR_SEVERITIES.includes(severity))
+    return refuse(400, "malformed_request", { finding_severity: TR_SEVERITIES.join(", ") });
+  const owner = trOwner(body, "finding_owner_staff_id");
+  if (owner === false)
+    return refuse(400, "malformed_request", { owner_staff_id: "choose someone on the team" });
+  const row: FindingRow = {
+    id: randomUUID(),
+    title,
+    description: context.slice(0, 2000),
+    source,
+    severity,
+    owner_staff_id: owner,
+    found_on: foundOn,
+    due_on: addDaysIso(foundOn, TR_FINDING_DAYS[severity]!),
+    status: "open",
+    fixed_on: null,
+    evidence: "",
+    decided_by: null,
+    decision_reason: "",
+    continuity_test_id: continuityTestId,
+    created_at: now(),
+  };
+  void headers;
+  return row;
+}
+const trIsRefusal = (value: unknown): value is { status: number; body: unknown } =>
+  typeof value === "object" && value !== null && "status" in value && "body" in value;
+
+function seedTrust() {
+  trustEvents.length = 0;
+  risks.length = 0;
+  trustFindings.length = 0;
+  changes.length = 0;
+  continuityTests.length = 0;
+  supplierReviews.length = 0;
+  answers.length = 0;
+  processing.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const ADMIN = "aa000000-0000-4000-8000-00000000000b";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const day = todayIso();
+  const at = (hours: number) => agoIso(hours);
+  const event = (
+    register: string,
+    id: string,
+    kind: string,
+    detail: string,
+    who: string,
+    when: string,
+  ) => trustEvents.push({ register, subject_id: id, kind, detail, staff_id: who, at: when });
+
+  const riskSeed: Array<Omit<RiskRow, "id" | "created_at" | "updated_at"> & { ago: number }> = [
+    {
+      title: "One cloud region runs the whole service",
+      description: "A regional outage takes sign-in, data and the desk down together.",
+      category: "availability",
+      likelihood: 3,
+      impact: 5,
+      owner_staff_id: OWNER,
+      treatment: "mitigate",
+      treatment_plan: "Standby database in a second region; restore drill every quarter.",
+      status: "treating",
+      review_due: addDaysIso(day, 12),
+      last_reviewed_at: at(24 * 18),
+      decided_by: null,
+      decision_reason: "",
+      ago: 24 * 120,
+    },
+    {
+      title: "A departing intern keeps access",
+      description: "Accounts outlive the internship if nobody closes them the same day.",
+      category: "people",
+      likelihood: 3,
+      impact: 3,
+      owner_staff_id: ADMIN,
+      treatment: "mitigate",
+      treatment_plan:
+        "Offboarding checklist closes access within 24 hours; quarterly access review.",
+      status: "treating",
+      review_due: addDaysIso(day, -4),
+      last_reviewed_at: at(24 * 94),
+      decided_by: null,
+      decision_reason: "",
+      ago: 24 * 200,
+    },
+    {
+      title: "A price vendor changes its licence terms",
+      description: "Redistribution rights could narrow with little notice.",
+      category: "supplier",
+      likelihood: 2,
+      impact: 4,
+      owner_staff_id: OWNER,
+      treatment: "accept",
+      treatment_plan: "",
+      status: "accepted",
+      review_due: addDaysIso(day, 60),
+      last_reviewed_at: at(24 * 30),
+      decided_by: OWNER,
+      decision_reason: "Two vendors already cover every market; switching takes a week.",
+      ago: 24 * 90,
+    },
+    {
+      title: "Phishing takes a founder's mailbox",
+      description: "",
+      category: "security",
+      likelihood: 2,
+      impact: 5,
+      owner_staff_id: null,
+      treatment: "mitigate",
+      treatment_plan: "",
+      status: "open",
+      review_due: addDaysIso(day, 80),
+      last_reviewed_at: null,
+      decided_by: null,
+      decision_reason: "",
+      ago: 24 * 6,
+    },
+    {
+      title: "Customer data kept past its retention period",
+      description: "Old trial accounts linger after the retention window.",
+      category: "privacy",
+      likelihood: 2,
+      impact: 2,
+      owner_staff_id: ADMIN,
+      treatment: "mitigate",
+      treatment_plan: "Nightly retention sweep with an audit row per deletion.",
+      status: "treating",
+      review_due: addDaysIso(day, 150),
+      last_reviewed_at: at(24 * 30),
+      decided_by: null,
+      decision_reason: "",
+      ago: 24 * 150,
+    },
+  ];
+  riskSeed.forEach(({ ago, ...entry }, index) => {
+    const id = `b7${String(index + 1).padStart(6, "0")}-0000-4000-8000-000000000000`;
+    risks.push({ ...entry, id, created_at: at(ago), updated_at: at(ago / 2) });
+    event(
+      "risk",
+      id,
+      "created",
+      `Likelihood ${entry.likelihood}, impact ${entry.impact}: ${trBand(entry.likelihood * entry.impact)}.`,
+      OWNER,
+      at(ago),
+    );
+    if (entry.status === "accepted")
+      event("risk", id, "accept", entry.decision_reason, OWNER, at(24 * 30));
+  });
+
+  const testId = "b8000001-0000-4000-8000-000000000000";
+  continuityTests.push(
+    {
+      id: testId,
+      kind: "restore",
+      scenario: "Restore last night's database backup to a fresh server and sign in",
+      performed_on: addDaysIso(day, -40),
+      participants: "Owner, Admin",
+      outcome: "partial",
+      target_minutes: 60,
+      actual_minutes: 95,
+      notes: "Data came back whole; the new server was missing its firewall rule for 30 minutes.",
+      next_due: addDaysIso(day, 51),
+      recorded_by: OWNER,
+    },
+    {
+      id: "b8000002-0000-4000-8000-000000000000",
+      kind: "tabletop",
+      scenario: "A founder's laptop is stolen on a Friday night",
+      performed_on: addDaysIso(day, -400),
+      participants: "Owner, Admin, Support",
+      outcome: "passed",
+      target_minutes: null,
+      actual_minutes: null,
+      notes: "Everyone knew where the break-glass sheet is.",
+      next_due: addDaysIso(day, -35),
+      recorded_by: ADMIN,
+    },
+  );
+  for (const row of continuityTests)
+    event(
+      "continuity_test",
+      row.id,
+      "created",
+      `${TR_CONTINUITY[row.kind]![0]}: ${TR_CONTINUITY_OUTCOMES[row.outcome]!.toLowerCase()}.`,
+      row.recorded_by,
+      `${row.performed_on}T16:00:00Z`,
+    );
+
+  const findingSeed: Array<Omit<FindingRow, "id" | "due_on" | "created_at">> = [
+    {
+      title: "Restore runbook skips the firewall rule",
+      description: "Restore from backup: the new server was unreachable for 30 minutes.",
+      source: "continuity",
+      severity: "medium",
+      owner_staff_id: ADMIN,
+      found_on: addDaysIso(day, -40),
+      status: "in_progress",
+      fixed_on: null,
+      evidence: "",
+      decided_by: null,
+      decision_reason: "",
+      continuity_test_id: testId,
+    },
+    {
+      title: "Session cookie missing SameSite on the legacy console",
+      description: "Found in the spring penetration test.",
+      source: "pen_test",
+      severity: "high",
+      owner_staff_id: OWNER,
+      found_on: addDaysIso(day, -36),
+      status: "open",
+      fixed_on: null,
+      evidence: "",
+      decided_by: null,
+      decision_reason: "",
+      continuity_test_id: null,
+    },
+    {
+      title: "Verbose error page shows the framework version",
+      description: "",
+      source: "internal",
+      severity: "low",
+      owner_staff_id: null,
+      found_on: addDaysIso(day, -20),
+      status: "open",
+      fixed_on: null,
+      evidence: "",
+      decided_by: null,
+      decision_reason: "",
+      continuity_test_id: null,
+    },
+    {
+      title: "Password reset link valid for 24 hours",
+      description: "A customer's security team asked for a shorter window.",
+      source: "customer",
+      severity: "medium",
+      owner_staff_id: ADMIN,
+      found_on: addDaysIso(day, -70),
+      status: "fixed",
+      fixed_on: addDaysIso(day, -55),
+      evidence: "Window cut to 30 minutes; retested by the customer.",
+      decided_by: null,
+      decision_reason: "",
+      continuity_test_id: null,
+    },
+  ];
+  findingSeed.forEach((entry, index) => {
+    const id = `c5${String(index + 1).padStart(6, "0")}-0000-4000-8000-000000000000`;
+    trustFindings.push({
+      ...entry,
+      id,
+      due_on: addDaysIso(entry.found_on, TR_FINDING_DAYS[entry.severity]!),
+      created_at: `${entry.found_on}T10:00:00Z`,
+    });
+    event(
+      "finding",
+      id,
+      "created",
+      `${entry.severity[0]!.toUpperCase()}${entry.severity.slice(1)}; fix by ${pvDay(addDaysIso(entry.found_on, TR_FINDING_DAYS[entry.severity]!))}.`,
+      OWNER,
+      `${entry.found_on}T10:00:00Z`,
+    );
+  });
+
+  const changeSeed: Array<Omit<ChangeRow, "id" | "created_at">> = [
+    {
+      title: "Move sign-in to the new session store",
+      description: "Sessions move from the cache to the database.",
+      kind: "migration",
+      system: "Account service database",
+      risk: "high",
+      rollback_plan: "Switch the flag back; the old store keeps writing for a week.",
+      approved_by: null,
+      approved_at: null,
+      happened_at: new Date(Date.now() + 2 * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      outcome: "planned",
+      incident_id: "",
+      recorded_by: ADMIN,
+    },
+    {
+      title: "Hotfix the sign-in throttle",
+      description: "Throttle locked out a whole office behind one address.",
+      kind: "deploy",
+      system: "Account service",
+      risk: "high",
+      rollback_plan: "Redeploy the previous build.",
+      approved_by: null,
+      approved_at: null,
+      happened_at: at(30),
+      outcome: "done",
+      incident_id: "",
+      recorded_by: OWNER,
+    },
+    {
+      title: "Rotate the mail provider key",
+      description: "",
+      kind: "access",
+      system: "Mail",
+      risk: "medium",
+      rollback_plan: "The old key stays valid for 24 hours.",
+      approved_by: OWNER,
+      approved_at: at(24 * 6),
+      happened_at: at(24 * 5),
+      outcome: "done",
+      incident_id: "",
+      recorded_by: ADMIN,
+    },
+    {
+      title: "Release 4.12 of the desktop app",
+      description: "",
+      kind: "deploy",
+      system: "Desktop app",
+      risk: "low",
+      rollback_plan: "",
+      approved_by: null,
+      approved_at: null,
+      happened_at: at(24 * 9),
+      outcome: "rolled_back",
+      incident_id: "INC-2026-004",
+      recorded_by: OWNER,
+    },
+  ];
+  changeSeed.forEach((entry, index) => {
+    const id = `c6${String(index + 1).padStart(6, "0")}-0000-4000-8000-000000000000`;
+    changes.push({ ...entry, id, created_at: entry.happened_at });
+    event(
+      "change",
+      id,
+      "created",
+      changeApproval({ ...entry, id, created_at: entry.happened_at }) === "awaiting"
+        ? "Planned; waiting for a second person's approval."
+        : changeApproval({ ...entry, id, created_at: entry.happened_at }) === "retrospective"
+          ? "Went ahead without approval; someone else still has to approve it."
+          : `${entry.risk[0]!.toUpperCase()}${entry.risk.slice(1)} risk; no approval needed.`,
+      entry.recorded_by,
+      entry.happened_at,
+    );
+  });
+
+  const tiers: Record<string, string> = {
+    "af000001-0000-4000-8000-000000000000": "critical",
+    "af000002-0000-4000-8000-000000000000": "high",
+  };
+  for (const row of subprocessors) row.tier = tiers[row.id] ?? "standard";
+  const northgate = subprocessors[0];
+  if (northgate) {
+    supplierReviews.push({
+      id: randomUUID(),
+      subprocessor_id: northgate.id,
+      reviewed_on: addDaysIso(day, -200),
+      reviewer_staff_id: OWNER,
+      outcome: "satisfactory",
+      evidence: "Their 2026 assurance report and penetration-test letter",
+      notes: "No exceptions that touch our data.",
+    });
+    event("supplier", northgate.id, "reviewed", "Satisfactory.", OWNER, at(24 * 200));
+  }
+  const edgeline = subprocessors[1];
+  if (edgeline) {
+    supplierReviews.push({
+      id: randomUUID(),
+      subprocessor_id: edgeline.id,
+      reviewed_on: addDaysIso(day, -800),
+      reviewer_staff_id: ADMIN,
+      outcome: "concerns",
+      evidence: "Security questionnaire answers",
+      notes: "No independent audit then; they said one was coming.",
+    });
+  }
+
+  const answerSeed: Array<[string, string, string, string, string | null, number]> = [
+    [
+      "Do you encrypt customer data at rest?",
+      "Yes. Every database, file store and backup is encrypted at rest with keys held by our cloud provider's key service.",
+      "security",
+      "Architecture overview, section 4",
+      OWNER,
+      120,
+    ],
+    [
+      "Where is customer data hosted?",
+      "In the European Union, with backups in a second EU region. Nothing is stored outside the EU.",
+      "infrastructure",
+      "Sub-processor register",
+      OWNER,
+      400,
+    ],
+    [
+      "Do you require two-factor sign-in for staff?",
+      "Yes. Every staff account signs in with a password and an authenticator code or a passkey; there is no way to turn it off.",
+      "security",
+      "",
+      ADMIN,
+      30,
+    ],
+    [
+      "How long do you keep data after a contract ends?",
+      "Account data is deleted 90 days after the contract ends, unless the customer asks for it sooner.",
+      "privacy",
+      "Retention schedule",
+      null,
+      -1,
+    ],
+  ];
+  answerSeed.forEach(([question, text, topic, evidence, approver, daysAgo], index) => {
+    const id = `ba${String(index + 1).padStart(6, "0")}-0000-4000-8000-000000000000`;
+    const approvedOn = daysAgo >= 0 ? addDaysIso(day, -daysAgo) : null;
+    answers.push({
+      id,
+      question,
+      answer: text,
+      topic,
+      evidence,
+      owner_staff_id: SALES,
+      approved_by: approver,
+      approved_at: approvedOn ? `${approvedOn}T12:00:00Z` : null,
+      review_due: approvedOn ? addMonthsIso(approvedOn, 12) : null,
+      archived_at: null,
+      updated_at: at(24 * Math.max(daysAgo, 2)),
+    });
+    event(
+      "answer",
+      id,
+      "created",
+      "Drafted; not approved yet.",
+      SALES,
+      at(24 * (Math.max(daysAgo, 2) + 1)),
+    );
+  });
+
+  const processingSeed: Array<
+    [string, string, string, string, string, string, string, number | null]
+  > = [
+    [
+      "Customer accounts",
+      "Running the service each firm pays for",
+      "contract",
+      "Customers' staff",
+      "Names, work email, sign-in history, usage",
+      "Kept while the contract runs, deleted 90 days after it ends",
+      "Hosting, email delivery",
+      60,
+    ],
+    [
+      "Sales prospects",
+      "Following up with firms that asked about the product",
+      "legitimate_interests",
+      "Prospects",
+      "Names, work email, firm, notes",
+      "Deleted after two years without contact",
+      "Email delivery, calendar",
+      420,
+    ],
+    [
+      "Support tickets",
+      "Answering customers' questions",
+      "contract",
+      "Customers' staff",
+      "Names, work email, messages",
+      "Two years after the ticket closes",
+      "Hosting",
+      null,
+    ],
+  ];
+  processingSeed.forEach(
+    ([name, purpose, basis, subjects, categories, retention, recipients, reviewedAgo], index) => {
+      const id = `bb${String(index + 1).padStart(6, "0")}-0000-4000-8000-000000000000`;
+      processing.push({
+        id,
+        name,
+        purpose,
+        lawful_basis: basis,
+        data_subjects: subjects,
+        data_categories: categories,
+        recipients,
+        transfers: "",
+        retention,
+        security_measures: "Encrypted at rest and in transit; access by role, reviewed quarterly.",
+        owner_staff_id: OWNER,
+        reviewed_at: reviewedAgo === null ? null : at(24 * reviewedAgo),
+        archived_at: null,
+        updated_at: at(24 * 30),
+      });
+    },
+  );
+}
+
+function trustOverview(viewer: string) {
+  const day = todayIso();
+  const due: Array<{
+    register: string;
+    record_id: string;
+    title: string;
+    reason: string;
+    due_on: string | null;
+    weight: number;
+  }> = [];
+  const owe = (
+    register: string,
+    id: string,
+    title: string,
+    reason: string,
+    on: string | null,
+    weight: number,
+  ) =>
+    due.push({
+      register,
+      record_id: id,
+      title,
+      reason,
+      due_on: on ? on.slice(0, 10) : null,
+      weight,
+    });
+  const riskViews = risks.map((row) => riskView(row, day));
+  for (const view of riskViews) {
+    if (view.review_overdue)
+      owe(
+        "risk",
+        view.risk_id,
+        view.title,
+        `${view.band[0]!.toUpperCase()}${view.band.slice(1)} risk; review was due`,
+        view.review_due,
+        2,
+      );
+    else if (
+      view.status === "open" &&
+      (view.band === "critical" || view.band === "high") &&
+      !view.treatment_plan
+    )
+      owe(
+        "risk",
+        view.risk_id,
+        view.title,
+        `${view.band[0]!.toUpperCase()}${view.band.slice(1)} risk with no treatment plan`,
+        null,
+        2,
+      );
+  }
+  const findingViews = trustFindings.map((row) => findingView(row, day));
+  for (const view of findingViews)
+    if (view.overdue)
+      owe(
+        "finding",
+        view.finding_id,
+        view.title,
+        `${view.severity[0]!.toUpperCase()}${view.severity.slice(1)} finding past its deadline`,
+        view.due_on,
+        1,
+      );
+  const changeViews = changes.map((row) => changeView(row, viewer));
+  for (const view of changeViews) {
+    if (view.approval === "awaiting")
+      owe(
+        "change",
+        view.change_id,
+        view.title,
+        "High-risk change waiting for approval",
+        view.happened_at,
+        1,
+      );
+    else if (view.approval === "retrospective")
+      owe(
+        "change",
+        view.change_id,
+        view.title,
+        "High-risk change went ahead without approval",
+        view.happened_at,
+        1,
+      );
+  }
+  const supplierViews = subprocessors
+    .filter((row) => row.status !== "retired")
+    .map((row) => supplierView(row, day));
+  for (const view of supplierViews)
+    if (view.state === "due")
+      owe("supplier", view.subprocessor_id, view.legal_name, view.reason, view.next_due, 3);
+  const plan = continuityPlan(day);
+  for (const item of plan)
+    if (item.state === "due")
+      owe(
+        "continuity",
+        item.kind,
+        item.label,
+        item.last_performed_on === null ? "Never done" : "Next test was due",
+        item.next_due,
+        3,
+      );
+  const answerViews = answers.map((row) => answerView(row, day));
+  for (const view of answerViews)
+    if (view.state === "expired")
+      owe(
+        "answer",
+        view.answer_id,
+        view.question,
+        "Approved answer needs re-approving",
+        view.review_due,
+        4,
+      );
+  const activityViews = processing.map((row) => processingView(row, day));
+  for (const view of activityViews)
+    if (view.review_owed)
+      owe("processing", view.activity_id, view.name, "Not reviewed this year", view.review_due, 4);
+  due.sort((a, b) => a.weight - b.weight || (a.due_on ?? "0000").localeCompare(b.due_on ?? "0000"));
+  const live = riskViews.filter((view) => view.status !== "closed");
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const lastTest =
+    plan
+      .map((item) => item.last_performed_on)
+      .filter(Boolean)
+      .sort()
+      .at(-1) ?? null;
+  return {
+    due: due.map(({ weight, ...item }) => (void weight, item)),
+    registers: {
+      risks: {
+        live: live.length,
+        critical: live.filter((view) => view.band === "critical").length,
+        high: live.filter((view) => view.band === "high").length,
+      },
+      findings: {
+        open: findingViews.filter((view) => view.status === "open" || view.status === "in_progress")
+          .length,
+        overdue: findingViews.filter((view) => view.overdue).length,
+      },
+      changes: {
+        last_30_days: changes.filter((row) => row.happened_at >= since).length,
+        waiting: changeViews.filter(
+          (view) => view.approval === "awaiting" || view.approval === "retrospective",
+        ).length,
+      },
+      suppliers: {
+        total: supplierViews.length,
+        due: supplierViews.filter((view) => view.state === "due").length,
+      },
+      continuity: {
+        last_performed_on: lastTest,
+        due: plan.filter((item) => item.state === "due").length,
+      },
+      answers: {
+        approved: answerViews.filter((view) => view.state === "approved").length,
+        draft: answerViews.filter((view) => view.state === "draft").length,
+        expired: answerViews.filter((view) => view.state === "expired").length,
+      },
+      processing: {
+        current: activityViews.filter((view) => !view.archived).length,
+        owed: activityViews.filter((view) => view.review_owed).length,
+      },
+    },
+  };
+}
+
+const trFind = <T extends { id: string }>(rows: T[], id: string | undefined) =>
+  rows.find((row) => row.id === id);
+const trChanged = (before: Record<string, unknown>, fields: Record<string, unknown>) =>
+  Object.keys(fields)
+    .filter((key) => key !== "updated_at" && before[key] !== fields[key])
+    .sort();
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/trust",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ headers }) => ok(trustOverview(caller(headers)?.member.id ?? "")),
+  },
+  // -- risks ----------------------------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/trust/risks",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ query }) => {
+      const show = ["live", "closed", "all"].includes(query.show ?? "") ? query.show! : "live";
+      const views = risks.map((row) => riskView(row));
+      const live = views.filter((view) => view.status !== "closed");
+      const heat = Array.from({ length: 5 }, () => [0, 0, 0, 0, 0]);
+      for (const view of live) heat[view.likelihood - 1]![view.impact - 1]! += 1;
+      const listed =
+        show === "live"
+          ? live
+          : show === "closed"
+            ? views.filter((view) => view.status === "closed")
+            : views;
+      listed.sort(
+        (a, b) =>
+          b.score - a.score ||
+          (a.review_due ?? "9999").localeCompare(b.review_due ?? "9999") ||
+          a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
+      );
+      return ok({
+        risks: listed,
+        show,
+        heat,
+        counts: Object.fromEntries(
+          Object.keys(TR_REVIEW_DAYS).map((band) => [
+            band,
+            live.filter((view) => view.band === band).length,
+          ]),
+        ),
+        overdue: live.filter((view) => view.review_overdue).length,
+        ...riskOptions(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/risks/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const likelihood = Number(body.likelihood);
+      const impact = Number(body.impact);
+      for (const [name, value] of [
+        ["likelihood", likelihood],
+        ["impact", impact],
+      ] as const)
+        if (!Number.isInteger(value) || value < 1 || value > 5)
+          return refuse(400, "malformed_request", { [name]: "a whole number from 1 to 5" });
+      const title = trText(body, "title", 200);
+      if (!title)
+        return refuse(400, "malformed_request", { title: "what could go wrong, in a line" });
+      const category = String(body.category ?? "");
+      if (!(category in TR_CATEGORIES))
+        return refuse(400, "malformed_request", {
+          category: Object.keys(TR_CATEGORIES).join(", "),
+        });
+      const treatment = String(body.treatment || "mitigate");
+      if (!(treatment in TR_TREATMENTS))
+        return refuse(400, "malformed_request", {
+          treatment: Object.keys(TR_TREATMENTS).join(", "),
+        });
+      if (treatment === "accept")
+        return refuse(400, "malformed_request", {
+          treatment: "record it first; accepting it is a decision with a reason",
+        });
+      const owner = trOwner(body);
+      if (owner === false)
+        return refuse(400, "malformed_request", { owner_staff_id: "choose someone on the team" });
+      const band = trBand(likelihood * impact);
+      const reviewDue = String(body.review_due ?? "");
+      const row: RiskRow = {
+        id: randomUUID(),
+        title,
+        description: trText(body, "description"),
+        category,
+        likelihood,
+        impact,
+        owner_staff_id: owner,
+        treatment,
+        treatment_plan: trText(body, "treatment_plan"),
+        status: "open",
+        review_due: trIsDay(reviewDue) ? reviewDue : addDaysIso(todayIso(), TR_REVIEW_DAYS[band]!),
+        last_reviewed_at: null,
+        decided_by: null,
+        decision_reason: "",
+        created_at: now(),
+        updated_at: now(),
+      };
+      risks.push(row);
+      trRecord(
+        headers,
+        "risk",
+        row.id,
+        "created",
+        `Likelihood ${likelihood}, impact ${impact}: ${band}.`,
+        "trust.risk.created",
+        { title, score: likelihood * impact },
+      );
+      return ok({ risk: riskView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/trust/risks/{risk_id}",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ params, headers }) => {
+      const row = trFind(risks, params.risk_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        risk: riskView(row),
+        events: trEvents("risk", row.id),
+        can_accept_critical: trRole(headers) === "owner",
+        ...riskOptions(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/risks/{risk_id}/act",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const row = trFind(risks, params.risk_id);
+      if (!row) return refuse(404, "not_found");
+      const actions = ["update", "review", "treat", "accept", "close", "reopen", "note"];
+      const action = String(body.action ?? "");
+      if (!actions.includes(action))
+        return refuse(400, "malformed_request", { action: actions.join(", ") });
+      const band = trBand(row.likelihood * row.impact);
+      const today = todayIso();
+      const fields: Partial<RiskRow> = {};
+      let detail = "";
+      let reason = "";
+      if (row.status === "closed" && action !== "reopen" && action !== "note")
+        return refuse(400, "malformed_request", { status: "closed; reopen it first" });
+      if (action === "update" || action === "review") {
+        if ("title" in body) {
+          const title = trText(body, "title", 200);
+          if (!title) return refuse(400, "malformed_request", { title: "cannot be empty" });
+          fields.title = title;
+        }
+        if ("description" in body) fields.description = trText(body, "description");
+        if ("treatment_plan" in body) fields.treatment_plan = trText(body, "treatment_plan");
+        if ("category" in body) {
+          const category = String(body.category ?? "");
+          if (!(category in TR_CATEGORIES))
+            return refuse(400, "malformed_request", {
+              category: Object.keys(TR_CATEGORIES).join(", "),
+            });
+          fields.category = category;
+        }
+        if ("owner_staff_id" in body) {
+          const owner = trOwner(body);
+          if (owner === false)
+            return refuse(400, "malformed_request", {
+              owner_staff_id: "choose someone on the team",
+            });
+          fields.owner_staff_id = owner;
+        }
+        if ("treatment" in body) {
+          const treatment = String(body.treatment ?? "");
+          if (!(treatment in TR_TREATMENTS))
+            return refuse(400, "malformed_request", {
+              treatment: Object.keys(TR_TREATMENTS).join(", "),
+            });
+          if (treatment === "accept" && row.status !== "accepted")
+            return refuse(400, "malformed_request", {
+              treatment: "accepting it is its own decision, with a reason",
+            });
+          fields.treatment = treatment;
+        }
+        for (const name of ["likelihood", "impact"] as const)
+          if (name in body) {
+            const value = Number(body[name]);
+            if (!Number.isInteger(value) || value < 1 || value > 5)
+              return refuse(400, "malformed_request", { [name]: "a whole number from 1 to 5" });
+            fields[name] = value;
+          }
+        const newBand = trBand(
+          (fields.likelihood ?? row.likelihood) * (fields.impact ?? row.impact),
+        );
+        if (
+          newBand === "critical" &&
+          row.status === "accepted" &&
+          band !== "critical" &&
+          trRole(headers) !== "owner"
+        )
+          return refuse(403, "forbidden", {
+            likelihood: "this makes an accepted risk critical, which is the owner's decision",
+          });
+        if (action === "review") {
+          reason = trText(body, "note");
+          if (!reason)
+            return refuse(400, "malformed_request", {
+              note: "what you looked at, and what you found",
+            });
+          fields.last_reviewed_at = now();
+          fields.review_due = addDaysIso(today, TR_REVIEW_DAYS[newBand]!);
+          detail = `${newBand[0]!.toUpperCase()}${newBand.slice(1)} now. ${reason}`;
+        } else {
+          const reviewDue = String(body.review_due ?? "");
+          if ("review_due" in body) {
+            if (!trIsDay(reviewDue))
+              return refuse(400, "malformed_request", { review_due: "a date, YYYY-MM-DD" });
+            fields.review_due = reviewDue;
+          } else if (newBand !== band) {
+            const earlier = addDaysIso(today, TR_REVIEW_DAYS[newBand]!);
+            if (!row.review_due || earlier < row.review_due) fields.review_due = earlier;
+          }
+          const changed = trChanged(row, fields);
+          if (!changed.length)
+            return refuse(400, "malformed_request", { fields: "nothing to change" });
+          detail = `Changed ${changed.join(", ")}${newBand !== band ? `. Now ${newBand}.` : "."}`;
+        }
+      } else if (action === "treat") {
+        const plan = trText(body, "treatment_plan") || row.treatment_plan;
+        if (!plan)
+          return refuse(400, "malformed_request", {
+            treatment_plan: "what is being done about it",
+          });
+        if (row.status === "treating")
+          return refuse(400, "malformed_request", { status: "already being treated" });
+        Object.assign(fields, {
+          status: "treating",
+          treatment_plan: plan,
+          treatment: row.treatment === "accept" ? "mitigate" : row.treatment,
+        });
+        detail = `Under way: ${plan}`;
+      } else if (action === "accept") {
+        if (row.status === "accepted")
+          return refuse(400, "malformed_request", { status: "already accepted" });
+        if (band === "critical" && trRole(headers) !== "owner")
+          return refuse(403, "forbidden", {
+            action: "accepting a critical risk is the owner's decision",
+          });
+        reason = trText(body, "reason", 400);
+        if (!reason)
+          return refuse(400, "malformed_request", {
+            reason: "why living with it is the right call",
+          });
+        Object.assign(fields, {
+          status: "accepted",
+          treatment: "accept",
+          decided_by: caller(headers)?.member.id ?? null,
+          decision_reason: reason,
+          review_due: addDaysIso(today, TR_REVIEW_DAYS[band]!),
+        });
+        detail = reason;
+      } else if (action === "close") {
+        reason = trText(body, "reason", 400);
+        if (!reason)
+          return refuse(400, "malformed_request", { reason: "why it no longer applies" });
+        Object.assign(fields, {
+          status: "closed",
+          decided_by: caller(headers)?.member.id ?? null,
+          decision_reason: reason,
+        });
+        detail = reason;
+      } else if (action === "reopen") {
+        if (row.status !== "accepted" && row.status !== "closed")
+          return refuse(400, "malformed_request", {
+            status: "only an accepted or closed risk reopens",
+          });
+        reason = trText(body, "reason", 400);
+        if (!reason) return refuse(400, "malformed_request", { reason: "what changed" });
+        Object.assign(fields, {
+          status: "open",
+          decided_by: null,
+          decision_reason: "",
+          treatment: row.treatment === "accept" ? "mitigate" : row.treatment,
+          review_due: addDaysIso(today, TR_REVIEW_DAYS[band]!),
+        });
+        detail = reason;
+      } else {
+        detail = trText(body, "note");
+        if (!detail) return refuse(400, "malformed_request", { note: "the note" });
+      }
+      const changed = trChanged(row, fields);
+      if (Object.keys(fields).length) Object.assign(row, fields, { updated_at: now() });
+      trRecord(
+        headers,
+        "risk",
+        row.id,
+        action,
+        detail,
+        `trust.risk.${action}`,
+        { changes: changed },
+        reason,
+      );
+      return ok({ risk: riskView(row) });
+    },
+  },
+  // -- findings -------------------------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/trust/findings",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ query }) => {
+      const show = ["open", "closed", "all"].includes(query.show ?? "") ? query.show! : "open";
+      const views = trustFindings.map((row) => findingView(row));
+      const live = views.filter((view) => view.status === "open" || view.status === "in_progress");
+      const closed = views.filter((view) => !live.includes(view));
+      const listed = show === "open" ? live : show === "closed" ? closed : views;
+      listed.sort(
+        (a, b) =>
+          Number(!a.overdue) - Number(!b.overdue) ||
+          (a.due_on ?? "9999").localeCompare(b.due_on ?? "9999") ||
+          TR_SEVERITIES.indexOf(a.severity) - TR_SEVERITIES.indexOf(b.severity),
+      );
+      return ok({
+        findings: listed,
+        show,
+        open: live.length,
+        overdue: live.filter((view) => view.overdue).length,
+        by_severity: Object.fromEntries(
+          TR_SEVERITIES.map((severity) => [
+            severity,
+            live.filter((view) => view.severity === severity).length,
+          ]),
+        ),
+        ...findingOptions(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/findings/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const severity = String(body.severity ?? "");
+      if (!TR_SEVERITIES.includes(severity))
+        return refuse(400, "malformed_request", { severity: TR_SEVERITIES.join(", ") });
+      const foundOn = String(body.found_on || todayIso());
+      if (!trIsDay(foundOn))
+        return refuse(400, "malformed_request", { found_on: "a date, YYYY-MM-DD" });
+      if (foundOn > addDaysIso(todayIso(), 1))
+        return refuse(400, "malformed_request", { found_on: "cannot be in the future" });
+      const title = trText(body, "title", 200);
+      if (!title) return refuse(400, "malformed_request", { title: "what is wrong, in a line" });
+      const source = String(body.source ?? "");
+      if (!(source in TR_SOURCES))
+        return refuse(400, "malformed_request", { source: Object.keys(TR_SOURCES).join(", ") });
+      const owner = trOwner(body);
+      if (owner === false)
+        return refuse(400, "malformed_request", { owner_staff_id: "choose someone on the team" });
+      const row: FindingRow = {
+        id: randomUUID(),
+        title,
+        description: trText(body, "description"),
+        source,
+        severity,
+        owner_staff_id: owner,
+        found_on: foundOn,
+        due_on: addDaysIso(foundOn, TR_FINDING_DAYS[severity]!),
+        status: "open",
+        fixed_on: null,
+        evidence: "",
+        decided_by: null,
+        decision_reason: "",
+        continuity_test_id: null,
+        created_at: now(),
+      };
+      trustFindings.push(row);
+      trRecord(
+        headers,
+        "finding",
+        row.id,
+        "created",
+        `${severity[0]!.toUpperCase()}${severity.slice(1)}; fix by ${pvDay(row.due_on)}.`,
+        "trust.finding.created",
+        { title, severity },
+      );
+      return ok({ finding: findingView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/trust/findings/{finding_id}",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ params, headers }) => {
+      const row = trFind(trustFindings, params.finding_id);
+      if (!row) return refuse(404, "not_found");
+      const test = row.continuity_test_id
+        ? trFind(continuityTests, row.continuity_test_id)
+        : undefined;
+      return ok({
+        finding: findingView(row),
+        continuity_test: test ? continuityView(test) : null,
+        events: trEvents("finding", row.id),
+        can_accept_critical: trRole(headers) === "owner",
+        ...findingOptions(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/findings/{finding_id}/act",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const row = trFind(trustFindings, params.finding_id);
+      if (!row) return refuse(404, "not_found");
+      const actions = ["update", "start", "fix", "accept", "reopen", "note"];
+      const action = String(body.action ?? "");
+      if (!actions.includes(action))
+        return refuse(400, "malformed_request", { action: actions.join(", ") });
+      const live = row.status === "open" || row.status === "in_progress";
+      if (["update", "start", "fix", "accept"].includes(action) && !live)
+        return refuse(400, "malformed_request", { status: `${row.status}; reopen it first` });
+      const fields: Partial<FindingRow> = {};
+      let detail = "";
+      let reason = "";
+      if (action === "update") {
+        if ("title" in body) {
+          const title = trText(body, "title", 200);
+          if (!title) return refuse(400, "malformed_request", { title: "cannot be empty" });
+          fields.title = title;
+        }
+        if ("description" in body) fields.description = trText(body, "description");
+        if ("owner_staff_id" in body) {
+          const owner = trOwner(body);
+          if (owner === false)
+            return refuse(400, "malformed_request", {
+              owner_staff_id: "choose someone on the team",
+            });
+          fields.owner_staff_id = owner;
+        }
+        if ("severity" in body) {
+          const severity = String(body.severity ?? "");
+          if (!TR_SEVERITIES.includes(severity))
+            return refuse(400, "malformed_request", { severity: TR_SEVERITIES.join(", ") });
+          if (severity !== row.severity) {
+            fields.severity = severity;
+            fields.due_on = addDaysIso(row.found_on, TR_FINDING_DAYS[severity]!);
+          }
+        }
+        const changed = trChanged(row, fields);
+        if (!changed.length)
+          return refuse(400, "malformed_request", { fields: "nothing to change" });
+        detail = `Changed ${changed.join(", ")}${fields.due_on ? `. Fix by ${pvDay(fields.due_on)}.` : "."}`;
+      } else if (action === "start") {
+        if (row.status === "in_progress")
+          return refuse(400, "malformed_request", { status: "already in progress" });
+        fields.status = "in_progress";
+        detail = "Work on the fix began.";
+      } else if (action === "fix") {
+        const evidence = trText(body, "evidence", 1000);
+        if (!evidence)
+          return refuse(400, "malformed_request", {
+            evidence: "how you know it is fixed: the change, the retest, the document",
+          });
+        const fixedOn = String(body.fixed_on || todayIso());
+        if (!trIsDay(fixedOn))
+          return refuse(400, "malformed_request", { fixed_on: "a date, YYYY-MM-DD" });
+        if (fixedOn > addDaysIso(todayIso(), 1))
+          return refuse(400, "malformed_request", { fixed_on: "cannot be in the future" });
+        Object.assign(fields, { status: "fixed", fixed_on: fixedOn, evidence });
+        detail = `On ${pvDay(fixedOn)}${fixedOn > row.due_on ? " (after its deadline)" : ""}: ${evidence}`;
+      } else if (action === "accept") {
+        if (row.severity === "critical" && trRole(headers) !== "owner")
+          return refuse(403, "forbidden", {
+            action: "accepting a critical finding is the owner's decision",
+          });
+        reason = trText(body, "reason", 400);
+        if (!reason)
+          return refuse(400, "malformed_request", { reason: "why it is not being fixed" });
+        Object.assign(fields, {
+          status: "accepted",
+          decided_by: caller(headers)?.member.id ?? null,
+          decision_reason: reason,
+        });
+        detail = `Without a fix: ${reason}`;
+      } else if (action === "reopen") {
+        if (live) return refuse(400, "malformed_request", { status: "already open" });
+        reason = trText(body, "reason", 400);
+        if (!reason)
+          return refuse(400, "malformed_request", { reason: "what showed it is not settled" });
+        Object.assign(fields, {
+          status: "open",
+          fixed_on: null,
+          decided_by: null,
+          decision_reason: "",
+        });
+        detail = reason;
+      } else {
+        detail = trText(body, "note");
+        if (!detail) return refuse(400, "malformed_request", { note: "the note" });
+      }
+      const changed = trChanged(row, fields);
+      Object.assign(row, fields);
+      trRecord(
+        headers,
+        "finding",
+        row.id,
+        action,
+        detail,
+        `trust.finding.${action}`,
+        { changes: changed },
+        reason,
+      );
+      return ok({ finding: findingView(row) });
+    },
+  },
+  // -- production changes ---------------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/trust/changes",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ query, headers }) => {
+      const viewer = caller(headers)?.member.id ?? "";
+      const kind = query.kind && query.kind in TR_CHANGE_KINDS ? query.kind : "";
+      const views = changes.map((row) => changeView(row, viewer));
+      const waiting = views.filter(
+        (view) => view.approval === "awaiting" || view.approval === "retrospective",
+      );
+      let listed = views.filter((view) => !kind || view.kind === kind);
+      if (query.waiting === "1")
+        listed = listed.filter(
+          (view) => view.approval === "awaiting" || view.approval === "retrospective",
+        );
+      listed.sort((a, b) => b.happened_at.localeCompare(a.happened_at));
+      const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+      const recent = changes.filter((row) => row.happened_at >= since);
+      return ok({
+        changes: listed.slice(0, 200),
+        total: listed.length,
+        waiting: waiting.length,
+        last_30_days: {
+          count: recent.length,
+          failed: recent.filter((row) => row.outcome === "failed" || row.outcome === "rolled_back")
+            .length,
+        },
+        kind,
+        ...changeOptions(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/changes/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const risk = String(body.risk ?? "");
+      if (!TR_CHANGE_RISKS.includes(risk))
+        return refuse(400, "malformed_request", { risk: TR_CHANGE_RISKS.join(", ") });
+      const outcome = String(body.outcome || "done");
+      if (!(outcome in TR_CHANGE_OUTCOMES))
+        return refuse(400, "malformed_request", {
+          outcome: Object.keys(TR_CHANGE_OUTCOMES).join(", "),
+        });
+      const raw = String(body.happened_at ?? "").trim();
+      const happened = raw
+        ? new Date(/[zZ]|[+-]\d{2}:\d{2}$/.test(raw) ? raw : `${raw}Z`)
+        : new Date();
+      if (Number.isNaN(happened.getTime()))
+        return refuse(400, "malformed_request", { happened_at: "a date and time" });
+      const nowMs = Date.now();
+      if (outcome === "planned" && happened.getTime() < nowMs - 3_600_000)
+        return refuse(400, "malformed_request", {
+          happened_at: "a planned change is for later; record what happened instead",
+        });
+      if (outcome !== "planned" && happened.getTime() > nowMs + 300_000)
+        return refuse(400, "malformed_request", {
+          happened_at: "in the future; record it as planned",
+        });
+      if (happened.getTime() > nowMs + 90 * 86_400_000)
+        return refuse(400, "malformed_request", { happened_at: "more than 90 days ahead" });
+      const rollback = trText(body, "rollback_plan", 1000);
+      if (risk !== "low" && !rollback)
+        return refuse(400, "malformed_request", {
+          rollback_plan: "how it is undone if it goes wrong",
+        });
+      const title = trText(body, "title", 200);
+      if (!title) return refuse(400, "malformed_request", { title: "what changed, in a line" });
+      const kind = String(body.kind ?? "");
+      if (!(kind in TR_CHANGE_KINDS))
+        return refuse(400, "malformed_request", { kind: Object.keys(TR_CHANGE_KINDS).join(", ") });
+      const system = trText(body, "system", 120);
+      if (!system)
+        return refuse(400, "malformed_request", {
+          system: "where: the service, database or account",
+        });
+      const who = caller(headers)?.member.id ?? "";
+      const row: ChangeRow = {
+        id: randomUUID(),
+        title,
+        description: trText(body, "description"),
+        kind,
+        system,
+        risk,
+        rollback_plan: rollback,
+        approved_by: null,
+        approved_at: null,
+        happened_at: happened.toISOString().replace(/\.\d{3}Z$/, "Z"),
+        outcome,
+        incident_id: trText(body, "incident_reference", 64),
+        recorded_by: who,
+        created_at: now(),
+      };
+      changes.push(row);
+      const approval = changeApproval(row);
+      trRecord(
+        headers,
+        "change",
+        row.id,
+        "created",
+        approval === "awaiting"
+          ? "Planned; waiting for a second person's approval."
+          : approval === "retrospective"
+            ? "Went ahead without approval; someone else still has to approve it."
+            : `${risk[0]!.toUpperCase()}${risk.slice(1)} risk; no approval needed.`,
+        "trust.change.created",
+        { title, risk, outcome },
+      );
+      return ok({ change: changeView(row, who) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/trust/changes/{change_id}",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ params, headers }) => {
+      const row = trFind(changes, params.change_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        change: changeView(row, caller(headers)?.member.id ?? ""),
+        events: trEvents("change", row.id),
+        ...changeOptions(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/changes/{change_id}/act",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const row = trFind(changes, params.change_id);
+      if (!row) return refuse(404, "not_found");
+      const actions = ["approve", "outcome", "note"];
+      const action = String(body.action ?? "");
+      if (!actions.includes(action))
+        return refuse(400, "malformed_request", { action: actions.join(", ") });
+      const who = caller(headers)?.member.id ?? "";
+      const fields: Partial<ChangeRow> = {};
+      let detail = "";
+      if (action === "approve") {
+        if (row.approved_by)
+          return refuse(400, "malformed_request", { action: "already approved" });
+        if (row.recorded_by === who)
+          return refuse(403, "forbidden", {
+            action: "the person who recorded a change cannot approve it",
+          });
+        const note = trText(body, "note");
+        Object.assign(fields, { approved_by: who, approved_at: now() });
+        detail = `${row.outcome !== "planned" ? "After it went ahead" : "Before it went ahead"}${note ? `: ${note}` : "."}`;
+      } else if (action === "outcome") {
+        const outcome = String(body.outcome ?? "");
+        const allowed = Object.keys(TR_CHANGE_OUTCOMES).filter((key) => key !== "planned");
+        if (!allowed.includes(outcome))
+          return refuse(400, "malformed_request", { outcome: allowed.join(", ") });
+        if (row.outcome !== "planned" && outcome === row.outcome)
+          return refuse(400, "malformed_request", { outcome: "already recorded" });
+        if (changeApproval(row) === "awaiting" && outcome === "done")
+          return refuse(400, "malformed_request", {
+            outcome: "a high-risk change needs a second person's approval before it goes ahead",
+          });
+        fields.outcome = outcome;
+        if ("incident_reference" in body)
+          fields.incident_id = trText(body, "incident_reference", 64);
+        const note = trText(body, "note");
+        detail = `${TR_CHANGE_OUTCOMES[outcome]}.${note ? ` ${note}` : ""}`;
+      } else {
+        detail = trText(body, "note");
+        if (!detail) return refuse(400, "malformed_request", { note: "the note" });
+      }
+      const changed = trChanged(row, fields);
+      Object.assign(row, fields);
+      trRecord(headers, "change", row.id, action, detail, `trust.change.${action}`, {
+        changes: changed,
+      });
+      return ok({ change: changeView(row, who) });
+    },
+  },
+  // -- continuity -----------------------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/trust/continuity",
+    auth: true,
+    capability: "audit:read",
+    handler: () =>
+      ok({
+        tests: [...continuityTests]
+          .sort((a, b) => b.performed_on.localeCompare(a.performed_on))
+          .map((row) => ({
+            ...continuityView(row),
+            findings: trustFindings
+              .filter((item) => item.continuity_test_id === row.id)
+              .map((item) => ({ finding_id: item.id, title: item.title, status: item.status })),
+          })),
+        plan: continuityPlan(),
+        kinds: trOptions(TR_CONTINUITY),
+        outcomes: trOptions(TR_CONTINUITY_OUTCOMES),
+        severities: TR_SEVERITIES,
+        staff: trActiveStaff(),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/continuity/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const kind = String(body.kind ?? "");
+      if (!(kind in TR_CONTINUITY))
+        return refuse(400, "malformed_request", { kind: Object.keys(TR_CONTINUITY).join(", ") });
+      const performedOn = String(body.performed_on || todayIso());
+      if (!trIsDay(performedOn))
+        return refuse(400, "malformed_request", { performed_on: "a date, YYYY-MM-DD" });
+      if (performedOn > addDaysIso(todayIso(), 1))
+        return refuse(400, "malformed_request", { performed_on: "cannot be in the future" });
+      const outcome = String(body.outcome ?? "");
+      if (!(outcome in TR_CONTINUITY_OUTCOMES))
+        return refuse(400, "malformed_request", {
+          outcome: Object.keys(TR_CONTINUITY_OUTCOMES).join(", "),
+        });
+      const minutes = (name: string): number | null | false => {
+        const raw = String(body[name] ?? "").trim();
+        if (!raw) return null;
+        const value = Number(raw);
+        return Number.isInteger(value) && value >= 0 && value <= 100000 ? value : false;
+      };
+      const target = minutes("target_minutes");
+      const actual = minutes("actual_minutes");
+      if (target === false)
+        return refuse(400, "malformed_request", {
+          target_minutes: "a whole number from 0 to 100000",
+        });
+      if (actual === false)
+        return refuse(400, "malformed_request", {
+          actual_minutes: "a whole number from 0 to 100000",
+        });
+      if (outcome === "passed" && target !== null && actual !== null && actual > target)
+        return refuse(400, "malformed_request", {
+          outcome: "it missed its recovery target, so it did not pass; record it as partly worked",
+        });
+      const scenario = trText(body, "scenario", 400);
+      if (!scenario)
+        return refuse(400, "malformed_request", {
+          scenario: "what was tried: what was lost, what was restored",
+        });
+      const nextDue = String(body.next_due ?? "");
+      const who = caller(headers)?.member.id ?? "";
+      const row: ContinuityRow = {
+        id: randomUUID(),
+        kind,
+        scenario,
+        performed_on: performedOn,
+        participants: trText(body, "participants", 400),
+        outcome,
+        target_minutes: target,
+        actual_minutes: actual,
+        notes: trText(body, "notes"),
+        next_due: trIsDay(nextDue) ? nextDue : addDaysIso(performedOn, TR_CONTINUITY[kind]![1]),
+        recorded_by: who,
+      };
+      let finding: FindingRow | null = null;
+      if (outcome !== "passed") {
+        const raised = trRaiseFinding(
+          headers,
+          body,
+          "continuity",
+          performedOn,
+          `${TR_CONTINUITY[kind]![0]} on ${pvDay(performedOn)}: ${scenario}`,
+          row.id,
+        );
+        if (trIsRefusal(raised)) return raised;
+        finding = raised;
+        trustFindings.push(finding);
+      }
+      continuityTests.push(row);
+      trRecord(
+        headers,
+        "continuity_test",
+        row.id,
+        "created",
+        `${TR_CONTINUITY[kind]![0]}: ${TR_CONTINUITY_OUTCOMES[outcome]!.toLowerCase()}.`,
+        "trust.continuity.recorded",
+        { kind, outcome, finding_id: finding?.id ?? null },
+      );
+      if (finding)
+        trRecord(
+          headers,
+          "finding",
+          finding.id,
+          "created",
+          `Raised by a continuity test; fix by ${pvDay(finding.due_on)}.`,
+          "trust.finding.created",
+          { title: finding.title, severity: finding.severity, continuity_test_id: row.id },
+        );
+      return ok({ test: continuityView(row), finding_id: finding?.id ?? null });
+    },
+  },
+  // -- suppliers ------------------------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/trust/suppliers",
+    auth: true,
+    capability: "audit:read",
+    handler: () => {
+      const order = Object.keys(TR_TIERS);
+      const views = subprocessors
+        .filter((row) => row.status !== "retired")
+        .map((row) => supplierView(row))
+        .sort(
+          (a, b) =>
+            Number(a.state !== "due") - Number(b.state !== "due") ||
+            order.indexOf(a.tier) - order.indexOf(b.tier) ||
+            a.legal_name.toLowerCase().localeCompare(b.legal_name.toLowerCase()),
+        );
+      return ok({
+        suppliers: views,
+        due: views.filter((view) => view.state === "due").length,
+        tiers: trOptions(TR_TIERS),
+        outcomes: trOptions(TR_REVIEW_OUTCOMES),
+        severities: TR_SEVERITIES,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/trust/suppliers/{subprocessor_id}",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ params }) => {
+      const row = trFind(subprocessors, params.subprocessor_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        supplier: supplierView(row),
+        purpose: row.purpose,
+        data_categories: row.data_categories,
+        locations: row.locations,
+        dpa_signed_on: row.dpa_signed_on,
+        reviews: supplierReviews
+          .filter((item) => item.subprocessor_id === row.id)
+          .sort((a, b) => b.reviewed_on.localeCompare(a.reviewed_on))
+          .map((item) => ({
+            review_id: item.id,
+            reviewed_on: item.reviewed_on,
+            reviewer_name: nameOf(item.reviewer_staff_id),
+            outcome: item.outcome,
+            outcome_label: TR_REVIEW_OUTCOMES[item.outcome] ?? item.outcome,
+            evidence: item.evidence,
+            notes: item.notes,
+          })),
+        events: trEvents("supplier", row.id),
+        tiers: trOptions(TR_TIERS),
+        outcomes: trOptions(TR_REVIEW_OUTCOMES),
+        severities: TR_SEVERITIES,
+        staff: trActiveStaff(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/suppliers/{subprocessor_id}/review",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const supplier = trFind(subprocessors, params.subprocessor_id);
+      if (!supplier) return refuse(404, "not_found");
+      if (supplier.status === "retired")
+        return refuse(400, "malformed_request", { status: "retired; nothing to review" });
+      const reviewedOn = String(body.reviewed_on || todayIso());
+      if (!trIsDay(reviewedOn))
+        return refuse(400, "malformed_request", { reviewed_on: "a date, YYYY-MM-DD" });
+      if (reviewedOn > addDaysIso(todayIso(), 1))
+        return refuse(400, "malformed_request", { reviewed_on: "cannot be in the future" });
+      const outcome = String(body.outcome ?? "");
+      if (!(outcome in TR_REVIEW_OUTCOMES))
+        return refuse(400, "malformed_request", {
+          outcome: Object.keys(TR_REVIEW_OUTCOMES).join(", "),
+        });
+      const evidence = trText(body, "evidence", 1000);
+      if (!evidence)
+        return refuse(400, "malformed_request", {
+          evidence: "what you looked at: their assurance report, certificate, test letter",
+        });
+      const notes = trText(body, "notes");
+      let finding: FindingRow | null = null;
+      if (outcome !== "satisfactory") {
+        const raised = trRaiseFinding(
+          headers,
+          body,
+          "supplier",
+          reviewedOn,
+          `Review of ${supplier.legal_name} on ${pvDay(reviewedOn)}: ${notes || evidence}`,
+        );
+        if (trIsRefusal(raised)) return raised;
+        finding = raised;
+        trustFindings.push(finding);
+      }
+      const who = caller(headers)?.member.id ?? "";
+      supplierReviews.push({
+        id: randomUUID(),
+        subprocessor_id: supplier.id,
+        reviewed_on: reviewedOn,
+        reviewer_staff_id: who,
+        outcome,
+        evidence,
+        notes,
+      });
+      const months = (TR_TIERS[supplier.tier ?? "standard"] ?? TR_TIERS.standard!)[1];
+      trRecord(
+        headers,
+        "supplier",
+        supplier.id,
+        "reviewed",
+        `${TR_REVIEW_OUTCOMES[outcome]}. Next due ${pvDay(addMonthsIso(reviewedOn, months))}.`,
+        "trust.supplier.reviewed",
+        { outcome, finding_id: finding?.id ?? null },
+      );
+      if (finding)
+        trRecord(
+          headers,
+          "finding",
+          finding.id,
+          "created",
+          `Raised by a supplier review; fix by ${pvDay(finding.due_on)}.`,
+          "trust.finding.created",
+          { title: finding.title, severity: finding.severity, subprocessor_id: supplier.id },
+        );
+      return ok({ supplier: supplierView(supplier), finding_id: finding?.id ?? null });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/suppliers/{subprocessor_id}/tier",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const supplier = trFind(subprocessors, params.subprocessor_id);
+      if (!supplier) return refuse(404, "not_found");
+      const tier = String(body.tier ?? "");
+      if (!(tier in TR_TIERS))
+        return refuse(400, "malformed_request", { tier: Object.keys(TR_TIERS).join(", ") });
+      const before = supplier.tier ?? "standard";
+      if (tier === before) return refuse(400, "malformed_request", { tier: "already that tier" });
+      const reason = trText(body, "reason", 400);
+      if (!reason)
+        return refuse(400, "malformed_request", {
+          reason: "why: what it holds, what depends on it",
+        });
+      supplier.tier = tier;
+      trRecord(
+        headers,
+        "supplier",
+        supplier.id,
+        "tier",
+        `${before[0]!.toUpperCase()}${before.slice(1)} → ${tier}: ${reason}`,
+        "trust.supplier.tier",
+        { from: before, to: tier },
+        reason,
+      );
+      return ok({ supplier: supplierView(supplier) });
+    },
+  },
+  // -- the answer library ---------------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/trust/answers",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query, headers }) => {
+      const q = String(query.q ?? "")
+        .trim()
+        .slice(0, 200);
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      const topic = query.topic && query.topic in TR_TOPICS ? query.topic : "";
+      const state = ["draft", "approved", "expired", "archived"].includes(query.state ?? "")
+        ? query.state!
+        : "";
+      const matches = (row: AnswerRow) => {
+        const haystack = `${row.question} ${row.answer} ${row.evidence}`.toLowerCase();
+        return words.every((word) => haystack.includes(word));
+      };
+      let views = answers
+        .filter((row) => (!words.length || matches(row)) && (!topic || row.topic === topic))
+        .map((row) => answerView(row));
+      views = state
+        ? views.filter((view) => view.state === state)
+        : views.filter((view) => view.state !== "archived");
+      views.sort(
+        (a, b) =>
+          a.topic_label.toLowerCase().localeCompare(b.topic_label.toLowerCase()) ||
+          a.question.toLowerCase().localeCompare(b.question.toLowerCase()),
+      );
+      const all = answers.map((row) => answerView(row));
+      return ok({
+        answers: views,
+        q,
+        topic,
+        state,
+        counts: Object.fromEntries(
+          ["approved", "draft", "expired", "archived"].map((name) => [
+            name,
+            all.filter((view) => view.state === name).length,
+          ]),
+        ),
+        topics: trOptions(TR_TOPICS),
+        can_approve: hasCap(headers, "hq:admin"),
+        can_write: hasCap(headers, "crm:write"),
+        staff: trActiveStaff(),
+        valid_months: 12,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/answers/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const question = trText(body, "question", 400);
+      if (!question)
+        return refuse(400, "malformed_request", {
+          question: "the question as questionnaires ask it",
+        });
+      if (
+        answers.some(
+          (row) => row.question.trim().toLowerCase() === question.toLowerCase() && !row.archived_at,
+        )
+      )
+        return refuse(400, "malformed_request", { question: "already in the library" });
+      const text = trText(body, "answer", 4000);
+      if (!text) return refuse(400, "malformed_request", { answer: "the answer" });
+      const topic = String(body.topic ?? "");
+      if (!(topic in TR_TOPICS))
+        return refuse(400, "malformed_request", { topic: Object.keys(TR_TOPICS).join(", ") });
+      const owner = trOwner(body);
+      if (owner === false)
+        return refuse(400, "malformed_request", { owner_staff_id: "choose someone on the team" });
+      const row: AnswerRow = {
+        id: randomUUID(),
+        question,
+        answer: text,
+        topic,
+        evidence: trText(body, "evidence", 400),
+        owner_staff_id: owner,
+        approved_by: null,
+        approved_at: null,
+        review_due: null,
+        archived_at: null,
+        updated_at: now(),
+      };
+      answers.push(row);
+      trRecord(
+        headers,
+        "answer",
+        row.id,
+        "created",
+        "Drafted; not approved yet.",
+        "trust.answer.created",
+        {
+          question: question.slice(0, 120),
+        },
+      );
+      return ok({ answer: answerView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/trust/answers/{answer_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params, headers }) => {
+      const row = trFind(answers, params.answer_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        answer: answerView(row),
+        events: trEvents("answer", row.id),
+        topics: trOptions(TR_TOPICS),
+        can_approve: hasCap(headers, "hq:admin"),
+        can_write: hasCap(headers, "crm:write"),
+        staff: trActiveStaff(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/answers/{answer_id}/act",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const row = trFind(answers, params.answer_id);
+      if (!row) return refuse(404, "not_found");
+      const actions = ["update", "approve", "archive", "restore", "note"];
+      const action = String(body.action ?? "");
+      if (!actions.includes(action))
+        return refuse(400, "malformed_request", { action: actions.join(", ") });
+      if (["approve", "archive", "restore"].includes(action) && !hasCap(headers, "hq:admin"))
+        return refuse(403, "forbidden", { action: "an admin approves and archives answers" });
+      if (row.archived_at && action !== "restore" && action !== "note")
+        return refuse(400, "malformed_request", { status: "archived; restore it first" });
+      const fields: Partial<AnswerRow> = {};
+      let detail = "";
+      if (action === "update") {
+        for (const [name, limit] of [
+          ["question", 400],
+          ["answer", 4000],
+        ] as const)
+          if (name in body) {
+            const value = trText(body, name, limit);
+            if (!value) return refuse(400, "malformed_request", { [name]: "cannot be empty" });
+            fields[name] = value;
+          }
+        if ("evidence" in body) fields.evidence = trText(body, "evidence", 400);
+        if ("topic" in body) {
+          const topic = String(body.topic ?? "");
+          if (!(topic in TR_TOPICS))
+            return refuse(400, "malformed_request", { topic: Object.keys(TR_TOPICS).join(", ") });
+          fields.topic = topic;
+        }
+        if ("owner_staff_id" in body) {
+          const owner = trOwner(body);
+          if (owner === false)
+            return refuse(400, "malformed_request", {
+              owner_staff_id: "choose someone on the team",
+            });
+          fields.owner_staff_id = owner;
+        }
+        const changed = trChanged(row, fields);
+        if (!changed.length)
+          return refuse(400, "malformed_request", { fields: "nothing to change" });
+        detail = `Changed ${changed.join(", ")}.`;
+        if (row.approved_at && (changed.includes("question") || changed.includes("answer"))) {
+          Object.assign(fields, { approved_by: null, approved_at: null, review_due: null });
+          detail += " The wording changed, so the approval lapsed.";
+        }
+      } else if (action === "approve") {
+        if (answerState(row) === "approved")
+          return refuse(400, "malformed_request", { action: "already approved and in date" });
+        const reviewDue = addMonthsIso(todayIso(), 12);
+        Object.assign(fields, {
+          approved_by: caller(headers)?.member.id ?? null,
+          approved_at: now(),
+          review_due: reviewDue,
+        });
+        detail = `Re-approve by ${pvDay(reviewDue)}.`;
+      } else if (action === "archive") {
+        fields.archived_at = now();
+        detail = "No longer offered.";
+      } else if (action === "restore") {
+        if (!row.archived_at) return refuse(400, "malformed_request", { status: "not archived" });
+        fields.archived_at = null;
+        detail = "Offered again.";
+      } else {
+        detail = trText(body, "note");
+        if (!detail) return refuse(400, "malformed_request", { note: "the note" });
+      }
+      const changed = trChanged(row, fields);
+      if (Object.keys(fields).length) Object.assign(row, fields, { updated_at: now() });
+      trRecord(headers, "answer", row.id, action, detail, `trust.answer.${action}`, {
+        changes: changed,
+      });
+      return ok({ answer: answerView(row) });
+    },
+  },
+  // -- the record of processing ---------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: "hq/trust/processing",
+    auth: true,
+    capability: "privacy:read",
+    handler: ({ query }) => {
+      const archived = query.show === "archived";
+      const views = processing.map((row) => processingView(row));
+      return ok({
+        activities: views
+          .filter((view) => view.archived === archived)
+          .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),
+        show: archived ? "archived" : "current",
+        owed: views.filter((view) => view.review_owed).length,
+        bases: trOptions(TR_BASES),
+        staff: trActiveStaff(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/processing/create",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ body, headers }) => {
+      const values: Record<string, string> = {};
+      for (const [name, limit, message] of PROCESSING_TEXT) {
+        const value = trText(body, name, limit);
+        if (!value) return refuse(400, "malformed_request", { [name]: message });
+        values[name] = value;
+      }
+      for (const [name, limit] of PROCESSING_OPTIONAL) values[name] = trText(body, name, limit);
+      const basis = String(body.lawful_basis ?? "");
+      if (!(basis in TR_BASES))
+        return refuse(400, "malformed_request", { lawful_basis: Object.keys(TR_BASES).join(", ") });
+      const owner = trOwner(body);
+      if (owner === false)
+        return refuse(400, "malformed_request", { owner_staff_id: "choose someone on the team" });
+      const row: ProcessingRow = {
+        id: randomUUID(),
+        name: values.name!,
+        purpose: values.purpose!,
+        data_subjects: values.data_subjects!,
+        data_categories: values.data_categories!,
+        retention: values.retention!,
+        recipients: values.recipients!,
+        transfers: values.transfers!,
+        security_measures: values.security_measures!,
+        lawful_basis: basis,
+        owner_staff_id: owner,
+        reviewed_at: now(),
+        archived_at: null,
+        updated_at: now(),
+      };
+      processing.push(row);
+      trRecord(
+        headers,
+        "processing",
+        row.id,
+        "created",
+        `Lawful basis: ${TR_BASES[basis]!.toLowerCase()}.`,
+        "trust.processing.created",
+        { name: row.name, lawful_basis: basis },
+      );
+      return ok({ activity: processingView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/trust/processing/{activity_id}",
+    auth: true,
+    capability: "privacy:read",
+    handler: ({ params }) => {
+      const row = trFind(processing, params.activity_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        activity: processingView(row),
+        events: trEvents("processing", row.id),
+        bases: trOptions(TR_BASES),
+        staff: trActiveStaff(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust/processing/{activity_id}/act",
+    auth: true,
+    capability: "privacy:write",
+    handler: ({ params, body, headers }) => {
+      const row = trFind(processing, params.activity_id);
+      if (!row) return refuse(404, "not_found");
+      const actions = ["update", "review", "archive", "restore", "note"];
+      const action = String(body.action ?? "");
+      if (!actions.includes(action))
+        return refuse(400, "malformed_request", { action: actions.join(", ") });
+      if (row.archived_at && action !== "restore" && action !== "note")
+        return refuse(400, "malformed_request", { status: "archived; restore it first" });
+      const fields: Record<string, unknown> = {};
+      let detail = "";
+      if (action === "update") {
+        for (const [name, limit, message] of PROCESSING_TEXT)
+          if (name in body) {
+            const value = trText(body, name, limit);
+            if (!value) return refuse(400, "malformed_request", { [name]: message });
+            fields[name] = value;
+          }
+        for (const [name, limit] of PROCESSING_OPTIONAL)
+          if (name in body) fields[name] = trText(body, name, limit);
+        if ("lawful_basis" in body) {
+          const basis = String(body.lawful_basis ?? "");
+          if (!(basis in TR_BASES))
+            return refuse(400, "malformed_request", {
+              lawful_basis: Object.keys(TR_BASES).join(", "),
+            });
+          fields.lawful_basis = basis;
+        }
+        if ("owner_staff_id" in body) {
+          const owner = trOwner(body);
+          if (owner === false)
+            return refuse(400, "malformed_request", {
+              owner_staff_id: "choose someone on the team",
+            });
+          fields.owner_staff_id = owner;
+        }
+        const changed = trChanged(row as unknown as Record<string, unknown>, fields);
+        if (!changed.length)
+          return refuse(400, "malformed_request", { fields: "nothing to change" });
+        detail = `Changed ${changed.join(", ")}.`;
+      } else if (action === "review") {
+        const note = trText(body, "note");
+        if (!note)
+          return refuse(400, "malformed_request", {
+            note: "what you checked against how it really runs",
+          });
+        fields.reviewed_at = now();
+        detail = note;
+      } else if (action === "archive") {
+        const reason = trText(body, "reason", 400);
+        if (!reason) return refuse(400, "malformed_request", { reason: "why it stopped" });
+        fields.archived_at = now();
+        detail = reason;
+      } else if (action === "restore") {
+        if (!row.archived_at) return refuse(400, "malformed_request", { status: "not archived" });
+        fields.archived_at = null;
+        detail = "Started again.";
+      } else {
+        detail = trText(body, "note");
+        if (!detail) return refuse(400, "malformed_request", { note: "the note" });
+      }
+      const changed = trChanged(row as unknown as Record<string, unknown>, fields);
+      if (Object.keys(fields).length) Object.assign(row, fields, { updated_at: now() });
+      trRecord(headers, "processing", row.id, action, detail, `trust.processing.${action}`, {
+        changes: changed,
+      });
+      return ok({ activity: processingView(row) });
+    },
+  },
+);
+
 seedTeam();
 seedOpenReview();
 seedPeopleOps();
@@ -28260,6 +30781,7 @@ seedStatus();
 seedPrivileged();
 seedAi();
 seedPlatform();
+seedTrust();
 seedSecurityFeed();
 seedReadWatch();
 seedInbox();
@@ -29586,6 +32108,648 @@ routes.push(
   },
 );
 
+// --- custom fields (mirrors account_api/hq/custom_fields.py and field_routes.py) ------------
+
+type CfOption = { value: string; label: string; retired: boolean };
+type CfFieldRow = {
+  id: string;
+  record_type: string;
+  field_key: string;
+  label: string;
+  kind: string;
+  options: CfOption[];
+  help: string;
+  required: boolean;
+  sensitive: boolean;
+  position: number;
+  archived_at: string | null;
+};
+const CF_TYPES: Record<string, string> = {
+  company: "Companies",
+  person: "People",
+  deal: "Deals",
+  lead: "Leads",
+};
+const CF_KINDS: Record<string, string> = {
+  text: "Short text",
+  long_text: "Paragraph",
+  number: "Number",
+  date: "Date",
+  choice: "One from a list",
+  multi_choice: "Several from a list",
+  checkbox: "Yes or no",
+  url: "Link",
+  email: "Email address",
+};
+const CF_LISTS = ["choice", "multi_choice"];
+const CF_MASK = "••••";
+const CF_PER_TYPE = 30;
+const customFields: CfFieldRow[] = [];
+/** `${fieldId}\u0000${recordId}` → value */
+const customValues = new Map<string, string>();
+
+const cfKey = (fieldId: string, recordId: string) => `${fieldId}\u0000${recordId}`;
+const cfLive = (recordType: string, withArchived = false) =>
+  customFields
+    .filter((row) => row.record_type === recordType && (withArchived || !row.archived_at))
+    .sort(
+      (a, b) =>
+        a.position - b.position || a.label.toLowerCase().localeCompare(b.label.toLowerCase()),
+    );
+const cfCanSee = (headers: Record<string, string | string[] | undefined>, row: CfFieldRow) =>
+  !row.sensitive || hasCap(headers, "hq:admin");
+
+function cfFieldView(row: CfFieldRow) {
+  return {
+    field_id: row.id,
+    record_type: row.record_type,
+    key: row.field_key,
+    label: row.label,
+    kind: row.kind,
+    kind_label: CF_KINDS[row.kind] ?? row.kind,
+    options: CF_LISTS.includes(row.kind) ? row.options : [],
+    help: row.help,
+    required: row.required,
+    sensitive: row.sensitive,
+    position: row.position,
+    archived: Boolean(row.archived_at),
+  };
+}
+
+function cfDisplay(row: CfFieldRow, value: string): string {
+  if (!value) return "";
+  if (row.kind === "checkbox") return "Yes";
+  if (CF_LISTS.includes(row.kind)) {
+    const labels = new Map(row.options.map((option) => [option.value, option.label]));
+    return value
+      .split(",")
+      .map((part) => labels.get(part) ?? part)
+      .join(", ");
+  }
+  return value;
+}
+
+/** The stored text for a value, "" for empty, or the refusal the service would give. */
+function cfNormalise(row: CfFieldRow, raw: unknown): string | { refusal: string } {
+  const key = `custom.${row.field_key}`;
+  void key;
+  if (raw === null || raw === undefined) return "";
+  if (row.kind === "checkbox") {
+    if (typeof raw === "boolean") return raw ? "true" : "";
+    const text = String(raw).trim().toLowerCase();
+    if (["", "false", "0", "no", "off"].includes(text)) return "";
+    if (["true", "1", "yes", "on"].includes(text)) return "true";
+    return { refusal: "yes or no" };
+  }
+  const live = new Set(
+    row.options.filter((option) => !option.retired).map((option) => option.value),
+  );
+  if (row.kind === "multi_choice") {
+    const picked = (Array.isArray(raw) ? raw : String(raw).split(","))
+      .map((item) => String(item).trim())
+      .filter(Boolean);
+    for (const value of picked)
+      if (!live.has(value)) return { refusal: `not one of the choices: ${value}` };
+    return [...new Set(picked)].join(",");
+  }
+  const text = String(raw).trim();
+  if (!text) return "";
+  if (text.length > 2000) return { refusal: "at most 2000 characters" };
+  switch (row.kind) {
+    case "text":
+      return text.includes("\n") || text.length > 200
+        ? { refusal: "one line, at most 200 characters" }
+        : text;
+    case "number": {
+      const number = Number(text.replace(/,/g, ""));
+      if (!Number.isFinite(number) || Math.abs(number) >= 1e15) return { refusal: "a number" };
+      return String(number);
+    }
+    case "date":
+      return /^\d{4}-\d{2}-\d{2}/.test(text) && !Number.isNaN(Date.parse(text.slice(0, 10)))
+        ? text.slice(0, 10)
+        : { refusal: "a date, YYYY-MM-DD" };
+    case "choice":
+      return live.has(text) ? text : { refusal: "not one of the choices" };
+    case "url":
+      return /^https?:\/\/[^\s/$.?#][^\s]*$/i.test(text)
+        ? text
+        : { refusal: "a link starting http:// or https://" };
+    case "email":
+      return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text)
+        ? text.toLowerCase()
+        : { refusal: "an email address" };
+    default:
+      return text;
+  }
+}
+
+type CfWrite = { row: CfFieldRow; before: string; value: string };
+
+/** Everything the service checks before a record is written; a refusal writes nothing. */
+function cfCheck(
+  recordType: string,
+  recordId: string,
+  raw: unknown,
+  headers: Record<string, string | string[] | undefined>,
+  creating: boolean,
+): CfWrite[] | { status: number; body: unknown } {
+  const fields = cfLive(recordType);
+  const incoming = (raw ?? {}) as Record<string, unknown>;
+  if (typeof incoming !== "object" || Array.isArray(incoming))
+    return refuse(400, "malformed_request", { custom: "an object of field keys and values" });
+  const byKey = new Map(fields.map((row) => [row.field_key, row]));
+  for (const key of Object.keys(incoming))
+    if (!byKey.has(key))
+      return refuse(400, "malformed_request", {
+        [`custom.${key}`]: "no such field, or it is archived",
+      });
+  const writes: CfWrite[] = [];
+  for (const row of fields) {
+    const key = row.field_key;
+    const before = creating ? "" : (customValues.get(cfKey(row.id, recordId)) ?? "");
+    if (!(key in incoming)) {
+      if (creating && row.required && cfCanSee(headers, row))
+        return refuse(400, "malformed_request", { [`custom.${key}`]: `${row.label} is required` });
+      continue;
+    }
+    const sent = incoming[key];
+    if (row.sensitive && typeof sent === "string" && sent.includes(CF_MASK)) continue;
+    const value = cfNormalise(row, sent);
+    if (typeof value !== "string")
+      return refuse(400, "malformed_request", { [`custom.${key}`]: value.refusal });
+    if (!value && row.required)
+      return refuse(400, "malformed_request", { [`custom.${key}`]: `${row.label} is required` });
+    if (value === before) continue;
+    if (!cfCanSee(headers, row))
+      return refuse(403, "forbidden", { [`custom.${key}`]: "an admin keeps this field" });
+    writes.push({ row, before, value });
+  }
+  return writes;
+}
+
+function cfWrite(recordId: string, writes: CfWrite[]) {
+  const changes: Record<string, { from: string; to: string }> = {};
+  for (const { row, before, value } of writes) {
+    if (value) customValues.set(cfKey(row.id, recordId), value);
+    else customValues.delete(cfKey(row.id, recordId));
+    changes[`custom.${row.field_key}`] = row.sensitive
+      ? { from: CF_MASK, to: CF_MASK }
+      : { from: cfDisplay(row, before), to: cfDisplay(row, value) };
+  }
+  return changes;
+}
+
+function cfValues(
+  recordType: string,
+  recordId: string,
+  headers: Record<string, string | string[] | undefined>,
+) {
+  return cfLive(recordType).map((row) => {
+    const value = customValues.get(cfKey(row.id, recordId)) ?? "";
+    const visible = cfCanSee(headers, row);
+    return {
+      ...cfFieldView(row),
+      value: visible ? value : value ? CF_MASK : "",
+      display: visible ? cfDisplay(row, value) : value ? CF_MASK : "",
+      masked: !visible && Boolean(value),
+      editable: visible,
+    };
+  });
+}
+
+function cfMap(
+  recordType: string,
+  recordId: string,
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const row of cfLive(recordType)) {
+    if (!cfCanSee(headers, row)) continue;
+    const value = customValues.get(cfKey(row.id, recordId));
+    if (value) out[row.field_key] = cfDisplay(row, value);
+  }
+  return out;
+}
+
+const cfListFields = (recordType: string, headers: Record<string, string | string[] | undefined>) =>
+  cfLive(recordType)
+    .filter((row) => cfCanSee(headers, row))
+    .map(cfFieldView);
+
+function cfOptions(raw: unknown, existing: CfOption[] = []): CfOption[] | { refusal: string } {
+  if (!Array.isArray(raw)) return { refusal: "a list of choices" };
+  const seen = new Map<string, CfOption>();
+  for (const item of raw as Array<Record<string, unknown>>) {
+    const label = String(item?.label ?? "")
+      .trim()
+      .slice(0, 80);
+    const value =
+      String(item?.value ?? "")
+        .trim()
+        .toLowerCase() ||
+      label
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 40);
+    if (!label || !/^[a-z0-9][a-z0-9_-]{0,39}$/.test(value))
+      return { refusal: `a choice needs a label, and a short value: ${label || value || "?"}` };
+    if (seen.has(value)) return { refusal: `the value ${value} appears twice` };
+    seen.set(value, { value, label, retired: Boolean(item?.retired) });
+  }
+  for (const old of existing)
+    if (!seen.has(old.value)) seen.set(old.value, { ...old, retired: true });
+  if (seen.size > 50) return { refusal: "at most 50 choices" };
+  if (![...seen.values()].some((option) => !option.retired))
+    return { refusal: "at least one choice" };
+  return [...seen.values()];
+}
+
+const cfFlag = (value: unknown) =>
+  typeof value === "boolean"
+    ? value
+    : ["true", "1", "yes", "on"].includes(String(value ?? "").toLowerCase());
+
+function seedCustomFields() {
+  customFields.length = 0;
+  customValues.clear();
+  const add = (
+    record_type: string,
+    field_key: string,
+    label: string,
+    kind: string,
+    extra: Partial<CfFieldRow> = {},
+  ) => {
+    const row: CfFieldRow = {
+      id: `cf${String(customFields.length + 1).padStart(6, "0")}-0000-4000-8000-000000000000`,
+      record_type,
+      field_key,
+      label,
+      kind,
+      options: [],
+      help: "",
+      required: false,
+      sensitive: false,
+      position: customFields.filter((item) => item.record_type === record_type).length + 1,
+      archived_at: null,
+      ...extra,
+    };
+    customFields.push(row);
+    return row;
+  };
+  const strategy = add("company", "strategy", "Strategy", "choice", {
+    options: [
+      { value: "long-short-equity", label: "Long/short equity", retired: false },
+      { value: "macro", label: "Macro", retired: false },
+      { value: "credit", label: "Credit", retired: false },
+      { value: "quant", label: "Systematic", retired: false },
+    ],
+  });
+  const aum = add("company", "aum_usd_m", "AUM (USD m)", "number", {
+    help: "Assets under management, in millions",
+  });
+  const regulator = add("company", "regulator", "Regulator", "text");
+  add("company", "former_name", "Former name", "text", { archived_at: agoIso(24 * 40) });
+  const desk = add("person", "desk", "Desk", "text");
+  const home = add("person", "home_city", "Home city", "text", { sensitive: true });
+  add("deal", "decision_date", "Decision date", "date", { help: "When their committee decides" });
+  add("deal", "security_review", "Security review", "checkbox");
+  add("lead", "heard_from", "Heard about us from", "choice", {
+    options: [
+      { value: "podcast", label: "A podcast", retired: false },
+      { value: "colleague", label: "A colleague", retired: false },
+      { value: "conference", label: "A conference", retired: false },
+    ],
+  });
+  const company = "c0000000-0000-4000-8000-000000000002";
+  customValues.set(cfKey(strategy.id, company), "macro");
+  customValues.set(cfKey(aum.id, company), "1250");
+  customValues.set(cfKey(regulator.id, company), "FCA");
+  const firstPerson = people[0];
+  if (firstPerson) {
+    customValues.set(cfKey(desk.id, firstPerson.id), "Rates");
+    customValues.set(cfKey(home.id, firstPerson.id), "Leeds");
+  }
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/settings/fields",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query, headers }) => {
+      const manage = hasCap(headers, "hq:admin");
+      const recordType = query.record_type ?? "";
+      if (recordType && !(recordType in CF_TYPES))
+        return refuse(400, "malformed_request", { record_type: Object.keys(CF_TYPES).join(", ") });
+      const fields = (recordType ? [recordType] : Object.keys(CF_TYPES)).flatMap((type) =>
+        cfLive(type, manage)
+          .filter((row) => manage || cfCanSee(headers, row))
+          .map(cfFieldView),
+      );
+      return ok({
+        fields,
+        record_types: Object.entries(CF_TYPES).map(([value, label]) => ({ value, label })),
+        kinds: Object.entries(CF_KINDS).map(([value, label]) => ({ value, label })),
+        can_manage: manage,
+        per_type: CF_PER_TYPE,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/fields/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const recordType = String(body.record_type ?? "");
+      if (!(recordType in CF_TYPES))
+        return refuse(400, "malformed_request", { record_type: Object.keys(CF_TYPES).join(", ") });
+      const label = String(body.label ?? "")
+        .trim()
+        .slice(0, 80);
+      if (!label) return refuse(400, "malformed_request", { label: "what the field is called" });
+      let key = String(body.key ?? "")
+        .trim()
+        .toLowerCase();
+      if (!key) {
+        key = label
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim()
+          .split(/\s+/)
+          .join("_")
+          .slice(0, 40);
+        if (key && !/^[a-z]/.test(key)) key = `f_${key}`.slice(0, 40);
+      }
+      if (!/^[a-z][a-z0-9_]{1,39}$/.test(key))
+        return refuse(400, "malformed_request", {
+          key: "lowercase letters, digits and underscores, starting with a letter",
+        });
+      const kind = String(body.kind ?? "");
+      if (!(kind in CF_KINDS))
+        return refuse(400, "malformed_request", { kind: Object.keys(CF_KINDS).join(", ") });
+      const siblings = customFields.filter((row) => row.record_type === recordType);
+      if (siblings.some((row) => row.field_key === key))
+        return refuse(400, "malformed_request", {
+          key: "already used on this record, perhaps by an archived field",
+        });
+      if (siblings.filter((row) => !row.archived_at).length >= CF_PER_TYPE)
+        return refuse(400, "malformed_request", {
+          record_type: `at most ${CF_PER_TYPE} fields per record`,
+        });
+      let options: CfOption[] = [];
+      if (CF_LISTS.includes(kind)) {
+        const parsed = cfOptions(body.options ?? []);
+        if (!Array.isArray(parsed))
+          return refuse(400, "malformed_request", { options: parsed.refusal });
+        options = parsed;
+      }
+      const row: CfFieldRow = {
+        id: randomUUID(),
+        record_type: recordType,
+        field_key: key,
+        label,
+        kind,
+        options,
+        help: String(body.help ?? "")
+          .trim()
+          .slice(0, 200),
+        required: cfFlag(body.required),
+        sensitive: cfFlag(body.sensitive),
+        position: Math.max(0, ...siblings.map((item) => item.position)) + 1,
+        archived_at: null,
+      };
+      customFields.push(row);
+      audit(
+        "custom_field.created",
+        caller(headers)?.member.id ?? null,
+        "custom_field",
+        row.id,
+        "",
+        {
+          record_type: recordType,
+          key,
+          kind,
+        },
+      );
+      return ok({ field: cfFieldView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/fields/{field_id}/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const row = customFields.find((item) => item.id === params.field_id);
+      if (!row) return refuse(404, "not_found");
+      for (const [name, current] of [
+        ["key", row.field_key],
+        ["kind", row.kind],
+        ["record_type", row.record_type],
+      ] as const)
+        if (name in body && String(body[name] ?? "") !== current)
+          return refuse(400, "malformed_request", { [name]: "fixed once the field is made" });
+      const next: Partial<CfFieldRow> = {};
+      if ("label" in body) {
+        const label = String(body.label ?? "")
+          .trim()
+          .slice(0, 80);
+        if (!label) return refuse(400, "malformed_request", { label: "cannot be empty" });
+        next.label = label;
+      }
+      if ("help" in body)
+        next.help = String(body.help ?? "")
+          .trim()
+          .slice(0, 200);
+      if ("required" in body) next.required = cfFlag(body.required);
+      if ("sensitive" in body) next.sensitive = cfFlag(body.sensitive);
+      if ("options" in body) {
+        if (!CF_LISTS.includes(row.kind))
+          return refuse(400, "malformed_request", { options: "only a list field has choices" });
+        const parsed = cfOptions(body.options, row.options);
+        if (!Array.isArray(parsed))
+          return refuse(400, "malformed_request", { options: parsed.refusal });
+        next.options = parsed;
+      }
+      if ("archived" in body) {
+        const archive = cfFlag(body.archived);
+        if (archive && !row.archived_at) next.archived_at = now();
+        else if (!archive && row.archived_at) {
+          if (cfLive(row.record_type).length >= CF_PER_TYPE)
+            return refuse(400, "malformed_request", {
+              archived: `at most ${CF_PER_TYPE} fields per record`,
+            });
+          next.archived_at = null;
+        }
+      }
+      if ("move" in body) {
+        const direction = String(body.move ?? "");
+        if (!["up", "down"].includes(direction))
+          return refuse(400, "malformed_request", { move: "up or down" });
+        const siblings = cfLive(row.record_type, true);
+        const index = siblings.findIndex((item) => item.id === row.id);
+        const other = direction === "up" ? index - 1 : index + 1;
+        if (other >= 0 && other < siblings.length) {
+          const order = siblings.map((item) => item.id);
+          [order[index], order[other]] = [order[other]!, order[index]!];
+          order.forEach((id, position) => {
+            const target = customFields.find((item) => item.id === id);
+            if (target && target.id !== row.id) target.position = position + 1;
+            else if (target) next.position = position + 1;
+          });
+        }
+      }
+      const changed = Object.entries(next).filter(
+        ([name, value]) => JSON.stringify(row[name as keyof CfFieldRow]) !== JSON.stringify(value),
+      );
+      if (!changed.length) return refuse(400, "malformed_request", { fields: "nothing to change" });
+      Object.assign(row, Object.fromEntries(changed));
+      audit(
+        "custom_field.updated",
+        caller(headers)?.member.id ?? null,
+        "custom_field",
+        row.id,
+        "",
+        {
+          key: row.field_key,
+          fields: changed.map(([name]) => name).sort(),
+        },
+      );
+      return ok({ field: cfFieldView(row) });
+    },
+  },
+);
+
+/**
+ * The four record types' existing handlers, taught custom fields the way the service's
+ * write handlers were: checked before anything is written, written after, and read back
+ * on every list row and record.
+ */
+function cfWrap(method: string, pattern: string, wrap: (original: Handler) => Handler) {
+  const entry = routes.find((item) => item.method === method && item.pattern === pattern);
+  if (!entry) throw new Error(`mock: no route ${method} ${pattern} to teach custom fields`);
+  entry.handler = wrap(entry.handler);
+}
+
+for (const [recordType, list, listKey, idKey, detail, detailKey, create, update] of [
+  [
+    "company",
+    "hq/companies",
+    "companies",
+    "company_id",
+    "hq/companies/{company_id}",
+    "company",
+    "hq/companies/create",
+    "hq/companies/{company_id}/update",
+  ],
+  [
+    "person",
+    "hq/people",
+    "people",
+    "person_id",
+    "hq/people/{person_id}",
+    "person",
+    "hq/people/create",
+    "hq/people/{person_id}/update",
+  ],
+  [
+    "lead",
+    "hq/leads",
+    "leads",
+    "lead_id",
+    "hq/leads/{lead_id}",
+    "lead",
+    "hq/leads/create",
+    "hq/leads/{lead_id}/update",
+  ],
+  [
+    "deal",
+    "hq/deals",
+    "",
+    "deal_id",
+    "hq/deals/{deal_id}",
+    "deal",
+    "hq/deals/create",
+    "hq/deals/{deal_id}/update",
+  ],
+] as const) {
+  cfWrap("GET", list, (original) => (context) => {
+    const answer = original(context);
+    if (answer.status !== 200) return answer;
+    const payload = answer.body as Record<string, unknown>;
+    const withValues = (row: Record<string, unknown>) => ({
+      ...row,
+      custom: cfMap(recordType, String(row[idKey] ?? ""), context.headers),
+    });
+    if (listKey)
+      payload[listKey] = (payload[listKey] as Array<Record<string, unknown>>).map(withValues);
+    else
+      payload.columns = (payload.columns as Array<Record<string, unknown>>).map((column) => ({
+        ...column,
+        deals: (column.deals as Array<Record<string, unknown>>).map(withValues),
+      }));
+    payload.custom_fields = cfListFields(recordType, context.headers);
+    return answer;
+  });
+  cfWrap("GET", detail, (original) => (context) => {
+    const answer = original(context);
+    if (answer.status !== 200) return answer;
+    const payload = answer.body as Record<string, unknown>;
+    const record = payload[detailKey] as Record<string, unknown>;
+    payload.custom_fields = cfValues(recordType, String(record[idKey] ?? ""), context.headers);
+    return answer;
+  });
+  cfWrap("POST", create, (original) => (context) => {
+    const writes = cfCheck(recordType, "", context.body.custom, context.headers, true);
+    if (!Array.isArray(writes)) return writes;
+    const answer = original(context);
+    if (answer.status !== 200) return answer;
+    const record = (answer.body as Record<string, unknown>)[detailKey] as Record<string, unknown>;
+    cfWrite(String(record[idKey] ?? ""), writes);
+    return answer;
+  });
+  cfWrap("POST", update, (original) => (context) => {
+    const recordId = String(context.params[idKey] ?? "");
+    const writes =
+      "custom" in context.body
+        ? cfCheck(recordType, recordId, context.body.custom, context.headers, false)
+        : [];
+    if (!Array.isArray(writes)) return writes;
+    const onlyCustom = Object.keys(context.body).every((key) => key === "custom");
+    if (onlyCustom && !writes.length)
+      return refuse(400, "malformed_request", { reason: "nothing to change" });
+    const answer = onlyCustom ? null : original(context);
+    if (answer && answer.status !== 200) return answer;
+    const changes = cfWrite(recordId, writes);
+    if (Object.keys(changes).length)
+      audit(
+        `${recordType}.updated`,
+        caller(context.headers)?.member.id ?? null,
+        recordType,
+        recordId,
+        "",
+        {
+          fields: Object.keys(changes).sort(),
+          changes,
+        },
+      );
+    if (answer) return answer;
+    // The service answers a fields-only save with the record, as any update.
+    const view = routes
+      .find((item) => item.method === "GET" && item.pattern === detail)!
+      .handler({ ...context, method: "GET", body: {} });
+    if (view.status !== 200) return view;
+    return ok({ [detailKey]: (view.body as Record<string, unknown>)[detailKey] });
+  });
+}
+
+// After its declarations: the seed reads the block's constants.
+seedCustomFields();
+
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
     if (entry.method !== method) continue;
@@ -29683,6 +32847,8 @@ function resetWorld() {
   seedPrivileged();
   seedAi();
   seedPlatform();
+  seedTrust();
+  seedCustomFields();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

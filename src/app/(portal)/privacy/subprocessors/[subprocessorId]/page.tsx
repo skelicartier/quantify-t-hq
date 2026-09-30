@@ -91,6 +91,7 @@ export default async function SubprocessorPage({ params }: { params: Params }) {
   const now = requestNow();
   const { subprocessor: sub } = detail;
   const canWrite = hasCapability(context, "privacy:write") && sub.status !== "retired";
+  const canSeeReviews = hasCapability(context, "audit:read") && sub.status !== "retired";
   const hidden = { subprocessor_id: sub.id };
   const changing = sub.status === "proposed" || sub.status === "notice_sent";
   const today = new Date(now).toISOString().slice(0, 10);
@@ -130,6 +131,15 @@ export default async function SubprocessorPage({ params }: { params: Params }) {
             <Property label="Where">{sub.locations || "—"}</Property>
             <Property label="Transfer">{sub.transfer_label}</Property>
             <Property label="DPA signed">{formatDate(sub.dpa_signed_on, "—")}</Property>
+            <Property label="Supplier tier">
+              {sub.tier.charAt(0).toUpperCase() + sub.tier.slice(1)}
+              {canSeeReviews && (
+                <>
+                  {" · "}
+                  <Link href={`/trust/suppliers/${sub.id}`}>Reviews</Link>
+                </>
+              )}
+            </Property>
             {sub.notice_sent_on && (
               <Property label="Notice began">{formatDate(sub.notice_sent_on)}</Property>
             )}
