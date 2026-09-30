@@ -10,6 +10,7 @@ const TABS = [
   { href: "/admin/webhooks", label: "Webhooks" },
   { href: "/admin/rules", label: "Rules" },
   { href: "/admin/fields", label: "Fields" },
+  { href: "/admin/automations", label: "Automations" },
   { href: "/admin/settings/pipeline", label: "Pipeline" },
   { href: "/admin/settings", label: "Settings" },
   { href: "/admin/audit", label: "Audit" },

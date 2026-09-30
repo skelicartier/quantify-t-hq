@@ -1,3 +1,4 @@
+import { RecordAutomations } from "@/components/platform/record-automations";
 import { CustomFieldsSection } from "@/components/platform/custom-fields-section";
 import Link from "next/link";
 import { RecordComments } from "@/components/platform/comments-section";
@@ -458,6 +459,12 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
               recordId={detail.deal.deal_id}
               fields={detail.custom_fields}
               canWrite={canDeal}
+            />
+            <RecordAutomations
+              token={context.token}
+              recordType="deal"
+              recordId={detail.deal.deal_id}
+              returnPath={`/deals/${detail.deal.deal_id}`}
             />
             {hasCapability(context, "audit:read") && (
               <ViewedBy token={context.token} entityType="deal" record={deal.deal_id} now={now} />

@@ -33439,6 +33439,25 @@ function seedAutomations() {
     ADMIN,
   );
   paused.failure_streak = 5;
+  // The five failures that paused it, on the leads they fired for.
+  for (let index = 0; index < 5; index += 1) {
+    const lead = leads[index];
+    if (!lead) break;
+    automationRuns.push({
+      id: randomUUID(),
+      automation_id: paused.id,
+      version: 1,
+      record_type: "lead",
+      record_id: lead.id,
+      trigger_kind: "field_changed",
+      outcome: "failed",
+      detail: "Failed: the person it acts as is no longer on the team",
+      depth: 0,
+      fire_key: "",
+      started_by: null,
+      at: agoIso(24 * (index + 1)),
+    });
+  }
   paused.paused_reason =
     "Paused after 5 failed runs in a row. The last: Failed: the person it acts as is no longer on the team";
   add(
@@ -33871,9 +33890,312 @@ cfWrap("POST", "hq/deals/{deal_id}/stage", (original) => (context) => {
   return answer;
 });
 
+// --- digests of saved views (mirrors account_api/hq/digests.py and digest_routes.py) --------
+
+type DigestRow = {
+  id: string;
+  staff_id: string;
+  view_id: string;
+  cadence: string;
+  weekday: number | null;
+  hour_utc: number;
+  send_empty: boolean;
+  active: boolean;
+  next_due_at: string;
+  last_sent_at: string | null;
+  last_rows: number | null;
+  last_outcome: string;
+};
+const DIGEST_CADENCES: Record<string, string> = {
+  daily: "Every day",
+  weekdays: "Weekdays",
+  weekly: "Once a week",
+};
+const DIGEST_WEEKDAYS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
+const DIGEST_LISTS: Record<string, [string, string]> = {
+  companies: ["Companies", "crm:read"],
+  leads: ["Leads", "crm:read"],
+  deals: ["Deals", "deals:read"],
+};
+const digestsStore: DigestRow[] = [];
+/** What the mock "mailed": the harness reads it to see a digest arrived. */
+const digestOutbox: Array<{
+  digest_id: string;
+  to: string;
+  subject: string;
+  rows: number;
+  at: string;
+}> = [];
+
+function digestNextDue(
+  cadence: string,
+  weekday: number | null,
+  hour: number,
+  after = new Date(),
+): string {
+  const candidate = new Date(after);
+  candidate.setUTCMinutes(0, 0, 0);
+  candidate.setUTCHours(hour);
+  if (candidate <= after) candidate.setUTCDate(candidate.getUTCDate() + 1);
+  for (let i = 0; i < 8; i += 1) {
+    const day = (candidate.getUTCDay() + 6) % 7; // Monday = 0, as the service counts
+    if (
+      cadence === "daily" ||
+      (cadence === "weekdays" && day < 5) ||
+      (cadence === "weekly" && day === weekday)
+    )
+      break;
+    candidate.setUTCDate(candidate.getUTCDate() + 1);
+  }
+  return candidate.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function digestSchedule(row: DigestRow): string {
+  const when = `${String(row.hour_utc).padStart(2, "0")}:00 UTC`;
+  return row.cadence === "weekly" && row.weekday !== null
+    ? `${DIGEST_WEEKDAYS[row.weekday]}s at ${when}`
+    : `${DIGEST_CADENCES[row.cadence] ?? row.cadence} at ${when}`;
+}
+function digestView(row: DigestRow) {
+  const view = savedViews.find((item) => item.id === row.view_id);
+  const listKey = view?.list_key ?? "";
+  return {
+    digest_id: row.id,
+    view_id: row.view_id,
+    view_name: view?.name ?? "A view no longer there",
+    list_key: listKey,
+    list_label: DIGEST_LISTS[listKey]?.[0] ?? "",
+    query: view?.query ?? "",
+    cadence: row.cadence,
+    weekday: row.weekday,
+    hour_utc: row.hour_utc,
+    schedule: digestSchedule(row),
+    send_empty: row.send_empty,
+    active: row.active,
+    next_due_at: row.next_due_at,
+    last_sent_at: row.last_sent_at,
+    last_rows: row.last_rows,
+    last_outcome: row.last_outcome,
+  };
+}
+function digestVisibleViews(headers: Record<string, string | string[] | undefined>) {
+  const me = caller(headers)?.member.id ?? "";
+  return savedViews.filter(
+    (view) =>
+      view.list_key in DIGEST_LISTS &&
+      hasCap(headers, DIGEST_LISTS[view.list_key]![1]) &&
+      (view.owner_staff_id === me || view.shared),
+  );
+}
+function digestSchedulePart(
+  body: Record<string, unknown>,
+  current?: DigestRow,
+):
+  | { cadence: string; hour_utc: number; weekday: number | null }
+  | { status: number; body: unknown } {
+  const cadence = String(body.cadence ?? current?.cadence ?? "daily");
+  if (!(cadence in DIGEST_CADENCES))
+    return refuse(400, "malformed_request", { cadence: Object.keys(DIGEST_CADENCES).join(", ") });
+  const hour = Number(body.hour_utc ?? current?.hour_utc ?? 8);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23)
+    return refuse(400, "malformed_request", { hour_utc: "an hour, 0 to 23 (UTC)" });
+  let weekday: number | null = null;
+  if (cadence === "weekly") {
+    weekday = Number(body.weekday ?? current?.weekday ?? 0);
+    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6)
+      return refuse(400, "malformed_request", { weekday: "0 (Monday) to 6 (Sunday)" });
+  }
+  return { cadence, hour_utc: hour, weekday };
+}
+
+function seedDigests() {
+  digestsStore.length = 0;
+  digestOutbox.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const view = savedViews.find((item) => item.owner_staff_id === OWNER) ?? savedViews[0];
+  if (view)
+    digestsStore.push({
+      id: "d1000001-0000-4000-8000-000000000000",
+      staff_id: OWNER,
+      view_id: view.id,
+      cadence: "weekdays",
+      weekday: null,
+      hour_utc: 7,
+      send_empty: false,
+      active: true,
+      next_due_at: digestNextDue("weekdays", null, 7),
+      last_sent_at: agoIso(20),
+      last_rows: 4,
+      last_outcome: "Sent: 4 matches",
+    });
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/digests",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      const mine = digestsStore.filter((row) => row.staff_id === me);
+      const subscribed = new Set(mine.map((row) => row.view_id));
+      return ok({
+        digests: mine
+          .map(digestView)
+          .sort(
+            (a, b) =>
+              a.list_label.localeCompare(b.list_label) || a.view_name.localeCompare(b.view_name),
+          ),
+        views: digestVisibleViews(headers)
+          .map((view) => ({
+            view_id: view.id,
+            name: view.name,
+            list_key: view.list_key,
+            list_label: DIGEST_LISTS[view.list_key]![0],
+            shared: view.shared,
+            subscribed: subscribed.has(view.id),
+          }))
+          .sort((a, b) => a.list_label.localeCompare(b.list_label) || a.name.localeCompare(b.name)),
+        cadences: Object.entries(DIGEST_CADENCES).map(([value, label]) => ({ value, label })),
+        weekdays: DIGEST_WEEKDAYS,
+        mail_ready: true,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/digests/create",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ body, headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      const viewId = String(body.view_id ?? "");
+      if (!digestVisibleViews(headers).some((view) => view.id === viewId))
+        return refuse(400, "malformed_request", {
+          view_id: "choose one of your views, or a shared one",
+        });
+      if (digestsStore.some((row) => row.staff_id === me && row.view_id === viewId))
+        return refuse(400, "malformed_request", {
+          view_id: "you already have this view as a digest",
+        });
+      const schedule = digestSchedulePart(body);
+      if ("status" in schedule) return schedule;
+      const row: DigestRow = {
+        id: randomUUID(),
+        staff_id: me,
+        view_id: viewId,
+        ...schedule,
+        send_empty: body.send_empty === true,
+        active: true,
+        next_due_at: digestNextDue(schedule.cadence, schedule.weekday, schedule.hour_utc),
+        last_sent_at: null,
+        last_rows: null,
+        last_outcome: "",
+      };
+      digestsStore.push(row);
+      audit("digest.created", me || null, "digest", row.id);
+      return ok({ digest: digestView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/digests/{digest_id}/update",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params, body, headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      const row = digestsStore.find((item) => item.id === params.digest_id && item.staff_id === me);
+      if (!row) return refuse(404, "not_found");
+      let changed = false;
+      if (["cadence", "hour_utc", "weekday"].some((name) => name in body)) {
+        const schedule = digestSchedulePart(body, row);
+        if ("status" in schedule) return schedule;
+        Object.assign(row, schedule, {
+          next_due_at: digestNextDue(schedule.cadence, schedule.weekday, schedule.hour_utc),
+        });
+        changed = true;
+      }
+      if ("send_empty" in body) {
+        row.send_empty = body.send_empty === true;
+        changed = true;
+      }
+      if ("active" in body) {
+        const active = body.active === true;
+        if (active && !row.active) {
+          row.next_due_at = digestNextDue(row.cadence, row.weekday, row.hour_utc);
+          row.last_outcome = "";
+        }
+        row.active = active;
+        changed = true;
+      }
+      if (!changed) return refuse(400, "malformed_request", { fields: "nothing to change" });
+      audit("digest.updated", me || null, "digest", row.id);
+      return ok({ digest: digestView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/digests/{digest_id}/delete",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params, headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      const index = digestsStore.findIndex(
+        (item) => item.id === params.digest_id && item.staff_id === me,
+      );
+      if (index < 0) return refuse(404, "not_found");
+      const [row] = digestsStore.splice(index, 1);
+      audit("digest.deleted", me || null, "digest", row!.id);
+      return ok({ deleted: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/digests/{digest_id}/deliver",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params, body, headers }) => {
+      const found = caller(headers);
+      const row = digestsStore.find(
+        (item) => item.id === params.digest_id && item.staff_id === found?.member.id,
+      );
+      if (!row) return refuse(404, "not_found");
+      const columns = Array.isArray(body.columns) ? (body.columns as unknown[]).slice(0, 6) : [];
+      const rows = Array.isArray(body.rows) ? (body.rows as unknown[]).slice(0, 50) : [];
+      if (!columns.length)
+        return refuse(400, "malformed_request", { rows: "columns and rows to lay out" });
+      const total = Math.max(Number(body.total ?? rows.length) || 0, rows.length);
+      const view = savedViews.find((item) => item.id === row.view_id);
+      // A person's own session: "send me one now" — always sent, schedule untouched.
+      digestOutbox.unshift({
+        digest_id: row.id,
+        to: found?.member.email ?? "",
+        subject: `${view?.name ?? "Your view"}: ${total} ${total === 1 ? "match" : "matches"}`,
+        rows: total,
+        at: now(),
+      });
+      audit("digest.previewed", found?.member.id ?? null, "digest", row.id);
+      return ok({
+        sent: true,
+        outcome: `Sent: ${total} ${total === 1 ? "match" : "matches"}`,
+        rows: total,
+      });
+    },
+  },
+);
+
 // After their declarations: the seeds read the blocks' constants.
 seedCustomFields();
 seedAutomations();
+seedDigests();
 
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
@@ -33975,6 +34297,7 @@ function resetWorld() {
   seedTrust();
   seedCustomFields();
   seedAutomations();
+  seedDigests();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

@@ -1,3 +1,4 @@
+import { RecordAutomations } from "@/components/platform/record-automations";
 import { CustomFieldsSection } from "@/components/platform/custom-fields-section";
 import { RecordMail } from "@/components/mail/record-mail";
 import Link from "next/link";
@@ -282,6 +283,12 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
               recordId={person.person_id}
               fields={detail.custom_fields}
               canWrite={canWrite}
+            />
+            <RecordAutomations
+              token={context.token}
+              recordType="person"
+              recordId={person.person_id}
+              returnPath={`/people/${person.person_id}`}
             />
             {hasCapability(context, "audit:read") && (
               <ViewedBy

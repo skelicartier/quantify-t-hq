@@ -192,6 +192,17 @@ const SIGNED_IN_PAGES: Shot[] = [
   },
   { name: "task-templates", path: "/tasks/templates", ready: "main#main-content" },
   { name: "admin-fields", path: "/admin/fields", ready: "main#main-content" },
+  { name: "admin-automations", path: "/admin/automations", ready: "main#main-content" },
+  {
+    name: "admin-automation",
+    path: "/admin/automations/a7000001-0000-4000-8000-000000000000",
+    ready: ".automation-builder",
+  },
+  {
+    name: "admin-automation-paused",
+    path: "/admin/automations/a7000004-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
   {
     name: "admin-field",
     path: "/admin/fields/cf000001-0000-4000-8000-000000000000",
@@ -492,6 +503,7 @@ async function captureInteractions(page: Page, folder: string) {
   await capturePlatformFlows(page, folder);
   await captureTrustFlows(page, folder);
   await captureFieldFlows(page, folder);
+  await captureAutomationFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -1099,6 +1111,64 @@ async function capturePlatformFlows(page: Page, folder: string) {
     await page.waitForSelector("#company-templates .form-sent", { timeout: 10_000 });
   }
   await shoot(page, `${folder}/company-threads`);
+}
+
+/**
+ * Automations: one started on companies, built (lifecycle changes to customer → a task and
+ * a notification), tried on the last fifty and published; then the Renewal pack button is
+ * pressed on a company page.
+ */
+async function captureAutomationFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  await page.goto(`${BASE}/admin/automations`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Start an automation" }).click();
+  await page.fill("#auto-new-name", `Harness welcome ${stamp}`);
+  await page.selectOption("#auto-new-type", "company");
+  await page.locator("button", { hasText: "Start it" }).click();
+  await page
+    .waitForURL(/\/admin\/automations\/[0-9a-f-]{36}$/, { timeout: 15_000 })
+    .catch(() => report(`${folder}/automation-built`, "starting an automation did not open it"));
+  await page.waitForSelector(".automation-builder", { timeout: 10_000 });
+  await page.selectOption("#auto-trigger", "field_changed");
+  await page.selectOption("#auto-trigger-field", "lifecycle");
+  await page.selectOption("#auto-trigger-to", "customer");
+  await page.locator("button", { hasText: "Add a condition" }).click();
+  await page.selectOption("#auto-cond-field-0", "country");
+  await page.selectOption("#auto-cond-op-0", "set");
+  await page.selectOption("#auto-next-kind", "task");
+  await page.locator(".automation-builder__add button", { hasText: "Add" }).click();
+  await page.fill("#auto-step-title-0", "Send the harness welcome pack");
+  await page.selectOption("#auto-next-kind", "notify");
+  await page.locator(".automation-builder__add button", { hasText: "Add" }).click();
+  await page.fill("#auto-step-message-1", "A new customer: say thank you.");
+  await page.locator("button", { hasText: "Save the draft" }).click();
+  await page.waitForSelector(".automation-builder .form-sent", { timeout: 10_000 });
+  await page.locator("button", { hasText: "Try the saved draft" }).click();
+  await page.waitForSelector(".dry-run__row", { timeout: 10_000 });
+  await shoot(page, `${folder}/automation-built`);
+  await page.locator("button", { hasText: /^Publish version 1$/ }).click();
+  await page.waitForSelector(".rhead__status :text('Running')", { timeout: 10_000 });
+
+  // A prospect becomes a customer: the automation runs on it.
+  await page.goto(`${BASE}/admin/automations`, { waitUntil: "networkidle" });
+  if ((await page.locator(`a:has-text("Harness welcome ${stamp}")`).count()) === 0)
+    report(`${folder}/automation-built`, "the new automation is not listed");
+  await shoot(page, `${folder}/admin-automations-worked`);
+
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002`, {
+    waitUntil: "networkidle",
+  });
+  const press = page.locator("button", { hasText: "Renewal pack" }).first();
+  if ((await press.count()) > 0) {
+    await press.click();
+    await page.waitForTimeout(800);
+    await page.reload({ waitUntil: "networkidle" });
+  } else
+    report(
+      `${folder}/company-automation-pressed`,
+      "the Renewal pack button is not on the company page",
+    );
+  await shoot(page, `${folder}/company-automation-pressed`);
 }
 
 /**

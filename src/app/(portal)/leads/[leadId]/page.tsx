@@ -1,3 +1,4 @@
+import { RecordAutomations } from "@/components/platform/record-automations";
 import { CustomFieldsSection } from "@/components/platform/custom-fields-section";
 import { RecordMail } from "@/components/mail/record-mail";
 import Link from "next/link";
@@ -228,6 +229,12 @@ export default async function LeadPage({ params }: LeadPageProps) {
               recordId={lead.lead_id}
               fields={detail.custom_fields}
               canWrite={canWrite}
+            />
+            <RecordAutomations
+              token={context.token}
+              recordType="lead"
+              recordId={lead.lead_id}
+              returnPath={`/leads/${lead.lead_id}`}
             />
             {lead.stage === "qualified" && (
               <Card title="Converted" titleAs="h3" important>

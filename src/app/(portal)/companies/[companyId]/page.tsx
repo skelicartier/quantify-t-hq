@@ -1,3 +1,4 @@
+import { RecordAutomations } from "@/components/platform/record-automations";
 import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
 import { readFields, type CustomField } from "@/lib/api/fields";
 import { CustomFieldsSection } from "@/components/platform/custom-fields-section";
@@ -516,6 +517,12 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
               recordId={company.company_id}
               fields={detail.custom_fields}
               canWrite={canWrite}
+            />
+            <RecordAutomations
+              token={context.token}
+              recordType="company"
+              recordId={company.company_id}
+              returnPath={`/companies/${company.company_id}`}
             />
             {detail.children.length > 0 && (
               <RecordSection id="company-group" title="Group">

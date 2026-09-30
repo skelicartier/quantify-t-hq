@@ -10352,3 +10352,71 @@
     }
   }
 }
+
+/* The automation builder: When · If · Then, and the dry run's answer. */
+@layer pages {
+  .automation-builder__part {
+    display: grid;
+    gap: 12px;
+  }
+
+  .automation-builder__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.2fr) auto;
+    gap: 10px;
+    align-items: end;
+  }
+
+  .automation-builder__step {
+    display: grid;
+    gap: 10px;
+    padding: 12px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .automation-builder__step-title {
+    margin: 0;
+    font-weight: 600;
+  }
+
+  .automation-builder__add {
+    display: flex;
+    gap: 10px;
+    align-items: end;
+  }
+
+  .dry-run {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .dry-run__row {
+    display: grid;
+    grid-template-columns: minmax(120px, 0.6fr) minmax(0, 1.4fr);
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .dry-run__label {
+    font-weight: 600;
+  }
+
+  .dry-run__yes {
+    color: var(--text);
+  }
+
+  @media (max-width: 640px) {
+    .automation-builder__row,
+    .dry-run__row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .automation-builder__add {
+      flex-wrap: wrap;
+    }
+  }
+}
