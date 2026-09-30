@@ -145,6 +145,7 @@ and asked for gaps only. Section 8 of that file is the build order.
 | Trust registers      | migration 0040: what a security review, an auditor or an insurer asks for, with dates and owners and never a "% compliant" — risks (likelihood × impact, banded, a heat map; the band sets the review, a worse score brings it forward; accepting one is a decision with a reason, a critical one the owner's), findings (fix-by 7/30/90/180 days from the day found; fixed with evidence or accepted with a reason), production changes (a way back for medium and high risk; high risk waits for someone other than its recorder, and one that went ahead unapproved stays flagged), continuity tests (restore quarterly, failover twice a year, tabletop and loss of access yearly; missing the recovery target is not a pass; anything short of a pass raises a finding), supplier reviews (a tier per sub-processor sets the cadence; concerns raise a finding; a proposed one is reviewed before it goes live), the answer library (sales drafts, an admin approves for a year, new words lapse the approval, copy an approved answer), the record of processing (UK GDPR Art 30, the privacy desk's, reviewed yearly)                                                                                                                                                                                                                                                                               | Trust (Due, Risks, Findings, Changes, Continuity, Suppliers, Answers, Processing); the sub-processor record shows its tier                                                        | service `78b045e`, `5f3dae1`; HQ: the commit adding this |
 | Custom fields        | migration 0041: an admin's own fields on companies, people, deals and leads (Admin → Fields, a page per field): nine kinds, values normalised by kind; key and kind fixed once made, fields archived never deleted, a choice retired never removed; required when a person creates or edits (imports, conversions, intake exempt; a sensitive required field never blocks someone who cannot see it); sensitive fields shown and written only by owners and admins, masked elsewhere and in the audit log; checked before anything is written; a merge fills the kept record's blanks; changes in the record's audit row; a Fields section on each record, required fields in the create forms, custom fields in the Companies and Leads filters                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Admin → Fields; company, person, deal and lead pages; the create forms; Companies and Leads filters                                                                               | service `b6133b4`, `d9b3322`; HQ: the commit adding this |
 | Automations          | migration 0042: a trigger (created, a field changed to a value, a deal entering a stage, N days before a date, a button on the record), conditions (the list filters' tests), actions (a task, a field set, a notification, the automation.fired webhook); a draft never runs, publishing makes the next version and runs name theirs; it acts as its publisher (a button, as whoever pressed it) through the record's own checks, and fails rather than act as nobody; its own writes never start it again, nothing chains past depth 3, both written down as skipped_loop runs; five failures in a row pause it; date triggers from a nightly timer, once per record per date; a dry run on the last fifty records writes nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Admin → Automations (the builder: When · If · Then; try; publish; pause, resume, archive); an Automations section on company, person, deal and lead pages (its buttons, what ran) | service `50c7019`; HQ: the commit adding this            |
+| Digests              | migration 0043: a saved view mailed on a schedule (daily, or a weekday, at an hour UTC), paused or removed by its reader; the hourly worker asks the portal to render the view as its reader — the list's own filters and field readers, so a digest shows what the page would — through a ten-minute read-only token (`hqd_`, hashed, lists only: no writes, no record pages, no sudo), then sends it; an empty one is skipped unless asked for; each send an audit row with the rows it carried                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | My digests (add, pause, remove, send me one now); "Mail me a view" beside saved views on Companies, Leads and Deals                                                               | service `4124222`; HQ: the commit adding this            |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
@@ -192,28 +193,28 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of the end of Automations** (the machine clock read 2026-10-01).
+**As of the end of Digests** (the machine clock read 2026-10-01).
 
-- HQ repo: custom fields `7c0ee2c`; automations go out in the commit after it (harness 17:
-  846 checks, all clean). That commit's mock also carries the digests block, which the next
-  wave's pages use and harness 18 first exercises. The builder submits through a transition,
-  not the form's action: React resets a form after its action succeeds, and the reset put
-  every controlled select back on its first option while the state still held the choices.
+- HQ repo: automations `3e1ca31`; digests go out in the commit after it (harness 18: 854
+  checks, all clean). Each list's filter fields and field readers now live in
+  `src/lib/lists/definitions.ts`, shared by the page and its digest, so the two cannot drift.
   `next-env.d.ts` shows modified after every `next dev`; never commit it. `.env.local`
   (HQ_DEV_AUTOLOGIN) never committed.
 - Product repo, local only: Security 3 `b1ee121`, AI `c90131c`, platform part one
   `e72b9f0`, Trust `78b045e` + `5f3dae1`, index guards `d3f30d0`, custom fields `b6133b4` +
-  `d9b3322`, automations `50c7019`, digests `4124222` (service and tests; the portal is
-  next). Run every file that imports `account_api`, not only `tests/test_hq_*.py` (1,804
-  pass). Uncommitted and
-  not ours: the theses tab, `app_manager`, examiner, memory service,
+  `d9b3322`, automations `50c7019`, digests `4124222`, finance part two `e4555ac` (cash and
+  runway, vendors, expense claims, investor updates; the portal is next). Run every file that
+  imports `account_api`, not only `tests/test_hq_*.py` (1,814 pass). Uncommitted and not
+  ours: the theses tab, `app_manager`, examiner, memory service,
   `tests/_fabric_coverage_test.db` — never stage.
-- Migrations 0006–0043 unapplied (production blocked on Azure). 0042 adds a nightly timer,
+- Migrations 0006–0044 unapplied (production blocked on Azure). 0042 adds a nightly timer,
   `hq_automation_sweeper` (04:11 UTC), for date triggers; 0043 an hourly one,
   `hq_digest_worker` (:07), which posts due digests to the portal's `/api/digests/render`
   with the portal key — so `QT_HQ_PORTAL_KEY` / `HQ_ACCOUNT_API_PORTAL_KEY` and
   `QT_HQ_PUBLIC_SITE_URL` must be set before digests can send.
-- The payload contract test fails on `hq/digests` until the digests portal lands.
+- The payload contract test fails on the five `hq/finance/*` reads until the finance portal
+  lands (the service's sampler already takes them). CI skips the test: it needs the product
+  repo's fixture.
 - Local run: the console's dev server holds port 3000; HQ runs on 3001 with
   `PORT=3001 NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3001 npx next dev -p 3001`, the mock with
   `MOCK_AI=1 HQ_UI_BASE=http://127.0.0.1:3001 npm run mock:hq` (port 7071; `MOCK_AI=1` puts a
@@ -233,10 +234,13 @@ founder can fix.
 - The mock's custom fields and automations blocks wrap the four record types' existing
   handlers (checked before, written after, triggers fired, values added to lists and
   records) rather than editing each; the automations block sits after the custom fields
-  block because it reuses `cfWrap`.
-- **Next step:** the digests portal — `src/lib/lists/definitions.ts` (each list's filter
-  fields and field readers, moved out of the Companies, Leads and Deals pages so a digest
-  filters exactly as its page), `src/lib/digests/render.ts` (a saved view's rows as the
-  reader), `POST /api/digests/render` (public at the edge, the portal key checked inside),
-  My digests (`/me/digests`: add, pause, remove, send me one now), a "Mail me a view" link
-  beside saved views, the contract mapping and the harness flow.
+  block because it reuses `cfWrap`. The mock's route-parity test reads `pattern:` strings
+  literally: two routes sharing a handler are two entries, never a ternary.
+- **Next step:** the finance portal — Business → Finance (cash and runway per currency,
+  vendors with their cancel-by dates, investor updates over a frozen snapshot) and Work →
+  Expenses (everyone's own claims; someone else decides them), the mock's finance block, the
+  contract mappings and the harness flows. Then the research leftovers, in order: quotes with
+  discount approval and a mutual action plan per deal (sales part three) → a business review
+  per firm, the changelog tied to requests, the reference consent ledger (customer success)
+  → a public trust centre and a control map with an auditor's view (trust) → deferred
+  revenue and budget against actual (finance part three).

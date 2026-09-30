@@ -24,6 +24,9 @@ export function normaliseQuery(query: string): string {
     .join("&");
 }
 
+/** The lists whose saved views can be mailed as digests. */
+const DIGEST_LISTS = new Set(["companies", "leads", "deals"]);
+
 export async function ViewTabs({
   token,
   listKey,
@@ -105,6 +108,11 @@ export async function ViewTabs({
       {current && (
         <Link className="views__reset" href={basePath}>
           Reset
+        </Link>
+      )}
+      {DIGEST_LISTS.has(listKey) && (
+        <Link className="views__reset" href="/me/digests">
+          Mail me a view
         </Link>
       )}
     </div>

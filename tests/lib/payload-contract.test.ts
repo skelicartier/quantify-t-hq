@@ -107,6 +107,7 @@ import * as tickets from "@/lib/api/tickets";
 import * as trustApi from "@/lib/api/trust";
 import * as fieldsApi from "@/lib/api/fields";
 import * as autoApi from "@/lib/api/automations";
+import * as digestApi from "@/lib/api/digests";
 
 const fixture = shared.fixture;
 const ids = fixture?.ids ?? {};
@@ -194,6 +195,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/outbound-webhooks", () => platformApi.readWebhooks(token)],
   ["hq/outbound-webhooks/{endpoint_id}", () => platformApi.readWebhook(token, ids.endpoint_id!)],
   ["hq/settings/fields", () => fieldsApi.readFields(token)],
+  ["hq/digests", () => digestApi.readDigests(token)],
   ["hq/automations", () => autoApi.readAutomations(token)],
   ["hq/automations/{automation_id}", () => autoApi.readAutomation(token, ids.automation_id!)],
   ["hq/record-automations", () => autoApi.readRecordAutomations(token, "company", ids.company_id!)],

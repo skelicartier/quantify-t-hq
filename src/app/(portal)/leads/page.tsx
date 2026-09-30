@@ -1,5 +1,5 @@
+import { leadFilterFields, readLeadField } from "@/lib/lists/definitions";
 import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
-import { customFilterFields, readCustom } from "@/lib/lists/custom";
 import Link from "next/link";
 import { AiFilterBox } from "@/components/ai/ai-assist";
 import { filterAction } from "@/app/(portal)/_actions/ai";
@@ -33,13 +33,7 @@ import {
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LEAD_STAGES, LEAD_STAGE_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { requestNow } from "@/lib/request-time";
-import {
-  applyFilters,
-  describeFilter,
-  parseFilters,
-  serializeFilter,
-  type FilterField,
-} from "@/lib/lists/filters";
+import { applyFilters, describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
 import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -121,57 +115,13 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
   };
   const filterLink = (name: keyof typeof filters, value: string) => listHref({ [name]: value });
   const currentQuery = listHref({}).split("?")[1] ?? "";
-  const filterFields: FilterField[] = [
-    {
-      key: "stage",
-      label: "Stage",
-      kind: "choice",
-      choices: LEAD_STAGES.map((value) => ({ value, label: LEAD_STAGE_LABELS[value] ?? value })),
-    },
-    {
-      key: "source",
-      label: "Source",
-      kind: "choice",
-      choices: [...(settings?.sources ?? []), ...(settings?.archived_sources ?? [])].map(
-        (source) => ({ value: source.key, label: source.label }),
-      ),
-    },
-    { key: "owner", label: "Owner", kind: "text" },
-    { key: "company", label: "Company", kind: "text" },
-    { key: "email", label: "Email", kind: "text" },
-    { key: "waiting", label: "Waiting (minutes)", kind: "number" },
-    {
-      key: "overdue",
-      label: "First reply overdue",
-      kind: "choice",
-      choices: [
-        { value: "yes", label: "Yes" },
-        { value: "no", label: "No" },
-      ],
-    },
-    ...customFilterFields(page?.custom_fields ?? []),
-  ];
+  const filterFields = leadFilterFields(page, [
+    ...(settings?.sources ?? []),
+    ...(settings?.archived_sources ?? []),
+  ]);
   const conditions = parseFilters(filterParams, filterFields);
-  const readField = (lead: LeadsPage["leads"][number], field: string): string | number | null => {
-    switch (field) {
-      case "stage":
-        return lead.stage;
-      case "source":
-        return lead.source_key;
-      case "owner":
-        return lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : "";
-      case "company":
-        return lead.company_name;
-      case "email":
-        return lead.email;
-      case "waiting":
-        return lead.waiting_minutes;
-      case "overdue":
-        return lead.first_reply_overdue ? "yes" : "no";
-      default:
-        return readCustom(lead.custom, field) ?? null;
-    }
-  };
+  const readField = (lead: LeadsPage["leads"][number], field: string) =>
+    readLeadField(lead, field, names);
   const filtered = applyFilters(page?.leads ?? [], conditions, readField);
   const leads = sortRows(filtered, sort, {
     lead: (lead) => lead.full_name || lead.email,

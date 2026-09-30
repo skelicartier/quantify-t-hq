@@ -1,3 +1,4 @@
+import { dealFilterFields, readDealField } from "@/lib/lists/definitions";
 import Link from "next/link";
 import { AiFilterBox } from "@/components/ai/ai-assist";
 import { filterAction } from "@/app/(portal)/_actions/ai";
@@ -26,13 +27,7 @@ import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
 import { formatMoney, formatMrr, formatMrrBy } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
-import {
-  applyFilters,
-  describeFilter,
-  parseFilters,
-  serializeFilter,
-  type FilterField,
-} from "@/lib/lists/filters";
+import { applyFilters, describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
 import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -117,50 +112,9 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
   const currentQuery = link({}).split("?")[1] ?? "";
   const peek = firstSearchValue(parameters.peek) ?? "";
   const canMoveDeals = hasCapability(context, "deals:write");
-  const filterFields: FilterField[] = [
-    {
-      key: "stage",
-      label: "Stage",
-      kind: "choice",
-      choices: (board?.columns ?? []).map((column) => ({ value: column.key, label: column.label })),
-    },
-    { key: "owner", label: "Owner", kind: "text" },
-    { key: "company", label: "Company", kind: "text" },
-    { key: "value", label: "Monthly value", kind: "number" },
-    { key: "weighted", label: "Weighted", kind: "number" },
-    { key: "age", label: "Days in stage", kind: "number" },
-    { key: "idle", label: "Days quiet", kind: "number" },
-    { key: "next", label: "Next step", kind: "text" },
-    { key: "due", label: "Next step due", kind: "text" },
-    { key: "flags", label: "Flags", kind: "text" },
-  ];
+  const filterFields = dealFilterFields(board);
   const conditions = parseFilters(filterParams, filterFields);
-  const readField = (deal: DealRow, field: string): string | number | null => {
-    switch (field) {
-      case "stage":
-        return deal.stage_key;
-      case "owner":
-        return deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "";
-      case "company":
-        return deal.company_name || deal.name;
-      case "value":
-        return deal.mrr_amount;
-      case "weighted":
-        return deal.weighted_mrr;
-      case "age":
-        return deal.days_in_stage;
-      case "idle":
-        return deal.idle_days;
-      case "next":
-        return deal.next_step;
-      case "due":
-        return deal.next_step_due;
-      case "flags":
-        return deal.flags.join(",");
-      default:
-        return null;
-    }
-  };
+  const readField = (deal: DealRow, field: string) => readDealField(deal, field, names);
   const rows = sortRows(
     applyFilters(
       (board?.columns ?? []).flatMap((column) => column.deals),

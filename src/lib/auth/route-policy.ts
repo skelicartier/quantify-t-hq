@@ -12,6 +12,8 @@ const PUBLIC_EXACT = new Set([
   "/forgot-password",
   "/reset-password",
   "/status",
+  // The service's hourly digest pass: no session, the shared portal key checked in the handler.
+  "/api/digests/render",
 ]);
 
 // "/u/": the recipient's stop page and the one-click endpoint mailbox providers POST to.

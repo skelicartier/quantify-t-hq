@@ -1,5 +1,5 @@
+import { companyFilterFields, readCompanyField } from "@/lib/lists/definitions";
 import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
-import { customFilterFields, readCustom } from "@/lib/lists/custom";
 import type { CustomField } from "@/lib/api/fields";
 import Link from "next/link";
 import { AiFilterBox } from "@/components/ai/ai-assist";
@@ -28,13 +28,7 @@ import { readCompanies, type CompanyRow } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LIFECYCLES, LIFECYCLE_LABELS } from "@/lib/crm/vocabulary";
 import { formatMrrBy, sumMoneyByCurrency } from "@/lib/format";
-import {
-  applyFilters,
-  describeFilter,
-  parseFilters,
-  serializeFilter,
-  type FilterField,
-} from "@/lib/lists/filters";
+import { applyFilters, describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
 import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
@@ -108,45 +102,9 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
   }
   const names = await directoryOrNull(context.token);
   const canWrite = hasCapability(context, "crm:write");
-  const filterFields: FilterField[] = [
-    {
-      key: "lifecycle",
-      label: "Lifecycle",
-      kind: "choice",
-      choices: LIFECYCLES.map((value) => ({ value, label: LIFECYCLE_LABELS[value] ?? value })),
-    },
-    { key: "type", label: "Type", kind: "text" },
-    { key: "country", label: "Country", kind: "text" },
-    { key: "domain", label: "Web domain", kind: "text" },
-    { key: "owner", label: "Owner", kind: "text" },
-    { key: "people", label: "People", kind: "number" },
-    { key: "deals", label: "Open deals", kind: "number" },
-    { key: "mrr", label: "MRR", kind: "number" },
-    ...customFilterFields(customFields),
-  ];
+  const filterFields = companyFilterFields({ custom_fields: customFields });
   const conditions = parseFilters(filterParams, filterFields);
-  const readField = (row: CompanyRow, field: string): string | number | null => {
-    switch (field) {
-      case "lifecycle":
-        return row.lifecycle;
-      case "type":
-        return row.firm_type;
-      case "country":
-        return row.country;
-      case "domain":
-        return row.domain;
-      case "owner":
-        return row.owner_staff_id ? nameFor(names, row.owner_staff_id) : "";
-      case "people":
-        return row.people_count;
-      case "deals":
-        return row.open_deals;
-      case "mrr":
-        return row.mrr ? Object.values(row.mrr).reduce((sum, amount) => sum + amount, 0) : null;
-      default:
-        return readCustom(row.custom, field) ?? null;
-    }
-  };
+  const readField = (row: CompanyRow, field: string) => readCompanyField(row, field, names);
   const filtered = applyFilters(
     (companies ?? []).filter((row) => !lifecycle || row.lifecycle === lifecycle),
     conditions,

@@ -18,6 +18,7 @@ import {
   LifeBuoy,
   HeartHandshake,
   Mail,
+  Newspaper,
   Scale,
   ScrollText,
   ShieldCheck,
@@ -232,7 +233,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         capability: "hq:admin",
       },
       { href: "/admin/audit", label: "Audit", icon: ScrollText, capability: "audit:read" },
-      { href: "/me/security", label: "My security", icon: ShieldCheck, activePrefix: "/me/" },
+      {
+        href: "/me/security",
+        label: "My security",
+        icon: ShieldCheck,
+        activePrefix: "/me/security",
+      },
+      // A reader of any list may have its saved views mailed.
+      { href: "/me/digests", label: "My digests", icon: Newspaper, capability: "crm:read" },
     ],
   },
 ];

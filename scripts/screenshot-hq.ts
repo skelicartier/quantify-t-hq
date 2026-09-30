@@ -193,6 +193,7 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "task-templates", path: "/tasks/templates", ready: "main#main-content" },
   { name: "admin-fields", path: "/admin/fields", ready: "main#main-content" },
   { name: "admin-automations", path: "/admin/automations", ready: "main#main-content" },
+  { name: "me-digests", path: "/me/digests", ready: "main#main-content" },
   {
     name: "admin-automation",
     path: "/admin/automations/a7000001-0000-4000-8000-000000000000",
@@ -504,6 +505,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureTrustFlows(page, folder);
   await captureFieldFlows(page, folder);
   await captureAutomationFlows(page, folder);
+  await captureDigestFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -1111,6 +1113,31 @@ async function capturePlatformFlows(page: Page, folder: string) {
     await page.waitForSelector("#company-templates .form-sent", { timeout: 10_000 });
   }
   await shoot(page, `${folder}/company-threads`);
+}
+
+/**
+ * Digests: a saved view added as a weekly digest, then "send me one now" — rendered by the
+ * portal as the signed-in person and handed to the service to mail.
+ */
+async function captureDigestFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/me/digests`, { waitUntil: "networkidle" });
+  if ((await page.locator("#digest-view").count()) > 0) {
+    await page.selectOption("#digest-cadence", "weekly");
+    await page.selectOption("#digest-weekday", "0");
+    await page.selectOption("#digest-hour", "7");
+    await page.locator("button", { hasText: "Add the digest" }).click();
+    await page.waitForSelector("form:has(#digest-view) .form-sent, #add .muted", {
+      timeout: 10_000,
+    });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  const now = page.locator("button", { hasText: "Send me one now" }).first();
+  if ((await now.count()) === 0) report(`${folder}/me-digests-sent`, "no digest to send");
+  else {
+    await now.click();
+    await page.waitForSelector("text=Sent to your address", { timeout: 20_000 });
+  }
+  await shoot(page, `${folder}/me-digests-sent`);
 }
 
 /**
