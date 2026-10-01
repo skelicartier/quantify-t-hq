@@ -194,6 +194,41 @@ and asked for gaps only. Section 8 of that file is the build order.
 - Service `6503188`; HQ: the commit adding this. Harness 23 adds the Company page, the
   export menu, one real file per format checked by its first bytes, and two pages printed.
 
+### 2026-10-01 — Product: the console's administration, moved here
+
+- The console carried the product's administration; it now lives in HQ's **Product** rail
+  group and the console is the customer's own account only. Overview, Accounts (and each
+  account), Subscriptions, Notices, Product email, Releases, Reports, Product audit,
+  Configuration, Provider keys, Credentials, Product roles, Product staff — the console's
+  own screens, ported (`src/app/(portal)/product`, `src/components/product`,
+  `src/lib/product`). Support is not among them: HQ has its own desk.
+- **Two keys.** HQ decides who may enter (`product:access`: Owner, Admin, Support; a fresh
+  code for every change, offered at the top of each screen). The product decides what they
+  may do: every `hq/product/<rest>` route runs the Account API's own `admin/<rest>` handler
+  as the staff member's **linked Quantify Terminal account**, by that account's product
+  role. A link never widens anyone's reach; the product's audit names the account, HQ's
+  audit adds who acted through it (`product.<route>`, `as_account`).
+- **The link.** Only an Owner, with a fresh code, on the staff record ("Quantify Terminal
+  account"), and only to an account that already holds a staff role in the product; one
+  account per staff member; an empty address unlinks. Until then Product says why and
+  shows nothing.
+- **Transport.** `src/lib/product/account-api.ts` keeps the console's schemas and calls;
+  only its transport changed (`admin/*` → `hq/product/*` through `fetchHqJson`/`postHqJson`,
+  HQ's errors translated to the console's so every screen keeps its messages). Releases
+  still go straight to the deploy function, which now accepts an `hq_` token
+  (`hq/product/whoami`; a publish needs an Owner and a fresh code). Set
+  `QT_UPDATE_DEPLOY_URL` on the HQ project for Releases.
+- The mock forwards Product routes to the console's mock (`HQ_PRODUCT_MOCK_URL`, default
+  `http://127.0.0.1:7072/api/v1`), signed in as the linked persona; run it from the console
+  repo with `MOCK_PORT=7072 npm run mock:api`. `tests/lib/product-bridge.test.ts` holds the
+  client, mock and service `BRIDGED` lists to one another; the console's plan catalogue,
+  role label, CSV and release client tests moved here with the code.
+- HQ's `.board` is the deals board (columns), so the console's stacked layout is
+  `.stack-board` here; the provider-key table takes the full width under 1500px.
+- Service `e8efead` (0052 `hq_staff.account_user_id`, the bridge, the deploy function) and
+  `f79dfaf`; HQ: the commit adding this; the console: the commit removing its
+  administration.
+
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
 The third pass's order (`docs/RESEARCH-2026-09-30-SUITE.md` §8): Security 2 part two
@@ -230,8 +265,9 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile) → apply migrations 0006–0028 and publish → move the desk onto SQL → Vercel
-import + `hq.quantifyterminal.com` → bootstrap the first owner → run
+Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0052 and publish → move the desk onto SQL → Vercel
+import + `hq.quantifyterminal.com` → bootstrap the first owner → link each staff
+member's Quantify Terminal account (Product) → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
 Actions on the account fails every run in seconds with no runner (billing) — only the
 founder can fix.
@@ -240,7 +276,25 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of documents: print, export and the company's particulars** (the machine clock read 2026-10-01).
+**As of Product: the console's administration, moved here** (2026-10-01).
+
+- Product wave: service `e8efead` + `f79dfaf` (local; 0052 unapplied), HQ and the console
+  each one commit. Before anyone uses Product for real, an Owner links each staff member's
+  Quantify Terminal account on their staff record (product repo `docs/HQ_GO_LIVE.md`). The
+  harness walks the fourteen Product screens only with the console's mock on 7072.
+- Harness 24: 720 checks clean — every desktop screen in both themes (the fourteen Product
+  screens and the intern's refusal included) and the phone pass as far as Privacy, where the
+  dev server reached the background-task time limit and stopped. The Product screens were
+  then checked alone at 412px in both themes (axe and overflow): clean. The mail flow's
+  campaign start now accepts a campaign already Sent: when every recipient is inside their
+  window the mock sends the lot at once and there is no Pause to wait for (an hour-of-day
+  flake, not a regression).
+- The Turbopack dev cache under `.next/dev/cache` grew to 7.8 GB and the dev server
+  panicked ("Restore of All … failed") and then hung mid-compile at 0% CPU: stop it, delete
+  `.next/dev/cache` (and `.next/dev/lock`), start again, and expect the first harness pass
+  to compile every page cold.
+
+**Before that: documents: print, export and the company's particulars.**
 
 - Documents wave: service `6503188` (no migration), HQ `7374fd8`. Harness 23: both desktop
   passes clean (783 checks, the new export menu, one real file per format by its first

@@ -33,6 +33,7 @@ const DEGRADED = new Set(
 
 const CAPABILITIES: Record<string, string[]> = {
   owner: [
+    "product:access",
     "audit:read",
     "certificates:issue",
     "crm:export",
@@ -53,6 +54,7 @@ const CAPABILITIES: Record<string, string[]> = {
     "tickets:write",
   ],
   admin: [
+    "product:access",
     "audit:read",
     "certificates:issue",
     "crm:export",
@@ -74,6 +76,7 @@ const CAPABILITIES: Record<string, string[]> = {
   ],
   sales: ["crm:read", "crm:write", "deals:read", "deals:write", "revenue:read", "tickets:read"],
   support: [
+    "product:access",
     "crm:read",
     "deals:read",
     "privacy:read",
@@ -1048,6 +1051,7 @@ function staffView(member: Staff) {
     last_login_at: member.last_login_at,
     created_at: member.created_at,
     totp_enrolled: member.enrolled,
+    account_user_id: linkedAccountId(member.id),
   };
 }
 
@@ -19293,6 +19297,264 @@ routes.push(
     },
   },
 );
+
+// =====================================================================================
+// Product: the product's administration, mirroring hq/product/whoami, the forwarded
+// hq/product/<rest> routes and hq/staff/{staff_id}/account-link. As the service runs the
+// Account API's own admin/<rest> handler as the staff member's linked account, this mock
+// forwards to the console's mock (its admin fixtures) signed in as the linked persona —
+// so start that mock too: MOCK_PORT=7072 npm run mock:api in the console repository.
+// =====================================================================================
+const PRODUCT_MOCK = (process.env.HQ_PRODUCT_MOCK_URL ?? "http://127.0.0.1:7072/api/v1").replace(
+  /\/+$/,
+  "",
+);
+/** The status `respond` uses to ask the server loop to forward asynchronously. */
+const FORWARD = 299;
+/** The console mock's personas: who may be linked, and their product role. */
+const PRODUCT_ACCOUNTS: Record<string, { userId: string; role: string }> = {
+  "owner@example.test": { userId: "4c7715ea-9ae3-4abd-b2f7-2d2c9a037d9b", role: "owner" },
+  "admin@example.test": { userId: "8b2d4e61-1c3a-4f5b-8d9e-2a4c6b8d0f11", role: "admin" },
+  "support@example.test": { userId: "5c1e7a93-2b4d-4e6f-9a1b-3c5d7e9f0a22", role: "support" },
+  "user@example.test": { userId: "9d3f5b71-4c6e-4a8b-9c0d-1e3f5a7b9c33", role: "user" },
+  "priya@example.test": { userId: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c55", role: "user" },
+  "leo@example.test": { userId: "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d66", role: "user" },
+};
+const PRODUCT_STAFF_ROLES = new Set([
+  "owner",
+  "admin",
+  "support_manager",
+  "support",
+  "billing_manager",
+  "auditor",
+]);
+/** staff id → linked console persona email. */
+const productLinks = new Map<string, string>();
+function seedProductLinks() {
+  productLinks.clear();
+  const byEmail = (email: string) => staff.find((member) => member.email === email)?.id;
+  for (const [hq, product] of [
+    ["owner@hq.test", "owner@example.test"],
+    ["admin@hq.test", "admin@example.test"],
+    ["support@hq.test", "support@example.test"],
+  ] as const) {
+    const id = byEmail(hq);
+    if (id) productLinks.set(id, product);
+  }
+}
+seedProductLinks();
+function linkedAccountId(staffId: string): string | null {
+  const email = productLinks.get(staffId);
+  return email ? (PRODUCT_ACCOUNTS[email]?.userId ?? null) : null;
+}
+
+/** Every forwarded route, as the service's BRIDGED table lists them. */
+const PRODUCT_BRIDGED: ReadonlyArray<[string, string]> = [
+  ["hq/product/metrics", "GET"],
+  ["hq/product/users", "GET"],
+  ["hq/product/users/{user_id}", "GET"],
+  ["hq/product/users/{user_id}/usage", "GET"],
+  ["hq/product/users/{user_id}/entitlements", "GET"],
+  ["hq/product/users/{user_id}/activation", "POST"],
+  ["hq/product/users/{user_id}/role", "POST"],
+  ["hq/product/users/{user_id}/subscription", "POST"],
+  ["hq/product/users/{user_id}/entitlement", "POST"],
+  ["hq/product/users/{user_id}/sessions/{session_id}/revoke", "POST"],
+  ["hq/product/subscriptions", "GET"],
+  ["hq/product/notifications", "GET"],
+  ["hq/product/notifications/update", "POST"],
+  ["hq/product/email", "GET"],
+  ["hq/product/email/enqueue", "POST"],
+  ["hq/product/audit-events/search", "GET"],
+  ["hq/product/reports", "GET"],
+  ["hq/product/reports/enqueue", "POST"],
+  ["hq/product/reports/{report_id}/download", "GET"],
+  ["hq/product/configuration", "GET"],
+  ["hq/product/credentials", "GET"],
+  ["hq/product/releases", "GET"],
+  ["hq/product/role-report", "GET"],
+  ["hq/product/staff", "GET"],
+  ["hq/product/staff/{staff_user_id}", "POST"],
+  ["hq/product/secrets", "GET"],
+  ["hq/product/secrets/{slot}", "POST"],
+  ["hq/product/secrets/{slot}/revoke", "POST"],
+  ["hq/product/secrets/{slot}/restore", "POST"],
+];
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/product/whoami",
+    auth: true,
+    capability: "product:access",
+    handler: ({ headers }) => {
+      const who = caller(headers)!;
+      const email = productLinks.get(who.member.id);
+      if (!email) return ok({ linked: false, reason: "account-not-linked", account: null });
+      return {
+        status: FORWARD,
+        body: {
+          kind: "whoami",
+          email,
+          staff: { staff_id: who.member.id, email: who.member.email, role: who.role },
+          sudo_fresh: Boolean(who.session.sudo_until && who.session.sudo_until > now()),
+        },
+      };
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/staff/{staff_id}/account-link",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const who = caller(headers)!;
+      if (who.role !== "owner") return refuse(403, "forbidden", { reason: "owner-only" });
+      const target = staff.find((member) => member.id === params.staff_id);
+      if (!target) return refuse(404, "not_found");
+      const email = String(body.email ?? "")
+        .trim()
+        .toLowerCase();
+      if (!email) {
+        if (!productLinks.has(target.id))
+          return refuse(400, "malformed_request", { email: "not linked" });
+        productLinks.delete(target.id);
+        audit("staff.account_unlinked", who.member.id, "staff", target.id);
+        return ok({ staff_id: target.id, account: null });
+      }
+      const account = PRODUCT_ACCOUNTS[email];
+      if (!account)
+        return refuse(400, "malformed_request", {
+          email: "no Quantify Terminal account has this address",
+        });
+      if (!PRODUCT_STAFF_ROLES.has(account.role))
+        return refuse(400, "malformed_request", {
+          email: "this account holds no staff role in the product; grant one first",
+        });
+      for (const [staffId, linked] of productLinks)
+        if (linked === email && staffId !== target.id)
+          return refuse(400, "malformed_request", {
+            email: "already linked to another staff member",
+          });
+      productLinks.set(target.id, email);
+      audit("staff.account_linked", who.member.id, "staff", target.id);
+      return ok({
+        staff_id: target.id,
+        account: { user_id: account.userId, email, role: account.role },
+      });
+    },
+  },
+  ...PRODUCT_BRIDGED.map(([pattern, method]) => ({
+    method,
+    pattern,
+    auth: true,
+    capability: "product:access",
+    sudo: method !== "GET",
+    handler: ({ route, query, body, headers }: Parameters<Handler>[0]) => {
+      const who = caller(headers)!;
+      const email = productLinks.get(who.member.id);
+      if (!email) return refuse(403, "forbidden", { reason: "account-not-linked" });
+      return {
+        status: FORWARD,
+        body: {
+          kind: "bridge",
+          email,
+          method,
+          route: `admin/${route.slice("hq/product/".length)}`,
+          query,
+          body,
+        },
+      };
+    },
+  })),
+);
+
+const productTokens = new Map<string, string>();
+async function productToken(email: string, fresh = false): Promise<string | null> {
+  if (!fresh && productTokens.has(email)) return productTokens.get(email)!;
+  const response = await fetch(`${PRODUCT_MOCK}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "idempotency-key": randomUUID() },
+    body: JSON.stringify({ email, password: "password-1234" }),
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { session?: { access_token?: string } };
+  const token = payload.session?.access_token ?? null;
+  if (token) productTokens.set(email, token);
+  return token;
+}
+
+async function productCall(
+  email: string,
+  method: string,
+  route: string,
+  query: Record<string, string>,
+  body: unknown,
+) {
+  const url = new URL(`${PRODUCT_MOCK}/${route}`);
+  for (const [name, value] of Object.entries(query ?? {})) url.searchParams.set(name, value);
+  for (const attempt of [false, true]) {
+    const token = await productToken(email, attempt);
+    if (!token) break;
+    const response = await fetch(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        ...(method === "POST" ? { "idempotency-key": randomUUID() } : {}),
+      },
+      body: method === "POST" ? JSON.stringify(body ?? {}) : null,
+    });
+    // A restarted console mock forgets its tokens: sign in again once.
+    if (response.status === 401 && !attempt) continue;
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  }
+  throw new Error("product mock refused the sign-in");
+}
+
+/** The asynchronous half: forward to the console's mock as the linked persona. */
+async function forwardProduct(
+  request: Record<string, unknown>,
+): Promise<{ status: number; body: unknown }> {
+  try {
+    const email = String(request.email);
+    if (request.kind === "whoami") {
+      const me = await productCall(email, "GET", "me", {}, null);
+      if (me.status !== 200) return refuse(503, "upstream_unavailable");
+      const { ok: _ok, correlation_id: _correlation, ...rest } = me.body as Record<string, unknown>;
+      void _ok;
+      void _correlation;
+      const role = (rest.role as { effective?: string } | undefined)?.effective ?? "user";
+      const user = rest.user as { user_id: string; email: string };
+      if (!PRODUCT_STAFF_ROLES.has(role))
+        return ok({ linked: false, reason: "linked-account-not-staff", account: null });
+      return ok({
+        linked: true,
+        reason: "",
+        account: {
+          user_id: user.user_id,
+          email: user.email,
+          role,
+          capabilities: rest.capabilities,
+        },
+        me: rest,
+        staff: request.staff,
+        sudo_fresh: request.sudo_fresh,
+      });
+    }
+    const answer = await productCall(
+      email,
+      String(request.method),
+      String(request.route),
+      (request.query as Record<string, string>) ?? {},
+      request.body,
+    );
+    return answer;
+  } catch {
+    return refuse(503, "upstream_unavailable", { dependency: "product-mock" });
+  }
+}
 
 // =====================================================================================
 // The team, mirroring hq/team*, hq/checkins*, hq/time-off*, hq/certificates*,
@@ -41085,6 +41347,15 @@ const server = createServer((request, response) => {
       return;
     }
     const answer = respond(request.method ?? "GET", route, query, body, request.headers);
+    if (answer.status === FORWARD) {
+      void forwardProduct(answer.body as Record<string, unknown>).then((forwarded) => {
+        response
+          .writeHead(forwarded.status, { "content-type": "application/json" })
+          .end(JSON.stringify(forwarded.body));
+        console.log(`[mock-hq] ${request.method} /${route} -> ${forwarded.status} (product)`);
+      });
+      return;
+    }
     response
       .writeHead(answer.status, { "content-type": "application/json" })
       .end(JSON.stringify(answer.body));
@@ -41138,6 +41409,7 @@ function resetWorld() {
   seedPlanning();
   seedHiring();
   seedCompany();
+  seedProductLinks();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

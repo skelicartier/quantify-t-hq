@@ -3204,7 +3204,9 @@
     }
   }
 
-  @media (max-width: 900px) {
+  /* The key table needs its full width: beside HQ's rail the change form sits under it
+     until the screen is wide enough for both. */
+  @media (max-width: 1500px) {
     .credential-split {
       grid-template-columns: 1fr;
     }
@@ -3460,8 +3462,8 @@
     gap: 10px 14px;
   }
 
-  /* status boards */
-  .board {
+  /* status boards: a page's sections stacked one under another (the deals board is columns) */
+  .stack-board {
     display: grid;
     gap: 20px;
     /* Grid items default to `min-width: auto`, which refuses to shrink below the
@@ -11193,5 +11195,31 @@
   .order-form {
     padding: 0 !important;
     border: 0 !important;
+  }
+}
+
+/* Product: the fresh-code bar over its screens, and on the overview the linked account's
+   badges with its permissions behind a count. */
+@layer pages {
+  .product-sudo {
+    margin-bottom: 12px;
+  }
+
+  .access-badges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .capability-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 6px 16px;
+    margin: 10px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--muted);
+    font-size: var(--fs-ui);
   }
 }

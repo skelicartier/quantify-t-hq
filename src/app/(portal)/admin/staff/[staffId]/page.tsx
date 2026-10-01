@@ -5,6 +5,7 @@ import {
   changeStaffRoleAction,
   confirmSudoAction,
   deactivateStaffAction,
+  linkStaffAccountAction,
   reactivateStaffAction,
   reinviteStaffAction,
   resetAuthenticatorAction,
@@ -19,7 +20,9 @@ import {
 import { SudoGate } from "@/components/admin/sudo-gate";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
+import { ActForm } from "@/components/ui/act-form";
 import { Card } from "@/components/ui/card";
+import { Field, Input } from "@/components/ui/field";
 import { InlineField } from "@/components/ui/inline-field";
 import {
   Properties,
@@ -301,6 +304,9 @@ export default async function StaffMemberPage({ params, searchParams }: StaffMem
               <Timestamp value={member.last_login_at} now={now} mode="both" fallback="Never" />
             </Property>
             <Property label="Added">{formatDate(member.created_at, "—")}</Property>
+            <Property label="Product account">
+              {member.account_user_id ? "Linked" : "Not linked"}
+            </Property>
           </Properties>
         }
       >
@@ -315,6 +321,36 @@ export default async function StaffMemberPage({ params, searchParams }: StaffMem
                   grantable={grantable}
                   disabled={!fresh}
                 />
+              </RecordSection>
+            )}
+            {isOwner && (
+              <RecordSection id="staff-product" title="Quantify Terminal account">
+                <Card
+                  title={member.account_user_id ? "Linked" : "Not linked"}
+                  titleAs="h3"
+                  description="In Product, HQ acts as this account: what it may do there is its product role's. Only an account that already holds a staff role in the product can be linked; leave the address empty to unlink."
+                >
+                  <ActForm
+                    action={linkStaffAccountAction}
+                    hidden={{ staff_id: member.staff_id }}
+                    act="link"
+                    label={member.account_user_id ? "Change the link" : "Link the account"}
+                    disabled={!fresh}
+                  >
+                    <Field
+                      id="product-account-email"
+                      label="Their Quantify Terminal sign-in address"
+                    >
+                      <Input
+                        id="product-account-email"
+                        name="email"
+                        type="email"
+                        maxLength={254}
+                        disabled={!fresh}
+                      />
+                    </Field>
+                  </ActForm>
+                </Card>
               </RecordSection>
             )}
             {(mayManage || isSelf) && (

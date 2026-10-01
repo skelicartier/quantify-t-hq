@@ -418,6 +418,44 @@ export async function deactivateStaffAction(
   }
 }
 
+/**
+ * Link a staff member to their Quantify Terminal account (or unlink with an empty address):
+ * what HQ acts as in Product. An Owner's act after a fresh code; the service accepts only an
+ * account that already holds a staff role in the product.
+ */
+export async function linkStaffAccountAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/admin/staff");
+  if (context.me.role !== "owner") {
+    return { status: "error", message: "Only an Owner links a Quantify Terminal account." };
+  }
+  const staffId = fieldValue(formData, "staff_id", 64);
+  const email = fieldValue(formData, "email", 254).trim();
+  try {
+    const outcome = await staffApi.linkStaffAccount(context.token, staffId, email);
+    refreshStaff(staffId);
+    revalidatePath("/product", "layout");
+    return {
+      status: "sent",
+      message: outcome.account
+        ? `Linked to ${outcome.account.email}. In Product they act as that account.`
+        : "Unlinked. Product is closed to them until an account is linked again.",
+      sentAt: Date.now(),
+    };
+  } catch (error) {
+    const details =
+      error instanceof HqApiRequestError ? (error.details as Record<string, unknown>) : {};
+    if (typeof details["email"] === "string") {
+      const text = details["email"];
+      return { status: "error", message: `${text.charAt(0).toUpperCase()}${text.slice(1)}.` };
+    }
+    return staffRefusal(error);
+  }
+}
+
 export async function reactivateStaffAction(
   _previous: ActionState,
   formData: FormData,

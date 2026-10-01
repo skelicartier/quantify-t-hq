@@ -24,8 +24,23 @@ export const staffMemberSchema = z.object({
   last_login_at: z.string().nullable(),
   created_at: z.string().nullable(),
   totp_enrolled: z.boolean().nullable(),
+  /** The Quantify Terminal account HQ acts as in Product; null when not linked. */
+  account_user_id: z.string().nullable().optional(),
 });
 export type StaffMember = z.infer<typeof staffMemberSchema>;
+
+const accountLinkSchema = okEnvelope.extend({
+  staff_id: z.string(),
+  account: z.object({ user_id: z.string(), email: z.string(), role: z.string() }).nullable(),
+});
+
+/** Link a staff member to their Quantify Terminal account, or unlink them with an empty address. */
+export function linkStaffAccount(token: string, staffId: string, email: string) {
+  return postHqJson(`hq/staff/${staffId}/account-link`, accountLinkSchema, {
+    token,
+    body: { email },
+  });
+}
 
 export const staffListSchema = okEnvelope.extend({ staff: z.array(staffMemberSchema) });
 

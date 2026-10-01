@@ -5,6 +5,10 @@
  *     npm run dev            (terminal 2)
  *     npm run check:hq-ui    (this)
  *
+ * Product's screens forward to the console's mock, so run it too, from the console repo:
+ *
+ *     MOCK_PORT=7072 npm run mock:api
+ *
  * Three assertions per page, not just pictures:
  *   - the page answered 200 and rendered its main landmark;
  *   - no horizontal overflow at either width (the phone is not a narrow desktop);
@@ -388,6 +392,27 @@ const SIGNED_IN_PAGES: Shot[] = [
   },
   { name: "admin-audit", path: "/admin/audit", ready: "main#main-content" },
   { name: "me-security", path: "/me/security", ready: "main#main-content" },
+  // Product: the product's administration, run as the staff member's linked account. Each
+  // waits for what only a successful read draws, so a broken link or an unreachable
+  // service fails here instead of photographing an error.
+  { name: "product", path: "/product", ready: ".stat-grid[role=list]" },
+  { name: "product-users", path: "/product/users", ready: ".data-table" },
+  {
+    name: "product-user",
+    path: "/product/users/9d3f5b71-4c6e-4a8b-9c0d-1e3f5a7b9c33",
+    ready: ".stat-grid[role=list]",
+  },
+  { name: "product-subscriptions", path: "/product/subscriptions", ready: ".data-table" },
+  { name: "product-notifications", path: "/product/notifications", ready: ".data-table" },
+  { name: "product-email", path: "/product/email", ready: ".data-table" },
+  { name: "product-releases", path: "/product/releases", ready: "main#main-content" },
+  { name: "product-reports", path: "/product/reports", ready: ".data-table" },
+  { name: "product-audit", path: "/product/audit", ready: ".data-table" },
+  { name: "product-configuration", path: "/product/configuration", ready: ".stat-grid[role=list]" },
+  { name: "product-secrets", path: "/product/secrets", ready: ".credential-split" },
+  { name: "product-credentials", path: "/product/credentials", ready: ".data-table" },
+  { name: "product-roles", path: "/product/roles", ready: ".data-table" },
+  { name: "product-access", path: "/product/access", ready: ".role-grid" },
   // Outbound mail: every tab, and a campaign in each state the seed holds.
   { name: "mail", path: "/mail", ready: ".stat-grid" },
   { name: "mail-campaigns", path: "/mail/campaigns", ready: ".data-table" },
@@ -2176,7 +2201,12 @@ async function captureMailFlows(page: Page, folder: string) {
   }
   if ((await page.locator("button", { hasText: "Start sending" }).count()) > 0) {
     await page.locator("button", { hasText: "Start sending" }).click();
-    await page.waitForSelector("button:has-text('Pause')", { timeout: 15_000 });
+    // Outside a recipient's local window the worker defers them and the campaign is still
+    // Sending, with Pause offered; when every recipient is inside it, the lot goes at once
+    // and the campaign is already Sent. Which one depends on the hour the harness runs.
+    await page.waitForSelector("button:has-text('Pause'), .rhead__status:has-text('Sent')", {
+      timeout: 15_000,
+    });
   }
   const webinarState = (await page.locator(".rhead__status").innerText()).trim();
   if (!/Sending|Sent/.test(webinarState)) {
@@ -2518,6 +2548,12 @@ async function run(browser: Browser) {
       report(`${viewport.name}/intern/trust`, "Trust did not open the answer library");
     if ((await intern.locator("summary", { hasText: "Draft an answer" }).count()) > 0)
       report(`${viewport.name}/intern/trust`, "the intern was offered a draft");
+    // Product administers customer accounts: never the intern's, in the rail or by URL.
+    if ((await intern.locator('a[href^="/product"]').count()) > 0)
+      report(`${viewport.name}/intern/product`, "the intern was offered Product");
+    await intern.goto(`${BASE}/product`, { waitUntil: "networkidle" });
+    if ((await intern.locator(".stat-grid[role=list], .data-table").count()) > 0)
+      report(`${viewport.name}/intern/product`, "Product opened for the intern");
     await captureElevation(intern, `${viewport.name}/intern`);
     await internContext.close();
 
