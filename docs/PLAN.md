@@ -236,7 +236,10 @@ founder can fix.
 
 **As of documents: print, export and the company's particulars** (the machine clock read 2026-10-01).
 
-- Documents wave: service `6503188` (no migration), HQ the commit after `2febf99`. Before
+- Documents wave: service `6503188` (no migration), HQ `7374fd8`. Harness 23: both desktop
+  passes clean (783 checks, the new export menu, one real file per format by its first
+  bytes, two printed pages); the phone pass stopped at two load flakes in older flows
+  (a resolved incident's form, the rules form), each rerun alone at 412px twice and clean. Before
   any document leaves for real, an owner fills System → Company (product repo
   `docs/HQ_GO_LIVE.md` §7a). The PDF typefaces live in `assets/pdf-fonts` (static instances
   cut with fontTools from the Google Fonts sources; regenerate the same way if a glyph is
