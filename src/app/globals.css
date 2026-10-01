@@ -10498,3 +10498,331 @@
     line-height: 1.5;
   }
 }
+
+/* Quotes: the order form as the customer reads it, the lines editor, and a deal's plan. */
+@layer pages {
+  .order-form {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+    padding: 20px 22px;
+    border: 1px solid var(--line-soft);
+    background: var(--panel);
+  }
+
+  .order-form__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .order-form__label {
+    margin: 0;
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .order-form__number {
+    margin: 2px 0 0;
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .order-form__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 24px;
+    margin: 0;
+  }
+
+  .order-form__meta dt {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .order-form__meta dd {
+    margin: 2px 0 0;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .order-form__scroll {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .order-form__lines {
+    width: 100%;
+    min-width: 520px;
+    border-collapse: collapse;
+    font-size: var(--fs-ui);
+  }
+
+  .order-form__lines th,
+  .order-form__lines td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .order-form__lines thead th {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .order-form__lines .order-form__num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .order-form__lines tfoot th {
+    color: var(--muted);
+    font-weight: 500;
+    text-align: right;
+  }
+
+  .order-form__total th,
+  .order-form__total td {
+    border-bottom: 0;
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .order-form__terms {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .order-form__sign {
+    display: grid;
+    gap: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .order-form__sign p {
+    margin: 0;
+  }
+
+  .order-form__line {
+    max-width: 320px;
+    padding-top: 22px;
+    border-bottom: 1px solid var(--line-strong);
+    color: var(--quiet);
+    font-size: var(--fs-ui);
+  }
+
+  .quote-editor__lines {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .quote-editor__line {
+    display: grid;
+    grid-template-columns:
+      minmax(0, 2.2fr) minmax(70px, 0.6fr) minmax(96px, 0.8fr) minmax(0, 1.3fr)
+      auto;
+    align-items: end;
+    gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .quote-editor__figure {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    padding-bottom: 8px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .quote-editor__add {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px 24px;
+  }
+
+  .quote-editor__adder {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .quote-editor__adder .field {
+    min-width: min(100%, 260px);
+  }
+
+  .quote-editor__totals {
+    display: flex;
+    flex-wrap: wrap;
+    margin: 0;
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .quote-editor__totals > div {
+    flex: 1 1 150px;
+    padding: 8px 14px 10px 0;
+  }
+
+  .quote-editor__totals dt {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .quote-editor__totals dd {
+    margin: 3px 0 0;
+    color: var(--text);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .plan-steps,
+  .plan-template {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .plan-template {
+    gap: 4px;
+  }
+
+  .plan-step {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .plan-step__main {
+    display: flex;
+    flex: 1 1 320px;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    min-width: 0;
+  }
+
+  .plan-step__side {
+    min-width: 3.5em;
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .plan-step__title {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .plan-step[data-state="done"] .plan-step__title {
+    color: var(--muted);
+    text-decoration: line-through;
+  }
+
+  .plan-step__side-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  @media (max-width: 640px) {
+    /* On a phone the form fits rather than scrolls: the totals sit under their figures. */
+    .order-form {
+      padding: 16px 12px;
+    }
+
+    .order-form__lines {
+      min-width: 0;
+    }
+
+    .order-form__lines th,
+    .order-form__lines td {
+      padding: 7px 4px;
+    }
+
+    .order-form__lines thead th {
+      letter-spacing: 0.04em;
+    }
+
+    .quote-editor__line {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .quote-editor__line > .field:first-child {
+      grid-column: 1 / -1;
+    }
+
+    .quote-editor__figure {
+      text-align: left;
+    }
+  }
+}
+
+/* Printing a quote prints its order form alone, black on white. */
+@media print {
+  @page {
+    margin: 16mm;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .order-form,
+  .order-form * {
+    visibility: visible;
+    color: #000 !important;
+    background: transparent !important;
+    border-color: #999 !important;
+  }
+
+  .order-form {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    border: 0;
+  }
+
+  .order-form__scroll {
+    overflow: visible;
+  }
+}

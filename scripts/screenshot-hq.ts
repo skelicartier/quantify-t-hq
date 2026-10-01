@@ -208,6 +208,28 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: "main#main-content",
   },
   { name: "expenses", path: "/expenses", ready: "main#main-content" },
+  { name: "deals-quotes", path: "/deals/quotes", ready: "main#main-content" },
+  { name: "deals-quotes-waiting", path: "/deals/quotes?view=waiting", ready: "main#main-content" },
+  {
+    name: "quote-waiting",
+    path: "/deals/d0000000-0000-4000-8000-000000000001/quotes/qa000001-0000-4000-8000-000000000000",
+    ready: ".order-form",
+  },
+  {
+    name: "quote-sent",
+    path: "/deals/d0000000-0000-4000-8000-000000000002/quotes/qa000002-0000-4000-8000-000000000000",
+    ready: ".order-form",
+  },
+  {
+    name: "deal-quotes",
+    path: "/deals/d0000000-0000-4000-8000-000000000001?tab=quotes",
+    ready: "main#main-content",
+  },
+  {
+    name: "deal-plan",
+    path: "/deals/d0000000-0000-4000-8000-000000000001?tab=plan",
+    ready: ".plan-steps",
+  },
   {
     name: "admin-automation",
     path: "/admin/automations/a7000001-0000-4000-8000-000000000000",
@@ -521,6 +543,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
+  await captureQuoteFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -1128,6 +1151,84 @@ async function capturePlatformFlows(page: Page, folder: string) {
     await page.waitForSelector("#company-templates .form-sent", { timeout: 10_000 });
   }
   await shoot(page, `${folder}/company-threads`);
+}
+
+/**
+ * Quotes: the waiting quote approved by someone other than its author, sent and signed (the
+ * deal takes its value); a new quote started on the second deal, a line cut by 30 % so an
+ * owner or admin must approve it, and sent for approval; the second deal's plan laid in
+ * from the close date and its first step done.
+ */
+async function captureQuoteFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  await page.goto(
+    `${BASE}/deals/d0000000-0000-4000-8000-000000000001/quotes/qa000001-0000-4000-8000-000000000000`,
+    { waitUntil: "networkidle" },
+  );
+  if ((await page.locator("#approve-note").count()) > 0) {
+    await page.fill("#approve-note", "Two desks for a year earns it");
+    await page.locator("button", { hasText: /^Approve$/ }).click();
+    await page.waitForSelector("#approve-note", { state: "detached", timeout: 10_000 });
+    await page.locator("button", { hasText: /^Mark as sent$/ }).click();
+    await page.waitForSelector("#signer-name", { timeout: 10_000 });
+    await page.fill("#signer-name", "Priya Nair");
+    await page.fill("#signer-email", "priya@northwall.example");
+    await page.fill("#signature-ref", "Signed copy in the deal folder");
+    await page.locator("button", { hasText: /^Record the signature$/ }).click();
+    await page.waitForSelector(".order-form__sign strong", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  if ((await page.locator(".order-form__sign strong", { hasText: "Priya Nair" }).count()) === 0)
+    report(`${folder}/quote-signed`, "the signature is not on the order form");
+  await shoot(page, `${folder}/quote-signed`);
+
+  await page.goto(`${BASE}/deals/d0000000-0000-4000-8000-000000000002?tab=quotes`, {
+    waitUntil: "networkidle",
+  });
+  await page.locator("summary", { hasText: "New quote" }).click();
+  await page.fill("#quote-new-title", `Revised terms ${stamp}`);
+  await page.locator("button", { hasText: "Start the quote" }).click();
+  await page
+    .waitForURL(/\/quotes\/[0-9a-f-]{36}$/, { timeout: 15_000 })
+    .catch(() => report(`${folder}/quote-cut`, "starting a quote did not open it"));
+  if ((await page.locator(".quote-editor__line").count()) === 0) {
+    await page.locator("button", { hasText: "Add the plan" }).click();
+  }
+  const price = page.locator(".quote-editor__line input[inputmode='decimal']").first();
+  const list = Number(await price.inputValue()) || 169;
+  await price.fill(String(Math.round(list * 0.7)));
+  if (
+    (await page
+      .locator(".quote-editor__totals", { hasText: "An owner or admin approves it" })
+      .count()) === 0
+  )
+    report(`${folder}/quote-cut`, "a 30 % cut does not preview an owner's approval");
+  await page.locator("button", { hasText: "Save the lines" }).click();
+  await page.waitForSelector("form.quote-editor .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator("button", { hasText: /^Ask for approval$/ }).click();
+  await page.waitForSelector(".rhead__status :text('Waiting for approval')", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/quote-cut`);
+
+  await page.goto(`${BASE}/deals/d0000000-0000-4000-8000-000000000002?tab=plan`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("button", { hasText: "Lay in the usual plan" }).count()) > 0) {
+    await page.locator("button", { hasText: "Lay in the usual plan" }).click();
+    await page.waitForSelector(".plan-steps", { timeout: 10_000 });
+    const done = page.locator('button[aria-label^="Mark "][aria-label$=" done"]').first();
+    const label = (await done.getAttribute("aria-label")) ?? "";
+    await done.click();
+    await page.waitForSelector(`button[aria-label="${label}"]`, {
+      state: "detached",
+      timeout: 10_000,
+    });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  if ((await page.locator(".plan-step").count()) < 6)
+    report(`${folder}/deal-plan-laid`, "the usual plan did not lay in six steps");
+  await shoot(page, `${folder}/deal-plan-laid`);
 }
 
 /**

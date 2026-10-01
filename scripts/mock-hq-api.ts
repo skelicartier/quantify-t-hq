@@ -35180,11 +35180,1207 @@ routes.push(
   },
 );
 
+// --- quotes and the mutual action plan (mirrors account_api/hq/quotes.py and quote_routes.py) ---
+
+type QuoteRow = {
+  id: string;
+  deal_id: string;
+  number: string;
+  title: string;
+  currency: string;
+  term_months: number;
+  valid_until: string | null;
+  terms: string;
+  status: string;
+  is_primary: boolean;
+  approval_tier: string;
+  submitted_by: string | null;
+  submitted_at: string | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string;
+  published_by: string | null;
+  published_at: string | null;
+  accepted_at: string | null;
+  signer_name: string;
+  signer_email: string;
+  signed_on: string | null;
+  signature_ref: string;
+  declined_reason: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+type QuoteLineRow = {
+  id: string;
+  quote_id: string;
+  position: number;
+  kind: string;
+  plan_key: string | null;
+  description: string;
+  quantity: number;
+  list_unit: number;
+  unit_price: number;
+};
+type PlanStepRow = {
+  id: string;
+  deal_id: string;
+  position: number;
+  title: string;
+  side: string;
+  owner_staff_id: string | null;
+  contact_name: string;
+  due_on: string | null;
+  done_at: string | null;
+  done_by: string | null;
+  notes: string;
+  created_at: string;
+};
+
+const quoteRows: QuoteRow[] = [];
+const quoteLines: QuoteLineRow[] = [];
+const planSteps: PlanStepRow[] = [];
+
+const Q_PEER_ABOVE = 10;
+const Q_ADMIN_ABOVE = 25;
+const Q_TIERS: Record<string, string> = {
+  none: "No approval needed",
+  peer: "A second person approves",
+  admin: "An owner or admin approves",
+};
+const Q_LABELS: Record<string, string> = {
+  draft: "Draft",
+  pending_approval: "Waiting for approval",
+  changes_requested: "Changes asked for",
+  approved: "Approved",
+  published: "Sent",
+  accepted: "Signed",
+  declined: "Declined",
+  withdrawn: "Withdrawn",
+  expired: "Expired",
+};
+const Q_EDITABLE = ["draft", "pending_approval", "changes_requested", "approved"];
+const Q_FINAL = ["accepted", "declined", "withdrawn"];
+const Q_TEMPLATE: ReadonlyArray<[string, string, number]> = [
+  ["Agree what the evaluation must show", "them", -35],
+  ["Security and data review", "them", -21],
+  ["Pricing agreed", "us", -14],
+  ["Their legal team reviews the order form", "them", -10],
+  ["Order form signed", "them", -3],
+  ["Kick-off call booked", "us", 5],
+];
+
+const qRound = (value: number) => Math.round(value * 100) / 100;
+const qExact = (list: number, net: number) =>
+  list <= 0 ? 0 : Math.max(0, ((list - net) / list) * 100);
+const qTenth = (value: number) => Math.round(value * 10) / 10;
+const qPercent = (value: number) => String(Math.round(value * 100) / 100);
+const qBad = (details: Record<string, string>) => refuse(400, "malformed_request", details);
+const qLinesOf = (quoteId: string) =>
+  quoteLines.filter((line) => line.quote_id === quoteId).sort((a, b) => a.position - b.position);
+
+function qTotals(lines: QuoteLineRow[], term: number) {
+  let listRecurring = 0;
+  let netRecurring = 0;
+  let listOneOff = 0;
+  let netOneOff = 0;
+  let deepest = 0;
+  for (const line of lines) {
+    const list = line.list_unit * line.quantity;
+    const net = line.unit_price * line.quantity;
+    if (line.kind === "recurring") {
+      listRecurring += list;
+      netRecurring += net;
+    } else {
+      listOneOff += list;
+      netOneOff += net;
+    }
+    deepest = Math.max(deepest, qTenth(qExact(line.list_unit, line.unit_price)));
+  }
+  return {
+    list_recurring: qRound(listRecurring),
+    net_recurring: qRound(netRecurring),
+    list_one_off: qRound(listOneOff),
+    net_one_off: qRound(netOneOff),
+    first_term_value: qRound(netRecurring * term + netOneOff),
+    discount_pct: qTenth(qExact(listRecurring + listOneOff, netRecurring + netOneOff)),
+    deepest_discount_pct: deepest,
+  };
+}
+
+function qTier(lines: QuoteLineRow[]): [string, string] {
+  let deepest = 0;
+  let offList = false;
+  for (const line of lines) {
+    deepest = Math.max(deepest, qExact(line.list_unit, line.unit_price));
+    if (!line.plan_key && line.kind === "recurring") offList = true;
+  }
+  if (deepest > Q_ADMIN_ABOVE)
+    return [
+      "admin",
+      `A line is ${qPercent(deepest)}% under the list; above ${Q_ADMIN_ABOVE}% an owner or admin approves.`,
+    ];
+  if (deepest > Q_PEER_ABOVE)
+    return [
+      "peer",
+      `A line is ${qPercent(deepest)}% under the list; above ${Q_PEER_ABOVE}% a second person approves.`,
+    ];
+  if (offList)
+    return ["peer", "A monthly price that is not on the price list; a second person approves it."];
+  return ["none", ""];
+}
+
+const qState = (row: QuoteRow) =>
+  row.status === "published" && row.valid_until && row.valid_until < todayIso()
+    ? "expired"
+    : row.status;
+
+function qCanApprove(role: string, me: string, row: QuoteRow) {
+  if (me === row.created_by || me === row.submitted_by) return false;
+  const held = CAPABILITIES[role] ?? [];
+  return row.approval_tier === "admin"
+    ? held.includes("revenue:write")
+    : held.includes("deals:write");
+}
+
+function qApprovers(row: QuoteRow) {
+  if (row.approval_tier === "none") return [];
+  const needed = row.approval_tier === "admin" ? "revenue:write" : "deals:write";
+  return staff
+    .filter(
+      (member) =>
+        member.is_active &&
+        member.id !== row.created_by &&
+        member.id !== row.submitted_by &&
+        (CAPABILITIES[member.role] ?? []).includes(needed),
+    )
+    .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
+    .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+}
+
+function qAbilities(role: string, me: string, row: QuoteRow, state: string, count: number) {
+  const held = CAPABILITIES[role] ?? [];
+  const writes = held.includes("deals:write");
+  const author = me === row.created_by || me === row.submitted_by;
+  const approves = qCanApprove(role, me, row);
+  return {
+    edit: writes && Q_EDITABLE.includes(state),
+    submit:
+      writes &&
+      ["draft", "changes_requested"].includes(state) &&
+      row.approval_tier !== "none" &&
+      count > 0,
+    recall: writes && state === "pending_approval" && (author || held.includes("revenue:write")),
+    approve: writes && state === "pending_approval" && approves,
+    request_changes: writes && state === "pending_approval" && approves,
+    publish:
+      writes &&
+      count > 0 &&
+      (state === "approved" || (state === "draft" && row.approval_tier === "none")),
+    accept: writes && state === "published",
+    decline: writes && ["published", "expired"].includes(state),
+    withdraw: writes && !Q_FINAL.includes(state),
+    make_primary: writes && !["declined", "withdrawn"].includes(state) && !row.is_primary,
+    revise: writes && ["published", "expired", "declined", "withdrawn"].includes(state),
+  };
+}
+
+function qView(
+  row: QuoteRow,
+  headers: Record<string, string | string[] | undefined>,
+  full: boolean,
+) {
+  const who = caller(headers)?.member;
+  const me = who?.id ?? "";
+  const role = who?.role ?? "";
+  const lines = qLinesOf(row.id);
+  const state = qState(row);
+  const deal = deals.find((item) => item.id === row.deal_id);
+  const company = companies.find((item) => item.id === deal?.company_id);
+  const base = {
+    quote_id: row.id,
+    deal_id: row.deal_id,
+    deal_name: deal?.name ?? "",
+    company_name: company?.name ?? "",
+    number: row.number,
+    title: row.title,
+    currency: row.currency,
+    term_months: row.term_months,
+    valid_until: row.valid_until,
+    status: row.status,
+    state,
+    state_label: Q_LABELS[state] ?? state,
+    is_primary: row.is_primary,
+    approval_tier: row.approval_tier,
+    tier_label: Q_TIERS[row.approval_tier] ?? row.approval_tier,
+    ...qTotals(lines, row.term_months),
+    created_by_name: nameOf(row.created_by),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    waiting_on_you: state === "pending_approval" && qCanApprove(role, me, row),
+  };
+  if (!full) return base;
+  let listChanged = false;
+  const lineViews = lines.map((line) => {
+    const plan = line.plan_key ? plans.find((item) => item.key === line.plan_key) : undefined;
+    let changed = false;
+    let listNow: number | null = null;
+    if (line.plan_key) {
+      if (!plan || plan.archived) changed = true;
+      else {
+        listNow = plan.unit_amount;
+        changed = qRound(plan.unit_amount) !== qRound(line.list_unit);
+      }
+    }
+    listChanged ||= changed;
+    return {
+      line_id: line.id,
+      position: line.position,
+      kind: line.kind,
+      plan_key: line.plan_key,
+      description: line.description,
+      quantity: line.quantity,
+      list_unit: line.list_unit,
+      unit_price: line.unit_price,
+      list_total: qRound(line.list_unit * line.quantity),
+      net_total: qRound(line.unit_price * line.quantity),
+      discount_pct: qTenth(qExact(line.list_unit, line.unit_price)),
+      off_list: !line.plan_key,
+      list_now: listNow,
+      list_changed: changed,
+    };
+  });
+  return {
+    ...base,
+    terms: row.terms,
+    lines: lineViews,
+    list_changed: listChanged,
+    tier_reason: qTier(lines)[1],
+    submitted_by_name: row.submitted_by ? nameOf(row.submitted_by) : "",
+    submitted_at: row.submitted_at,
+    decided_by_name: row.decided_by ? nameOf(row.decided_by) : "",
+    decided_at: row.decided_at,
+    decision_note: row.decision_note,
+    published_by_name: row.published_by ? nameOf(row.published_by) : "",
+    published_at: row.published_at,
+    accepted_at: row.accepted_at,
+    signer_name: row.signer_name,
+    signer_email: row.signer_email,
+    signed_on: row.signed_on,
+    signature_ref: row.signature_ref,
+    declined_reason: row.declined_reason,
+    approvers: qApprovers(row).map((item) => item.name),
+    can: qAbilities(role, me, row, state, lines.length),
+  };
+}
+
+const qPlanChoices = () =>
+  plans
+    .filter((plan) => !plan.archived)
+    .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+    .map((plan) => ({
+      key: plan.key,
+      name: plan.name,
+      unit_amount: plan.unit_amount,
+      currency: plan.currency,
+      min_seats: plan.min_seats,
+    }));
+
+function qNextNumber() {
+  const year = todayIso().slice(0, 4);
+  const prefix = `Q-${year}-`;
+  const highest = quoteRows
+    .filter((row) => row.number.startsWith(prefix))
+    .reduce((top, row) => Math.max(top, Number(row.number.slice(prefix.length)) || 0), 0);
+  return `${prefix}${String(highest + 1).padStart(4, "0")}`;
+}
+
+/** The lines as sent, priced; a kept plan line (same id, same plan) keeps its pinned list price. */
+function qParseLines(
+  raw: unknown,
+  currency: string,
+  kept: Map<string, QuoteLineRow>,
+  quoteId: string,
+): QuoteLineRow[] | { status: number; body: unknown } {
+  if (!Array.isArray(raw)) return qBad({ lines: "a list of lines" });
+  if (raw.length > 30) return qBad({ lines: "at most 30" });
+  const out: QuoteLineRow[] = [];
+  for (const [index, entry] of raw.entries()) {
+    const item = (entry ?? {}) as Record<string, unknown>;
+    const where = `lines[${index}]`;
+    const quantity = Number(item.quantity ?? 1);
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100_000)
+      return qBad({ [where]: "1 to 100,000 units" });
+    const planKey = String(item.plan_key ?? "").trim();
+    let description = String(item.description ?? "")
+      .trim()
+      .slice(0, 300);
+    const previous = kept.get(String(item.line_id ?? "").toLowerCase());
+    const price = (value: unknown) => {
+      const number = Number(String(value ?? "").replace(/,/g, ""));
+      return String(value ?? "").trim() === "" ||
+        !Number.isFinite(number) ||
+        number < 0 ||
+        number >= 1e7
+        ? null
+        : qRound(number);
+    };
+    let kind: string;
+    let listUnit: number;
+    let unit: number;
+    if (planKey) {
+      const plan = plans.find((row) => row.key === planKey);
+      if (!plan) return qBad({ [where]: "not a plan on the price list" });
+      if (plan.currency !== currency)
+        return qBad({
+          [where]: `${plan.name} is priced in ${plan.currency}; the quote is in ${currency}`,
+        });
+      const pinned = previous !== undefined && previous.plan_key === planKey;
+      if (!pinned && plan.archived)
+        return qBad({ [where]: `${plan.name} is no longer on the price list` });
+      if (quantity < plan.min_seats && (!pinned || quantity !== previous?.quantity))
+        return qBad({ [where]: `${plan.name} is at least ${plan.min_seats} seats` });
+      listUnit = pinned ? previous.list_unit : plan.unit_amount;
+      if (item.unit_price === undefined || item.unit_price === null || item.unit_price === "")
+        unit = listUnit;
+      else {
+        const parsed = price(item.unit_price);
+        if (parsed === null) return qBad({ [where]: "an amount, like 120.00" });
+        unit = parsed;
+      }
+      kind = "recurring";
+      description ||= plan.name;
+    } else {
+      kind = String(item.kind ?? "");
+      if (kind !== "recurring" && kind !== "one_off")
+        return qBad({ [where]: "recurring or one_off" });
+      if (!description) return qBad({ [where]: "what the line is for" });
+      const parsed = price(item.unit_price);
+      if (parsed === null) return qBad({ [where]: "an amount, like 120.00" });
+      unit = parsed;
+      listUnit = parsed;
+    }
+    out.push({
+      id: randomUUID(),
+      quote_id: quoteId,
+      position: index,
+      kind,
+      plan_key: planKey || null,
+      description,
+      quantity,
+      list_unit: listUnit,
+      unit_price: unit,
+    });
+  }
+  return out;
+}
+
+function qValidUntil(value: unknown): string | { status: number; body: unknown } {
+  const day = String(value ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return qBad({ valid_until: "a date, YYYY-MM-DD" });
+  if (day < todayIso()) return qBad({ valid_until: "today or later" });
+  if (day > addDaysIso(todayIso(), 366)) return qBad({ valid_until: "within a year" });
+  return day;
+}
+
+function qTerm(value: unknown): number | null {
+  const term = Number(value);
+  return Number.isInteger(term) && term >= 1 && term <= 60 ? term : null;
+}
+
+function qStepView(row: PlanStepRow) {
+  const today = todayIso();
+  let state = "open";
+  if (row.done_at) state = "done";
+  else if (row.due_on && row.due_on < today) state = "overdue";
+  else if (row.due_on && finDays(today, row.due_on) <= 7) state = "due_soon";
+  return {
+    step_id: row.id,
+    position: row.position,
+    title: row.title,
+    side: row.side,
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    contact_name: row.contact_name,
+    due_on: row.due_on,
+    done_at: row.done_at,
+    done_by_name: row.done_by ? nameOf(row.done_by) : "",
+    notes: row.notes,
+    state,
+  };
+}
+
+function qPlanPayload(deal: DealRow, headers: Record<string, string | string[] | undefined>) {
+  const steps = planSteps
+    .filter((row) => row.deal_id === deal.id)
+    .sort((a, b) => a.position - b.position);
+  const views = steps.map(qStepView);
+  const open = steps.filter((row) => !row.done_at && row.due_on).map((row) => row.due_on!);
+  const theirs = steps
+    .filter((row) => !row.done_at && row.side === "them" && row.due_on)
+    .map((row) => row.due_on!);
+  const lastTheirs = theirs.sort().at(-1);
+  const close = deal.expected_close_date || null;
+  return {
+    steps: views,
+    summary: {
+      total: views.length,
+      done: views.filter((view) => view.state === "done").length,
+      overdue: views.filter((view) => view.state === "overdue").length,
+      their_overdue: views.filter((view) => view.state === "overdue" && view.side === "them")
+        .length,
+      ends_on: open.sort().at(-1) ?? null,
+      close_date: close,
+      after_close: Boolean(close && lastTheirs && lastTheirs > close),
+    },
+    can_edit: hasCap(headers, "deals:write"),
+    staff: staff
+      .filter((member) => member.is_active)
+      .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
+      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),
+    template: Q_TEMPLATE.map(([title, side, days]) => ({ title, side, days_from_close: days })),
+  };
+}
+
+function seedQuotes() {
+  quoteRows.length = 0;
+  quoteLines.length = 0;
+  planSteps.length = 0;
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const year = todayIso().slice(0, 4);
+  const base = {
+    terms: "Invoiced monthly in advance; 30 days' notice before the term ends.",
+    decided_by: null,
+    decided_at: null,
+    decision_note: "",
+    published_by: null,
+    published_at: null,
+    accepted_at: null,
+    signer_name: "",
+    signer_email: "",
+    signed_on: null,
+    signature_ref: "",
+    declined_reason: "",
+  };
+  // Waiting on an owner or admin: 15 % off the Professional desk, asked for by sales.
+  quoteRows.push({
+    ...base,
+    id: "qa000001-0000-4000-8000-000000000000",
+    deal_id: "d0000000-0000-4000-8000-000000000001",
+    number: `Q-${year}-0001`,
+    title: "Northwall Advisors — two desks for a year",
+    currency: "USD",
+    term_months: 12,
+    valid_until: addDaysIso(todayIso(), 21),
+    status: "pending_approval",
+    is_primary: true,
+    approval_tier: "peer",
+    submitted_by: SALES,
+    submitted_at: agoIso(5),
+    created_by: SALES,
+    created_at: agoIso(26),
+    updated_at: agoIso(5),
+  });
+  quoteLines.push(
+    {
+      id: randomUUID(),
+      quote_id: "qa000001-0000-4000-8000-000000000000",
+      position: 0,
+      kind: "recurring",
+      plan_key: "pro",
+      description: "Professional desk",
+      quantity: 2,
+      list_unit: 199,
+      unit_price: 169,
+    },
+    {
+      id: randomUUID(),
+      quote_id: "qa000001-0000-4000-8000-000000000000",
+      position: 1,
+      kind: "one_off",
+      plan_key: null,
+      description: "Onboarding and data set-up",
+      quantity: 1,
+      list_unit: 1200,
+      unit_price: 1200,
+    },
+  );
+  // Sent, at list price, on the second deal.
+  quoteRows.push({
+    ...base,
+    id: "qa000002-0000-4000-8000-000000000000",
+    deal_id: "d0000000-0000-4000-8000-000000000002",
+    number: `Q-${year}-0002`,
+    title: "Bluecrest Family Office — Team",
+    currency: "USD",
+    term_months: 24,
+    valid_until: addDaysIso(todayIso(), 12),
+    status: "published",
+    is_primary: true,
+    approval_tier: "none",
+    submitted_by: null,
+    submitted_at: null,
+    published_by: OWNER,
+    published_at: agoIso(48),
+    created_by: OWNER,
+    created_at: agoIso(72),
+    updated_at: agoIso(48),
+  });
+  quoteLines.push({
+    id: randomUUID(),
+    quote_id: "qa000002-0000-4000-8000-000000000000",
+    position: 0,
+    kind: "recurring",
+    plan_key: "team",
+    description: "Team",
+    quantity: 6,
+    list_unit: 169,
+    unit_price: 169,
+  });
+  // The first deal's plan: one step done, one of theirs overdue, the signature ahead.
+  const step = (
+    position: number,
+    title: string,
+    side: string,
+    due: number,
+    done = false,
+    contact = "",
+  ) =>
+    planSteps.push({
+      id: `ab00000${position + 1}-0000-4000-8000-000000000000`,
+      deal_id: "d0000000-0000-4000-8000-000000000001",
+      position,
+      title,
+      side,
+      owner_staff_id: side === "us" ? SALES : null,
+      contact_name: contact,
+      due_on: addDaysIso(todayIso(), due),
+      done_at: done ? agoIso(24 * 3) : null,
+      done_by: done ? SALES : null,
+      notes: "",
+      created_at: agoIso(24 * 10),
+    });
+  step(0, "Agree what the pilot must show", "them", -6, true, "Priya Nair");
+  step(1, "Security questionnaire returned", "them", -2, false, "Their IT lead");
+  step(2, "Pricing agreed", "us", 4);
+  step(3, "Order form signed", "them", 18, false, "Priya Nair");
+  step(4, "Kick-off call booked", "us", 26);
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/quotes",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query, headers }) => {
+      const view = String(query.view || "open");
+      if (!["open", "waiting", "mine", "all"].includes(view))
+        return qBad({ view: "open, waiting, mine, all" });
+      const me = caller(headers)?.member.id ?? "";
+      const counts = { open: 0, waiting: 0, mine: 0, all: 0 };
+      const views = [];
+      for (const row of quoteRows) {
+        const item = qView(row, headers, false);
+        const matches: Record<string, boolean> = {
+          open: ![...Q_FINAL, "expired"].includes(item.state),
+          waiting: item.waiting_on_you,
+          mine: row.created_by === me,
+          all: true,
+        };
+        for (const key of Object.keys(counts) as Array<keyof typeof counts>)
+          counts[key] += Number(matches[key]);
+        if (matches[view]) views.push(item);
+      }
+      const order: Record<string, number> = {
+        pending_approval: 0,
+        changes_requested: 1,
+        approved: 2,
+        draft: 3,
+        published: 4,
+        expired: 5,
+      };
+      views.sort(
+        (a, b) =>
+          Number(!a.waiting_on_you) - Number(!b.waiting_on_you) ||
+          (order[a.state] ?? 9) - (order[b.state] ?? 9) ||
+          a.number.localeCompare(b.number),
+      );
+      return ok({ quotes: views, view, counts });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/quotes/{quote_id}",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ params, headers }) => {
+      const row = quoteRows.find((item) => item.id === params.quote_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        quote: qView(row, headers, true),
+        plans: qPlanChoices(),
+        peer_above: Q_PEER_ABOVE,
+        admin_above: Q_ADMIN_ABOVE,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/deals/{deal_id}/quotes",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ params, headers }) => {
+      const deal = deals.find((item) => item.id === params.deal_id);
+      if (!deal) return refuse(404, "not_found");
+      return ok({
+        quotes: quoteRows
+          .filter((row) => row.deal_id === deal.id)
+          .sort((a, b) => b.number.localeCompare(a.number))
+          .map((row) => qView(row, headers, false)),
+        plans: qPlanChoices(),
+        currency: deal.currency,
+        can_create: hasCap(headers, "deals:write") && deal.status === "open",
+        peer_above: Q_PEER_ABOVE,
+        admin_above: Q_ADMIN_ABOVE,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/deals/{deal_id}/quotes/create",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ params, body, headers }) => {
+      const deal = deals.find((item) => item.id === params.deal_id);
+      if (!deal) return refuse(404, "not_found");
+      if (deal.status !== "open") return qBad({ deal_id: "a quote is made on an open deal" });
+      const dealPlan = plans.find((plan) => plan.key === deal.plan_key);
+      const currency = String(
+        body.currency || dealPlan?.currency || deal.currency || "USD",
+      ).toUpperCase();
+      if (!/^[A-Z]{3}$/.test(currency)) return qBad({ currency: "a three-letter code, like USD" });
+      const id = randomUUID();
+      let lines: QuoteLineRow[] = [];
+      if ("lines" in body) {
+        const parsed = qParseLines(body.lines, currency, new Map(), id);
+        if (!Array.isArray(parsed)) return parsed;
+        lines = parsed;
+      } else if (dealPlan && !dealPlan.archived && dealPlan.currency === currency) {
+        const parsed = qParseLines(
+          [{ plan_key: dealPlan.key, quantity: Math.max(deal.seats || 1, dealPlan.min_seats) }],
+          currency,
+          new Map(),
+          id,
+        );
+        if (Array.isArray(parsed)) lines = parsed;
+      }
+      const term = qTerm(body.term_months ?? 12);
+      if (term === null) return qBad({ term_months: "1 to 60 months" });
+      const valid = qValidUntil(body.valid_until || addDaysIso(todayIso(), 30));
+      if (typeof valid !== "string") return valid;
+      const me = caller(headers)?.member.id ?? "";
+      const row: QuoteRow = {
+        id,
+        deal_id: deal.id,
+        number: qNextNumber(),
+        title:
+          String(body.title ?? "")
+            .trim()
+            .slice(0, 160) || deal.name,
+        currency,
+        term_months: term,
+        valid_until: valid,
+        terms: String(body.terms ?? "")
+          .trim()
+          .slice(0, 4000),
+        status: "draft",
+        is_primary: !quoteRows.some((item) => item.deal_id === deal.id && item.is_primary),
+        approval_tier: qTier(lines)[0],
+        submitted_by: null,
+        submitted_at: null,
+        decided_by: null,
+        decided_at: null,
+        decision_note: "",
+        published_by: null,
+        published_at: null,
+        accepted_at: null,
+        signer_name: "",
+        signer_email: "",
+        signed_on: null,
+        signature_ref: "",
+        declined_reason: "",
+        created_by: me,
+        created_at: now(),
+        updated_at: now(),
+      };
+      quoteRows.push(row);
+      quoteLines.push(...lines);
+      audit("quote.created", me || null, "quote", id);
+      return ok({ quote: qView(row, headers, true) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/quotes/{quote_id}/update",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ params, body, headers }) => {
+      const row = quoteRows.find((item) => item.id === params.quote_id);
+      if (!row) return refuse(404, "not_found");
+      const state = qState(row);
+      if (!Q_EDITABLE.includes(state))
+        return qBad({
+          status: `${(Q_LABELS[state] ?? state).toLowerCase()}: revise it to change it`,
+        });
+      const next: Partial<QuoteRow> = {};
+      if ("title" in body) {
+        const title = String(body.title ?? "")
+          .trim()
+          .slice(0, 160);
+        if (!title) return qBad({ title: "cannot be empty" });
+        next.title = title;
+      }
+      if ("currency" in body) {
+        const currency = String(body.currency ?? "")
+          .trim()
+          .toUpperCase();
+        if (!/^[A-Z]{3}$/.test(currency))
+          return qBad({ currency: "a three-letter code, like USD" });
+        next.currency = currency;
+      }
+      if ("term_months" in body) {
+        const term = qTerm(body.term_months);
+        if (term === null) return qBad({ term_months: "1 to 60 months" });
+        next.term_months = term;
+      }
+      if ("valid_until" in body) {
+        const valid = qValidUntil(body.valid_until);
+        if (typeof valid !== "string") return valid;
+        next.valid_until = valid;
+      }
+      if ("terms" in body)
+        next.terms = String(body.terms ?? "")
+          .trim()
+          .slice(0, 4000);
+      const oldLines = qLinesOf(row.id);
+      const currency = next.currency ?? row.currency;
+      let newLines: QuoteLineRow[] | null = null;
+      if ("lines" in body || (next.currency && next.currency !== row.currency)) {
+        const raw =
+          "lines" in body
+            ? body.lines
+            : oldLines.map((line) => ({
+                line_id: line.id,
+                plan_key: line.plan_key,
+                kind: line.kind,
+                description: line.description,
+                quantity: line.quantity,
+                unit_price: String(line.unit_price),
+              }));
+        const parsed = qParseLines(
+          raw,
+          currency,
+          new Map(oldLines.map((line) => [line.id, line])),
+          row.id,
+        );
+        if (!Array.isArray(parsed)) return parsed;
+        newLines = parsed;
+      }
+      const priced = (lines: QuoteLineRow[]) =>
+        JSON.stringify(
+          lines.map((line) => [
+            line.kind,
+            line.plan_key,
+            line.description,
+            line.quantity,
+            line.list_unit,
+            line.unit_price,
+          ]),
+        );
+      const linesChanged = newLines !== null && priced(newLines) !== priced(oldLines);
+      const changed = (Object.keys(next) as Array<keyof QuoteRow>).filter(
+        (key) => next[key] !== row[key],
+      );
+      if (!changed.length && !linesChanged) return qBad({ fields: "nothing to change" });
+      const termsChanged =
+        linesChanged ||
+        changed.some((key) => ["currency", "term_months", "valid_until", "terms"].includes(key));
+      const cancelled = termsChanged && ["pending_approval", "approved"].includes(row.status);
+      for (const key of changed) Object.assign(row, { [key]: next[key] });
+      if (linesChanged && newLines) {
+        for (let index = quoteLines.length - 1; index >= 0; index -= 1)
+          if (quoteLines[index]!.quote_id === row.id) quoteLines.splice(index, 1);
+        quoteLines.push(...newLines);
+        row.approval_tier = qTier(newLines)[0];
+      }
+      if (cancelled)
+        Object.assign(row, {
+          status: "draft",
+          submitted_by: null,
+          submitted_at: null,
+          decided_by: null,
+          decided_at: null,
+          decision_note: "",
+        });
+      row.updated_at = now();
+      audit("quote.updated", caller(headers)?.member.id ?? null, "quote", row.id);
+      return ok({ quote: qView(row, headers, true), approval_cancelled: cancelled });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/quotes/{quote_id}/act",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ params, body, headers }) => {
+      const row = quoteRows.find((item) => item.id === params.quote_id);
+      if (!row) return refuse(404, "not_found");
+      const who = caller(headers)?.member;
+      const me = who?.id ?? "";
+      const role = who?.role ?? "";
+      const action = String(body.action ?? "");
+      const actions = [
+        "submit",
+        "recall",
+        "approve",
+        "request_changes",
+        "publish",
+        "accept",
+        "decline",
+        "withdraw",
+        "make_primary",
+        "revise",
+      ];
+      if (!actions.includes(action)) return qBad({ action: actions.join(", ") });
+      const state = qState(row);
+      const lines = qLinesOf(row.id);
+      const can = qAbilities(role, me, row, state, lines.length) as Record<string, boolean>;
+      const deal = deals.find((item) => item.id === row.deal_id);
+      const label = `${row.number} · ${deal?.name ?? ""}`;
+      const link = `/deals/${row.deal_id}/quotes/${row.id}`;
+      if (
+        ["approve", "request_changes"].includes(action) &&
+        state === "pending_approval" &&
+        !can[action]
+      )
+        return refuse(403, "forbidden", {
+          action:
+            me === row.created_by || me === row.submitted_by
+              ? "someone other than its author approves it"
+              : "above 25 % an owner or admin approves it",
+        });
+      if (action !== "make_primary" && !can[action]) {
+        const why: Record<string, string> = {
+          submit: ["draft", "changes_requested"].includes(state)
+            ? "it needs no approval, or has no lines"
+            : "only a draft is sent for approval",
+          recall: "only a quote waiting for approval is recalled, by its author",
+          approve: "only a quote waiting for approval is approved",
+          request_changes: "only a quote waiting for approval is sent back",
+          publish: ["draft", "changes_requested", "pending_approval"].includes(state)
+            ? "it needs approval first"
+            : "it cannot be sent now",
+          accept:
+            state === "expired"
+              ? `it expired on ${row.valid_until}; revise it`
+              : "only a sent quote is signed",
+          decline: "only a sent quote is declined",
+          withdraw: "it is over",
+          revise: "only a sent, expired, declined or withdrawn quote is revised",
+        };
+        return qBad({ status: why[action] ?? "not now" });
+      }
+      const extra: Record<string, unknown> = {};
+      if (action === "submit") {
+        const approvers = qApprovers({ ...row, submitted_by: me });
+        if (!approvers.length)
+          return qBad({ approval_tier: "nobody else can approve it; ask an owner to" });
+        Object.assign(row, {
+          status: "pending_approval",
+          submitted_by: me,
+          submitted_at: now(),
+          decided_by: null,
+          decided_at: null,
+          decision_note: "",
+        });
+        inboxNotify({
+          recipients: approvers.map((item) => item.staff_id),
+          subject_type: "quote",
+          subject_id: row.id,
+          subject_label: label,
+          reason: "review",
+          summary: `${nameOf(me)} asks you to approve ${row.number}.`,
+          actor_id: me,
+          link_path: link,
+        });
+      } else if (action === "recall") {
+        Object.assign(row, { status: "draft", submitted_by: null, submitted_at: null });
+      } else if (action === "approve" || action === "request_changes") {
+        const note = String(body.note ?? "")
+          .trim()
+          .slice(0, 1000);
+        if (action === "request_changes" && !note) return qBad({ note: "what should change" });
+        Object.assign(row, {
+          status: action === "approve" ? "approved" : "changes_requested",
+          decided_by: me,
+          decided_at: now(),
+          decision_note: note,
+        });
+        inboxNotify({
+          recipients: [row.submitted_by ?? row.created_by],
+          subject_type: "quote",
+          subject_id: row.id,
+          subject_label: label,
+          reason: "state",
+          summary: `${nameOf(me)} ${action === "approve" ? "approved" : "asked for changes to"} ${row.number}.${note ? ` ${note}` : ""}`,
+          actor_id: me,
+          link_path: link,
+        });
+      } else if (action === "publish") {
+        if (!row.valid_until || row.valid_until < todayIso())
+          return qBad({ valid_until: "today or later; change it first" });
+        Object.assign(row, { status: "published", published_by: me, published_at: now() });
+      } else if (action === "accept") {
+        const signer = String(body.signer_name ?? "")
+          .trim()
+          .slice(0, 160);
+        if (!signer) return qBad({ signer_name: "who signed it" });
+        const email = String(body.signer_email ?? "")
+          .trim()
+          .slice(0, 254);
+        if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+          return qBad({ signer_email: "an email address" });
+        const signedOn = String(body.signed_on || todayIso());
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(signedOn)) return qBad({ signed_on: "a date, YYYY-MM-DD" });
+        if (signedOn > todayIso()) return qBad({ signed_on: "cannot be in the future" });
+        if (row.published_at && signedOn < row.published_at.slice(0, 10))
+          return qBad({ signed_on: "not before it was sent" });
+        Object.assign(row, {
+          status: "accepted",
+          accepted_at: now(),
+          signer_name: signer,
+          signer_email: email,
+          signed_on: signedOn,
+          signature_ref: String(body.signature_ref ?? "")
+            .trim()
+            .slice(0, 400),
+        });
+        for (const other of quoteRows) {
+          if (other.deal_id !== row.deal_id) continue;
+          other.is_primary = other.id === row.id;
+          if (other.id !== row.id && ![...Q_FINAL, "expired"].includes(qState(other))) {
+            other.status = "withdrawn";
+            other.updated_at = now();
+          }
+        }
+        const net = qTotals(lines, row.term_months).net_recurring;
+        extra.deal_updated = false;
+        if (
+          deal &&
+          deal.status === "open" &&
+          (deal.mrr_amount !== net || deal.currency !== row.currency)
+        ) {
+          Object.assign(deal, { mrr_amount: net, currency: row.currency });
+          audit("deal.updated", me || null, "deal", deal.id);
+          extra.deal_updated = true;
+        }
+      } else if (action === "decline") {
+        const reason = String(body.reason ?? "")
+          .trim()
+          .slice(0, 400);
+        if (!reason) return qBad({ reason: "why they declined" });
+        Object.assign(row, { status: "declined", declined_reason: reason });
+      } else if (action === "withdraw") {
+        Object.assign(row, { status: "withdrawn", is_primary: false });
+      } else if (action === "make_primary") {
+        if (["declined", "withdrawn"].includes(state))
+          return qBad({ status: "a declined or withdrawn quote is not the deal's quote" });
+        for (const other of quoteRows)
+          if (other.deal_id === row.deal_id) other.is_primary = other.id === row.id;
+      } else if (action === "revise") {
+        const copy: QuoteRow = {
+          ...row,
+          id: randomUUID(),
+          number: qNextNumber(),
+          status: "draft",
+          is_primary: false,
+          valid_until: addDaysIso(todayIso(), 30),
+          submitted_by: null,
+          submitted_at: null,
+          decided_by: null,
+          decided_at: null,
+          decision_note: "",
+          published_by: null,
+          published_at: null,
+          accepted_at: null,
+          signer_name: "",
+          signer_email: "",
+          signed_on: null,
+          signature_ref: "",
+          declined_reason: "",
+          created_by: me,
+          created_at: now(),
+          updated_at: now(),
+        };
+        quoteRows.push(copy);
+        quoteLines.push(...lines.map((line) => ({ ...line, id: randomUUID(), quote_id: copy.id })));
+        audit("quote.revised", me || null, "quote", copy.id);
+        return ok({ quote: qView(copy, headers, true) });
+      }
+      row.updated_at = now();
+      audit(`quote.${action}`, me || null, "quote", row.id);
+      return ok({ quote: qView(row, headers, true), ...extra });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/deals/{deal_id}/plan",
+    auth: true,
+    capability: "deals:read",
+    handler: ({ params, headers }) => {
+      const deal = deals.find((item) => item.id === params.deal_id);
+      if (!deal) return refuse(404, "not_found");
+      return ok(qPlanPayload(deal, headers));
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/deals/{deal_id}/plan/act",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ params, body, headers }) => {
+      const deal = deals.find((item) => item.id === params.deal_id);
+      if (!deal) return refuse(404, "not_found");
+      const me = caller(headers)?.member.id ?? "";
+      const action = String(body.action ?? "");
+      const steps = planSteps
+        .filter((row) => row.deal_id === deal.id)
+        .sort((a, b) => a.position - b.position);
+      const fields = (
+        creating: boolean,
+      ): Partial<PlanStepRow> | { status: number; body: unknown } => {
+        const out: Partial<PlanStepRow> = {};
+        if (creating || "title" in body) {
+          const title = String(body.title ?? "")
+            .trim()
+            .slice(0, 200);
+          if (!title) return qBad({ title: "what happens at this step" });
+          out.title = title;
+        }
+        if (creating || "side" in body) {
+          const side = String(body.side || "us");
+          if (side !== "us" && side !== "them") return qBad({ side: "us or them" });
+          out.side = side;
+        }
+        if (creating || "due_on" in body) {
+          const due = String(body.due_on ?? "").trim();
+          if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due))
+            return qBad({ due_on: "a date, YYYY-MM-DD" });
+          out.due_on = due || null;
+        }
+        if (creating || "owner_staff_id" in body) {
+          const owner =
+            String(body.owner_staff_id ?? "")
+              .trim()
+              .toLowerCase() || null;
+          if (owner && !staff.some((member) => member.id === owner))
+            return qBad({ owner_staff_id: "choose someone on the team" });
+          out.owner_staff_id = owner;
+        }
+        if (creating || "contact_name" in body)
+          out.contact_name = String(body.contact_name ?? "")
+            .trim()
+            .slice(0, 160);
+        if (creating || "notes" in body)
+          out.notes = String(body.notes ?? "")
+            .trim()
+            .slice(0, 1000);
+        return out;
+      };
+      if (action === "template") {
+        if (steps.length) return qBad({ action: "the plan has steps; add to it instead" });
+        const today = todayIso();
+        const anchor =
+          deal.expected_close_date && deal.expected_close_date > today
+            ? deal.expected_close_date
+            : addDaysIso(today, 30);
+        Q_TEMPLATE.forEach(([title, side, days], position) => {
+          const due = addDaysIso(anchor, days);
+          planSteps.push({
+            id: randomUUID(),
+            deal_id: deal.id,
+            position,
+            title,
+            side,
+            owner_staff_id: side === "us" ? deal.owner_staff_id || me : null,
+            contact_name: "",
+            due_on: due < today ? today : due,
+            done_at: null,
+            done_by: null,
+            notes: "",
+            created_at: now(),
+          });
+        });
+      } else if (action === "add") {
+        if (steps.length >= 40) return qBad({ action: "a plan has at most 40 steps" });
+        const made = fields(true);
+        if ("status" in made && "body" in made) return made as { status: number; body: unknown };
+        planSteps.push({
+          id: randomUUID(),
+          deal_id: deal.id,
+          position: (steps.at(-1)?.position ?? -1) + 1,
+          title: "",
+          side: "us",
+          owner_staff_id: null,
+          contact_name: "",
+          due_on: null,
+          notes: "",
+          ...(made as Partial<PlanStepRow>),
+          done_at: null,
+          done_by: null,
+          created_at: now(),
+        });
+      } else if (["edit", "done", "reopen", "remove", "move"].includes(action)) {
+        const step = steps.find((row) => row.id === String(body.step_id ?? "").toLowerCase());
+        if (!step) return refuse(404, "not_found");
+        if (action === "edit") {
+          const made = fields(false);
+          if ("status" in made && "body" in made) return made as { status: number; body: unknown };
+          if (!Object.keys(made).length) return qBad({ fields: "nothing to change" });
+          Object.assign(step, made);
+        } else if (action === "done") {
+          if (step.done_at) return qBad({ step_id: "already done" });
+          Object.assign(step, { done_at: now(), done_by: me });
+        } else if (action === "reopen") {
+          if (!step.done_at) return qBad({ step_id: "not done" });
+          Object.assign(step, { done_at: null, done_by: null });
+        } else if (action === "remove") {
+          planSteps.splice(planSteps.indexOf(step), 1);
+        } else {
+          const direction = String(body.direction ?? "");
+          if (direction !== "up" && direction !== "down") return qBad({ direction: "up or down" });
+          const index = steps.indexOf(step);
+          const other = direction === "up" ? index - 1 : index + 1;
+          if (other < 0 || other >= steps.length)
+            return qBad({ direction: "it is already at that end" });
+          [steps[index], steps[other]] = [steps[other]!, steps[index]!];
+          steps.forEach((row, position) => (row.position = position));
+        }
+      } else return qBad({ action: "template, add, edit, done, reopen, remove, move" });
+      audit(`plan_step.${action}`, me || null, "deal", deal.id);
+      return ok(qPlanPayload(deal, headers));
+    },
+  },
+);
+
 // After their declarations: the seeds read the blocks' constants.
 seedCustomFields();
 seedAutomations();
 seedDigests();
 seedFinance();
+seedQuotes();
 
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
@@ -35288,6 +36484,7 @@ function resetWorld() {
   seedAutomations();
   seedDigests();
   seedFinance();
+  seedQuotes();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

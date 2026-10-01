@@ -106,6 +106,7 @@ import * as team from "@/lib/api/team";
 import * as tickets from "@/lib/api/tickets";
 import * as trustApi from "@/lib/api/trust";
 import * as financeApi from "@/lib/api/finance";
+import * as quotesApi from "@/lib/api/quotes";
 import * as fieldsApi from "@/lib/api/fields";
 import * as autoApi from "@/lib/api/automations";
 import * as digestApi from "@/lib/api/digests";
@@ -197,6 +198,10 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/outbound-webhooks/{endpoint_id}", () => platformApi.readWebhook(token, ids.endpoint_id!)],
   ["hq/settings/fields", () => fieldsApi.readFields(token)],
   ["hq/digests", () => digestApi.readDigests(token)],
+  ["hq/quotes", () => quotesApi.readQuotes(token)],
+  ["hq/quotes/{quote_id}", () => quotesApi.readQuote(token, ids.quote_id!)],
+  ["hq/deals/{deal_id}/quotes", () => quotesApi.readDealQuotes(token, ids.deal_id!)],
+  ["hq/deals/{deal_id}/plan", () => quotesApi.readDealPlan(token, ids.deal_id!)],
   ["hq/finance/cash", () => financeApi.readCash(token)],
   ["hq/finance/vendors", () => financeApi.readVendors(token)],
   ["hq/finance/expenses", () => financeApi.readExpenses(token)],

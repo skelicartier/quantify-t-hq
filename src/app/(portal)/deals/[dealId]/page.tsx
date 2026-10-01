@@ -25,6 +25,8 @@ import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { StageRail } from "@/components/crm/stage-rail";
 import { DealCompetition } from "@/components/deals/deal-competition";
+import { DealPlanSection } from "@/components/deals/deal-plan";
+import { DealQuotesSection } from "@/components/deals/deal-quotes";
 import { TaskList } from "@/components/crm/task-list";
 import { TaskQuickAdd } from "@/components/crm/task-quick-add";
 import { Callout } from "@/components/ui/callout";
@@ -71,6 +73,8 @@ const TABS = [
   { key: "changes", label: "Changes" },
   { key: "tasks", label: "Tasks" },
   { key: "competition", label: "Competition" },
+  { key: "quotes", label: "Quotes" },
+  { key: "plan", label: "Action plan" },
 ];
 
 type DealPageProps = {
@@ -303,6 +307,9 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
           TABS[2]!,
           { ...TABS[3]!, count: openTasks.length },
           { ...TABS[4]!, count: detail.competitors.length + detail.interviews.length },
+          // Quotes are money: a role that reads the pipeline without revenue does not see the tab.
+          ...(hasCapability(context, "revenue:read") ? [TABS[5]!] : []),
+          TABS[6]!,
         ]}
         current={tab}
         label="Deal sections"
@@ -530,6 +537,17 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
         )}
         {tab === "tasks" && tasks}
         {tab === "competition" && <DealCompetition detail={detail} canDeal={canDeal} open={open} />}
+        {tab === "quotes" &&
+          (hasCapability(context, "revenue:read") ? (
+            <DealQuotesSection token={context.token} dealId={deal.deal_id} today={today} />
+          ) : (
+            <RecordSection id="deal-quotes" title="Quotes">
+              <Callout tone="neutral">
+                Quotes are money: your role reads the pipeline without it.
+              </Callout>
+            </RecordSection>
+          ))}
+        {tab === "plan" && <DealPlanSection token={context.token} dealId={deal.deal_id} />}
       </RecordGrid>
     </>
   );
