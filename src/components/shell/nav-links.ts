@@ -11,6 +11,7 @@ import {
   NotebookPen,
   ChartNoAxesCombined,
   ClipboardList,
+  MessagesSquare,
   Contact,
   FileSpreadsheet,
   Handshake,
@@ -26,6 +27,7 @@ import {
   ShieldCheck,
   UserCog,
   UsersRound,
+  UserPlus,
   Wallet,
   type LucideIcon,
 } from "lucide-react";
@@ -141,8 +143,10 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       // Everyone's: a check-in and time off are about the person, not a capability.
       { href: "/checkin", label: "Check-in", icon: NotebookPen },
       { href: "/time-off", label: "Time off", icon: CalendarOff },
+      // Anyone named to interview an applicant scores them here, whatever their role.
+      { href: "/hiring/interviews", label: "Interviews", icon: MessagesSquare },
       // Everyone claims their own; deciding one is checked by the service.
-      { href: "/expenses", label: "Expenses", icon: Receipt },
+      { href: "/expenses", label: "Expenses", icon: Receipt, activePrefix: "/expenses/" },
     ],
   },
   {
@@ -237,6 +241,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: "Access review",
         icon: KeyRound,
         activePrefix: "/access-review",
+        capability: "hr:read",
+      },
+      {
+        href: "/hiring",
+        label: "Hiring",
+        icon: UserPlus,
+        activePrefix: "/hiring/",
         capability: "hr:read",
       },
     ],

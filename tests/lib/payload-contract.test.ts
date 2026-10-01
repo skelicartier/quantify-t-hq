@@ -109,6 +109,9 @@ import * as financeApi from "@/lib/api/finance";
 import * as quotesApi from "@/lib/api/quotes";
 import * as relApi from "@/lib/api/relationships";
 import * as kbApi from "@/lib/api/knowledge";
+import * as controlsApi from "@/lib/api/controls";
+import * as centreApi from "@/lib/api/trust-centre";
+import * as hiringApi from "@/lib/api/hiring";
 import * as fieldsApi from "@/lib/api/fields";
 import * as autoApi from "@/lib/api/automations";
 import * as digestApi from "@/lib/api/digests";
@@ -200,6 +203,13 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/outbound-webhooks/{endpoint_id}", () => platformApi.readWebhook(token, ids.endpoint_id!)],
   ["hq/settings/fields", () => fieldsApi.readFields(token)],
   ["hq/digests", () => digestApi.readDigests(token)],
+  ["hq/hiring", () => hiringApi.readHiring(token)],
+  ["hq/hiring/openings/{opening_id}", () => hiringApi.readOpening(token, ids.opening_id!)],
+  ["hq/hiring/applicants/{applicant_id}", () => hiringApi.readApplicant(token, ids.applicant_id!)],
+  ["hq/hiring/interviews", () => hiringApi.readInterviews(token)],
+  ["hq/controls", () => controlsApi.readControls(token)],
+  ["hq/controls/{control_id}", () => controlsApi.readControl(token, ids.control_id!)],
+  ["hq/trust-centre", () => centreApi.readTrustCentre(token)],
   ["hq/changelog", () => kbApi.readChangelog(token)],
   ["hq/changelog/{entry_id}", () => kbApi.readEntry(token, ids.entry_id!)],
   ["hq/help", () => kbApi.readHelp(token)],
@@ -214,6 +224,9 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/deals/{deal_id}/quotes", () => quotesApi.readDealQuotes(token, ids.deal_id!)],
   ["hq/deals/{deal_id}/plan", () => quotesApi.readDealPlan(token, ids.deal_id!)],
   ["hq/finance/cash", () => financeApi.readCash(token)],
+  ["hq/finance/deferred", () => financeApi.readDeferred(token)],
+  ["hq/finance/purchases", () => financeApi.readPurchases(token)],
+  ["hq/finance/budget", () => financeApi.readBudget(token)],
   ["hq/finance/vendors", () => financeApi.readVendors(token)],
   ["hq/finance/expenses", () => financeApi.readExpenses(token)],
   ["hq/finance/updates", () => financeApi.readInvestorUpdates(token)],
@@ -321,6 +334,18 @@ describe("every portal read parses the service's own payload", () => {
     it("public/mail/unsubscribe/{token}", async () => {
       shared.role = "anonymous";
       await expect(mail.readUnsubscribe(ids.unsubscribe_token!)).resolves.toBeTruthy();
+    });
+    it("public/audit/{token}", async () => {
+      shared.role = "anonymous";
+      await expect(controlsApi.readAuditView(ids.auditor_token!)).resolves.toBeTruthy();
+    });
+    it("public/careers", async () => {
+      shared.role = "anonymous";
+      await expect(hiringApi.readPublicCareers()).resolves.toBeTruthy();
+    });
+    it("public/trust-centre", async () => {
+      shared.role = "anonymous";
+      await expect(centreApi.readPublicTrustCentre()).resolves.toBeTruthy();
     });
     it("public/changelog", async () => {
       shared.role = "anonymous";

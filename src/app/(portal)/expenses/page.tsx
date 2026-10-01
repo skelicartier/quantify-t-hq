@@ -1,5 +1,5 @@
 import { actOnExpenseAction, claimExpenseAction } from "@/app/(portal)/finance/actions";
-import { ClaimPill, FinanceTabs } from "@/components/finance/finance-parts";
+import { ClaimPill, FinanceTabs, SpendTabs } from "@/components/finance/finance-parts";
 import { PageHeader } from "@/components/shell/page-header";
 import { ActForm } from "@/components/ui/act-form";
 import { Callout } from "@/components/ui/callout";
@@ -61,7 +61,13 @@ export default async function ExpensesPage() {
         eyebrow="Work"
         title="Expenses"
         description="Claim back what you spent for the company, with where the receipt is. Someone else approves it; your own claims are never yours to decide."
-        actions={board?.can_decide ? <FinanceTabs current="/expenses" /> : undefined}
+        actions={
+          board?.can_decide ? (
+            <FinanceTabs current="/expenses" />
+          ) : (
+            <SpendTabs current="/expenses" />
+          )
+        }
       />
       {board === null ? (
         <Callout tone="danger" role="alert">

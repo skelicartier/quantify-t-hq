@@ -13195,6 +13195,12 @@ routes.push(
           activity.body = "";
           notes += 1;
         }
+      let documentRequests = 0;
+      for (const request of tcRequests)
+        if (email && request.email === email) {
+          Object.assign(request, { name: "", email: "", company: "", reason: "" });
+          documentRequests += 1;
+        }
       Object.assign(person, {
         full_name: "",
         email: "",
@@ -13207,7 +13213,7 @@ routes.push(
       });
       erasedPeople.add(person.id);
       const added = pvSuppress(email, "erasure", viewer.id, row.reference);
-      const summary = `Erased from the CRM: the person record emptied, ${leadCount} lead(s), ${memberships} list membership(s), ${attendances} meeting attendance(s) and ${notes} note(s) on them alone. The address stays on the suppression list only.`;
+      const summary = `Erased from the CRM: the person record emptied, ${leadCount} lead(s), ${memberships} list membership(s), ${attendances} meeting attendance(s), ${notes} note(s) on them alone and ${documentRequests} trust-centre document request(s). The address stays on the suppression list only.`;
       privacySearches.set(`${row.id}|crm`, {
         state: "found",
         note: summary,
@@ -37831,6 +37837,2295 @@ routes.push(
   },
 );
 
+// --- the control map and the trust centre (mirrors control_routes.py and trust_centre_routes.py) ---
+
+type ControlRow = {
+  id: string;
+  ref: string;
+  title: string;
+  description: string;
+  domain: string;
+  frequency: string;
+  state: string;
+  owner_staff_id: string | null;
+  frameworks: string[];
+  operating_since: string | null;
+  updated_at: string;
+};
+type EvidenceRow = {
+  id: string;
+  control_id: string;
+  title: string;
+  reference: string;
+  period_start: string | null;
+  period_end: string | null;
+  collected_on: string;
+  collected_by: string;
+  note: string;
+};
+type ControlLinkRow = {
+  id: string;
+  control_id: string;
+  record_type: string;
+  record_id: string;
+  created_at: string;
+};
+type AuditorLinkRow = {
+  id: string;
+  token: string;
+  label: string;
+  expires_at: string;
+  created_by: string;
+  created_at: string;
+  revoked_at: string | null;
+  last_viewed_at: string | null;
+  views: number;
+};
+type TcSectionRow = {
+  id: string;
+  position: number;
+  title: string;
+  body: string;
+  published: boolean;
+  reviewed_on: string | null;
+};
+type TcDocumentRow = {
+  id: string;
+  title: string;
+  description: string;
+  requires_nda: boolean;
+  available: boolean;
+};
+type TcRequestRow = {
+  id: string;
+  document_id: string;
+  name: string;
+  email: string;
+  company: string;
+  reason: string;
+  status: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string;
+  sent_on: string | null;
+  created_at: string;
+};
+
+const CTL_DOMAINS: Record<string, string> = {
+  access: "Access",
+  change: "Change",
+  continuity: "Continuity",
+  data: "Data protection",
+  incident: "Incidents",
+  people: "People",
+  supplier: "Suppliers",
+  operations: "Operations",
+};
+const CTL_FREQUENCIES: Record<string, [string, number]> = {
+  continuous: ["Continuous (evidenced quarterly)", 92],
+  monthly: ["Monthly", 31],
+  quarterly: ["Quarterly", 92],
+  semiannual: ["Twice a year", 183],
+  annual: ["Yearly", 366],
+};
+const CTL_STATES: Record<string, string> = {
+  draft: "Being designed",
+  operating: "Operating",
+  retired: "Retired",
+};
+const CTL_LINKS: Record<string, [() => Array<{ id: string }>, string, string]> = {
+  risk: [() => risks, "title", "/trust/risks/{id}"],
+  finding: [() => trustFindings, "title", "/trust/findings/{id}"],
+  change: [() => changes, "title", "/trust/changes/{id}"],
+  continuity_test: [() => continuityTests, "scenario", "/trust/continuity"],
+  answer: [() => answers, "question", "/trust/answers/{id}"],
+  processing: [() => processing, "name", "/trust/processing/{id}"],
+};
+const controls: ControlRow[] = [];
+const controlEvidence: EvidenceRow[] = [];
+const controlLinks: ControlLinkRow[] = [];
+const auditorLinks: AuditorLinkRow[] = [];
+const tcSections: TcSectionRow[] = [];
+const tcDocuments: TcDocumentRow[] = [];
+const tcRequests: TcRequestRow[] = [];
+const ctlBad = (details: Record<string, string>) => refuse(400, "malformed_request", details);
+
+const ctlLabel = (type: string, id: string) => {
+  const entry = CTL_LINKS[type];
+  if (!entry) return "";
+  const row = entry[0]().find((item) => item.id === id) as Record<string, unknown> | undefined;
+  return row ? String(row[entry[1]] ?? "") : "";
+};
+function ctlDue(row: ControlRow): string | null {
+  if (row.state !== "operating") return null;
+  const newest = controlEvidence
+    .filter((item) => item.control_id === row.id)
+    .map((item) => item.collected_on)
+    .sort()
+    .at(-1);
+  if (!newest) return row.operating_since ?? row.updated_at.slice(0, 10);
+  return addDaysIso(newest, (CTL_FREQUENCIES[row.frequency] ?? ["", 92])[1]);
+}
+function ctlView(row: ControlRow, full: boolean) {
+  const evidence = controlEvidence.filter((item) => item.control_id === row.id);
+  const links = controlLinks.filter((item) => item.control_id === row.id);
+  const due = ctlDue(row);
+  const base = {
+    control_id: row.id,
+    ref: row.ref,
+    title: row.title,
+    domain: row.domain,
+    domain_label: CTL_DOMAINS[row.domain] ?? row.domain,
+    frequency: row.frequency,
+    frequency_label: (CTL_FREQUENCIES[row.frequency] ?? [row.frequency])[0],
+    state: row.state,
+    state_label: CTL_STATES[row.state] ?? row.state,
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    frameworks: row.frameworks,
+    evidence_count: evidence.length,
+    last_evidence_on:
+      evidence
+        .map((item) => item.collected_on)
+        .sort()
+        .at(-1) ?? null,
+    evidence_due_on: due,
+    evidence_due: Boolean(due && due <= todayIso()),
+    links: links.length,
+  };
+  if (!full) return base;
+  return {
+    ...base,
+    description: row.description,
+    operating_since: row.operating_since,
+    evidence: evidence
+      .sort((a, b) => b.collected_on.localeCompare(a.collected_on))
+      .map((item) => ({
+        evidence_id: item.id,
+        title: item.title,
+        reference: item.reference,
+        period_start: item.period_start,
+        period_end: item.period_end,
+        collected_on: item.collected_on,
+        collected_by_name: nameOf(item.collected_by),
+        note: item.note,
+      })),
+    linked: links
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map((link) => ({
+        link_id: link.id,
+        record_type: link.record_type,
+        record_id: link.record_id,
+        label: ctlLabel(link.record_type, link.record_id),
+        path: (CTL_LINKS[link.record_type]?.[2] ?? "/trust").replace("{id}", link.record_id),
+      })),
+  };
+}
+const ctlLinkState = (row: AuditorLinkRow) =>
+  row.revoked_at ? "revoked" : Date.parse(row.expires_at) <= Date.now() ? "expired" : "live";
+const ctlFrameworks = (raw: unknown) => {
+  const items = Array.isArray(raw)
+    ? raw
+    : String(raw ?? "")
+        .replace(/\n/g, ",")
+        .split(",");
+  const out: string[] = [];
+  for (const item of items) {
+    const text = String(item).split(/\s+/).filter(Boolean).join(" ").slice(0, 60);
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out;
+};
+function ctlBoard(onlyOperating = false, full = false) {
+  const order: Record<string, number> = { operating: 0, draft: 1, retired: 2 };
+  return controls
+    .filter((row) => !onlyOperating || row.state === "operating")
+    .map((row) => ctlView(row, full))
+    .sort(
+      (a, b) =>
+        (order[a.state] ?? 9) - (order[b.state] ?? 9) ||
+        a.domain.localeCompare(b.domain) ||
+        a.ref.localeCompare(b.ref),
+    );
+}
+
+function seedControlsAndCentre() {
+  controls.length = 0;
+  controlEvidence.length = 0;
+  controlLinks.length = 0;
+  auditorLinks.length = 0;
+  tcSections.length = 0;
+  tcDocuments.length = 0;
+  tcRequests.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const ADMIN = "aa000000-0000-4000-8000-00000000000b";
+  const day = todayIso();
+  const control = (row: Omit<ControlRow, "updated_at">) =>
+    controls.push({ ...row, updated_at: agoIso(24 * 30) });
+  control({
+    id: "c7000001-0000-4000-8000-000000000000",
+    ref: "AC-1",
+    title: "Quarterly access review",
+    description:
+      "Every quarter the owner lists who can reach production, the database and the admin console, and removes anyone who should not.",
+    domain: "access",
+    frequency: "quarterly",
+    state: "operating",
+    owner_staff_id: OWNER,
+    frameworks: ["SOC 2 CC6.2", "ISO 27001 A.5.18"],
+    operating_since: addDaysIso(day, -200),
+  });
+  control({
+    id: "c7000002-0000-4000-8000-000000000000",
+    ref: "BC-1",
+    title: "Restore a backup",
+    description:
+      "Restore last night's database backup to a scratch server and check the row counts.",
+    domain: "continuity",
+    frequency: "quarterly",
+    state: "operating",
+    owner_staff_id: ADMIN,
+    frameworks: ["SOC 2 A1.3"],
+    operating_since: addDaysIso(day, -300),
+  });
+  control({
+    id: "c7000003-0000-4000-8000-000000000000",
+    ref: "SU-1",
+    title: "Supplier reviews by tier",
+    description: "",
+    domain: "supplier",
+    frequency: "annual",
+    state: "draft",
+    owner_staff_id: null,
+    frameworks: ["SOC 2 CC9.2"],
+    operating_since: null,
+  });
+  const evidence = (
+    control_id: string,
+    title: string,
+    reference: string,
+    daysAgo: number,
+    by: string,
+  ) =>
+    controlEvidence.push({
+      id: randomUUID(),
+      control_id,
+      title,
+      reference,
+      period_start: null,
+      period_end: null,
+      collected_on: addDaysIso(day, -daysAgo),
+      collected_by: by,
+      note: "",
+    });
+  evidence(
+    "c7000001-0000-4000-8000-000000000000",
+    "Q2 access review sign-off",
+    "Drive: /audit/2026-Q2",
+    95,
+    OWNER,
+  );
+  evidence(
+    "c7000001-0000-4000-8000-000000000000",
+    "Q3 access review sign-off",
+    "Drive: /audit/2026-Q3",
+    5,
+    OWNER,
+  );
+  evidence(
+    "c7000002-0000-4000-8000-000000000000",
+    "Restore test, June",
+    "Runbook log, 2026-06",
+    120,
+    ADMIN,
+  );
+  const risk = risks[0];
+  if (risk)
+    controlLinks.push({
+      id: randomUUID(),
+      control_id: "c7000001-0000-4000-8000-000000000000",
+      record_type: "risk",
+      record_id: risk.id,
+      created_at: agoIso(24 * 30),
+    });
+  tcSections.push(
+    {
+      id: "d7000001-0000-4000-8000-000000000000",
+      position: 0,
+      title: "How your data is protected",
+      body: "Every database and backup is encrypted at rest; traffic is encrypted in transit. Staff reach production only with a second factor.",
+      published: true,
+      reviewed_on: addDaysIso(day, -20),
+    },
+    {
+      id: "d7000002-0000-4000-8000-000000000000",
+      position: 1,
+      title: "Reporting a security problem",
+      body: "Write to the founders with what you found and how to reproduce it. We reply to every report.",
+      published: false,
+      reviewed_on: null,
+    },
+  );
+  tcDocuments.push({
+    id: "d7100001-0000-4000-8000-000000000000",
+    title: "Penetration test summary",
+    description: "The latest external test, findings and fixes.",
+    requires_nda: true,
+    available: true,
+  });
+  tcRequests.push({
+    id: "d7200001-0000-4000-8000-000000000000",
+    document_id: "d7100001-0000-4000-8000-000000000000",
+    name: "Jordan Park",
+    email: "jordan@ledgerco.example",
+    company: "Ledger & Co",
+    reason: "Vendor review before a pilot",
+    status: "received",
+    decided_by: null,
+    decided_at: null,
+    decision_note: "",
+    sent_on: null,
+    created_at: agoIso(26),
+  });
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/controls",
+    auth: true,
+    capability: "audit:read",
+    handler: () => {
+      const views = ctlBoard();
+      const operating = views.filter((view) => view.state === "operating");
+      return ok({
+        controls: views,
+        counts: {
+          total: views.length,
+          operating: operating.length,
+          draft: views.filter((view) => view.state === "draft").length,
+          evidence_due: operating.filter((view) => view.evidence_due).length,
+        },
+        domains: Object.entries(CTL_DOMAINS).map(([value, label]) => ({ value, label })),
+        frequencies: Object.entries(CTL_FREQUENCIES).map(([value, [label]]) => ({ value, label })),
+        staff: staff
+          .filter((member) => member.is_active)
+          .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
+          .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),
+        auditor_links: [...auditorLinks]
+          .sort((a, b) => b.created_at.localeCompare(a.created_at))
+          .map((row) => ({
+            link_id: row.id,
+            label: row.label,
+            expires_at: row.expires_at,
+            state: ctlLinkState(row),
+            views: row.views,
+            last_viewed_at: row.last_viewed_at,
+            created_by_name: nameOf(row.created_by),
+          })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/controls/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const ref = String(body.ref ?? "")
+        .trim()
+        .toUpperCase();
+      if (!/^[A-Z]{1,6}-\d{1,4}$/.test(ref))
+        return ctlBad({ ref: "letters, a dash and a number, like AC-1" });
+      if (controls.some((row) => row.ref === ref)) return ctlBad({ ref: "already used" });
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title) return ctlBad({ title: "what the control does" });
+      const domain = String(body.domain || "operations");
+      if (!(domain in CTL_DOMAINS)) return ctlBad({ domain: Object.keys(CTL_DOMAINS).join(", ") });
+      const frequency = String(body.frequency || "quarterly");
+      if (!(frequency in CTL_FREQUENCIES))
+        return ctlBad({ frequency: Object.keys(CTL_FREQUENCIES).join(", ") });
+      const owner = String(body.owner_staff_id ?? "").toLowerCase() || null;
+      if (owner && !staff.some((member) => member.id === owner))
+        return ctlBad({ owner_staff_id: "choose someone on the team" });
+      const row: ControlRow = {
+        id: randomUUID(),
+        ref,
+        title,
+        description: String(body.description ?? "")
+          .trim()
+          .slice(0, 4000),
+        domain,
+        frequency,
+        state: "draft",
+        owner_staff_id: owner,
+        frameworks: ctlFrameworks(body.frameworks),
+        operating_since: null,
+        updated_at: now(),
+      };
+      controls.push(row);
+      audit("control.created", caller(headers)?.member.id ?? null, "control", row.id);
+      return ok({ control: ctlView(row, true) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/controls/auditor-links/create",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const who = caller(headers)!;
+      const label = String(body.label ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!label) return ctlBad({ label: "who it is for — the audit firm and the auditor" });
+      const days = Number(body.days ?? 14);
+      if (!Number.isInteger(days) || days < 1 || days > 30) return ctlBad({ days: "1 to 30" });
+      if (!String(body.reason ?? "").trim())
+        return ctlBad({ reason: "why an outsider sees the control map" });
+      const token = `qta_${randomUUID().replace(/-/g, "")}`;
+      const row: AuditorLinkRow = {
+        id: randomUUID(),
+        token,
+        label,
+        expires_at: new Date(Date.now() + days * 86_400_000).toISOString(),
+        created_by: who.member.id,
+        created_at: now(),
+        revoked_at: null,
+        last_viewed_at: null,
+        views: 0,
+      };
+      auditorLinks.push(row);
+      audit("auditor_link.created", who.member.id, "auditor_link", row.id);
+      return ok({ link_id: row.id, token, expires_at: row.expires_at });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/controls/auditor-links/{link_id}/revoke",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ params, headers }) => {
+      const who = caller(headers)!;
+      const row = auditorLinks.find((item) => item.id === params.link_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.revoked_at) return ctlBad({ state: "already revoked" });
+      row.revoked_at = now();
+      audit("auditor_link.revoked", who.member.id, "auditor_link", row.id);
+      return ok({ link_id: row.id, state: "revoked" });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/controls/{control_id}",
+    auth: true,
+    capability: "audit:read",
+    handler: ({ params }) => {
+      const row = controls.find((item) => item.id === params.control_id);
+      if (!row) return refuse(404, "not_found");
+      const choices = Object.fromEntries(
+        Object.entries(CTL_LINKS).map(([type, [rows, field]]) => [
+          type,
+          rows()
+            .map((item) => ({
+              record_id: item.id,
+              label: String((item as Record<string, unknown>)[field] ?? ""),
+            }))
+            .sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase())),
+        ]),
+      );
+      return ok({ control: ctlView(row, true), link_choices: choices });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/controls/{control_id}/act",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const row = controls.find((item) => item.id === params.control_id);
+      if (!row) return refuse(404, "not_found");
+      const me = caller(headers)?.member.id ?? "";
+      const action = String(body.action ?? "");
+      if (action === "edit") {
+        let changed = false;
+        if ("title" in body) {
+          const title = String(body.title ?? "")
+            .trim()
+            .slice(0, 200);
+          if (!title) return ctlBad({ title: "what the control does" });
+          changed ||= title !== row.title;
+          row.title = title;
+        }
+        if ("description" in body) {
+          const text = String(body.description ?? "")
+            .trim()
+            .slice(0, 4000);
+          changed ||= text !== row.description;
+          row.description = text;
+        }
+        if ("domain" in body) {
+          if (!(String(body.domain) in CTL_DOMAINS))
+            return ctlBad({ domain: Object.keys(CTL_DOMAINS).join(", ") });
+          changed ||= String(body.domain) !== row.domain;
+          row.domain = String(body.domain);
+        }
+        if ("frequency" in body) {
+          if (!(String(body.frequency) in CTL_FREQUENCIES))
+            return ctlBad({ frequency: Object.keys(CTL_FREQUENCIES).join(", ") });
+          changed ||= String(body.frequency) !== row.frequency;
+          row.frequency = String(body.frequency);
+        }
+        if ("owner_staff_id" in body) {
+          const owner = String(body.owner_staff_id ?? "").toLowerCase() || null;
+          if (owner && !staff.some((member) => member.id === owner))
+            return ctlBad({ owner_staff_id: "choose someone on the team" });
+          changed ||= owner !== row.owner_staff_id;
+          row.owner_staff_id = owner;
+        }
+        if ("frameworks" in body) {
+          const frameworks = ctlFrameworks(body.frameworks);
+          changed ||= frameworks.join("|") !== row.frameworks.join("|");
+          row.frameworks = frameworks;
+        }
+        if (!changed) return ctlBad({ fields: "nothing to change" });
+      } else if (action === "operate") {
+        if (row.state !== "draft")
+          return ctlBad({ state: "only a control being designed starts operating" });
+        if (!row.owner_staff_id)
+          return ctlBad({ owner_staff_id: "a control someone owns; give it an owner first" });
+        Object.assign(row, { state: "operating", operating_since: todayIso() });
+      } else if (action === "retire") {
+        if (row.state === "retired") return ctlBad({ state: "already retired" });
+        if (!String(body.reason ?? "").trim()) return ctlBad({ reason: "why it stops" });
+        row.state = "retired";
+      } else if (action === "restore") {
+        if (row.state !== "retired") return ctlBad({ state: "only a retired control is restored" });
+        Object.assign(row, { state: "draft", operating_since: null });
+      } else if (action === "evidence") {
+        const title = String(body.title ?? "")
+          .trim()
+          .slice(0, 200);
+        const reference = String(body.reference ?? "")
+          .trim()
+          .slice(0, 400);
+        if (!title || !reference)
+          return ctlBad({ reference: "what was collected and where it is kept" });
+        const collected = String(body.collected_on || todayIso());
+        if (collected > todayIso()) return ctlBad({ collected_on: "cannot be in the future" });
+        const start = String(body.period_start ?? "") || null;
+        const end = String(body.period_end ?? "") || null;
+        if (start && end && end < start) return ctlBad({ period_end: "on or after the start" });
+        controlEvidence.push({
+          id: randomUUID(),
+          control_id: row.id,
+          title,
+          reference,
+          period_start: start,
+          period_end: end,
+          collected_on: collected,
+          collected_by: me,
+          note: String(body.note ?? "")
+            .trim()
+            .slice(0, 1000),
+        });
+      } else if (action === "link") {
+        const type = String(body.record_type ?? "");
+        const entry = CTL_LINKS[type];
+        if (!entry) return ctlBad({ record_type: Object.keys(CTL_LINKS).join(", ") });
+        const recordId = String(body.record_id ?? "").toLowerCase();
+        if (!entry[0]().some((item) => item.id === recordId))
+          return ctlBad({ record_id: `not on the ${type.replace("_", " ")} register` });
+        if (
+          controlLinks.some(
+            (link) =>
+              link.control_id === row.id &&
+              link.record_type === type &&
+              link.record_id === recordId,
+          )
+        )
+          return ctlBad({ record_id: "already linked" });
+        controlLinks.push({
+          id: randomUUID(),
+          control_id: row.id,
+          record_type: type,
+          record_id: recordId,
+          created_at: now(),
+        });
+      } else if (action === "unlink") {
+        const index = controlLinks.findIndex(
+          (link) => link.id === String(body.link_id ?? "").toLowerCase(),
+        );
+        if (index < 0) return refuse(404, "not_found");
+        controlLinks.splice(index, 1);
+      } else return ctlBad({ action: "edit, operate, retire, restore, evidence, link, unlink" });
+      row.updated_at = now();
+      audit(`control.${action}`, me || null, "control", row.id);
+      return ok({ control: ctlView(row, true) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "public/audit/{token}",
+    handler: ({ params }) => {
+      const row = auditorLinks.find((item) => item.token === params.token);
+      if (!row || ctlLinkState(row) !== "live") return refuse(404, "not_found");
+      row.views += 1;
+      row.last_viewed_at = now();
+      audit("auditor_link.viewed", null, "auditor_link", row.id);
+      return ok({
+        label: row.label,
+        expires_at: row.expires_at,
+        read_at: now(),
+        controls: (ctlBoard(true, true) as Array<Record<string, unknown>>).map((view) => {
+          const { control_id: _id, owner_staff_id: _owner, ...rest } = view;
+          void _id;
+          void _owner;
+          return {
+            ...rest,
+            evidence: (view.evidence as Array<Record<string, unknown>>).map((item) => {
+              const { evidence_id: _e, collected_by_name: _c, ...kept } = item;
+              void _e;
+              void _c;
+              return kept;
+            }),
+            linked: (view.linked as Array<Record<string, unknown>>).map((link) => ({
+              record_type: link.record_type,
+              label: link.label,
+            })),
+          };
+        }),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/trust-centre",
+    auth: true,
+    capability: "audit:read",
+    handler: () => {
+      const order: Record<string, number> = { received: 0, approved: 1, sent: 2, declined: 3 };
+      return ok({
+        sections: [...tcSections]
+          .sort((a, b) => a.position - b.position)
+          .map((row) => ({ section_id: row.id, ...row, id: undefined })),
+        documents: [...tcDocuments]
+          .sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()))
+          .map((row) => ({ document_id: row.id, ...row, id: undefined })),
+        requests: [...tcRequests]
+          .sort(
+            (a, b) =>
+              (order[a.status] ?? 9) - (order[b.status] ?? 9) ||
+              a.created_at.localeCompare(b.created_at),
+          )
+          .map((row) => ({
+            request_id: row.id,
+            document_id: row.document_id,
+            document_title: tcDocuments.find((item) => item.id === row.document_id)?.title ?? "",
+            name: row.name,
+            email: row.email,
+            company: row.company,
+            reason: row.reason,
+            status: row.status,
+            decided_by_name: row.decided_by ? nameOf(row.decided_by) : "",
+            decided_at: row.decided_at,
+            decision_note: row.decision_note,
+            sent_on: row.sent_on,
+            created_at: row.created_at,
+          })),
+        subprocessors: subprocessors
+          .filter((row) => row.status === "active")
+          .map((row) => ({
+            service: row.service || row.legal_name,
+            purpose: row.purpose,
+            locations: row.locations,
+          }))
+          .sort((a, b) => a.service.toLowerCase().localeCompare(b.service.toLowerCase())),
+        waiting: tcRequests.filter((row) => row.status === "received").length,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust-centre/sections/save",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 160);
+      const text = String(body.body ?? "")
+        .trim()
+        .slice(0, 20_000);
+      if (!title || !text) return ctlBad({ body: "a title and what it says" });
+      const published = body.published === true;
+      const sectionId = String(body.section_id ?? "").toLowerCase();
+      let row = sectionId ? tcSections.find((item) => item.id === sectionId) : undefined;
+      if (sectionId && !row) return refuse(404, "not_found");
+      if (!row) {
+        if (tcSections.length >= 20) return ctlBad({ title: "at most 20 sections" });
+        row = {
+          id: randomUUID(),
+          position:
+            (tcSections
+              .map((item) => item.position)
+              .sort((a, b) => a - b)
+              .at(-1) ?? -1) + 1,
+          title,
+          body: text,
+          published,
+          reviewed_on: published ? todayIso() : null,
+        };
+        tcSections.push(row);
+      } else {
+        if (published && (!row.published || text !== row.body)) row.reviewed_on = todayIso();
+        Object.assign(row, { title, body: text, published });
+      }
+      audit(
+        "trust_centre.section_saved",
+        caller(headers)?.member.id ?? null,
+        "trust_section",
+        row.id,
+      );
+      return ok({
+        sections: [...tcSections]
+          .sort((a, b) => a.position - b.position)
+          .map((item) => ({ section_id: item.id, ...item, id: undefined })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust-centre/documents/save",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!title) return ctlBad({ title: "what the document is" });
+      const documentId = String(body.document_id ?? "").toLowerCase();
+      let row = documentId ? tcDocuments.find((item) => item.id === documentId) : undefined;
+      if (documentId && !row) return refuse(404, "not_found");
+      const fields = {
+        title,
+        description: String(body.description ?? "")
+          .trim()
+          .slice(0, 1000),
+        requires_nda: body.requires_nda !== false,
+        available: body.available !== false,
+      };
+      if (row) Object.assign(row, fields);
+      else {
+        row = { id: randomUUID(), ...fields };
+        tcDocuments.push(row);
+      }
+      audit(
+        "trust_centre.document_saved",
+        caller(headers)?.member.id ?? null,
+        "trust_document",
+        row.id,
+      );
+      return ok({
+        documents: [...tcDocuments]
+          .sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()))
+          .map((item) => ({ document_id: item.id, ...item, id: undefined })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/trust-centre/requests/{request_id}/act",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params, body, headers }) => {
+      const row = tcRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      const me = caller(headers)?.member.id ?? "";
+      const action = String(body.action ?? "");
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 1000);
+      if (action === "approve" || action === "decline") {
+        if (row.status !== "received") return ctlBad({ status: "already decided" });
+        if (action === "decline" && !note)
+          return ctlBad({ note: "why — it is kept with the request" });
+        Object.assign(row, {
+          status: action === "approve" ? "approved" : "declined",
+          decided_by: me,
+          decided_at: now(),
+          decision_note: note,
+        });
+      } else if (action === "sent") {
+        if (row.status !== "approved") return ctlBad({ status: "approve it before it is sent" });
+        Object.assign(row, { status: "sent", sent_on: todayIso() });
+      } else return ctlBad({ action: "approve, decline, sent" });
+      audit(`trust_centre.request_${action}`, me || null, "trust_document_request", row.id);
+      return ok({
+        request: {
+          request_id: row.id,
+          document_id: row.document_id,
+          document_title: tcDocuments.find((item) => item.id === row.document_id)?.title ?? "",
+          name: row.name,
+          email: row.email,
+          company: row.company,
+          reason: row.reason,
+          status: row.status,
+          decided_by_name: row.decided_by ? nameOf(row.decided_by) : "",
+          decided_at: row.decided_at,
+          decision_note: row.decision_note,
+          sent_on: row.sent_on,
+          created_at: row.created_at,
+        },
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "public/trust-centre",
+    handler: () =>
+      ok({
+        sections: [...tcSections]
+          .filter((row) => row.published)
+          .sort((a, b) => a.position - b.position)
+          .map((row) => ({ title: row.title, body: row.body, reviewed_on: row.reviewed_on })),
+        subprocessors: subprocessors
+          .filter((row) => row.status === "active")
+          .map((row) => ({
+            service: row.service || row.legal_name,
+            purpose: row.purpose,
+            locations: row.locations,
+          }))
+          .sort((a, b) => a.service.toLowerCase().localeCompare(b.service.toLowerCase())),
+        documents: [...tcDocuments]
+          .filter((row) => row.available)
+          .sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()))
+          .map((row) => ({
+            document_id: row.id,
+            title: row.title,
+            description: row.description,
+            requires_nda: row.requires_nda,
+          })),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "public/trust-centre/request",
+    handler: ({ body }) => {
+      if (String(body.website ?? "").trim()) return ok({ received: true });
+      const document = tcDocuments.find(
+        (row) => row.id === String(body.document_id ?? "").toLowerCase(),
+      );
+      if (!document || !document.available)
+        return ctlBad({ document_id: "choose a document from the list" });
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 160);
+      const email = String(body.email ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 254);
+      const company = String(body.company ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!name) return ctlBad({ name: "your name" });
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+        return ctlBad({ email: "your work email address" });
+      if (!company) return ctlBad({ company: "the firm you are asking for" });
+      tcRequests.push({
+        id: randomUUID(),
+        document_id: document.id,
+        name,
+        email,
+        company,
+        reason: String(body.reason ?? "")
+          .trim()
+          .slice(0, 1000),
+        status: "received",
+        decided_by: null,
+        decided_at: null,
+        decision_note: "",
+        sent_on: null,
+        created_at: now(),
+      });
+      audit("trust_centre.document_requested", null, "trust_document_request", document.id);
+      return ok({ received: true });
+    },
+  },
+);
+
+// --- finance part three: deferred revenue, purchase requests, budget (mirrors finance.py) ---
+
+type PurchaseRow = {
+  id: string;
+  requested_by: string;
+  vendor_name: string;
+  description: string;
+  category: string;
+  amount: number;
+  currency: string;
+  billing: string;
+  needed_by: string | null;
+  status: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string;
+  bought_on: string | null;
+  vendor_id: string | null;
+  created_at: string;
+};
+type BudgetRow = {
+  id: string;
+  month: string;
+  category: string;
+  currency: string;
+  budget: number;
+  actual: number | null;
+  actual_source: string;
+  updated_by: string;
+  updated_at: string;
+};
+
+const PLAN_BILLING: Record<string, string> = {
+  one_off: "One-off",
+  monthly: "Monthly",
+  annual: "Yearly",
+};
+const BUDGET_CATEGORIES: Record<string, string> = {
+  revenue: "Revenue",
+  people: "People",
+  software: "Software",
+  infrastructure: "Infrastructure",
+  data: "Data",
+  office: "Office",
+  travel: "Travel",
+  marketing: "Marketing",
+  services: "Professional services",
+  other: "Other",
+};
+const purchases: PurchaseRow[] = [];
+const budgetLines: BudgetRow[] = [];
+const planBad = (details: Record<string, string>) => refuse(400, "malformed_request", details);
+
+/** Cents earned per month over the invoice's service period, by day; the last month takes the rounding. */
+function planRecognition(row: InvoiceRow): Map<string, number> {
+  const start = row.period_start ?? row.issued_on;
+  let end = row.period_end ?? start;
+  if (end < start) end = start;
+  const total = finDays(start, end) + 1;
+  const out = new Map<string, number>();
+  let cursor = start;
+  while (cursor <= end) {
+    const monthEnd = addDaysIso(addMonthsIso(`${cursor.slice(0, 7)}-01`, 1), -1);
+    const stop = monthEnd < end ? monthEnd : end;
+    out.set(cursor.slice(0, 7), Math.round((row.net_cents * (finDays(cursor, stop) + 1)) / total));
+    cursor = addDaysIso(stop, 1);
+  }
+  const months = [...out.keys()].sort();
+  const last = months.at(-1)!;
+  out.set(
+    last,
+    row.net_cents - months.slice(0, -1).reduce((sum, month) => sum + out.get(month)!, 0),
+  );
+  return out;
+}
+const planCounted = () =>
+  invoicesRx.filter((row) => ["open", "paid", "uncollectible"].includes(row.status));
+function planSchedule(months: string[]) {
+  const out: Record<
+    string,
+    Array<{ month: string; invoiced: number; recognised: number; balance: number }>
+  > = {};
+  const counted = planCounted();
+  for (const currency of [...new Set(counted.map((row) => row.currency))].sort()) {
+    const mine = counted.filter((row) => row.currency === currency);
+    const earned = mine.map(planRecognition);
+    out[currency] = months.map((month) => {
+      const monthEnd = addDaysIso(addMonthsIso(`${month}-01`, 1), -1);
+      const invoiced = mine
+        .filter((row) => row.issued_on.slice(0, 7) === month)
+        .reduce((sum, row) => sum + row.net_cents, 0);
+      const recognised = earned.reduce((sum, plan) => sum + (plan.get(month) ?? 0), 0);
+      const billed = mine
+        .filter((row) => row.issued_on <= monthEnd)
+        .reduce((sum, row) => sum + row.net_cents, 0);
+      const earnedToDate = earned.reduce(
+        (sum, plan) =>
+          sum +
+          [...plan.entries()]
+            .filter(([key]) => key <= month)
+            .reduce((inner, [, cents]) => inner + cents, 0),
+        0,
+      );
+      return {
+        month,
+        invoiced: invoiced / 100,
+        recognised: recognised / 100,
+        balance: (billed - earnedToDate) / 100,
+      };
+    });
+  }
+  return out;
+}
+function planPurchaseView(row: PurchaseRow, me: string) {
+  return {
+    request_id: row.id,
+    requested_by_name: nameOf(row.requested_by),
+    mine: row.requested_by === me,
+    vendor_name: row.vendor_name,
+    description: row.description,
+    category: row.category,
+    category_label: FIN_CATEGORIES[row.category] ?? row.category,
+    amount: row.amount,
+    currency: row.currency,
+    billing: row.billing,
+    billing_label: PLAN_BILLING[row.billing] ?? row.billing,
+    needed_by: row.needed_by,
+    status: row.status,
+    decided_by_name: row.decided_by ? nameOf(row.decided_by) : "",
+    decided_at: row.decided_at,
+    decision_note: row.decision_note,
+    bought_on: row.bought_on,
+    vendor_id: row.vendor_id,
+    created_at: row.created_at,
+  };
+}
+function planVariance(category: string, budget: number, actual: number | null) {
+  if (actual === null) return { variance: null, variance_share: null, flag: false };
+  const diff = finRound(actual - budget);
+  const share = budget ? Math.round((diff / budget) * 1000) / 1000 : null;
+  const flag =
+    category === "revenue"
+      ? budget > 0 && actual < budget * 0.9
+      : budget > 0
+        ? actual > budget * 1.1
+        : actual > 0;
+  return { variance: diff, variance_share: share, flag };
+}
+function planBudget(month: string) {
+  const order = Object.keys(BUDGET_CATEGORIES);
+  const lines = budgetLines
+    .filter((row) => row.month === month)
+    .map((row) => ({
+      line_id: row.id,
+      category: row.category,
+      category_label: BUDGET_CATEGORIES[row.category] ?? row.category,
+      currency: row.currency,
+      budget: row.budget,
+      actual: row.actual,
+      actual_source: row.actual_source,
+      ...planVariance(row.category, row.budget, row.actual),
+      updated_by_name: nameOf(row.updated_by),
+      updated_at: row.updated_at,
+    }))
+    .sort(
+      (a, b) =>
+        a.currency.localeCompare(b.currency) ||
+        order.indexOf(a.category) - order.indexOf(b.category),
+    );
+  const costs: Record<string, { budget: number; actual: number; lines_without_actual: number }> =
+    {};
+  for (const line of lines) {
+    if (line.category === "revenue") continue;
+    const entry = (costs[line.currency] ??= { budget: 0, actual: 0, lines_without_actual: 0 });
+    entry.budget = finRound(entry.budget + line.budget);
+    if (line.actual === null) entry.lines_without_actual += 1;
+    else entry.actual = finRound(entry.actual + line.actual);
+  }
+  const earned: Record<string, number> = {};
+  for (const [currency, rows] of Object.entries(planSchedule([month])))
+    earned[currency] = rows[0]?.recognised ?? 0;
+  return {
+    month,
+    lines,
+    earned_revenue: earned,
+    costs: Object.fromEntries(Object.entries(costs).sort(([a], [b]) => a.localeCompare(b))),
+    categories: Object.entries(BUDGET_CATEGORIES).map(([value, label]) => ({ value, label })),
+  };
+}
+
+function seedPlanning() {
+  purchases.length = 0;
+  budgetLines.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const INTERN = "aa000000-0000-4000-8000-00000000000e";
+  const day = todayIso();
+  const month = day.slice(0, 7);
+  const purchase = (
+    row: Partial<PurchaseRow> & Pick<PurchaseRow, "id" | "requested_by" | "vendor_name" | "amount">,
+  ) =>
+    purchases.push({
+      description: "",
+      category: "software",
+      currency: "USD",
+      billing: "one_off",
+      needed_by: null,
+      status: "submitted",
+      decided_by: null,
+      decided_at: null,
+      decision_note: "",
+      bought_on: null,
+      vendor_id: null,
+      created_at: agoIso(30),
+      ...row,
+    });
+  purchase({
+    id: "e6000001-0000-4000-8000-000000000000",
+    requested_by: SALES,
+    vendor_name: "Event badge printing",
+    description: "Badges and a banner for the London fund-manager breakfast",
+    category: "other",
+    amount: 640,
+    currency: "GBP",
+    needed_by: addDaysIso(day, 9),
+  });
+  purchase({
+    id: "e6000002-0000-4000-8000-000000000000",
+    requested_by: INTERN,
+    vendor_name: "Charting library licence",
+    description: "A commercial licence for the chart library the desktop app uses",
+    category: "software",
+    amount: 2400,
+    billing: "annual",
+    status: "approved",
+    decided_by: OWNER,
+    decided_at: agoIso(24 * 2),
+  });
+  const line = (
+    category: string,
+    currency: string,
+    budget: number,
+    actual: number | null,
+    source = "",
+  ) =>
+    budgetLines.push({
+      id: randomUUID(),
+      month,
+      category,
+      currency,
+      budget,
+      actual,
+      actual_source: actual === null ? "" : source || "Ledger P&L, provisional",
+      updated_by: OWNER,
+      updated_at: agoIso(24 * 3),
+    });
+  line("revenue", "USD", 90000, null);
+  line("people", "USD", 42000, 41250);
+  line("software", "USD", 3800, 4460);
+  line("infrastructure", "USD", 2600, 2410);
+  line("data", "USD", 3000, null);
+  line("office", "GBP", 650, 650);
+  line("travel", "GBP", 900, 1280);
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/finance/deferred",
+    auth: true,
+    capability: "revenue:write",
+    handler: () => {
+      const day = todayIso();
+      const thisMonth = day.slice(0, 7);
+      const start = addMonthsIso(`${thisMonth}-01`, -11);
+      const months = Array.from({ length: 18 }, (_, step) => addMonthsIso(start, step).slice(0, 7));
+      const deferred = planCounted()
+        .map((row) => {
+          const plan = planRecognition(row);
+          const earned = [...plan.entries()]
+            .filter(([key]) => key <= thisMonth)
+            .reduce((sum, [, cents]) => sum + cents, 0);
+          return {
+            invoice_id: row.id,
+            number: row.number,
+            company_name: companies.find((item) => item.id === row.company_id)?.name ?? "",
+            currency: row.currency,
+            period_start: row.period_start,
+            period_end: row.period_end,
+            net_amount: row.net_cents / 100,
+            earned: earned / 100,
+            remaining: (row.net_cents - earned) / 100,
+          };
+        })
+        .filter((item) => item.remaining > 0)
+        .sort((a, b) => a.currency.localeCompare(b.currency) || b.remaining - a.remaining);
+      return ok({
+        months,
+        this_month: thisMonth,
+        schedule: planSchedule(months),
+        deferred,
+        invoices_counted: planCounted().length,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/finance/budget",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ query }) => {
+      const month = String(query.month || todayIso().slice(0, 7));
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return planBad({ month: "a month, YYYY-MM" });
+      return ok(planBudget(month));
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/budget/save",
+    auth: true,
+    capability: "revenue:write",
+    handler: ({ body, headers }) => {
+      const month = String(body.month ?? "").trim();
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return planBad({ month: "a month, YYYY-MM" });
+      const category = String(body.category ?? "");
+      if (!(category in BUDGET_CATEGORIES))
+        return planBad({ category: Object.keys(BUDGET_CATEGORIES).join(", ") });
+      const currency = finCurrency(body.currency);
+      if (!currency) return planBad({ currency: "a three-letter code, like USD" });
+      const budget = finMoney(body.budget);
+      if (budget === null) return planBad({ budget: "an amount, like 1250.00" });
+      let actual: number | null = null;
+      const source = String(body.actual_source ?? "")
+        .trim()
+        .slice(0, 200);
+      if (String(body.actual ?? "").trim()) {
+        actual = finMoney(body.actual);
+        if (actual === null) return planBad({ actual: "an amount, like 1250.00" });
+        if (!source)
+          return planBad({
+            actual_source: "where the actual came from — the accounting system's report",
+          });
+      }
+      const me = caller(headers)?.member.id ?? "";
+      const existing = budgetLines.find(
+        (row) => row.month === month && row.category === category && row.currency === currency,
+      );
+      if (existing)
+        Object.assign(existing, {
+          budget,
+          actual,
+          actual_source: actual === null ? "" : source,
+          updated_by: me,
+          updated_at: now(),
+        });
+      else
+        budgetLines.push({
+          id: randomUUID(),
+          month,
+          category,
+          currency,
+          budget,
+          actual,
+          actual_source: actual === null ? "" : source,
+          updated_by: me,
+          updated_at: now(),
+        });
+      audit("budget.saved", me || null, "budget_line", `${month}|${category}|${currency}`);
+      return ok(planBudget(month));
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/finance/purchases",
+    auth: true,
+    handler: ({ headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      const decides = hasCap(headers, "revenue:write");
+      const order: Record<string, number> = {
+        submitted: 0,
+        approved: 1,
+        bought: 2,
+        rejected: 3,
+        withdrawn: 4,
+      };
+      return ok({
+        requests: purchases
+          .filter((row) => decides || row.requested_by === me)
+          .map((row) => planPurchaseView(row, me))
+          .sort(
+            (a, b) =>
+              (order[a.status] ?? 9) - (order[b.status] ?? 9) ||
+              (a.needed_by ?? "9999").localeCompare(b.needed_by ?? "9999") ||
+              (a.created_at ?? "").localeCompare(b.created_at ?? ""),
+          ),
+        can_decide: decides,
+        categories: Object.entries(FIN_CATEGORIES).map(([value, label]) => ({ value, label })),
+        billing: Object.entries(PLAN_BILLING).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/purchases/create",
+    auth: true,
+    handler: ({ body, headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      const category = String(body.category ?? "");
+      if (!(category in FIN_CATEGORIES))
+        return planBad({ category: Object.keys(FIN_CATEGORIES).join(", ") });
+      const billing = String(body.billing ?? "");
+      if (!(billing in PLAN_BILLING))
+        return planBad({ billing: Object.keys(PLAN_BILLING).join(", ") });
+      const amount = finMoney(body.amount);
+      if (amount === null || amount <= 0) return planBad({ amount: "more than nothing" });
+      const currency = finCurrency(body.currency);
+      if (!currency) return planBad({ currency: "a three-letter code, like USD" });
+      const vendorName = String(body.vendor_name ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!vendorName) return planBad({ vendor_name: "who it is bought from" });
+      const description = String(body.description ?? "")
+        .trim()
+        .slice(0, 1000);
+      if (!description) return planBad({ description: "what it is and why" });
+      const row: PurchaseRow = {
+        id: randomUUID(),
+        requested_by: me,
+        vendor_name: vendorName,
+        description,
+        category,
+        amount,
+        currency,
+        billing,
+        needed_by: String(body.needed_by ?? "") || null,
+        status: "submitted",
+        decided_by: null,
+        decided_at: null,
+        decision_note: "",
+        bought_on: null,
+        vendor_id: null,
+        created_at: now(),
+      };
+      purchases.push(row);
+      audit("purchase.requested", me || null, "purchase_request", row.id);
+      return ok({ request: planPurchaseView(row, me) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/finance/purchases/{request_id}/act",
+    auth: true,
+    handler: ({ params, body, headers }) => {
+      const row = purchases.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      const me = caller(headers)?.member.id ?? "";
+      const mine = row.requested_by === me;
+      const decides = hasCap(headers, "revenue:write");
+      if (!mine && !decides) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      if (action === "withdraw") {
+        if (!mine)
+          return refuse(403, "forbidden", { action: "only the person who asked withdraws it" });
+        if (!["submitted", "approved"].includes(row.status))
+          return planBad({
+            status: "only a request not yet bought or decided against is withdrawn",
+          });
+        row.status = "withdrawn";
+      } else if (action === "approve" || action === "reject") {
+        if (!decides)
+          return refuse(403, "forbidden", { action: "owners and admins decide purchases" });
+        if (mine)
+          return refuse(403, "forbidden", { action: "someone else decides your own request" });
+        if (row.status !== "submitted") return planBad({ status: "already decided" });
+        const note = String(body.note ?? "")
+          .trim()
+          .slice(0, 400);
+        if (action === "reject" && !note) return planBad({ note: "why it is not bought" });
+        Object.assign(row, {
+          status: action === "approve" ? "approved" : "rejected",
+          decided_by: me,
+          decided_at: now(),
+          decision_note: note,
+        });
+      } else if (action === "bought") {
+        if (row.status !== "approved") return planBad({ status: "approve it before it is bought" });
+        const bought = String(body.bought_on || todayIso());
+        if (bought > todayIso()) return planBad({ bought_on: "cannot be in the future" });
+        Object.assign(row, { status: "bought", bought_on: bought });
+        if (row.billing === "monthly" || row.billing === "annual") {
+          const vendorId = randomUUID();
+          vendorsStore.push({
+            id: vendorId,
+            name: row.vendor_name,
+            category: row.category,
+            owner_staff_id: row.requested_by,
+            amount: row.amount,
+            currency: row.currency,
+            billing: row.billing,
+            renews_on: String(
+              body.renews_on || addMonthsIso(bought, row.billing === "monthly" ? 1 : 12),
+            ),
+            notice_days: 0,
+            auto_renews: true,
+            status: "active",
+            cancelled_on: null,
+            contract_ref: "",
+            notes: `Bought on purchase request of ${bought}.`,
+          });
+          row.vendor_id = vendorId;
+        }
+      } else return planBad({ action: "approve, reject, withdraw, bought" });
+      audit(`purchase.${action}`, me || null, "purchase_request", row.id);
+      return ok({ request: planPurchaseView(row, me) });
+    },
+  },
+);
+
+// --- hiring (mirrors account_api/hq/hiring.py and hiring_routes.py) ---
+
+type OpeningRow = {
+  id: string;
+  title: string;
+  team: string;
+  kind: string;
+  location: string;
+  description: string;
+  status: string;
+  owner_staff_id: string | null;
+  opened_on: string;
+  closes_on: string | null;
+};
+type ApplicantRow = {
+  id: string;
+  opening_id: string;
+  full_name: string;
+  email: string;
+  phone: string;
+  links: string;
+  cover_note: string;
+  source: string;
+  referred_by: string;
+  interviewers: string[];
+  stage: string;
+  stage_entered_at: string;
+  decision_reason: string;
+  decision_note: string;
+  decided_at: string | null;
+  keep_until: string | null;
+  anonymised_at: string | null;
+  created_at: string;
+};
+type ApplicantEventRow = {
+  id: string;
+  applicant_id: string;
+  kind: string;
+  from_stage: string;
+  to_stage: string;
+  note: string;
+  staff_id: string | null;
+  created_at: string;
+};
+type ScorecardRow = {
+  id: string;
+  applicant_id: string;
+  stage: string;
+  interviewer_staff_id: string;
+  recommendation: string;
+  scores: Record<string, number>;
+  notes: string;
+  submitted_at: string;
+};
+
+const HR_OPEN = ["applied", "screen", "interview", "task", "offer"];
+const HR_END = ["hired", "rejected", "withdrawn"];
+const HR_STAGES: Record<string, string> = {
+  applied: "Applied",
+  screen: "Screen",
+  interview: "Interview",
+  task: "Task",
+  offer: "Offer",
+  hired: "Hired",
+  rejected: "Rejected",
+  withdrawn: "Withdrew",
+};
+const HR_REASONS: Record<string, string> = {
+  role_fit: "Not the role we have",
+  skills: "Skills short of the role",
+  experience: "Experience short of the role",
+  location: "Location or right to work",
+  compensation: "Pay expectations",
+  timing: "Timing",
+  other: "Other (in the note)",
+};
+const HR_SOURCES: Record<string, string> = {
+  careers: "Careers page",
+  referral: "Referral",
+  agency: "Agency",
+  outreach: "We reached out",
+  other: "Other",
+};
+const HR_KINDS: Record<string, string> = {
+  employee: "Employee",
+  intern: "Intern",
+  contractor: "Contractor",
+};
+const HR_RECOMMENDATIONS: Record<string, string> = {
+  strong_no: "Strong no",
+  no: "No",
+  yes: "Yes",
+  strong_yes: "Strong yes",
+};
+const HR_CRITERIA: Record<string, string> = {
+  skills: "Skills for the role",
+  judgement: "Judgement",
+  communication: "Communication",
+  ownership: "Ownership",
+};
+const openings: OpeningRow[] = [];
+const applicants: ApplicantRow[] = [];
+const applicantEvents: ApplicantEventRow[] = [];
+const scorecards: ScorecardRow[] = [];
+const hrBad = (details: Record<string, string>) => refuse(400, "malformed_request", details);
+const hrDays = (row: ApplicantRow) =>
+  Math.max(0, Math.floor((Date.now() - Date.parse(row.stage_entered_at)) / 86_400_000));
+const hrStaffList = () =>
+  staff
+    .filter((member) => member.is_active)
+    .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
+    .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+
+function hrForget(row: ApplicantRow): string | null {
+  if (!["rejected", "withdrawn"].includes(row.stage) || !row.decided_at) return null;
+  const due = addDaysIso(row.decided_at.slice(0, 10), 183);
+  return row.keep_until && row.keep_until > due ? row.keep_until : due;
+}
+function hrOpeningView(row: OpeningRow) {
+  const mine = applicants.filter((item) => item.opening_id === row.id);
+  const byStage = Object.fromEntries(Object.keys(HR_STAGES).map((stage) => [stage, 0])) as Record<
+    string,
+    number
+  >;
+  for (const item of mine) byStage[item.stage] = (byStage[item.stage] ?? 0) + 1;
+  return {
+    opening_id: row.id,
+    title: row.title,
+    team: row.team,
+    kind: row.kind,
+    kind_label: HR_KINDS[row.kind] ?? row.kind,
+    location: row.location,
+    status: row.status,
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    opened_on: row.opened_on,
+    closes_on: row.closes_on,
+    in_process: HR_OPEN.reduce((sum, stage) => sum + (byStage[stage] ?? 0), 0),
+    by_stage: byStage,
+    waiting_over_a_week: mine.filter((item) => HR_OPEN.includes(item.stage) && hrDays(item) > 7)
+      .length,
+  };
+}
+function hrSummary(row: ApplicantRow) {
+  const forget = hrForget(row);
+  return {
+    applicant_id: row.id,
+    opening_id: row.opening_id,
+    full_name: row.full_name || "Erased",
+    email: row.email,
+    source: row.source,
+    source_label: HR_SOURCES[row.source] ?? "",
+    stage: row.stage,
+    stage_label: HR_STAGES[row.stage] ?? row.stage,
+    days_in_stage: hrDays(row),
+    scorecards: scorecards.filter((card) => card.applicant_id === row.id).length,
+    decision_reason: row.decision_reason,
+    decision_reason_label: HR_REASONS[row.decision_reason] ?? "",
+    forget_on: forget,
+    anonymised: row.anonymised_at !== null,
+    created_at: row.created_at,
+  };
+}
+function hrDetail(row: ApplicantRow, headers: Record<string, string | string[] | undefined>) {
+  const me = caller(headers)?.member.id ?? "";
+  const cards = scorecards.filter((card) => card.applicant_id === row.id);
+  const sees =
+    hasCap(headers, "hr:write") || cards.some((card) => card.interviewer_staff_id === me);
+  const visible = sees ? cards : [];
+  return {
+    ...hrSummary(row),
+    phone: row.phone,
+    links: row.links,
+    cover_note: row.cover_note,
+    referred_by: row.referred_by,
+    decision_note: row.decision_note,
+    keep_until: row.keep_until,
+    opening_title: openings.find((item) => item.id === row.opening_id)?.title ?? "",
+    interviewers: row.interviewers.map((staffId) => ({ staff_id: staffId, name: nameOf(staffId) })),
+    interviewing: row.interviewers.includes(me),
+    scorecard_views: [...visible]
+      .sort((a, b) => a.submitted_at.localeCompare(b.submitted_at))
+      .map((card) => ({
+        stage: card.stage,
+        interviewer_name: nameOf(card.interviewer_staff_id),
+        mine: card.interviewer_staff_id === me,
+        recommendation: card.recommendation,
+        recommendation_label: HR_RECOMMENDATIONS[card.recommendation] ?? "",
+        scores: card.scores,
+        notes: card.notes,
+        submitted_at: card.submitted_at,
+      })),
+    scorecards_hidden: cards.length - visible.length,
+    events: applicantEvents
+      .filter((event) => event.applicant_id === row.id)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map((event) => ({
+        kind: event.kind,
+        from_stage: event.from_stage,
+        to_stage: event.to_stage,
+        note: event.note,
+        staff_name: event.staff_id ? nameOf(event.staff_id) : "The careers form",
+        at: event.created_at,
+      })),
+    can_write: hasCap(headers, "hr:write"),
+  };
+}
+const hrReadable = (row: ApplicantRow, headers: Record<string, string | string[] | undefined>) =>
+  hasCap(headers, "hr:read") || row.interviewers.includes(caller(headers)?.member.id ?? "");
+
+function seedHiring() {
+  openings.length = 0;
+  applicants.length = 0;
+  applicantEvents.length = 0;
+  scorecards.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const ADMIN = "aa000000-0000-4000-8000-00000000000b";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const day = todayIso();
+  openings.push(
+    {
+      id: "f1000001-0000-4000-8000-000000000000",
+      title: "Research intern",
+      team: "Research",
+      kind: "intern",
+      location: "Remote",
+      description:
+        "Help build the overnight brief: read filings, check the figures, write the first draft.",
+      status: "open",
+      owner_staff_id: OWNER,
+      opened_on: addDaysIso(day, -30),
+      closes_on: addDaysIso(day, 21),
+    },
+    {
+      id: "f1000002-0000-4000-8000-000000000000",
+      title: "Founding sales engineer",
+      team: "Sales",
+      kind: "employee",
+      location: "London or remote",
+      description: "Run demos for funds and turn what they ask into what we build next.",
+      status: "open",
+      owner_staff_id: ADMIN,
+      opened_on: addDaysIso(day, -12),
+      closes_on: null,
+    },
+  );
+  const applicant = (
+    id: string,
+    opening: string,
+    name: string,
+    stage: string,
+    daysAgo: number,
+    source = "careers",
+    extra: Partial<ApplicantRow> = {},
+  ) => {
+    applicants.push({
+      id,
+      opening_id: opening,
+      full_name: name,
+      email: `${name.split(" ")[0]!.toLowerCase()}@applicant.example`,
+      phone: "",
+      links: `https://example.test/${name.split(" ")[0]!.toLowerCase()}`,
+      cover_note: "I want to build tools that analysts actually trust.",
+      source,
+      referred_by: "",
+      interviewers: [],
+      stage,
+      stage_entered_at: agoIso(24 * daysAgo),
+      decision_reason: "",
+      decision_note: "",
+      decided_at: null,
+      keep_until: null,
+      anonymised_at: null,
+      created_at: agoIso(24 * (daysAgo + 3)),
+      ...extra,
+    });
+    applicantEvents.push({
+      id: randomUUID(),
+      applicant_id: id,
+      kind: "stage",
+      from_stage: "",
+      to_stage: "applied",
+      note: source === "careers" ? "From the careers page." : "Added by hand (referral).",
+      staff_id: source === "careers" ? null : OWNER,
+      created_at: agoIso(24 * (daysAgo + 3)),
+    });
+  };
+  applicant(
+    "f2000001-0000-4000-8000-000000000000",
+    "f1000001-0000-4000-8000-000000000000",
+    "Asha Rao",
+    "applied",
+    9,
+  );
+  applicant(
+    "f2000002-0000-4000-8000-000000000000",
+    "f1000001-0000-4000-8000-000000000000",
+    "Ben Ade",
+    "interview",
+    2,
+    "referral",
+    {
+      interviewers: [OWNER, SALES],
+      referred_by: "A friend of the team",
+    },
+  );
+  applicant(
+    "f2000003-0000-4000-8000-000000000000",
+    "f1000001-0000-4000-8000-000000000000",
+    "Chen Li",
+    "rejected",
+    40,
+    "careers",
+    {
+      decision_reason: "experience",
+      decided_at: agoIso(24 * 40),
+    },
+  );
+  applicant(
+    "f2000004-0000-4000-8000-000000000000",
+    "f1000002-0000-4000-8000-000000000000",
+    "Dara Okoye",
+    "screen",
+    4,
+    "agency",
+  );
+  scorecards.push({
+    id: randomUUID(),
+    applicant_id: "f2000002-0000-4000-8000-000000000000",
+    stage: "interview",
+    interviewer_staff_id: SALES,
+    recommendation: "yes",
+    scores: { skills: 3, judgement: 3, communication: 4, ownership: 3 },
+    notes: "Explained a messy filing clearly; would ramp fast.",
+    submitted_at: agoIso(20),
+  });
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/hiring",
+    auth: true,
+    capability: "hr:read",
+    handler: ({ headers }) => {
+      const order: Record<string, number> = { open: 0, paused: 1, closed: 2 };
+      return ok({
+        openings: openings
+          .map(hrOpeningView)
+          .sort(
+            (a, b) =>
+              (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.title.localeCompare(b.title),
+          ),
+        kinds: Object.entries(HR_KINDS).map(([value, label]) => ({ value, label })),
+        staff: hrStaffList(),
+        can_write: hasCap(headers, "hr:write"),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/hiring/interviews",
+    auth: true,
+    handler: ({ headers }) => {
+      const me = caller(headers)?.member.id ?? "";
+      return ok({
+        interviews: applicants
+          .filter(
+            (row) =>
+              row.interviewers.includes(me) && HR_OPEN.includes(row.stage) && !row.anonymised_at,
+          )
+          .map((row) => ({
+            applicant_id: row.id,
+            full_name: row.full_name,
+            opening_title: openings.find((item) => item.id === row.opening_id)?.title ?? "",
+            stage: row.stage,
+            stage_label: HR_STAGES[row.stage] ?? row.stage,
+            scorecard_written: scorecards.some(
+              (card) =>
+                card.applicant_id === row.id &&
+                card.interviewer_staff_id === me &&
+                card.stage === row.stage,
+            ),
+            days_in_stage: hrDays(row),
+          }))
+          .sort(
+            (a, b) =>
+              Number(a.scorecard_written) - Number(b.scorecard_written) ||
+              b.days_in_stage - a.days_in_stage,
+          ),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/hiring/openings/create",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ body, headers }) => {
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!title) return hrBad({ title: "the role" });
+      const kind = String(body.kind || "employee");
+      if (!(kind in HR_KINDS)) return hrBad({ kind: Object.keys(HR_KINDS).join(", ") });
+      const me = caller(headers)?.member.id ?? "";
+      const row: OpeningRow = {
+        id: randomUUID(),
+        title,
+        team: String(body.team ?? "")
+          .trim()
+          .slice(0, 80),
+        kind,
+        location: String(body.location ?? "")
+          .trim()
+          .slice(0, 120),
+        description: String(body.description ?? "")
+          .trim()
+          .slice(0, 20_000),
+        status: ["open", "paused", "closed"].includes(String(body.status))
+          ? String(body.status)
+          : "open",
+        owner_staff_id: String(body.owner_staff_id || me).toLowerCase() || null,
+        opened_on: todayIso(),
+        closes_on: String(body.closes_on ?? "") || null,
+      };
+      openings.push(row);
+      audit("opening.created", me || null, "opening", row.id);
+      return ok({ opening: hrOpeningView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/hiring/openings/{opening_id}",
+    auth: true,
+    capability: "hr:read",
+    handler: ({ params }) => {
+      const row = openings.find((item) => item.id === params.opening_id);
+      if (!row) return refuse(404, "not_found");
+      const order = Object.keys(HR_STAGES);
+      return ok({
+        opening: { ...hrOpeningView(row), description: row.description },
+        applicants: applicants
+          .filter((item) => item.opening_id === row.id)
+          .map(hrSummary)
+          .sort(
+            (a, b) =>
+              order.indexOf(a.stage) - order.indexOf(b.stage) || b.days_in_stage - a.days_in_stage,
+          ),
+        stages: Object.entries(HR_STAGES).map(([value, label]) => ({ value, label })),
+        sources: Object.entries(HR_SOURCES).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/hiring/openings/{opening_id}/update",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const row = openings.find((item) => item.id === params.opening_id);
+      if (!row) return refuse(404, "not_found");
+      let changed = false;
+      for (const [name, limit] of [
+        ["title", 160],
+        ["team", 80],
+        ["location", 120],
+        ["description", 20_000],
+      ] as const) {
+        if (name in body) {
+          const value = String(body[name] ?? "")
+            .trim()
+            .slice(0, limit);
+          if (name === "title" && !value) return hrBad({ title: "the role" });
+          changed ||= value !== row[name];
+          row[name] = value;
+        }
+      }
+      if ("status" in body) {
+        if (!["open", "paused", "closed"].includes(String(body.status)))
+          return hrBad({ status: "open, paused, closed" });
+        changed ||= String(body.status) !== row.status;
+        row.status = String(body.status);
+      }
+      if ("closes_on" in body) {
+        const value = String(body.closes_on ?? "") || null;
+        changed ||= value !== row.closes_on;
+        row.closes_on = value;
+      }
+      if (!changed) return hrBad({ fields: "nothing to change" });
+      audit("opening.updated", caller(headers)?.member.id ?? null, "opening", row.id);
+      return ok({ opening: hrOpeningView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/hiring/applicants/create",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ body, headers }) => {
+      const opening = openings.find(
+        (item) => item.id === String(body.opening_id ?? "").toLowerCase(),
+      );
+      if (!opening) return hrBad({ opening_id: "which role" });
+      const source = String(body.source || "referral");
+      if (!(source in HR_SOURCES)) return hrBad({ source: Object.keys(HR_SOURCES).join(", ") });
+      const name = String(body.full_name ?? "")
+        .trim()
+        .slice(0, 160);
+      const email = String(body.email ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 254);
+      if (!name) return hrBad({ full_name: "their name" });
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return hrBad({ email: "an email address" });
+      const me = caller(headers)?.member.id ?? "";
+      const row: ApplicantRow = {
+        id: randomUUID(),
+        opening_id: opening.id,
+        full_name: name,
+        email,
+        phone: String(body.phone ?? "")
+          .trim()
+          .slice(0, 40),
+        links: String(body.links ?? "")
+          .trim()
+          .slice(0, 1000),
+        cover_note: String(body.cover_note ?? "")
+          .trim()
+          .slice(0, 4000),
+        source,
+        referred_by: String(body.referred_by ?? "")
+          .trim()
+          .slice(0, 160),
+        interviewers: [],
+        stage: "applied",
+        stage_entered_at: now(),
+        decision_reason: "",
+        decision_note: "",
+        decided_at: null,
+        keep_until: null,
+        anonymised_at: null,
+        created_at: now(),
+      };
+      applicants.push(row);
+      applicantEvents.push({
+        id: randomUUID(),
+        applicant_id: row.id,
+        kind: "stage",
+        from_stage: "",
+        to_stage: "applied",
+        note: `Added by hand (${(HR_SOURCES[source] ?? source).toLowerCase()}).`,
+        staff_id: me,
+        created_at: now(),
+      });
+      audit("applicant.added", me || null, "applicant", row.id);
+      return ok({ applicant: hrSummary(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/hiring/applicants/{applicant_id}",
+    auth: true,
+    handler: ({ params, headers }) => {
+      const row = applicants.find((item) => item.id === params.applicant_id);
+      if (!row || !hrReadable(row, headers)) return refuse(404, "not_found");
+      return ok({
+        applicant: hrDetail(row, headers),
+        stages: Object.entries(HR_STAGES).map(([value, label]) => ({ value, label })),
+        reasons: Object.entries(HR_REASONS).map(([value, label]) => ({ value, label })),
+        criteria: Object.entries(HR_CRITERIA).map(([value, label]) => ({ value, label })),
+        recommendations: Object.entries(HR_RECOMMENDATIONS).map(([value, label]) => ({
+          value,
+          label,
+        })),
+        staff: hrStaffList(),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/hiring/applicants/{applicant_id}/act",
+    auth: true,
+    capability: "hr:write",
+    handler: ({ params, body, headers }) => {
+      const row = applicants.find((item) => item.id === params.applicant_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.anonymised_at) return hrBad({ applicant: "erased: nothing more is done with it" });
+      const me = caller(headers)?.member.id ?? "";
+      const action = String(body.action ?? "");
+      if (action === "move") {
+        const to = String(body.to_stage ?? "");
+        if (!(to in HR_STAGES) || to === row.stage) return hrBad({ to_stage: "another stage" });
+        if (HR_END.includes(row.stage)) {
+          const last = [...applicantEvents]
+            .filter(
+              (event) =>
+                event.applicant_id === row.id &&
+                event.kind === "stage" &&
+                event.to_stage === row.stage,
+            )
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+          const back = last?.from_stage || "applied";
+          if (to !== back)
+            return hrBad({
+              to_stage: `an ended application reopens to where it was (${HR_STAGES[back] ?? back})`,
+            });
+        }
+        const note = String(body.note ?? "")
+          .trim()
+          .slice(0, 1000);
+        if (to === "rejected") {
+          const reason = String(body.reason ?? "");
+          if (!(reason in HR_REASONS)) return hrBad({ reason: "why, from the list" });
+          if (reason === "other" && !note) return hrBad({ note: "what the other reason is" });
+          Object.assign(row, { decision_reason: reason, decision_note: note, decided_at: now() });
+        } else if (to === "withdrawn" || to === "hired")
+          Object.assign(row, { decision_reason: "", decision_note: note, decided_at: now() });
+        else Object.assign(row, { decision_reason: "", decision_note: "", decided_at: null });
+        applicantEvents.push({
+          id: randomUUID(),
+          applicant_id: row.id,
+          kind: "stage",
+          from_stage: row.stage,
+          to_stage: to,
+          note,
+          staff_id: me,
+          created_at: now(),
+        });
+        Object.assign(row, { stage: to, stage_entered_at: now() });
+      } else if (action === "note") {
+        const note = String(body.note ?? "")
+          .trim()
+          .slice(0, 2000);
+        if (!note) return hrBad({ note: "what to write down" });
+        applicantEvents.push({
+          id: randomUUID(),
+          applicant_id: row.id,
+          kind: "note",
+          from_stage: "",
+          to_stage: "",
+          note,
+          staff_id: me,
+          created_at: now(),
+        });
+      } else if (action === "interviewers") {
+        const chosen = [
+          ...new Set(
+            (Array.isArray(body.staff_ids) ? body.staff_ids : [])
+              .map((value) => String(value).toLowerCase())
+              .filter(Boolean),
+          ),
+        ].slice(0, 10);
+        if (chosen.some((staffId) => !staff.some((member) => member.id === staffId)))
+          return hrBad({ staff_ids: "choose people on the team" });
+        const added = chosen.filter((staffId) => !row.interviewers.includes(staffId));
+        row.interviewers = chosen;
+        if (added.length)
+          inboxNotify({
+            recipients: added,
+            subject_type: "applicant",
+            subject_id: row.id,
+            subject_label: row.full_name,
+            reason: "assigned",
+            summary: `${nameOf(me)} asked you to interview ${row.full_name}.`,
+            actor_id: me,
+            link_path: `/hiring/applicants/${row.id}`,
+          });
+      } else if (action === "keep") {
+        const until = String(body.keep_until ?? "");
+        if (
+          !/^\d{4}-\d{2}-\d{2}$/.test(until) ||
+          until <= todayIso() ||
+          finDays(todayIso(), until) > 730
+        )
+          return hrBad({ keep_until: "a later date, within two years" });
+        if (!String(body.evidence ?? "").trim()) return hrBad({ evidence: "where they said yes" });
+        row.keep_until = until;
+      } else if (action === "edit") {
+        let changed = false;
+        for (const [name, limit] of [
+          ["full_name", 160],
+          ["phone", 40],
+          ["links", 1000],
+          ["referred_by", 160],
+        ] as const) {
+          if (name in body) {
+            const value = String(body[name] ?? "")
+              .trim()
+              .slice(0, limit);
+            if (name === "full_name" && !value) return hrBad({ full_name: "cannot be empty" });
+            changed ||= value !== row[name];
+            row[name] = value;
+          }
+        }
+        if ("email" in body) {
+          const email = String(body.email ?? "")
+            .trim()
+            .toLowerCase()
+            .slice(0, 254);
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+            return hrBad({ email: "an email address" });
+          changed ||= email !== row.email;
+          row.email = email;
+        }
+        if (!changed) return hrBad({ fields: "nothing to change" });
+      } else return hrBad({ action: "move, note, keep, edit, interviewers" });
+      audit(`applicant.${action}`, me || null, "applicant", row.id);
+      return ok({ applicant: hrDetail(row, headers) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/hiring/applicants/{applicant_id}/scorecard",
+    auth: true,
+    handler: ({ params, body, headers }) => {
+      const row = applicants.find((item) => item.id === params.applicant_id);
+      if (!row || !hrReadable(row, headers)) return refuse(404, "not_found");
+      const me = caller(headers)?.member.id ?? "";
+      if (!hasCap(headers, "hr:write") && !row.interviewers.includes(me))
+        return refuse(403, "forbidden", { applicant: "you are not named to interview them" });
+      const stage = String(body.stage || row.stage);
+      if (!["screen", "interview", "task", "offer"].includes(stage))
+        return hrBad({ stage: "screen, interview, task or offer" });
+      const recommendation = String(body.recommendation ?? "");
+      if (!(recommendation in HR_RECOMMENDATIONS))
+        return hrBad({ recommendation: Object.keys(HR_RECOMMENDATIONS).join(", ") });
+      const raw = (body.scores && typeof body.scores === "object" ? body.scores : {}) as Record<
+        string,
+        unknown
+      >;
+      const scores: Record<string, number> = {};
+      for (const key of Object.keys(HR_CRITERIA)) {
+        const score = Number(raw[key]);
+        if (!Number.isInteger(score) || score < 1 || score > 4)
+          return hrBad({ scores: key in raw ? "1 to 4 for each" : "score every criterion" });
+        scores[key] = score;
+      }
+      const existing = scorecards.find(
+        (card) =>
+          card.applicant_id === row.id && card.interviewer_staff_id === me && card.stage === stage,
+      );
+      const fields = {
+        recommendation,
+        scores,
+        notes: String(body.notes ?? "")
+          .trim()
+          .slice(0, 4000),
+        submitted_at: now(),
+      };
+      if (existing) Object.assign(existing, fields);
+      else
+        scorecards.push({
+          id: randomUUID(),
+          applicant_id: row.id,
+          stage,
+          interviewer_staff_id: me,
+          ...fields,
+        });
+      audit("applicant.scored", me || null, "applicant", row.id);
+      return ok({ applicant: hrDetail(row, headers) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "public/careers",
+    handler: () =>
+      ok({
+        roles: openings
+          .filter((row) => row.status === "open" && (!row.closes_on || row.closes_on >= todayIso()))
+          .map((row) => ({
+            opening_id: row.id,
+            title: row.title,
+            team: row.team,
+            kind: row.kind,
+            kind_label: HR_KINDS[row.kind] ?? row.kind,
+            location: row.location,
+            description: row.description,
+            closes_on: row.closes_on,
+          }))
+          .sort((a, b) => a.team.localeCompare(b.team) || a.title.localeCompare(b.title)),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: "public/careers/apply",
+    handler: ({ body }) => {
+      if (String(body.website ?? "").trim()) return ok({ received: true });
+      const opening = openings.find(
+        (row) => row.id === String(body.opening_id ?? "").toLowerCase(),
+      );
+      if (!opening || opening.status !== "open")
+        return hrBad({ opening_id: "choose a role that is open" });
+      const name = String(body.full_name ?? "")
+        .trim()
+        .slice(0, 160);
+      const email = String(body.email ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 254);
+      if (!name) return hrBad({ full_name: "your name" });
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return hrBad({ email: "an email address" });
+      if (
+        applicants.some(
+          (row) =>
+            row.opening_id === opening.id && row.email === email && HR_OPEN.includes(row.stage),
+        )
+      )
+        return ok({ received: true });
+      const row: ApplicantRow = {
+        id: randomUUID(),
+        opening_id: opening.id,
+        full_name: name,
+        email,
+        phone: "",
+        links: String(body.links ?? "")
+          .trim()
+          .slice(0, 1000),
+        cover_note: String(body.cover_note ?? "")
+          .trim()
+          .slice(0, 4000),
+        source: "careers",
+        referred_by: "",
+        interviewers: [],
+        stage: "applied",
+        stage_entered_at: now(),
+        decision_reason: "",
+        decision_note: "",
+        decided_at: null,
+        keep_until: body.keep_longer === true ? addDaysIso(todayIso(), 730) : null,
+        anonymised_at: null,
+        created_at: now(),
+      };
+      applicants.push(row);
+      applicantEvents.push({
+        id: randomUUID(),
+        applicant_id: row.id,
+        kind: "stage",
+        from_stage: "",
+        to_stage: "applied",
+        note: "From the careers page.",
+        staff_id: null,
+        created_at: now(),
+      });
+      audit("applicant.applied", null, "applicant", row.id);
+      return ok({ received: true });
+    },
+  },
+);
+
 // After their declarations: the seeds read the blocks' constants.
 seedCustomFields();
 seedAutomations();
@@ -37839,6 +40134,9 @@ seedFinance();
 seedQuotes();
 seedRelationships();
 seedKnowledge();
+seedControlsAndCentre();
+seedPlanning();
+seedHiring();
 
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
@@ -37945,6 +40243,9 @@ function resetWorld() {
   seedQuotes();
   seedRelationships();
   seedKnowledge();
+  seedControlsAndCentre();
+  seedPlanning();
+  seedHiring();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

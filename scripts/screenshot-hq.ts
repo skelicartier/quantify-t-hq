@@ -208,6 +208,9 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: "main#main-content",
   },
   { name: "expenses", path: "/expenses", ready: "main#main-content" },
+  { name: "finance-deferred", path: "/finance/deferred", ready: "main#main-content" },
+  { name: "finance-budget", path: "/finance/budget", ready: "main#main-content" },
+  { name: "expenses-purchases", path: "/expenses/purchases", ready: "main#main-content" },
   { name: "deals-quotes", path: "/deals/quotes", ready: "main#main-content" },
   { name: "success-references", path: "/success/references", ready: "main#main-content" },
   { name: "success-changelog", path: "/success/changelog", ready: "main#main-content" },
@@ -217,6 +220,25 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: "main#main-content",
   },
   { name: "help", path: "/help", ready: "main#main-content" },
+  { name: "trust-controls", path: "/trust/controls", ready: "main#main-content" },
+  { name: "hiring", path: "/hiring", ready: "main#main-content" },
+  {
+    name: "hiring-opening",
+    path: "/hiring/openings/f1000001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  {
+    name: "hiring-applicant",
+    path: "/hiring/applicants/f2000002-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "hiring-interviews", path: "/hiring/interviews", ready: "main#main-content" },
+  {
+    name: "trust-control",
+    path: "/trust/controls/c7000001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "trust-centre-admin", path: "/trust/centre", ready: "main#main-content" },
   { name: "help-gaps", path: "/help/gaps", ready: "main#main-content" },
   {
     name: "help-article-due",
@@ -572,9 +594,12 @@ async function captureInteractions(page: Page, folder: string) {
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
+  await capturePlanFlows(page, folder);
   await captureQuoteFlows(page, folder);
   await captureRelationshipFlows(page, folder);
   await captureKnowledgeFlows(page, folder);
+  await captureControlFlows(page, folder);
+  await captureHiringFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -1185,6 +1210,115 @@ async function capturePlatformFlows(page: Page, folder: string) {
 }
 
 /**
+ * Hiring: the applicant from the careers page moved to screen, the signed-in owner named an
+ * interviewer and their scorecard handed in; the agency applicant rejected with a reason.
+ */
+async function captureHiringFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/hiring/applicants/f2000001-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator(".rhead__status :text('Applied')").count()) > 0) {
+    await page.selectOption("#move-stage", "screen");
+    await page.locator("button", { hasText: /^Move$/ }).click();
+    await page.waitForSelector(".rhead__status :text('Screen')", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.check("#interviewer-aa000000-0000-4000-8000-00000000000a");
+    await page.locator("button", { hasText: "Set interviewers" }).click();
+    await page.waitForSelector(
+      "form:has(#interviewer-aa000000-0000-4000-8000-00000000000a) .form-sent",
+      {
+        timeout: 10_000,
+      },
+    );
+    await page.reload({ waitUntil: "networkidle" });
+    await page.locator("summary", { hasText: "Write your scorecard" }).click();
+    await page.selectOption("#card-recommendation", "strong_yes");
+    await page.fill(
+      "#card-notes",
+      "Walked through a 10-K note without prompting; asked the right follow-ups.",
+    );
+    await page.locator("button", { hasText: "Hand it in" }).click();
+    await page.waitForSelector("h3:has-text('(you)')", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/hiring-scored`);
+
+  await page.goto(`${BASE}/hiring/applicants/f2000004-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if (
+    (await page.locator("#move-stage").count()) > 0 &&
+    (await page.getByText("Rejected:").count()) === 0
+  ) {
+    await page.selectOption("#move-stage", "rejected");
+    await page.selectOption("#move-reason", "timing");
+    await page.fill("#move-note", "Strong, but we need someone from January");
+    await page.locator("button", { hasText: /^Move$/ }).click();
+    await page.waitForSelector("text=Rejected: Timing", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/hiring-rejected`);
+}
+
+/**
+ * The control map and the trust centre: evidence recorded on the overdue restore control; an
+ * auditor's link made behind a fresh code and opened as the auditor would; the waiting
+ * document request approved and recorded as sent.
+ */
+async function captureControlFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  await page.goto(`${BASE}/trust/controls/c7000002-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("summary", { hasText: "Record evidence" }).count()) > 0) {
+    await page.locator("summary", { hasText: "Record evidence" }).click();
+    await page.fill("#evidence-title", `Restore test ${stamp}`);
+    await page.fill("#evidence-reference", "Runbook log, this quarter");
+    await page.locator("button", { hasText: /^Record it$/ }).click();
+    await page.waitForSelector(`td:has-text("${stamp}")`, { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  if ((await page.getByText("Evidence due", { exact: true }).count()) > 0)
+    report(`${folder}/trust-control-evidenced`, "fresh evidence did not clear the due flag");
+  await shoot(page, `${folder}/trust-control-evidenced`);
+
+  await page.goto(`${BASE}/trust/controls`, { waitUntil: "networkidle" });
+  if ((await page.locator("#sudo-code").count()) > 0) {
+    await page.fill("#sudo-code", "000000");
+    await page.locator(".sudo-gate button[type=submit]").click();
+    await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  }
+  await page.fill("#auditor-label", `Ledger & Co ${stamp}`);
+  await page.fill("#auditor-reason", "SOC 2 type I fieldwork");
+  await page.locator("button", { hasText: "Make the link" }).click();
+  await page.waitForSelector(".one-time-secret__value", { timeout: 10_000 });
+  const link = ((await page.locator(".one-time-secret__value").textContent()) ?? "").trim();
+  await shoot(page, `${folder}/trust-auditor-link`);
+  if (!/\/audit\/qta_/.test(link))
+    report(`${folder}/trust-auditor-view`, `no auditor link shown (got "${link}")`);
+  else {
+    await page.goto(link, { waitUntil: "networkidle" });
+    await page.waitForSelector(".status-public__section", { timeout: 10_000 });
+    await shoot(page, `${folder}/trust-auditor-view`);
+  }
+
+  await page.goto(`${BASE}/trust/centre`, { waitUntil: "networkidle" });
+  const approve = page.locator("tr:has-text('Jordan Park') button", { hasText: /^Approve$/ });
+  if ((await approve.count()) > 0) {
+    await approve.click();
+    await page.waitForSelector("tr:has-text('Jordan Park') button:has-text('It went out today')", {
+      timeout: 10_000,
+    });
+    await page
+      .locator("tr:has-text('Jordan Park') button", { hasText: "It went out today" })
+      .click();
+    await page.waitForSelector("tr:has-text('Jordan Park') :text('Sent')", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/trust-centre-request-sent`);
+}
+
+/**
  * The changelog and the help centre: the drafted fixed-income entry published (its request
  * ships); an article written, answered and published; the article past its review read
  * again.
@@ -1390,6 +1524,45 @@ async function captureQuoteFlows(page: Page, folder: string) {
   if ((await page.locator(".plan-step").count()) < 6)
     report(`${folder}/deal-plan-laid`, "the usual plan did not lay in six steps");
   await shoot(page, `${folder}/deal-plan-laid`);
+}
+
+/**
+ * Finance, part three: someone else's purchase request approved; the approved yearly
+ * licence bought, which puts it on the vendor register; this month's data line closed with
+ * an actual and where it came from.
+ */
+async function capturePlanFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/expenses/purchases`, { waitUntil: "networkidle" });
+  const approve = page.locator('button[aria-label^="Approve "]').first();
+  if ((await approve.count()) > 0) {
+    const label = (await approve.getAttribute("aria-label")) ?? "";
+    await approve.click();
+    await page.waitForSelector(`button[aria-label="${label}"]`, {
+      state: "detached",
+      timeout: 10_000,
+    });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  const bought = page.locator('button[aria-label="Record Charting library licence as bought"]');
+  if ((await bought.count()) > 0) {
+    await bought.click();
+    await page.waitForSelector("a:has-text('on the register')", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/purchases-decided`);
+
+  await page.goto(`${BASE}/finance/budget`, { waitUntil: "networkidle" });
+  await page.selectOption("#budget-category", "data");
+  await page.fill("#budget-currency", "USD");
+  await page.fill("#budget-amount", "3000");
+  await page.fill("#budget-actual", "3520");
+  await page.fill("#budget-source", "Ledger P&L, run today");
+  await page.locator("button", { hasText: "Save the line" }).click();
+  await page.waitForSelector("form:has(#budget-source) .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  if ((await page.locator("tr:has-text('Data') :text('Over by more than a tenth')").count()) === 0)
+    report(`${folder}/budget-closed`, "an actual 17 % over budget is not flagged");
+  await shoot(page, `${folder}/budget-closed`);
 }
 
 /**
@@ -2190,6 +2363,16 @@ async function run(browser: Browser) {
     await captureUnsubscribe(page, `${viewport.name}/auth`);
     await captureReport(page, `${viewport.name}/auth`);
     await captureStatusPublic(page, `${viewport.name}/auth`);
+    await capture(page, `${viewport.name}/auth`, {
+      name: "careers-public",
+      path: "/careers",
+      ready: ".status-public__section",
+    });
+    await capture(page, `${viewport.name}/auth`, {
+      name: "trust-centre-public",
+      path: "/trust-centre",
+      ready: ".status-public__section",
+    });
     await capture(page, `${viewport.name}/auth`, {
       name: "changelog-public",
       path: "/changelog",

@@ -33,6 +33,7 @@ const SCOPED_LABELS: Record<string, string> = {
   "/trust/changes": "Changes",
   "/trust/answers": "Answer library",
   "/trust/processing": "Record of processing",
+  "/trust/centre": "Trust centre",
   "/finance/updates": "Investor updates",
 };
 

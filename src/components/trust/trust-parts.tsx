@@ -12,6 +12,8 @@ const TABS = [
   { href: "/trust/suppliers", label: "Suppliers", capability: "audit:read" },
   { href: "/trust/answers", label: "Answers", capability: "crm:read" },
   { href: "/trust/processing", label: "Processing", capability: "privacy:read" },
+  { href: "/trust/controls", label: "Controls", capability: "audit:read" },
+  { href: "/trust/centre", label: "Trust centre", capability: "audit:read" },
 ] as const;
 
 export type TrustTab = (typeof TABS)[number]["href"];

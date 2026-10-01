@@ -6,9 +6,27 @@ import { formatDate, formatMoney } from "@/lib/format";
 const TABS = [
   { href: "/finance", label: "Cash and runway" },
   { href: "/finance/vendors", label: "Vendors" },
+  { href: "/finance/deferred", label: "Revenue earned" },
+  { href: "/finance/budget", label: "Budget" },
   { href: "/finance/updates", label: "Investor updates" },
   { href: "/expenses", label: "Expenses" },
+  { href: "/expenses/purchases", label: "Purchases" },
 ] as const;
+
+const SPEND_TABS = [
+  { href: "/expenses", label: "Expenses" },
+  { href: "/expenses/purchases", label: "Purchase requests" },
+] as const;
+
+/** For everyone who spends: their claims and their requests to buy. */
+export function SpendTabs({ current }: { current: (typeof SPEND_TABS)[number]["href"] }) {
+  return (
+    <SegmentedLinks
+      label="Spending"
+      items={SPEND_TABS.map((tab) => ({ ...tab, current: tab.href === current }))}
+    />
+  );
+}
 
 export function FinanceTabs({ current }: { current: (typeof TABS)[number]["href"] }) {
   return (

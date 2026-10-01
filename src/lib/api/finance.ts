@@ -240,3 +240,137 @@ export function createInvestorUpdate(token: string, body: Record<string, string>
 export function actOnInvestorUpdate(token: string, updateId: string, body: Record<string, string>) {
   return postHqJson(`hq/finance/updates/${updateId}/act`, updateEnvelope, { token, body });
 }
+
+// --- deferred revenue: read from the invoice register --------------------------------------------
+
+const scheduleRow = z.object({
+  month: z.string(),
+  invoiced: z.number(),
+  recognised: z.number(),
+  balance: z.number(),
+});
+
+const deferredSchema = okEnvelope.extend({
+  months: z.array(z.string()),
+  this_month: z.string(),
+  schedule: z.record(z.string(), z.array(scheduleRow)),
+  deferred: z.array(
+    z.object({
+      invoice_id: z.string(),
+      number: z.string(),
+      company_name: z.string(),
+      currency: z.string(),
+      period_start: z.string().nullable(),
+      period_end: z.string().nullable(),
+      net_amount: z.number(),
+      earned: z.number(),
+      remaining: z.number(),
+    }),
+  ),
+  invoices_counted: z.number(),
+});
+export type DeferredRevenue = z.infer<typeof deferredSchema>;
+
+export function readDeferred(token: string) {
+  return fetchHqJson("hq/finance/deferred", deferredSchema, { token });
+}
+
+// --- purchase requests --------------------------------------------------------------------------
+
+export const PURCHASE_STATUSES = [
+  "submitted",
+  "approved",
+  "rejected",
+  "withdrawn",
+  "bought",
+] as const;
+
+const purchaseSchema = z.object({
+  request_id: z.string(),
+  requested_by_name: z.string(),
+  mine: z.boolean(),
+  vendor_name: z.string(),
+  description: z.string(),
+  category: z.string(),
+  category_label: z.string(),
+  amount: z.number(),
+  currency: z.string(),
+  billing: z.enum(["one_off", "monthly", "annual"]),
+  billing_label: z.string(),
+  needed_by: z.string().nullable(),
+  status: z.enum(PURCHASE_STATUSES),
+  decided_by_name: z.string(),
+  decided_at: z.string().nullable(),
+  decision_note: z.string(),
+  bought_on: z.string().nullable(),
+  vendor_id: z.string().nullable(),
+  created_at: z.string().nullable(),
+});
+export type PurchaseRequest = z.infer<typeof purchaseSchema>;
+
+const purchasesSchema = okEnvelope.extend({
+  requests: z.array(purchaseSchema),
+  can_decide: z.boolean(),
+  categories: z.array(option),
+  billing: z.array(option),
+});
+export type PurchaseBoard = z.infer<typeof purchasesSchema>;
+
+export function readPurchases(token: string) {
+  return fetchHqJson("hq/finance/purchases", purchasesSchema, { token });
+}
+
+export function createPurchase(token: string, body: Record<string, string>) {
+  return postHqJson("hq/finance/purchases/create", okEnvelope.extend({ request: purchaseSchema }), {
+    token,
+    body,
+  });
+}
+
+export function actOnPurchase(token: string, requestId: string, body: Record<string, string>) {
+  return postHqJson(
+    `hq/finance/purchases/${requestId}/act`,
+    okEnvelope.extend({ request: purchaseSchema }),
+    {
+      token,
+      body,
+    },
+  );
+}
+
+// --- budget against actual ------------------------------------------------------------------------
+
+const budgetSchema = okEnvelope.extend({
+  month: z.string(),
+  lines: z.array(
+    z.object({
+      line_id: z.string(),
+      category: z.string(),
+      category_label: z.string(),
+      currency: z.string(),
+      budget: z.number(),
+      actual: z.number().nullable(),
+      actual_source: z.string(),
+      variance: z.number().nullable(),
+      variance_share: z.number().nullable(),
+      flag: z.boolean(),
+      updated_by_name: z.string(),
+      updated_at: z.string().nullable(),
+    }),
+  ),
+  earned_revenue: z.record(z.string(), z.number()),
+  costs: z.record(
+    z.string(),
+    z.object({ budget: z.number(), actual: z.number(), lines_without_actual: z.number() }),
+  ),
+  categories: z.array(option),
+});
+export type Budget = z.infer<typeof budgetSchema>;
+
+export function readBudget(token: string, month?: string) {
+  return fetchHqJson("hq/finance/budget", budgetSchema, { token, query: month ? { month } : {} });
+}
+
+export function saveBudget(token: string, body: Record<string, string>) {
+  return postHqJson("hq/finance/budget/save", budgetSchema, { token, body });
+}

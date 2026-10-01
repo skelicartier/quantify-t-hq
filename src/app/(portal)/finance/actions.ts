@@ -270,3 +270,86 @@ export async function actOnInvestorUpdateAction(
   };
   return sent(said[action] ?? "Saved.");
 }
+
+// --- purchase requests: everyone's own, decided by someone else ---------------------------------
+
+export async function requestPurchaseAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/expenses/purchases");
+  try {
+    const body = collect(formData, [
+      ["vendor_name", 160],
+      ["description", 1000],
+      ["category", 16],
+      ["amount", 24],
+      ["currency", 3],
+      ["billing", 10],
+      ["needed_by", 10],
+    ]);
+    if (!body.needed_by) delete body.needed_by;
+    await fin.createPurchase(context.token, body);
+  } catch (error) {
+    return refusal(error);
+  }
+  revalidatePath("/expenses/purchases");
+  return sent("Asked. Someone else approves it.");
+}
+
+export async function purchaseAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/expenses/purchases");
+  const action = fieldValue(formData, "action", 10);
+  let bought: Awaited<ReturnType<typeof fin.actOnPurchase>> | null = null;
+  try {
+    bought = await fin.actOnPurchase(context.token, fieldValue(formData, "request_id", 64), {
+      action,
+      ...collect(formData, [["note", 400]]),
+    });
+  } catch (error) {
+    return refusal(error);
+  }
+  revalidatePath("/expenses/purchases");
+  revalidatePath("/finance/vendors");
+  const said: Record<string, string> = {
+    approve: "Approved.",
+    reject: "Rejected, with your reason.",
+    withdraw: "Withdrawn.",
+    bought: bought?.request.vendor_id
+      ? "Recorded as bought. It is on the vendor register now, with its renewal date."
+      : "Recorded as bought.",
+  };
+  return sent(said[action] ?? "Saved.");
+}
+
+// --- budget against actual -------------------------------------------------------------------------
+
+export async function saveBudgetAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { context, allowed } = await finance(formData, "/finance/budget");
+  if (!allowed) return NOT_FINANCE;
+  try {
+    await fin.saveBudget(
+      context.token,
+      collect(formData, [
+        ["month", 7],
+        ["category", 16],
+        ["currency", 3],
+        ["budget", 24],
+        ["actual", 24],
+        ["actual_source", 200],
+      ]),
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  revalidatePath("/finance/budget");
+  return sent("Saved.");
+}

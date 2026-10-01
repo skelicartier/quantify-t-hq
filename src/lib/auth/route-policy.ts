@@ -14,6 +14,10 @@ const PUBLIC_EXACT = new Set([
   "/status",
   // The public changelog: what changed, as the world may read it.
   "/changelog",
+  // The public trust centre and its document request form.
+  "/trust-centre",
+  // The careers page and its application form.
+  "/careers",
   // The service's hourly digest pass: no session, the shared portal key checked in the handler.
   "/api/digests/render",
 ]);
@@ -21,7 +25,8 @@ const PUBLIC_EXACT = new Set([
 // "/u/": the recipient's stop page and the one-click endpoint mailbox providers POST to.
 // "/report/": "this wasn't me" from a security mail — the person may be locked out.
 // "/status": the public status page, and the confirm and stop links its mails carry.
-const PUBLIC_PREFIXES = ["/verify/", "/u/", "/report/", "/status/"];
+// "/audit/": an auditor's expiring read of the control map; the token is the key.
+const PUBLIC_PREFIXES = ["/verify/", "/u/", "/report/", "/status/", "/audit/"];
 
 export function isPublicPath(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;
