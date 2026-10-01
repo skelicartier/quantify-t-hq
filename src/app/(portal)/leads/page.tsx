@@ -9,6 +9,7 @@ import { createLeadAction } from "@/app/(portal)/leads/actions";
 import { LeadCreateForm } from "@/components/crm/lead-forms";
 import { FirstReplyClock, LeadStagePill } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
@@ -162,20 +163,23 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
         title="Leads"
         description={`Everyone who asked. The first reply is owed within ${replyTarget(target)}; the longest wait sorts first.`}
         actions={
-          canWrite && settings ? (
-            <Popover label="Add lead" variant="primary">
-              <LeadCreateForm
-                action={createLeadAction}
-                sources={settings.sources}
-                extra={
-                  <CustomFieldInputs
-                    idPrefix="new-lead"
-                    fields={(page?.custom_fields ?? []).filter((field) => field.required)}
-                  />
-                }
-              />
-            </Popover>
-          ) : undefined
+          <>
+            {canWrite && settings ? (
+              <Popover label="Add lead" variant="primary">
+                <LeadCreateForm
+                  action={createLeadAction}
+                  sources={settings.sources}
+                  extra={
+                    <CustomFieldInputs
+                      idPrefix="new-lead"
+                      fields={(page?.custom_fields ?? []).filter((field) => field.required)}
+                    />
+                  }
+                />
+              </Popover>
+            ) : undefined}
+            <DocumentTools context={context} kind="leads" returnPath="/leads" />
+          </>
         }
       />
       <LiveRefresh intervalSeconds={60} label="Leads" />

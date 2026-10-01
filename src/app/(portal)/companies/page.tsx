@@ -10,6 +10,7 @@ import { createCompanyAction } from "@/app/(portal)/companies/actions";
 import { CompanyCreateForm } from "@/components/crm/company-forms";
 import { LifecyclePill } from "@/components/crm/pills";
 import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { CategoryRow, DataTable, SelectCell, tableIdFor } from "@/components/ui/data-table";
@@ -185,6 +186,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
                 />
               </Popover>
             )}
+            <DocumentTools context={context} kind="companies" returnPath="/companies" />
           </>
         }
       />

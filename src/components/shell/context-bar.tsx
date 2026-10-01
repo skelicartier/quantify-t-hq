@@ -1,6 +1,6 @@
 "use client";
 
-import { Keyboard } from "lucide-react";
+import { Keyboard, Printer } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -113,6 +113,15 @@ export function ContextBar() {
         </span>
         <DensityToggle />
         <ThemeToggle />
+        <button
+          type="button"
+          className="cbar__icon"
+          onClick={() => window.print()}
+          title="Print this page, on the letterhead"
+        >
+          <Printer size={14} strokeWidth={1.8} aria-hidden="true" />
+          <span className="sr-only">Print this page</span>
+        </button>
         <button
           type="button"
           className="cbar__icon"

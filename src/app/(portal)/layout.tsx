@@ -5,6 +5,7 @@ import { setHqTheme } from "@/app/(portal)/actions";
 import { HqShell } from "@/components/shell/hq-shell";
 import { roleLabel } from "@/lib/access/role-labels";
 import { requireStaff } from "@/lib/access/core";
+import { FALLBACK_LETTERHEAD, readCompany, type Letterhead } from "@/lib/api/company";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readPreferences } from "@/lib/api/views";
 import { DEV_PERSONAS, devAutologinPersona } from "@/lib/auth/dev-bypass";
@@ -24,14 +25,22 @@ function initialsOf(displayName: string, email: string): string {
 export default async function PortalLayout({ children }: Readonly<{ children: ReactNode }>) {
   const { me, token } = await requireStaff("/home");
   const theme = await readHqTheme();
-  // The account's display preferences; a failed read leaves the device's own copy alone.
+  // The account's display preferences and the company's letterhead, read together; a
+  // failed read leaves the device's own preferences alone and prints the brand alone.
+  const [preferencesRead, companyRead] = await Promise.allSettled([
+    readPreferences(token),
+    readCompany(token),
+  ]);
+  const tolerated = (reason: unknown) => {
+    if (!(reason instanceof HqApiUnavailableError || reason instanceof HqApiRequestError))
+      throw reason;
+  };
   let preferences: Record<string, string> = {};
-  try {
-    preferences = (await readPreferences(token)).preferences;
-  } catch (error) {
-    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
-      throw error;
-  }
+  if (preferencesRead.status === "fulfilled") preferences = preferencesRead.value.preferences;
+  else tolerated(preferencesRead.reason);
+  let letterhead: Letterhead = FALLBACK_LETTERHEAD;
+  if (companyRead.status === "fulfilled") letterhead = companyRead.value.letterhead;
+  else tolerated(companyRead.reason);
   return (
     <HqShell
       preferences={preferences}
@@ -54,6 +63,7 @@ export default async function PortalLayout({ children }: Readonly<{ children: Re
           : undefined
       }
       signOutAction={signOutAction}
+      print={{ letterhead, printedBy: me.staff.display_name || me.staff.email }}
       theme={theme}
       themeAction={setHqTheme}
     >

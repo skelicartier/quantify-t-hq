@@ -3,6 +3,7 @@ import Link from "next/link";
 import { createTaskAction, setTaskStatusAction } from "@/app/(portal)/_actions/work";
 import { TaskList } from "@/components/crm/task-list";
 import { TaskQuickAdd } from "@/components/crm/task-quick-add";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
@@ -85,6 +86,7 @@ export default async function TasksIndexPage({ searchParams }: TasksPageProps) {
                 { href: link({ scope: "all" }), label: "Everyone's", current: scope === "all" },
               ]}
             />
+            <DocumentTools context={context} kind="tasks" returnPath="/tasks" />
           </>
         }
       />

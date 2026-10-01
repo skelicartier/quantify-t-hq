@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CalendarOff,
   KeyRound,
+  Landmark,
   NotebookPen,
   ChartNoAxesCombined,
   ClipboardList,
@@ -263,6 +264,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         capability: "hq:admin",
       },
       { href: "/admin/audit", label: "Audit", icon: ScrollText, capability: "audit:read" },
+      // Everyone's: the registered particulars every document prints, and the brand.
+      { href: "/company", label: "Company", icon: Landmark, activePrefix: "/company" },
       {
         href: "/me/security",
         label: "My security",

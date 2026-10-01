@@ -221,6 +221,7 @@ const SIGNED_IN_PAGES: Shot[] = [
   },
   { name: "help", path: "/help", ready: "main#main-content" },
   { name: "trust-controls", path: "/trust/controls", ready: "main#main-content" },
+  { name: "company-particulars", path: "/company", ready: ".paper" },
   { name: "hiring", path: "/hiring", ready: "main#main-content" },
   {
     name: "hiring-opening",
@@ -600,22 +601,25 @@ async function captureInteractions(page: Page, folder: string) {
   await captureKnowledgeFlows(page, folder);
   await captureControlFlows(page, folder);
   await captureHiringFlows(page, folder);
+  await captureDocumentFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
+  await page.selectOption("#export-format", "csv");
   await page.fill("#export-reason", "Screenshot run check");
   // A fresh dev server compiles the export route on this first request (14 s seen after a
   // cache reset); the product's answer is fast once warm, the wait covers the tool.
   const [download] = await Promise.all([
     page.waitForEvent("download", { timeout: 60_000 }),
-    page.locator("button", { hasText: "Download CSV" }).click(),
+    page.locator("form[action='/exports'] button[type=submit]").click(),
   ]);
   const name = download.suggestedFilename();
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(chunk as Buffer);
   const csv = Buffer.concat(chunks).toString("utf8");
-  if (!name.startsWith("hq-leads-") || !csv.startsWith("id,received_at")) {
+  // The byte-order mark first, so a spreadsheet reads ₹ and é as written.
+  if (!name.startsWith("hq-leads-") || !csv.startsWith("\uFEFFid,received_at")) {
     report(`${folder}/export`, `unexpected download ${name}: ${csv.slice(0, 40)}`);
   } else {
     console.log(`  ✓ ${folder}/export (${name})`);
@@ -1213,6 +1217,72 @@ async function capturePlatformFlows(page: Page, folder: string) {
  * Hiring: the applicant from the careers page moved to screen, the signed-in owner named an
  * interviewer and their scorecard handed in; the agency applicant rejected with a reason.
  */
+/**
+ * Documents: the export menu on a list, one real file in each format through the route
+ * (checked by its first bytes, not its name), and two pages as they print — a list on
+ * the letterhead, and a quote as the customer's order form.
+ */
+async function captureDocumentFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/finance/vendors`, { waitUntil: "networkidle" });
+  await page.locator(".export-menu summary").click();
+  await page.waitForSelector(".export-menu .format-choice", { timeout: 10_000 });
+  await assertAccessible(page, `${folder}/export-menu`);
+  await shoot(page, `${folder}/export-menu`);
+  const magic: Record<string, (body: Buffer) => boolean> = {
+    pdf: (body) => body.subarray(0, 5).toString("latin1") === "%PDF-",
+    xlsx: (body) => body.subarray(0, 4).toString("latin1") === "PK\x03\x04",
+    csv: (body) => body.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])),
+  };
+  for (const [format, check] of Object.entries(magic)) {
+    const response = await page.request.post(`${BASE}/exports`, {
+      form: { kind: "vendors", format, reason: "Screenshot run check", back: "/finance/vendors" },
+      headers: { origin: BASE },
+      maxRedirects: 0,
+      timeout: 60_000,
+    });
+    const body = await response.body();
+    if (response.status() !== 200 || !check(body)) {
+      report(
+        `${folder}/export-${format}`,
+        `status ${response.status()}, ${body.subarray(0, 12).toString("latin1")}`,
+      );
+    } else {
+      console.log(`  ✓ ${folder}/export-${format} (${body.length} bytes)`);
+    }
+  }
+  const refused = await page.request.post(`${BASE}/exports`, {
+    form: { kind: "vendors", format: "pdf", reason: "short", back: "//elsewhere.example" },
+    headers: { origin: BASE },
+    maxRedirects: 0,
+  });
+  if (!String(refused.headers()["location"] ?? "").endsWith("/reports?export=reason")) {
+    report(`${folder}/export-refused`, `went to ${refused.headers()["location"] ?? "nowhere"}`);
+  }
+
+  await page.emulateMedia({ media: "print" });
+  try {
+    await page.goto(`${BASE}/companies`, { waitUntil: "networkidle" });
+    if (
+      !(await page.locator(".print-head .letterhead").isVisible()) ||
+      (await page.locator(".rail").isVisible())
+    ) {
+      report(`${folder}/print-companies`, "printed without the letterhead, or with the rail");
+    }
+    await shoot(page, `${folder}/print-companies`);
+    await page.goto(`${BASE}/deals/quotes?view=all`, { waitUntil: "networkidle" });
+    const quote = await page.locator("a[href*='/quotes/']").first().getAttribute("href");
+    if (quote) {
+      await page.goto(`${BASE}${quote}`, { waitUntil: "networkidle" });
+      if (await page.locator(".print-head__stamp").isVisible()) {
+        report(`${folder}/print-quote`, "the customer's order form says who printed it");
+      }
+      await shoot(page, `${folder}/print-quote`);
+    }
+  } finally {
+    await page.emulateMedia({ media: "screen" });
+  }
+}
+
 async function captureHiringFlows(page: Page, folder: string) {
   await page.goto(`${BASE}/hiring/applicants/f2000001-0000-4000-8000-000000000000`, {
     waitUntil: "networkidle",

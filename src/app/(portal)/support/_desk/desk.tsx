@@ -8,6 +8,7 @@ import {
   mergeTicketAction,
   sendMessage,
 } from "@/app/(portal)/support/[ticketId]/actions";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { AiReplyDraft, AiTriage } from "@/components/ai/ai-assist";
 import {
@@ -254,6 +255,11 @@ export async function Desk({ context, filters, selected }: DeskProps) {
               placeholder="Search subject or sender"
             />
           </form>
+          {selected === null && (
+            <div className="desk__tools">
+              <DocumentTools context={context} kind="tickets" returnPath="/support" />
+            </div>
+          )}
           <div className="desk__chips" aria-label="Queue filters">
             <Link
               href={queueHref(filters, selected, {

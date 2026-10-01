@@ -6,7 +6,8 @@ import {
   saveQuoteLinesAction,
   updateQuoteTermsAction,
 } from "@/app/(portal)/deals/quote-actions";
-import { PrintButton } from "@/components/deals/print-button";
+import { Letterhead } from "@/components/documents/letterhead";
+import { PrintButton } from "@/components/documents/print-button";
 import { QuoteLinesEditor } from "@/components/deals/quote-lines-editor";
 import { QuoteStatePill } from "@/components/deals/quote-parts";
 import { PageHeader } from "@/components/shell/page-header";
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/record-shell";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import { FALLBACK_LETTERHEAD, readCompany } from "@/lib/api/company";
 import { readQuote, type QuoteRead } from "@/lib/api/quotes";
 import { formatAbsolute, formatDate, formatMoneyExact } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -54,13 +56,20 @@ export default async function QuotePage({ params }: { params: Params }) {
     );
   }
   let read: QuoteRead | null = null;
-  try {
-    read = await readQuote(context.token, quoteId);
-  } catch (error) {
+  // The order form is issued on the letterhead; without the particulars it carries the brand alone.
+  const [quoteRead, companyRead] = await Promise.allSettled([
+    readQuote(context.token, quoteId),
+    readCompany(context.token),
+  ]);
+  if (quoteRead.status === "fulfilled") read = quoteRead.value;
+  else {
+    const error = quoteRead.reason;
     if (error instanceof HqApiRequestError && error.status === 404) notFound();
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
   }
+  const letterhead =
+    companyRead.status === "fulfilled" ? companyRead.value.letterhead : FALLBACK_LETTERHEAD;
   if (read === null) {
     return (
       <>
@@ -168,6 +177,9 @@ export default async function QuotePage({ params }: { params: Params }) {
       >
         <RecordSection id="order-form" title="The order form" actions={<PrintButton />}>
           <article className="order-form" aria-label={`Order form ${quote.number}`}>
+            <div className="order-form__letterhead">
+              <Letterhead head={letterhead} />
+            </div>
             <header className="order-form__head">
               <div>
                 <p className="order-form__label">Order form</p>
@@ -258,21 +270,35 @@ export default async function QuotePage({ params }: { params: Params }) {
               </table>
             </div>
             {quote.terms && <p className="order-form__terms prewrap">{quote.terms}</p>}
-            <div className="order-form__sign">
-              {quote.state === "accepted" ? (
-                <p>
-                  Signed by <strong>{quote.signer_name}</strong>
-                  {quote.signer_email ? ` (${quote.signer_email})` : ""} on{" "}
-                  {formatDate(quote.signed_on)}
-                  {quote.signature_ref ? `. The signed copy: ${quote.signature_ref}.` : "."}
-                </p>
-              ) : (
-                <>
-                  <p>Signed for {quote.company_name || "the customer"}</p>
+            <div className="order-form__parties">
+              <div className="order-form__sign">
+                <p>Signed for {letterhead.name}</p>
+                {letterhead.signatory.name ? (
+                  <p>
+                    <strong>{letterhead.signatory.name}</strong>
+                    {letterhead.signatory.title ? `, ${letterhead.signatory.title}` : ""}
+                  </p>
+                ) : (
                   <p className="order-form__line">Name</p>
-                  <p className="order-form__line">Date</p>
-                </>
-              )}
+                )}
+                <p className="order-form__line">Date</p>
+              </div>
+              <div className="order-form__sign">
+                {quote.state === "accepted" ? (
+                  <p>
+                    Signed by <strong>{quote.signer_name}</strong>
+                    {quote.signer_email ? ` (${quote.signer_email})` : ""} on{" "}
+                    {formatDate(quote.signed_on)}
+                    {quote.signature_ref ? `. The signed copy: ${quote.signature_ref}.` : "."}
+                  </p>
+                ) : (
+                  <>
+                    <p>Signed for {quote.company_name || "the customer"}</p>
+                    <p className="order-form__line">Name</p>
+                    <p className="order-form__line">Date</p>
+                  </>
+                )}
+              </div>
             </div>
           </article>
         </RecordSection>

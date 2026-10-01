@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { searchRecordsAction } from "@/app/(portal)/_actions/search";
+import { PrintFrame } from "@/components/documents/print-frame";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { ContextBar } from "@/components/shell/context-bar";
 import { Rail } from "@/components/shell/rail";
@@ -10,6 +11,7 @@ import { Shortcuts } from "@/components/shell/shortcuts";
 import { ThemeScope } from "@/components/shell/theme-scope";
 import { DEFAULT_HQ_THEME } from "@/lib/theme";
 import type { HqTheme } from "@/lib/theme";
+import type { Letterhead } from "@/lib/api/company";
 
 type HqShellProps = {
   identity: ShellIdentity;
@@ -23,6 +25,8 @@ type HqShellProps = {
   inboxUnread?: number | undefined;
   /** A live elevation: the role taken and when it ends, shown on every page until then. */
   elevation?: { roleLabel: string; endsLabel: string } | undefined;
+  /** The company's letterhead and the reader's name, for every printed page. */
+  print?: { letterhead: Letterhead; printedBy: string } | undefined;
   children: ReactNode;
 };
 
@@ -40,6 +44,7 @@ export function HqShell({
   preferences,
   inboxUnread,
   elevation,
+  print,
   children,
 }: HqShellProps) {
   return (
@@ -63,6 +68,7 @@ export function HqShell({
           </p>
         )}
         <main className="shell__main" id="main-content" tabIndex={-1}>
+          {print && <PrintFrame head={print.letterhead} printedBy={print.printedBy} />}
           {children}
         </main>
       </div>

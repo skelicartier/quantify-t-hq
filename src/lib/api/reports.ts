@@ -2,6 +2,12 @@ import "server-only";
 
 import { z } from "zod";
 
+import {
+  EXPORT_COLUMN_TYPES,
+  EXPORT_FORMATS,
+  type ExportFormat,
+  type ExportKind,
+} from "@/lib/exports";
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
 import { moneyByCurrencySchema } from "@/lib/api/crm";
 
@@ -100,17 +106,36 @@ export function readWeeklyReport(token: string, week = "") {
   });
 }
 
-export const EXPORT_KINDS = ["companies", "people", "leads", "deals", "contracts"] as const;
-export type ExportKind = (typeof EXPORT_KINDS)[number];
+const exportColumnSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  type: z.enum(EXPORT_COLUMN_TYPES),
+});
+export type ExportColumn = z.infer<typeof exportColumnSchema>;
+export type ExportCell = string | number | boolean | null;
 
 const exportSchema = okEnvelope.extend({
   filename: z.string(),
   rows: z.number(),
+  marked: z.boolean(),
+  /** Filled only for a CSV: the service writes it, every cell neutralised against formulas. */
   csv: z.string(),
+  format: z.enum(EXPORT_FORMATS),
+  title: z.string(),
+  generated_at: z.string(),
+  columns: z.array(exportColumnSchema),
+  /** The same records, typed, for the spreadsheet and the PDF the portal lays out. */
+  table: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))),
 });
+export type ExportFile = z.infer<typeof exportSchema>;
 
-export function createExport(token: string, kind: ExportKind, reason: string) {
-  return postHqJson(`hq/exports/${kind}`, exportSchema, { token, body: { reason } });
+export function createExport(
+  token: string,
+  kind: ExportKind,
+  reason: string,
+  format: ExportFormat = "csv",
+) {
+  return postHqJson(`hq/exports/${kind}`, exportSchema, { token, body: { reason, format } });
 }
 
 const funnelSchema = okEnvelope.extend({

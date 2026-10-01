@@ -9,6 +9,7 @@ import { DealBoard } from "@/components/crm/deal-board";
 import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PipelineTabs } from "@/components/deals/pipeline-tabs";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
@@ -156,7 +157,12 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
         eyebrow="CRM"
         title="Deals"
         description="Every open deal names its next step and a date. Deals quiet for 14 days, or past their stage's limit with no step on the calendar, are flagged."
-        actions={<PipelineTabs current="/deals" />}
+        actions={
+          <>
+            <PipelineTabs current="/deals" />
+            <DocumentTools context={context} kind="deals" returnPath="/deals" />
+          </>
+        }
       />
       <LiveRefresh intervalSeconds={120} label="Pipeline" />
       {board === null ? (

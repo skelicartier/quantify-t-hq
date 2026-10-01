@@ -155,6 +155,39 @@ and asked for gaps only. Section 8 of that file is the build order.
 | Finance, part three       | migration 0050: revenue earned from the invoice register by day of each service period (the last month takes the rounding), per currency — invoiced, earned and the month-end balance, negative when billed in arrears — and the invoices still being earned; purchase requests decided by someone other than the requester, a recurring one joining the vendor register when bought; budget lines with actuals typed from the accounting system and their source (refused without one), over by a tenth flagged for costs and under for revenue, the register's earned revenue shown beside to check against                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Business → Finance → Revenue earned, Budget; Work → Expenses → Purchase requests                                                                                                                 | service `0e2ef22`; HQ: the commit adding this            |
 | Hiring                    | migration 0051: openings with a hiring manager, public at public/careers; applicants from the careers form (throttled, a honeypot, answered alike, a repeat folded in) or by hand; applied → screen → interview → task → offer → hired, rejected (a reason from a fixed list) or withdrawn, an ended one reopening only where it ended; HR names interviewers, who (any role) are told, see their interviews, read that applicant and write one scorecard per stage, blind until their own is in; six months after a decision the details are emptied unless the applicant agreed to longer; erasure reaches applications                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Team → Hiring (roles, a role page, an applicant page); Work → Interviews; public /careers with an application form per role                                                                      | service `bbb4c7d`; HQ: the commit adding this            |
 
+### 2026-10-01 — documents: print, export, the company's particulars
+
+- **Company** (System → Company, everyone reads, an admin edits after a fresh code): the
+  legal form, registered name, CIN/LLPIN, PAN, GSTIN, Udyam, DPIIT, registered office,
+  contacts and who signs order forms, in the settings store (`company.*`, no migration).
+  The service checks shapes and cross-checks (CIN year and class against the form and the
+  incorporation date, a PAN's fourth letter, the PAN inside a GSTIN and its Luhn mod 36
+  character) and refuses only a problem the change makes. It returns the letterhead every
+  document prints and the law's list for the form: Companies Act 2013 s.12(3)(c) (name,
+  registered office, CIN, telephone, e-mail, website if any; a former name for two years;
+  "(One Person Company)"), s.4(1)(a) for the suffix, LLP Act 2008 s.21 and s.15. The demo
+  seeds only public facts (site, contact address, Jammu, who signs) — never a number.
+- **Print** (top bar, every page; Print beside Export on lists): the print style forces
+  paper colours, drops the frame and every control but keeps every value, puts the
+  letterhead and "Printed by … on …" over page one, and the particulars and "Page N of M" in
+  the margin boxes (Chrome 131+). A quote prints as the customer's document: letterhead,
+  order form, both signature blocks (the company's signatory named), nothing else. A
+  repeated top-margin note was tried and dropped: Chrome ignores a named page's override.
+- **Export** (lists: companies, people, leads, deals, contracts, quotes, receivables,
+  tasks, meetings, the support queue, vendors, expenses, controls; and Reports): CSV (the
+  service's, formula-neutralised, with a byte-order mark), Excel (`src/lib/documents/xlsx.ts`,
+  a stored zip written here: typed cells, frozen header, filter, an "About this file"
+  sheet) or PDF (`pdf.ts`, pdf-lib + fontkit, the brand faces cut to Latin in
+  `assets/pdf-fonts`, traced into `/exports` by `next.config.ts`: letterhead, wrapped never
+  truncated cells, record-ID columns left to the CSV/Excel, every page footed and
+  numbered). One door: `POST /exports` (same origin, session, `crm:export`, a safe return
+  path) → `hq/exports/{kind}` (fresh code, reason, quota, marker row, audit row with the
+  format). The service returns typed `columns` and `table`; the portal lays out the file.
+  Applicants and staff records are deliberately not exportable: a file escapes the
+  six-month erasure.
+- Service `6503188`; HQ: the commit adding this. Harness 23 adds the Company page, the
+  export menu, one real file per format checked by its first bytes, and two pages printed.
+
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
 The third pass's order (`docs/RESEARCH-2026-09-30-SUITE.md` §8): Security 2 part two
@@ -201,7 +234,16 @@ founder can fix.
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of the end of the suite's leftovers** (the machine clock read 2026-10-01).
+**As of documents: print, export and the company's particulars** (the machine clock read 2026-10-01).
+
+- Documents wave: service `6503188` (no migration), HQ the commit after `2febf99`. Before
+  any document leaves for real, an owner fills System → Company (product repo
+  `docs/HQ_GO_LIVE.md` §7a). The PDF typefaces live in `assets/pdf-fonts` (static instances
+  cut with fontTools from the Google Fonts sources; regenerate the same way if a glyph is
+  missing — Devanagari would need shaping pdf-lib does not do, so the PDF says how many
+  characters it could not draw and the CSV/Excel carry them).
+
+**Before that: the end of the suite's leftovers.**
 
 - HQ repo: references, reviews, the changelog and the help centre `d585ecb`; the control
   map, the trust centre, finance part three and hiring go out in the commit after it

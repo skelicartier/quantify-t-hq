@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { createContractAction } from "@/app/(portal)/revenue/actions";
 import { ColumnChart } from "@/components/charts/column-chart";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { ContractCreateForm, type ContractPrefill } from "@/components/revenue/contract-forms";
 import { RevenueTabs } from "@/components/revenue/revenue-tabs";
@@ -134,6 +135,7 @@ export default async function ContractsIndexPage({ searchParams }: ContractsPage
                 </div>
               </details>
             )}
+            <DocumentTools context={context} kind="contracts" returnPath="/revenue/contracts" />
           </>
         }
       />

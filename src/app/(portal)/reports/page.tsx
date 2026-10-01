@@ -12,10 +12,17 @@ import { DataTable } from "@/components/ui/data-table";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
+import {
+  EXPORT_FORMATS,
+  EXPORT_KINDS,
+  EXPORT_LABELS,
+  EXPORT_OUTCOMES,
+  FORMAT_LABELS,
+  canExport as canExportKind,
+} from "@/lib/exports";
 import { readCrmSettings, type DealSummary } from "@/lib/api/crm";
 import { readDealsBoard } from "@/lib/api/deals";
 import {
-  EXPORT_KINDS,
   readFunnel,
   readPipelineHistory,
   readWeeklyReport,
@@ -50,23 +57,6 @@ import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Weekly report" };
 export const dynamic = "force-dynamic";
-
-const EXPORT_LABELS: Record<string, string> = {
-  companies: "Companies",
-  people: "People",
-  leads: "Leads",
-  deals: "Deals",
-  contracts: "Contracts",
-};
-
-const EXPORT_OUTCOMES: Record<string, string> = {
-  sudo: "Confirm it's you first, then export again.",
-  reason: "Say what the export is for, in a sentence.",
-  forbidden: "Your role cannot export.",
-  failed: "The export could not be made. Nothing left HQ.",
-  quota:
-    "That is more than you can export today. An owner can lift your limit for a day on Privileged access.",
-};
 
 type ReportsPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -657,7 +647,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                 <Card
                   title="Export records"
                   titleAs="h3"
-                  description="A CSV for work outside HQ. It needs a reason, and the export is kept in the audit log."
+                  description="A CSV, a spreadsheet or a PDF on the letterhead, for work outside HQ. It needs a reason, and the export is kept in the audit log."
                 >
                   {quota && (
                     <p className="field__hint">
@@ -677,8 +667,9 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                   <form
                     className="stack-form stack-form--tight export-form"
                     method="post"
-                    action="/reports/export"
+                    action="/exports"
                   >
+                    <input type="hidden" name="back" value="/reports" />
                     <div className="field">
                       <div className="field__label">
                         <label htmlFor="export-kind">Records</label>
@@ -690,11 +681,30 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                         defaultValue="leads"
                         disabled={!context.me.sudo_fresh}
                       >
-                        {EXPORT_KINDS.filter(
-                          (kind) => kind !== "contracts" || hasCapability(context, "revenue:read"),
+                        {EXPORT_KINDS.filter((kind) =>
+                          canExportKind(context.me.capabilities, kind),
                         ).map((kind) => (
                           <option key={kind} value={kind}>
                             {EXPORT_LABELS[kind]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <div className="field__label">
+                        <label htmlFor="export-format">Format</label>
+                      </div>
+                      <select
+                        id="export-format"
+                        className="select"
+                        name="format"
+                        defaultValue="pdf"
+                        disabled={!context.me.sudo_fresh}
+                      >
+                        {EXPORT_FORMATS.map((format) => (
+                          <option key={format} value={format}>
+                            {FORMAT_LABELS[format].label} —{" "}
+                            {FORMAT_LABELS[format].hint.toLowerCase()}
                           </option>
                         ))}
                       </select>
@@ -719,7 +729,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                       type="submit"
                       disabled={!context.me.sudo_fresh}
                     >
-                      Download CSV
+                      Download
                     </button>
                   </form>
                 </Card>

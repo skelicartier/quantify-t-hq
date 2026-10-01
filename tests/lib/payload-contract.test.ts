@@ -112,6 +112,7 @@ import * as kbApi from "@/lib/api/knowledge";
 import * as controlsApi from "@/lib/api/controls";
 import * as centreApi from "@/lib/api/trust-centre";
 import * as hiringApi from "@/lib/api/hiring";
+import * as companyApi from "@/lib/api/company";
 import * as fieldsApi from "@/lib/api/fields";
 import * as autoApi from "@/lib/api/automations";
 import * as digestApi from "@/lib/api/digests";
@@ -207,6 +208,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/hiring/openings/{opening_id}", () => hiringApi.readOpening(token, ids.opening_id!)],
   ["hq/hiring/applicants/{applicant_id}", () => hiringApi.readApplicant(token, ids.applicant_id!)],
   ["hq/hiring/interviews", () => hiringApi.readInterviews(token)],
+  ["hq/company", () => companyApi.readCompany(token)],
   ["hq/controls", () => controlsApi.readControls(token)],
   ["hq/controls/{control_id}", () => controlsApi.readControl(token, ids.control_id!)],
   ["hq/trust-centre", () => centreApi.readTrustCentre(token)],
@@ -309,6 +311,7 @@ const INTERN_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/checkins", () => team.readCheckins(token)],
   ["hq/time-off", () => team.readTimeOff(token)],
   ["hq/elevation", () => privilegedApi.readMyElevation(token)],
+  ["hq/company", () => companyApi.readCompany(token)],
 ];
 
 describe("every portal read parses the service's own payload", () => {

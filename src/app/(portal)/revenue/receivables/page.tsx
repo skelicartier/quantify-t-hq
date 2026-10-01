@@ -7,6 +7,7 @@ import {
 import { RecordInvoiceForm, RecordReceiptForm } from "@/components/revenue/receivable-forms";
 import { RevenueTabs } from "@/components/revenue/revenue-tabs";
 import { CollectionPill } from "@/components/revenue/receivable-pills";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { Section } from "@/components/ui/card";
@@ -129,6 +130,7 @@ export default async function ReceivablesPage() {
                 </Popover>
               </>
             )}
+            <DocumentTools context={context} kind="invoices" returnPath="/revenue/receivables" />
           </>
         }
       />

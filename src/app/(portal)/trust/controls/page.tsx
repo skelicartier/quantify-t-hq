@@ -7,6 +7,7 @@ import {
   revokeAuditorLinkAction,
 } from "@/app/(portal)/trust/controls/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { AuditorLinkForm } from "@/components/trust/auditor-link-form";
 import { TrustTabs } from "@/components/trust/trust-parts";
@@ -144,6 +145,7 @@ export default async function ControlsPage() {
                 </ActForm>
               </Popover>
             )}
+            <DocumentTools context={context} kind="controls" returnPath="/trust/controls" />
           </>
         }
       />

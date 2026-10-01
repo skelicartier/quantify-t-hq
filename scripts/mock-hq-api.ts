@@ -3615,7 +3615,7 @@ function invoiceViewRx(row: InvoiceRow) {
   const days = rxDaysBetween(row.due_on, todayIso());
   return {
     invoice_id: row.id,
-    company: { company_id: row.company_id, name: companyName(row.company_id) },
+    company: { company_id: row.company_id, name: companyName(String(row.company_id ?? "")) },
     contract_id: row.contract_id,
     number: row.number,
     issued_on: row.issued_on,
@@ -3707,7 +3707,7 @@ function receiptViewRx(row: ReceiptRow) {
   const applied = mine.reduce((total, item) => total + item.cents, 0);
   return {
     receipt_id: row.id,
-    company: { company_id: row.company_id, name: companyName(row.company_id) },
+    company: { company_id: row.company_id, name: companyName(String(row.company_id ?? "")) },
     received_on: row.received_on,
     currency: row.currency,
     amount: centsText(row.amount_cents),
@@ -4240,7 +4240,7 @@ function csOnboardingView(row: OnboardingRow) {
   const owner = staff.find((member) => member.id === row.owner_staff_id);
   return {
     id: row.id,
-    company: { id: row.company_id, name: companyName(row.company_id) },
+    company: { id: row.company_id, name: companyName(String(row.company_id ?? "")) },
     contract_id: row.contract_id,
     owner: owner ? { id: owner.id, name: owner.display_name } : null,
     starts_on: row.starts_on,
@@ -5534,7 +5534,9 @@ function pvRequestView(row: PrivacyRequestRow, today = todayIso()) {
     requester_name: row.requester_name,
     requester_email: row.requester_email,
     person_id: row.person_id || null,
-    company: row.company_id ? { id: row.company_id, name: companyName(row.company_id) } : null,
+    company: row.company_id
+      ? { id: row.company_id, name: companyName(String(row.company_id ?? "")) }
+      : null,
     description: row.description,
     received_on: row.received_on,
     identity_state: row.identity_state,
@@ -11138,7 +11140,7 @@ routes.push(
               : reminder.offset === 0
                 ? `Invoice ${row.number} due today`
                 : `Invoice ${row.number} is overdue`,
-          body: `Hello ${companyName(row.company_id)} accounts team,\n\n${opening}\n\n${row.po_number ? `Your PO reference: ${row.po_number}.\n\n` : ""}If it is already on its way, thank you, and please ignore this. If anything stands in the way of payment, reply and tell us what it is.\n\nKind regards,\nQuantify Terminal accounts`,
+          body: `Hello ${companyName(String(row.company_id ?? ""))} accounts team,\n\n${opening}\n\n${row.po_number ? `Your PO reference: ${row.po_number}.\n\n` : ""}If it is already on its way, thank you, and please ignore this. If anything stands in the way of payment, reply and tell us what it is.\n\nKind regards,\nQuantify Terminal accounts`,
         };
       }
       return ok({
@@ -11281,7 +11283,7 @@ routes.push(
             number: row.number,
             currency: row.currency,
             amount: centsText(owedCents(row)),
-            company: companyName(row.company_id),
+            company: companyName(String(row.company_id ?? "")),
           },
           reason,
         );
@@ -17487,6 +17489,481 @@ function csvCell(value: unknown): string {
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
+// -- exports: the same kinds, columns and capability checks as the service's EXPORTS table.
+type ExportCell = string | number | boolean | null;
+type ExportSpec = {
+  title: string;
+  needs: string | null;
+  columns: Array<[string, string, string?]>;
+  rows: (headers: Record<string, string | string[] | undefined>) => ExportCell[][];
+};
+
+/** A list route's own payload, so an export carries what the page shows. */
+function listedBy(
+  pattern: string,
+  headers: Record<string, string | string[] | undefined>,
+  query: Record<string, string> = {},
+): Record<string, unknown> {
+  const entry = routes.find((item) => item.method === "GET" && item.pattern === pattern)!;
+  return entry.handler({ method: "GET", route: pattern, params: {}, query, body: {}, headers })
+    .body as Record<string, unknown>;
+}
+
+const cell = (value: unknown): ExportCell =>
+  value === undefined || value === null
+    ? null
+    : typeof value === "number" || typeof value === "boolean"
+      ? value
+      : String(value);
+const pick = (row: object, ...keys: string[]): ExportCell[] =>
+  keys.map((key) => cell((row as Record<string, unknown>)[key]));
+
+const EXPORT_SPECS: Record<string, ExportSpec> = {
+  companies: {
+    title: "Companies",
+    needs: null,
+    columns: [
+      ["id", "ID"],
+      ["name", "Name"],
+      ["domain", "Domain"],
+      ["lifecycle", "Lifecycle"],
+      ["firm_type", "Firm type"],
+      ["team_size", "Team size"],
+      ["country", "Country"],
+      ["source", "Source"],
+      ["customer_since", "Customer since", "date"],
+      ["created_at", "Created", "datetime"],
+    ],
+    rows: () =>
+      companies
+        .filter((row) => !(row as Record<string, unknown>).archived_at)
+        .map((row) =>
+          pick(
+            row,
+            "id",
+            "name",
+            "domain",
+            "lifecycle",
+            "firm_type",
+            "team_size_band",
+            "country",
+            "source_key",
+            "customer_since",
+            "created_at",
+          ),
+        ),
+  },
+  people: {
+    title: "People",
+    needs: null,
+    columns: [
+      ["id", "ID"],
+      ["full_name", "Name"],
+      ["email", "Email"],
+      ["title", "Title"],
+      ["company", "Company"],
+      ["do_not_contact", "Do not contact", "bool"],
+      ["last_contacted_at", "Last contacted", "datetime"],
+      ["created_at", "Created", "datetime"],
+    ],
+    rows: () =>
+      people
+        .filter((row) => !(row as Record<string, unknown>).archived_at)
+        .map((row) => [
+          ...pick(row, "id", "full_name", "email", "title"),
+          companyName(String(row.company_id ?? "")),
+          Boolean((row as Record<string, unknown>).do_not_contact),
+          ...pick(row, "last_contacted_at", "created_at"),
+        ]),
+  },
+  leads: {
+    title: "Leads",
+    needs: null,
+    columns: [
+      ["id", "ID"],
+      ["received_at", "Received", "datetime"],
+      ["source", "Source"],
+      ["full_name", "Name"],
+      ["email", "Email"],
+      ["company_name", "Company"],
+      ["stage", "Stage"],
+      ["disqualify_reason", "Disqualified because"],
+      ["first_replied_at", "First reply", "datetime"],
+      ["message", "Message"],
+    ],
+    rows: () =>
+      leads.map((row) =>
+        pick(
+          row,
+          "id",
+          "created_at",
+          "source_key",
+          "full_name",
+          "email",
+          "company_name",
+          "stage",
+          "disqualify_reason",
+          "first_replied_at",
+          "message",
+        ),
+      ),
+  },
+  deals: {
+    title: "Deals",
+    needs: "deals:read",
+    columns: [
+      ["id", "ID"],
+      ["name", "Deal"],
+      ["company", "Company"],
+      ["stage", "Stage"],
+      ["status", "Status"],
+      ["mrr", "MRR", "money"],
+      ["currency", "Currency"],
+      ["seats", "Seats", "number"],
+      ["next_step", "Next step"],
+      ["next_step_due", "Next step due", "date"],
+      ["expected_close_date", "Expected close", "date"],
+      ["loss_reason", "Loss reason"],
+      ["created_at", "Created", "datetime"],
+      ["closed_at", "Closed", "datetime"],
+    ],
+    rows: () =>
+      deals.map((row) => [
+        ...pick(row, "id", "name"),
+        companyName(String(row.company_id ?? "")),
+        ...pick(row, "stage_key", "status"),
+        Number((row as Record<string, unknown>).mrr_amount ?? 0),
+        ...pick(
+          row,
+          "currency",
+          "seats",
+          "next_step",
+          "next_step_due",
+          "expected_close_date",
+          "loss_reason",
+          "created_at",
+          "closed_at",
+        ),
+      ]),
+  },
+  contracts: {
+    title: "Contracts",
+    needs: "revenue:read",
+    columns: [
+      ["id", "ID"],
+      ["company", "Company"],
+      ["plan", "Plan"],
+      ["seats", "Seats", "number"],
+      ["mrr", "MRR", "money"],
+      ["currency", "Currency"],
+      ["billing", "Billing"],
+      ["starts_on", "Starts", "date"],
+      ["renews_on", "Renews", "date"],
+      ["status", "Status"],
+      ["ends_on", "Ends", "date"],
+      ["cancel_reason", "Cancelled because"],
+    ],
+    rows: () =>
+      contracts.map((row) => [
+        cell(row.id),
+        companyName(String(row.company_id ?? "")),
+        ...pick(row, "plan_name", "seats"),
+        Number(money(row.mrr_cents)),
+        ...pick(
+          row,
+          "currency",
+          "billing_cadence",
+          "starts_on",
+          "renews_on",
+          "status",
+          "ends_on",
+          "cancel_reason",
+        ),
+      ]),
+  },
+  quotes: {
+    title: "Quotes",
+    needs: "revenue:read",
+    columns: [
+      ["number", "Number"],
+      ["title", "Title"],
+      ["company", "Company"],
+      ["deal", "Deal"],
+      ["state", "State"],
+      ["currency", "Currency"],
+      ["term_months", "Term (months)", "number"],
+      ["net_recurring", "Recurring, net", "money"],
+      ["net_one_off", "One-off, net", "money"],
+      ["first_term_value", "First-term value", "money"],
+      ["discount_pct", "Discount", "percent"],
+      ["valid_until", "Valid until", "date"],
+      ["created_by", "Prepared by"],
+      ["created_at", "Created", "datetime"],
+    ],
+    rows: (headers) =>
+      (listedBy("hq/quotes", headers, { view: "all" }).quotes as Array<Record<string, unknown>>)
+        .sort((a, b) => String(a.number).localeCompare(String(b.number)))
+        .map((view) =>
+          pick(
+            view,
+            "number",
+            "title",
+            "company_name",
+            "deal_name",
+            "state_label",
+            "currency",
+            "term_months",
+            "net_recurring",
+            "net_one_off",
+            "first_term_value",
+            "discount_pct",
+            "valid_until",
+            "created_by_name",
+            "created_at",
+          ),
+        ),
+  },
+  invoices: {
+    title: "Invoices",
+    needs: "revenue:read",
+    columns: [
+      ["number", "Number"],
+      ["company", "Customer"],
+      ["issued_on", "Issued", "date"],
+      ["due_on", "Due", "date"],
+      ["currency", "Currency"],
+      ["net", "Net", "money"],
+      ["tax", "Tax", "money"],
+      ["gross", "Gross", "money"],
+      ["paid", "Paid", "money"],
+      ["outstanding", "Outstanding", "money"],
+      ["status", "Status"],
+      ["collection_state", "Collection"],
+      ["days_past_due", "Days past due", "number"],
+      ["po_number", "PO number"],
+      ["paid_on", "Paid on", "date"],
+    ],
+    rows: (headers) =>
+      (listedBy("hq/invoices", headers).invoices as Array<Record<string, unknown>>)
+        .sort((a, b) => String(a.issued_on).localeCompare(String(b.issued_on)))
+        .map((view) => [
+          cell(view.number),
+          cell((view.company as { name?: string } | undefined)?.name ?? ""),
+          ...pick(
+            view,
+            "issued_on",
+            "due_on",
+            "currency",
+            "net",
+            "tax",
+            "gross",
+            "paid",
+            "outstanding",
+            "status",
+            "collection_state",
+            "days_past_due",
+            "po_number",
+            "paid_on",
+          ),
+        ]),
+  },
+  tasks: {
+    title: "Tasks",
+    needs: null,
+    columns: [
+      ["title", "Task"],
+      ["status", "Status"],
+      ["priority", "Priority"],
+      ["due_on", "Due", "date"],
+      ["assignee", "Assignee"],
+      ["record", "About"],
+      ["origin", "Made by"],
+      ["created_at", "Created", "datetime"],
+      ["completed_at", "Done", "datetime"],
+    ],
+    rows: () =>
+      tasks
+        .map((row) => taskView(row, true) as Record<string, unknown>)
+        .sort((a, b) => String(a.due_on ?? "9999").localeCompare(String(b.due_on ?? "9999")))
+        .map((view) => [
+          ...pick(view, "title", "status", "priority", "due_on"),
+          staff.find((member) => member.id === view.assignee_staff_id)?.display_name ?? "",
+          ...pick(view, "record_label", "origin", "created_at", "completed_at"),
+        ]),
+  },
+  meetings: {
+    title: "Meetings",
+    needs: null,
+    columns: [
+      ["starts_at", "Starts", "datetime"],
+      ["ends_at", "Ends", "datetime"],
+      ["title", "Meeting"],
+      ["kind", "Kind"],
+      ["status", "Status"],
+      ["company", "Company"],
+      ["deal", "Deal"],
+      ["attendees", "Attendees", "number"],
+      ["outcome", "Outcome"],
+      ["needs_outcome", "Outcome missing", "bool"],
+    ],
+    rows: () =>
+      meetings
+        .map((row) => meetingView(row) as Record<string, unknown>)
+        .sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)))
+        .map((view) => [
+          ...pick(
+            view,
+            "starts_at",
+            "ends_at",
+            "title",
+            "kind",
+            "status",
+            "company_name",
+            "deal_name",
+          ),
+          ((view.attendees as unknown[]) ?? []).length,
+          ...pick(view, "outcome", "needs_outcome"),
+        ]),
+  },
+  tickets: {
+    title: "Support tickets",
+    needs: "tickets:read",
+    columns: [
+      ["id", "Ticket"],
+      ["subject", "Subject"],
+      ["status", "Status"],
+      ["priority", "Priority"],
+      ["source", "Came in by"],
+      ["assignee", "Assignee"],
+      ["tags", "Tags"],
+      ["sla", "Reply target"],
+      ["messages", "Messages", "number"],
+      ["reopened", "Reopened", "number"],
+      ["created_at", "Opened", "datetime"],
+      ["updated_at", "Last change", "datetime"],
+    ],
+    rows: (headers) =>
+      tickets
+        .map((row) => ticketSummary(row, caller(headers)!.member.id) as Record<string, unknown>)
+        .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+        .map((view) => [
+          ...pick(view, "id", "subject"),
+          view.snoozed ? "snoozed" : cell(view.status),
+          ...pick(view, "priority", "source", "assignee_name"),
+          ((view.tags as string[]) ?? []).join("; "),
+          cell((view.sla as { status?: string } | undefined)?.status ?? ""),
+          ...pick(view, "message_count", "reopened_count", "created_at", "updated_at"),
+        ]),
+  },
+  vendors: {
+    title: "Vendors",
+    needs: "revenue:write",
+    columns: [
+      ["name", "Vendor"],
+      ["category", "Category"],
+      ["owner", "Owner"],
+      ["amount", "Amount", "money"],
+      ["currency", "Currency"],
+      ["billing", "Billing"],
+      ["monthly", "Monthly equivalent", "money"],
+      ["renews_on", "Renews", "date"],
+      ["notice_days", "Notice (days)", "number"],
+      ["cancel_by", "Cancel by", "date"],
+      ["auto_renews", "Renews itself", "bool"],
+      ["status", "Status"],
+      ["contract_ref", "Contract"],
+    ],
+    rows: (headers) =>
+      (listedBy("hq/finance/vendors", headers).vendors as Array<Record<string, unknown>>)
+        .sort((a, b) => String(a.name).toLowerCase().localeCompare(String(b.name).toLowerCase()))
+        .map((view) =>
+          pick(
+            view,
+            "name",
+            "category_label",
+            "owner_name",
+            "amount",
+            "currency",
+            "billing_label",
+            "monthly_equivalent",
+            "renews_on",
+            "notice_days",
+            "cancel_by",
+            "auto_renews",
+            "status",
+            "contract_ref",
+          ),
+        ),
+  },
+  expenses: {
+    title: "Expense claims",
+    needs: "revenue:write",
+    columns: [
+      ["spent_on", "Spent", "date"],
+      ["staff", "Claimed by"],
+      ["category", "Category"],
+      ["description", "What for"],
+      ["amount", "Amount", "money"],
+      ["currency", "Currency"],
+      ["status", "Status"],
+      ["receipt_ref", "Receipt"],
+      ["decided_by", "Decided by"],
+      ["decided_at", "Decided", "datetime"],
+      ["paid_on", "Paid", "date"],
+    ],
+    rows: (headers) =>
+      (listedBy("hq/finance/expenses", headers).claims as Array<Record<string, unknown>>)
+        .sort((a, b) => String(a.spent_on).localeCompare(String(b.spent_on)))
+        .map((view) =>
+          pick(
+            view,
+            "spent_on",
+            "staff_name",
+            "category_label",
+            "description",
+            "amount",
+            "currency",
+            "status",
+            "receipt_ref",
+            "decided_by_name",
+            "decided_at",
+            "paid_on",
+          ),
+        ),
+  },
+  controls: {
+    title: "Controls",
+    needs: "audit:read",
+    columns: [
+      ["ref", "Ref"],
+      ["title", "Control"],
+      ["domain", "Domain"],
+      ["frequency", "Evidence every"],
+      ["state", "State"],
+      ["owner", "Owner"],
+      ["frameworks", "Frameworks"],
+      ["evidence_count", "Evidence", "number"],
+      ["last_evidence_on", "Last evidence", "date"],
+      ["evidence_due_on", "Next due", "date"],
+      ["evidence_due", "Due now", "bool"],
+    ],
+    rows: (headers) =>
+      (listedBy("hq/controls", headers).controls as Array<Record<string, unknown>>).map((view) => [
+        ...pick(
+          view,
+          "ref",
+          "title",
+          "domain_label",
+          "frequency_label",
+          "state_label",
+          "owner_name",
+        ),
+        ((view.frameworks as string[]) ?? []).join("; "),
+        ...pick(view, "evidence_count", "last_evidence_on", "evidence_due_on", "evidence_due"),
+      ]),
+  },
+};
+
 routes.push(
   {
     method: "GET",
@@ -18318,87 +18795,501 @@ routes.push(
       const reason = String(body.reason ?? "").trim();
       if (reason.length < 8)
         return refuse(400, "malformed_request", { reason: "say what the export is for" });
-      const tables: Record<string, [string[], unknown[][]]> = {
-        companies: [
-          ["id", "name", "domain", "lifecycle"],
-          companies.map((row) => [row.id, row.name, row.domain, row.lifecycle]),
-        ],
-        people: [
-          ["id", "full_name", "email", "title"],
-          people.map((row) => [row.id, row.full_name, row.email, row.title]),
-        ],
-        leads: [
-          ["id", "received_at", "source", "full_name", "email", "stage"],
-          leads.map((row) => [
-            row.id,
-            row.created_at,
-            row.source_key,
-            row.full_name,
-            row.email,
-            row.stage,
-          ]),
-        ],
-        deals: [
-          ["id", "name", "stage", "status", "mrr"],
-          deals.map((row) => [row.id, row.name, row.stage_key, row.status, row.mrr_amount]),
-        ],
-        contracts: [
-          ["id", "plan", "mrr", "currency", "status"],
-          contracts.map((row) => [
-            row.id,
-            row.plan_name,
-            money(row.mrr_cents),
-            row.currency,
-            row.status,
-          ]),
-        ],
-      };
-      const table = tables[String(params.kind)];
-      if (!table) return refuse(404, "not_found");
-      const [header, records] = table;
-      const exporterId = caller(headers)!.member.id;
+      const format = String(body.format ?? "csv");
+      if (!["csv", "xlsx", "pdf"].includes(format))
+        return refuse(400, "malformed_request", { format: "csv, xlsx, pdf" });
+      const kind = String(params.kind);
+      const spec = EXPORT_SPECS[kind];
+      if (!spec) return refuse(404, "not_found");
+      const exporter = caller(headers)!;
+      // Beyond crm:export, what the records themselves need — as the service checks.
+      if (spec.needs && !capsFor(exporter.role).includes(spec.needs))
+        return refuse(403, "forbidden", { required_capability: spec.needs });
+      const records = spec.rows(headers);
+      const exporterId = exporter.member.id;
       const overQuota = exportQuotaRefusal(exporterId, records.length);
       if (overQuota) return overQuota;
-      const mark = exportMarker(String(params.kind));
+      const mark = exportMarker(kind);
       const rows = mark
         ? placeMarker(
             records,
-            String(params.kind) === "people"
-              ? [mark.id, mark.full_name, mark.email, mark.title]
-              : [mark.id, now(), "website", mark.full_name, mark.email, "new"],
+            kind === "people"
+              ? [
+                  mark.id,
+                  mark.full_name,
+                  mark.email,
+                  mark.title,
+                  "Northbridge Partners",
+                  false,
+                  null,
+                  now(),
+                ]
+              : [
+                  mark.id,
+                  now(),
+                  "website",
+                  mark.full_name,
+                  mark.email,
+                  "Northbridge Partners",
+                  "new",
+                  "",
+                  null,
+                  "",
+                ],
           )
         : records;
       const decoyType = ({ companies: "company", people: "person" } as Record<string, string>)[
-        String(params.kind)
+        kind
       ];
       if (decoyType) {
-        const exporter = caller(headers)!.member;
         for (const row of rows)
-          springDecoy(exporter, decoyType, String(row[0]), "exported", clientAddress(headers));
+          springDecoy(
+            exporter.member,
+            decoyType,
+            String(row[0]),
+            "exported",
+            clientAddress(headers),
+          );
       }
+      const header = spec.columns.map(([key]) => key);
       const csv =
-        [header.join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\r\n") + "\r\n";
-      audit(
-        "export.created",
-        caller(headers)?.member.id ?? null,
-        "export",
-        String(params.kind),
-        reason,
-      );
-      recordExport(
-        exporterId,
-        String(params.kind),
-        String(params.kind),
-        records.length,
-        reason,
-        mark?.email ?? null,
-      );
+        format === "csv"
+          ? [
+              header.join(","),
+              ...rows.map((row) =>
+                row
+                  .map((value) =>
+                    csvCell(typeof value === "boolean" ? (value ? "yes" : "no") : value),
+                  )
+                  .join(","),
+              ),
+            ].join("\r\n") + "\r\n"
+          : "";
+      audit("export.created", exporterId, "export", kind, reason);
+      recordExport(exporterId, kind, kind, records.length, reason, mark?.email ?? null);
       return ok({
-        filename: `hq-${params.kind}-mock.csv`,
+        filename: `hq-${kind}-mock.${format}`,
         rows: records.length,
         marked: Boolean(mark),
         csv,
+        format,
+        title: spec.title,
+        generated_at: now(),
+        columns: spec.columns.map(([key, label, type]) => ({ key, label, type: type ?? "text" })),
+        table: rows.map((row) => row.map((value) => (value === undefined ? null : value))),
       });
+    },
+  },
+);
+
+// =====================================================================================
+// The company's particulars, mirroring hq/company and hq/company/update: one record in
+// the settings store, checked as the service checks it (shapes, a CIN's year and class,
+// a PAN's fourth letter, the PAN inside a GSTIN and its Luhn mod 36 character), and the
+// letterhead and the law's list worked out from it. Seeded with what is public only —
+// the site, the address people write to, the city, who signs — never a number.
+// =====================================================================================
+const COMPANY_FIELDS = [
+  "legal_name",
+  "entity_type",
+  "former_name",
+  "name_changed_on",
+  "registration_number",
+  "incorporated_on",
+  "pan",
+  "gstin",
+  "udyam",
+  "dpiit",
+  "registered_address",
+  "operating_address",
+  "phone",
+  "email",
+  "website",
+  "signatory_name",
+  "signatory_title",
+  "document_note",
+] as const;
+type CompanyField = (typeof COMPANY_FIELDS)[number];
+const COMPANY_LIMITS: Record<CompanyField, [number, boolean]> = {
+  legal_name: [200, true],
+  entity_type: [20, true],
+  former_name: [200, true],
+  name_changed_on: [10, true],
+  registration_number: [24, true],
+  incorporated_on: [10, true],
+  pan: [10, true],
+  gstin: [15, true],
+  udyam: [19, true],
+  dpiit: [20, true],
+  registered_address: [400, false],
+  operating_address: [400, false],
+  phone: [40, true],
+  email: [254, true],
+  website: [200, true],
+  signatory_name: [120, true],
+  signatory_title: [120, true],
+  document_note: [300, true],
+};
+const ENTITY_TYPES: Record<string, string> = {
+  unregistered: "Not registered yet",
+  proprietorship: "Sole proprietorship",
+  partnership: "Partnership firm",
+  llp: "Limited liability partnership",
+  private_limited: "Private limited company",
+  opc: "One person company",
+  public_limited: "Public limited company",
+};
+const COMPANY_KINDS = ["private_limited", "opc", "public_limited"];
+const CIN_CLASS: Record<string, string> = {
+  PTC: "private_limited",
+  OPC: "opc",
+  PLC: "public_limited",
+};
+const PAN_HOLDER: Record<string, string> = {
+  private_limited: "C",
+  opc: "C",
+  public_limited: "C",
+  llp: "F",
+  partnership: "F",
+  proprietorship: "P",
+};
+const companySettings: Record<string, string> = {};
+let companyUpdated: { at: string; by: string } | null = null;
+
+function seedCompany() {
+  for (const key of Object.keys(companySettings)) delete companySettings[key];
+  companyUpdated = null;
+  Object.assign(companySettings, {
+    operating_address: "Jammu, India",
+    email: "contact@quantifyterminal.com",
+    website: "https://quantifyterminal.com",
+    signatory_name: "Aaryan Saroha",
+    signatory_title: "Founder and Chief Executive Officer",
+  });
+}
+seedCompany();
+
+function companyRecord(): Record<CompanyField, string> {
+  return Object.fromEntries(
+    COMPANY_FIELDS.map((key) => [key, companySettings[key] ?? ""]),
+  ) as Record<CompanyField, string>;
+}
+
+function gstinCheck(first14: string): string {
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let total = 0;
+  [...first14].reverse().forEach((char, index) => {
+    let value = alphabet.indexOf(char);
+    if (index % 2 === 0) value *= 2;
+    total += Math.floor(value / 36) + (value % 36);
+  });
+  return alphabet[(36 - (total % 36)) % 36]!;
+}
+
+function companyProblems(record: Record<string, string>, today: string): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const kind = record.entity_type ?? "";
+  if (kind && !ENTITY_TYPES[kind]) errors.entity_type = "choose one of the legal forms";
+  for (const key of ["name_changed_on", "incorporated_on"]) {
+    const value = record[key] ?? "";
+    if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) errors[key] = "a date, YYYY-MM-DD";
+    else if (value && value > today) errors[key] = "cannot be in the future";
+  }
+  const legal = record.legal_name ?? "";
+  if (
+    legal &&
+    /\b(limited|ltd\.?|llp|limited liability partnership|pvt\.?|private limited)\s*$/i.test(
+      legal,
+    ) &&
+    ![...COMPANY_KINDS, "llp"].includes(kind)
+  )
+    errors.legal_name = "only a company or an LLP may end its name with Limited, Ltd, Pvt or LLP";
+  const number = record.registration_number ?? "";
+  if (number) {
+    if (COMPANY_KINDS.includes(kind)) {
+      if (!/^[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$/.test(number))
+        errors.registration_number = "a CIN is 21 characters, like U72900JK2026PTC012345";
+      else {
+        const klass = number.slice(12, 15);
+        const year = Number(number.slice(8, 12));
+        const incorporated = record.incorporated_on ?? "";
+        if (CIN_CLASS[klass] && CIN_CLASS[klass] !== kind)
+          errors.registration_number = `this CIN is a ${ENTITY_TYPES[CIN_CLASS[klass]!]!.toLowerCase()}'s (${klass}), not a ${ENTITY_TYPES[kind]!.toLowerCase()}'s`;
+        else if (number.startsWith("L") && kind !== "public_limited")
+          errors.registration_number =
+            "an L at the start means a listed company; only a public company is listed";
+        else if (incorporated && Number(incorporated.slice(0, 4)) !== year)
+          errors.registration_number = `this CIN says incorporated in ${year}; the date of incorporation says ${incorporated.slice(0, 4)}`;
+      }
+    } else if (kind === "llp") {
+      if (!/^[A-Z]{3}-\d{4}$/.test(number))
+        errors.registration_number =
+          "an LLPIN is three letters, a dash and four digits, like AAB-1234";
+    } else if (["unregistered", "proprietorship", ""].includes(kind)) {
+      errors.registration_number =
+        "only a company, an LLP or a registered firm has a registration number";
+    }
+  }
+  const pan = record.pan ?? "";
+  if (pan) {
+    if (!/^[A-Z]{5}\d{4}[A-Z]$/.test(pan))
+      errors.pan = "a PAN is five letters, four digits and a letter, like AABCQ1234D";
+    else if (PAN_HOLDER[kind] && pan[3] !== PAN_HOLDER[kind])
+      errors.pan = `the fourth letter of a ${ENTITY_TYPES[kind]!.toLowerCase()}'s PAN is ${PAN_HOLDER[kind]}; this one is ${pan[3]}`;
+  }
+  const gstin = record.gstin ?? "";
+  if (gstin) {
+    const code = Number(gstin.slice(0, 2));
+    if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin))
+      errors.gstin = "a GSTIN is 15 characters: state code, PAN, entity number, Z, check character";
+    else if (!((code >= 1 && code <= 38) || code === 97 || code === 99))
+      errors.gstin = `${gstin.slice(0, 2)} is not a GST state code`;
+    else if (gstinCheck(gstin.slice(0, 14)) !== gstin[14])
+      errors.gstin = "the last character does not check: a character is mistyped";
+    else if (pan && /^[A-Z]{5}\d{4}[A-Z]$/.test(pan) && gstin.slice(2, 12) !== pan)
+      errors.gstin = "the PAN inside this GSTIN is not the PAN above";
+  }
+  if (record.udyam && !/^UDYAM-[A-Z]{2}-\d{2}-\d{7}$/.test(record.udyam))
+    errors.udyam = "a Udyam number reads UDYAM-JK-02-0001234";
+  if (record.dpiit && !/^DIPP\d{3,8}$/.test(record.dpiit))
+    errors.dpiit = "a DPIIT recognition number reads DIPP followed by digits";
+  if (record.email && !/^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/.test(record.email))
+    errors.email = "an e-mail address";
+  const phone = record.phone ?? "";
+  const digits = phone.replace(/\D/g, "").length;
+  if (phone && (!/^\+?[\d\s()-]+$/.test(phone) || digits < 7 || digits > 15))
+    errors.phone = "digits, spaces, + ( ) and -, 7 to 15 digits";
+  if (
+    record.website &&
+    !/^(?:https?:\/\/)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(\/\S*)?$/i.test(record.website)
+  )
+    errors.website = "a web address, like quantifyterminal.com";
+  if (record.name_changed_on && !record.former_name)
+    errors.former_name = "the name it changed from";
+  return errors;
+}
+
+function formerNamePrinted(record: Record<string, string>, today: string): string {
+  if (!record.former_name || !record.name_changed_on) return "";
+  const [y, m, d] = record.name_changed_on.split("-").map(Number) as [number, number, number];
+  const until =
+    m === 2 && d === 29
+      ? `${y + 2}-02-28`
+      : `${y + 2}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return today < until ? record.former_name : "";
+}
+
+function companyRequirements(record: Record<string, string>, today: string) {
+  const kind = record.entity_type ?? "";
+  const item = (key: string, label: string, law: string, state: string, detail = "") => ({
+    key,
+    label,
+    law,
+    state,
+    detail,
+  });
+  const have = (key: string) => (record[key] ? "met" : "missing");
+  const legal = (record.legal_name ?? "").trim();
+  if (COMPANY_KINDS.includes(kind)) {
+    const law = "Companies Act 2013, s.12(3)(c)";
+    const suffix = kind === "public_limited" ? "Limited" : "Private Limited";
+    const ends =
+      kind === "public_limited"
+        ? /(limited|ltd\.?)$/i.test(legal)
+        : /(private limited|pvt\.? ltd\.?)$/i.test(legal);
+    const former = formerNamePrinted(record, today);
+    return [
+      item("legal_name", "Name", law, have("legal_name")),
+      item("registered_address", "Registered office address", law, have("registered_address")),
+      item(
+        "registration_number",
+        "Corporate Identity Number (CIN)",
+        law,
+        have("registration_number"),
+      ),
+      item("phone", "Telephone number", law, have("phone")),
+      item("email", "E-mail address", law, have("email")),
+      item("website", "Website, if there is one", law, record.website ? "met" : "optional"),
+      item(
+        "suffix",
+        `The name ends with “${suffix}”`,
+        "Companies Act 2013, s.4(1)(a)",
+        legal && ends ? "met" : "missing",
+      ),
+      ...(kind === "opc"
+        ? [
+            item(
+              "opc",
+              "“(One Person Company)” with the name",
+              "Companies Act 2013, s.12(3)",
+              "met",
+              "Printed by HQ with the name.",
+            ),
+          ]
+        : []),
+      item(
+        "former_name",
+        "A name changed in the last two years, beside the new one",
+        law,
+        former ? "met" : "not_applicable",
+        former ? `Printing “${former}”.` : "No change of name in the last two years.",
+      ),
+    ];
+  }
+  if (kind === "llp") {
+    const law = "LLP Act 2008, s.21";
+    return [
+      item("legal_name", "Name", law, have("legal_name")),
+      item("registered_address", "Registered office address", law, have("registered_address")),
+      item("registration_number", "Registration number (LLPIN)", law, have("registration_number")),
+      item(
+        "statement",
+        "A statement that it is registered with limited liability",
+        law,
+        "met",
+        "Printed by HQ under the name.",
+      ),
+      item(
+        "suffix",
+        "The name ends with “LLP” or “Limited Liability Partnership”",
+        "LLP Act 2008, s.15",
+        legal && /(llp|limited liability partnership)$/i.test(legal) ? "met" : "missing",
+      ),
+    ];
+  }
+  if (["partnership", "proprietorship", "unregistered"].includes(kind))
+    return [
+      item(
+        "trading_name",
+        "The trading name",
+        "No statute sets this business's letters",
+        "met",
+        "Documents carry “Quantify Terminal” and nothing that suggests limited liability.",
+      ),
+    ];
+  return [
+    item(
+      "entity_type",
+      "The legal form",
+      "Sets what the law asks documents to carry",
+      "missing",
+      "Choose it to see the list.",
+    ),
+  ];
+}
+
+function companyLetterhead(record: Record<string, string>, today: string) {
+  const kind = record.entity_type ?? "";
+  const legal = [...COMPANY_KINDS, "llp", "partnership"].includes(kind)
+    ? (record.legal_name ?? "")
+    : "";
+  const numbers: string[] = [];
+  if (record.registration_number)
+    numbers.push(
+      `${COMPANY_KINDS.includes(kind) ? "CIN" : kind === "llp" ? "LLPIN" : "Registration"} ${record.registration_number}`,
+    );
+  if (record.gstin) numbers.push(`GSTIN ${record.gstin}`);
+  const address = (record.registered_address ?? "").replace(/\n/g, ", ");
+  const operating = (record.operating_address ?? "").replace(/\n/g, ", ");
+  const contact = [
+    record.phone,
+    record.email,
+    (record.website ?? "").replace(/^https?:\/\//, ""),
+  ].filter(Boolean);
+  const former = COMPANY_KINDS.includes(kind) ? formerNamePrinted(record, today) : "";
+  return {
+    brand: "Quantify Terminal",
+    name: legal || "Quantify Terminal",
+    name_note: kind === "opc" ? "(One Person Company)" : "",
+    former_name: former ? `Formerly ${former}` : "",
+    trading_as:
+      legal && legal.toLowerCase() !== "quantify terminal"
+        ? `Quantify Terminal is a trading name of ${legal}`
+        : "",
+    liability:
+      kind === "llp"
+        ? "Registered with limited liability under the Limited Liability Partnership Act, 2008"
+        : "",
+    numbers: numbers.join(" · "),
+    address:
+      address && [...COMPANY_KINDS, "llp"].includes(kind)
+        ? `Registered office: ${address}`
+        : address || operating,
+    contact: contact.join(" · "),
+    signatory: { name: record.signatory_name ?? "", title: record.signatory_title ?? "" },
+    note: record.document_note ?? "",
+    complete: companyRequirements(record, today).every((item) => item.state !== "missing"),
+  };
+}
+
+function companyPayload(viewerRole: string) {
+  const today = now().slice(0, 10);
+  const record = companyRecord();
+  return {
+    company: record,
+    letterhead: companyLetterhead(record, today),
+    requirements: companyRequirements(record, today),
+    entity_types: Object.entries(ENTITY_TYPES).map(([value, label]) => ({ value, label })),
+    updated_at: companyUpdated?.at ?? null,
+    updated_by_name: companyUpdated
+      ? (staff.find((member) => member.id === companyUpdated!.by)?.display_name ?? "")
+      : "",
+    can_edit: capsFor(viewerRole).includes("hq:admin"),
+  };
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/company",
+    auth: true,
+    handler: ({ headers }) => ok(companyPayload(caller(headers)!.role)),
+  },
+  {
+    method: "POST",
+    pattern: "hq/company/update",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const today = now().slice(0, 10);
+      const current = companyRecord();
+      const writes: Record<string, string> = {};
+      for (const key of COMPANY_FIELDS) {
+        if (!(key in body)) continue;
+        const [limit, single] = COMPANY_LIMITS[key];
+        let value = String(body[key] ?? "").replace(/\r/g, "");
+        value = single
+          ? value.split(/\s+/).filter(Boolean).join(" ")
+          : value
+              .split("\n")
+              .map((line) => line.split(/\s+/).filter(Boolean).join(" "))
+              .filter(Boolean)
+              .join("\n");
+        value = value.slice(0, limit);
+        if (["registration_number", "pan", "gstin", "udyam", "dpiit"].includes(key))
+          value = value.toUpperCase().replace(/ /g, "");
+        if (key === "email") value = value.toLowerCase();
+        if (key === "website" && value) {
+          const match = /^(?:https?:\/\/)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(\/\S*)?$/i.exec(value);
+          if (match)
+            value = `https://${match[1]!.toLowerCase()}${match[2] ?? ""}`.replace(/\/$/, "");
+        }
+        if (value !== current[key]) writes[key] = value;
+      }
+      const before = companyProblems(current, today);
+      const after = companyProblems({ ...current, ...writes }, today);
+      const made = Object.fromEntries(
+        Object.entries(after).filter(([key, reason]) => before[key] !== reason),
+      );
+      if (Object.keys(made).length > 0) return refuse(400, "malformed_request", made);
+      if (Object.keys(writes).length === 0)
+        return refuse(400, "malformed_request", { body: "nothing to change" });
+      Object.assign(companySettings, writes);
+      const who = caller(headers)!;
+      companyUpdated = { at: now(), by: who.member.id };
+      audit("company.updated", who.member.id, "settings", "company");
+      return ok(companyPayload(who.role));
     },
   },
 );
@@ -40246,6 +41137,7 @@ function resetWorld() {
   seedControlsAndCentre();
   seedPlanning();
   seedHiring();
+  seedCompany();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

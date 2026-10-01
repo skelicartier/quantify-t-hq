@@ -11,7 +11,12 @@ describe("capability-filtered navigation", () => {
     expect(labels).not.toContain("Business");
     expect(labels).not.toContain("Team");
     const system = groups.find((group) => group.label === "System");
-    expect(system?.links.map((link) => link.href)).toEqual(["/me/security", "/me/digests"]);
+    // The company's particulars are on every printed page already; reading them is everyone's.
+    expect(system?.links.map((link) => link.href)).toEqual([
+      "/company",
+      "/me/security",
+      "/me/digests",
+    ]);
   });
 
   it("an owner sees every group", () => {

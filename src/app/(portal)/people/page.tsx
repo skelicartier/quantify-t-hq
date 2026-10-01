@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { createPersonAction } from "@/app/(portal)/people/actions";
 import { PersonCreateForm } from "@/components/crm/person-forms";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { PeekPane } from "@/components/lists/peek-pane";
@@ -71,20 +72,23 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
         title="People"
         description="One person per address. Leads become people when they are qualified."
         actions={
-          canWrite ? (
-            <Popover label="Add person" variant="primary">
-              <PersonCreateForm
-                action={createPersonAction}
-                companies={companyOptions}
-                extra={
-                  <CustomFieldInputs
-                    idPrefix="new-person"
-                    fields={customFields.filter((field) => field.required)}
-                  />
-                }
-              />
-            </Popover>
-          ) : undefined
+          <>
+            {canWrite ? (
+              <Popover label="Add person" variant="primary">
+                <PersonCreateForm
+                  action={createPersonAction}
+                  companies={companyOptions}
+                  extra={
+                    <CustomFieldInputs
+                      idPrefix="new-person"
+                      fields={customFields.filter((field) => field.required)}
+                    />
+                  }
+                />
+              </Popover>
+            ) : undefined}
+            <DocumentTools context={context} kind="people" returnPath="/people" />
+          </>
         }
       />
       {people === null ? (

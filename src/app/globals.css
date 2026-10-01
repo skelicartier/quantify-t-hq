@@ -7557,12 +7557,15 @@
   }
 
   .sudo-gate--open {
+    /* The mark beside its sentence in a narrow panel too, never on a line of its own. */
+    flex-wrap: nowrap;
     border-color: color-mix(in srgb, var(--success) 40%, var(--line));
     background: color-mix(in srgb, var(--success) 6%, transparent);
     color: var(--muted);
   }
 
   .sudo-gate__mark {
+    flex: none;
     width: 8px;
     height: 8px;
     border-radius: 50%;
@@ -10797,35 +10800,6 @@
 }
 
 /* Printing a quote prints its order form alone, black on white. */
-@media print {
-  @page {
-    margin: 16mm;
-  }
-
-  body * {
-    visibility: hidden;
-  }
-
-  .order-form,
-  .order-form * {
-    visibility: visible;
-    color: #000 !important;
-    background: transparent !important;
-    border-color: #999 !important;
-  }
-
-  .order-form {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    border: 0;
-  }
-
-  .order-form__scroll {
-    overflow: visible;
-  }
-}
 
 /* Business reviews: short lists inside the figures' cards. */
 @layer pages {
@@ -10835,5 +10809,462 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+}
+
+/* ---------------------------------------------------------------- documents
+   The letterhead, the wordmark, the print and export tools, and the print style:
+   every page prints as a document on the company's letterhead — paper colours in
+   either theme, the controls left out, every value kept, the particulars and the
+   page number in the margin. */
+@layer pages {
+  .wordmark {
+    font-family: var(--font-wordmark), var(--font-heading);
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .wordmark--small {
+    font-size: 15px;
+  }
+
+  .wordmark__dot {
+    font-weight: 700;
+    color: #9810fa;
+  }
+
+  .letterhead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px 24px;
+  }
+
+  .letterhead__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .letterhead__mark {
+    display: block;
+    width: 30px;
+    height: 30px;
+  }
+
+  .letterhead__mark--ink,
+  .shell[data-theme="light"] .letterhead__mark--pale {
+    display: none;
+  }
+
+  .shell[data-theme="light"] .letterhead__mark--ink {
+    display: block;
+  }
+
+  .letterhead__particulars {
+    display: grid;
+    gap: 2px;
+    max-width: 46ch;
+    color: var(--muted);
+    font-size: 12px;
+    font-style: normal;
+    line-height: 1.45;
+    text-align: right;
+  }
+
+  .letterhead__particulars strong {
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .order-form__letterhead {
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .order-form__parties {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px 32px;
+  }
+
+  .print-head {
+    display: none;
+  }
+
+  /* A sheet of paper on screen: the letterhead previewed as it prints, in either theme. */
+  .paper {
+    --text: #0b0e17;
+    --muted: #474c57;
+    display: grid;
+    gap: 10px;
+    padding: 22px 24px;
+    border: 1px solid var(--line);
+    color: #0b0e17;
+    background: #ffffff;
+  }
+
+  .paper .letterhead__mark--pale {
+    display: none;
+  }
+
+  .paper .letterhead__mark--ink {
+    display: block;
+  }
+
+  .paper--brand {
+    justify-items: start;
+    padding: 28px 24px;
+  }
+
+  .paper--brand .wordmark {
+    font-size: 34px;
+  }
+
+  .paper__note {
+    margin: 0;
+    color: #474c57;
+    font-size: 12px;
+  }
+
+  .requirements {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .requirements__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .requirements__label {
+    margin: 0;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .requirements__law {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .brand-rules {
+    display: grid;
+    margin: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .brand-rules__row {
+    display: grid;
+    grid-template-columns: minmax(96px, 160px) 1fr;
+    gap: 4px 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .brand-rules__row dt {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .brand-rules__row dd {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .company-form__group {
+    display: grid;
+    gap: 12px;
+    margin: 0;
+    padding: 0 0 16px;
+    border: 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .company-form__group legend {
+    margin-bottom: 8px;
+    padding: 0;
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .doc-tools {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .desk__tools {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .export-menu__title {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .format-choice {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .format-choice__legend {
+    margin-bottom: 6px;
+    padding: 0;
+    color: var(--text);
+    font-size: var(--fs-body);
+    font-weight: 600;
+  }
+
+  .format-choice__option {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 10px;
+    align-items: baseline;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    cursor: pointer;
+  }
+
+  .format-choice__option input {
+    grid-row: span 2;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+
+  .format-choice__option--on {
+    border-color: var(--accent);
+    background: var(--accent-wash);
+  }
+
+  .format-choice__name {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .format-choice__hint {
+    grid-column: 2;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .format-choice:disabled .format-choice__option {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm 13mm 18mm;
+
+    @bottom-left {
+      color: #555;
+      font-family: var(--font-space-grotesk), sans-serif;
+      font-size: 7pt;
+    }
+
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      color: #555;
+      font-family: var(--font-jetbrains-mono), monospace;
+      font-size: 7pt;
+    }
+  }
+
+  /* Paper colours, whichever theme is on screen. */
+  :root,
+  .shell,
+  .shell[data-theme] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --panel: #ffffff;
+    --panel-raised: #ffffff;
+    --panel-soft: #f6f6f7;
+    --line: #d5d8dd;
+    --line-soft: #e5e7eb;
+    --line-strong: #b9bec7;
+    --text: #0b0e17;
+    --muted: #474c57;
+    --quiet: #5c6270;
+    --accent: #0b0e17;
+    --accent-soft: #000000;
+    --accent-ink: #ffffff;
+    --accent-wash: transparent;
+    --success: #15803d;
+    --danger: #b42318;
+    --attention: #b45309;
+    --info: #0369a1;
+    --lift-shadow: none;
+  }
+
+  html,
+  body,
+  .shell {
+    background: #ffffff !important;
+  }
+
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+    print-color-adjust: exact;
+  }
+
+  /* The frame and every control: nothing on paper can be clicked. */
+  .rail,
+  .cbar,
+  .elevation-bar,
+  .skip-link,
+  .palette,
+  .shortcuts,
+  .route-progress,
+  .doc-tools,
+  .desk__tools,
+  .desk__queue-head,
+  .popover,
+  .sudo-gate,
+  .views,
+  .table-tools,
+  .filter-strip,
+  .filter-builder,
+  .filter-bar,
+  .toolbar,
+  .pagination,
+  .selection-bar,
+  .peek,
+  .pagebar__about,
+  .rhead__actions,
+  .pagebar__actions,
+  .chip__remove,
+  .chip--clear,
+  .list-tools,
+  .shell__main nav:not(.rhead__crumbs),
+  .prop__edit,
+  .data-table__select,
+  .live-refresh__toggle,
+  button,
+  .btn,
+  form .field,
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    display: none !important;
+  }
+
+  .shell__body {
+    display: block;
+    min-height: 0;
+    padding: 0 !important;
+  }
+
+  .shell__main {
+    padding: 0 !important;
+  }
+
+  .print-head {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #d5d8dd;
+  }
+
+  .print-head__stamp {
+    margin: 0;
+    color: #5c6270;
+    font-size: 8pt;
+  }
+
+  .letterhead__mark--pale {
+    display: none !important;
+  }
+
+  .letterhead__mark--ink {
+    display: block !important;
+  }
+
+  a {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+
+  /* Tables print whole: no scrolling box, the heading on every page, no row cut in two. */
+  .table-wrap,
+  .table-scroll,
+  .order-form__scroll,
+  [class*="__scroll"] {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  th,
+  thead,
+  .data-table thead th {
+    position: static !important;
+  }
+
+  tr,
+  .card,
+  .prop {
+    break-inside: avoid;
+  }
+
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+  }
+
+  /* A quote prints as the customer's document: the letterhead and the order form, no
+     line saying who printed it, no other part of the page. */
+  body:has(.order-form)
+    .shell__main
+    *:not(:has(.order-form)):not(.order-form):not(.order-form *):not(.print-head):not(
+      .print-head *
+    ) {
+    display: none !important;
+  }
+
+  body:has(.order-form) .rgrid {
+    display: block !important;
+  }
+
+  body:has(.order-form) .print-head__stamp,
+  .order-form__letterhead {
+    display: none !important;
+  }
+
+  .order-form {
+    padding: 0 !important;
+    border: 0 !important;
   }
 }

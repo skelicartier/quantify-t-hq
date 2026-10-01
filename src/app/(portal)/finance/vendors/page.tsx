@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { createVendorAction } from "@/app/(portal)/finance/actions";
 import { FinanceTabs, VendorStatePill } from "@/components/finance/finance-parts";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { ActForm } from "@/components/ui/act-form";
 import { Callout } from "@/components/ui/callout";
@@ -145,6 +146,7 @@ export default async function VendorsPage() {
                 </ActForm>
               </Popover>
             )}
+            <DocumentTools context={context} kind="vendors" returnPath="/finance/vendors" />
           </>
         }
       />

@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { PipelineTabs } from "@/components/deals/pipeline-tabs";
 import { QuoteStatePill } from "@/components/deals/quote-parts";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { Section } from "@/components/ui/card";
@@ -71,7 +72,12 @@ export default async function QuotesPage({ searchParams }: Props) {
         eyebrow="Deals"
         title="Quotes"
         description="Order forms on deals, with the approval a discount needs: up to 10 % its author sends it; above that a second person approves, and above 25 % an owner or admin. Made from a deal's Quotes tab."
-        actions={<PipelineTabs current="/deals/quotes" />}
+        actions={
+          <>
+            <PipelineTabs current="/deals/quotes" />
+            <DocumentTools context={context} kind="quotes" returnPath="/deals/quotes" />
+          </>
+        }
       />
       {list === null ? (
         <Callout tone="danger" role="alert">

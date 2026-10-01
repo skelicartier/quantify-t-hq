@@ -2,6 +2,7 @@ import { createMeetingAction } from "@/app/(portal)/meetings/actions";
 import { MeetingCreateForm } from "@/components/crm/meeting-forms";
 import { MeetingList } from "@/components/crm/meeting-list";
 import { LiveRefresh } from "@/components/shell/live-refresh";
+import { DocumentTools } from "@/components/documents/document-tools";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { Popover } from "@/components/ui/popover";
@@ -75,6 +76,7 @@ export default async function MeetingsIndexPage({ searchParams }: MeetingsIndexP
                 <MeetingCreateForm action={createMeetingAction} companies={companies} />
               </Popover>
             )}
+            <DocumentTools context={context} kind="meetings" returnPath="/meetings" />
           </>
         }
       />

@@ -33,6 +33,10 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   poweredByHeader: false,
   reactStrictMode: true,
+  // The export route reads the PDF typefaces and the mark from disk; trace them into it.
+  outputFileTracingIncludes: {
+    "/exports": ["./assets/pdf-fonts/**/*", "./public/brand/mark-light.png"],
+  },
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
