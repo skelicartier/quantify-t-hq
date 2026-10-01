@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { Wordmark } from "@/components/brand/wordmark";
 import { AuthLegal } from "@/components/auth/auth-shell";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { verifyCertificate, type PublicCertificate } from "@/lib/api/team";
@@ -53,8 +54,7 @@ export default async function VerifyPage({ params }: VerifyPageProps) {
             href="https://www.quantifyterminal.com"
             aria-label="Quantify Terminal"
           >
-            <span>Quantify</span>
-            <span>Terminal</span>
+            <Wordmark size="large" />
           </a>
         </div>
         <div className="auth__header">

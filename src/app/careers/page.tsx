@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { Wordmark } from "@/components/brand/wordmark";
 import { applyAction } from "@/app/careers/actions";
 import { ApplyForm } from "@/components/hiring/apply-form";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
@@ -30,8 +31,7 @@ export default async function CareersPage() {
           href="https://www.quantifyterminal.com"
           aria-label="Quantify Terminal"
         >
-          <span>Quantify</span>
-          <span>Terminal</span>
+          <Wordmark size="large" />
         </a>
         <span className="status-public__title">Careers</span>
       </header>

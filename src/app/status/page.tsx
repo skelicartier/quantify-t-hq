@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { Wordmark } from "@/components/brand/wordmark";
 import { subscribeAction } from "@/app/status/actions";
 import { StatusBars } from "@/components/status/status-bars";
 import { SubscribeForm } from "@/components/status/status-forms";
@@ -37,8 +38,7 @@ export default async function PublicStatusPage() {
           href="https://www.quantifyterminal.com"
           aria-label="Quantify Terminal"
         >
-          <span>Quantify</span>
-          <span>Terminal</span>
+          <Wordmark size="large" />
         </a>
         <span className="status-public__title">Status</span>
       </header>

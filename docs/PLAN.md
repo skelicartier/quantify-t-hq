@@ -185,6 +185,12 @@ and asked for gaps only. Section 8 of that file is the build order.
   format). The service returns typed `columns` and `table`; the portal lays out the file.
   Applicants and staff records are deliberately not exportable: a file escapes the
   six-month erasure.
+- **The brand** (same day): the top of the rail, the phone bar, sign-in, not-found and every
+  public page show the wordmark "quantify terminal." alone (`src/components/brand/wordmark.tsx`,
+  Poppins, preloaded); no Q symbol and no "QUANTIFY HQ" anywhere, on screen or on documents.
+  Tab titles end "| Quantify Terminal HQ"; the authenticator issuer, the passkey name and
+  the staff mails say "Quantify Terminal HQ" (service `0985717`). A collapsed rail shows no
+  brand. The unused `public/brand/mark-*.png` files are left in place.
 - Service `6503188`; HQ: the commit adding this. Harness 23 adds the Company page, the
   export menu, one real file per format checked by its first bytes, and two pages printed.
 

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { Wordmark } from "@/components/brand/wordmark";
 import { stopMailAction } from "@/app/u/[token]/actions";
 import { AuthLegal } from "@/components/auth/auth-shell";
 import { UnsubscribeChoices } from "@/components/mail/unsubscribe-choices";
@@ -47,8 +48,7 @@ export default async function UnsubscribePage({ params, searchParams }: Unsubscr
             href="https://www.quantifyterminal.com"
             aria-label="Quantify Terminal"
           >
-            <span>Quantify</span>
-            <span>Terminal</span>
+            <Wordmark size="large" />
           </a>
         </div>
         <div className="auth__header">

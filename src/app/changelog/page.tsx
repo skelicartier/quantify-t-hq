@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { Wordmark } from "@/components/brand/wordmark";
 import { StatusPill, type PillTone } from "@/components/ui/status-pill";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readPublicChangelog, type PublicChangelog } from "@/lib/api/knowledge";
@@ -31,8 +32,7 @@ export default async function PublicChangelogPage() {
           href="https://www.quantifyterminal.com"
           aria-label="Quantify Terminal"
         >
-          <span>Quantify</span>
-          <span>Terminal</span>
+          <Wordmark size="large" />
         </a>
         <span className="status-public__title">Changelog</span>
       </header>

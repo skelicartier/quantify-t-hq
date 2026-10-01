@@ -1194,7 +1194,7 @@ const routes: Array<{
       if (member.enrolled) return refuse(403, "forbidden");
       return ok({
         secret: "MOCKSECRETBASE32AAAA",
-        otpauth_uri: `otpauth://totp/Quantify%20HQ:${encodeURIComponent(member.email)}?secret=MOCKSECRETBASE32AAAA&issuer=Quantify%20HQ`,
+        otpauth_uri: `otpauth://totp/Quantify%20Terminal%20HQ:${encodeURIComponent(member.email)}?secret=MOCKSECRETBASE32AAAA&issuer=Quantify%20Terminal%20HQ`,
       });
     },
   },
@@ -1383,7 +1383,7 @@ const routes: Array<{
         return refuse(400, "malformed_request", { reason: "at most 10 passkeys" });
       return ok({
         ...mintPasskeyChallenge(found.member.id),
-        rp: { id: "localhost", name: "Quantify HQ" },
+        rp: { id: "localhost", name: "Quantify Terminal HQ" },
         user: {
           id: Buffer.from(found.member.id).toString("base64url"),
           name: found.member.email,

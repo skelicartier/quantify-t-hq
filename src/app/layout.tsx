@@ -23,8 +23,8 @@ const jetbrainsMono = localFont({
   adjustFontFallback: false,
 });
 
-// The wordmark's face ("quantify terminal." on letterheads and printed pages), 600 and
-// the 700 full stop. Not preloaded: most screens never draw it.
+// The wordmark's face ("quantify terminal." at the top of every screen and on every
+// document), 600 and the 700 full stop. Preloaded: the rail draws it on every page.
 const poppins = localFont({
   src: [
     { path: "./fonts/poppins-latin-600.woff2", weight: "600", style: "normal" },
@@ -32,14 +32,13 @@ const poppins = localFont({
   ],
   display: "swap",
   variable: "--font-wordmark",
-  preload: false,
 });
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://hq.quantifyterminal.com"),
   title: {
     default: "Quantify Terminal HQ",
-    template: "%s | Quantify HQ",
+    template: "%s | Quantify Terminal HQ",
   },
   description: "The staff portal for Quantify Terminal.",
   robots: {

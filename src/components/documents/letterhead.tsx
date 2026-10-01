@@ -1,13 +1,5 @@
+import { Wordmark } from "@/components/brand/wordmark";
 import type { Letterhead as LetterheadData } from "@/lib/api/company";
-
-/** "quantify terminal." — the wordmark, lowercase, the full stop heavier and in the brand purple. */
-export function Wordmark({ size = "default" }: { size?: "default" | "small" }) {
-  return (
-    <span className={`wordmark wordmark--${size}`} translate="no">
-      quantify terminal<span className="wordmark__dot">.</span>
-    </span>
-  );
-}
 
 /**
  * The company's letterhead: the wordmark alone on the left — no symbol beside it on any

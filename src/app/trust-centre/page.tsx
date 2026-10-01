@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { Wordmark } from "@/components/brand/wordmark";
 import { requestDocumentAction } from "@/app/trust-centre/actions";
 import { DocumentRequestForm } from "@/components/trust/document-request-form";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
@@ -34,8 +35,7 @@ export default async function TrustCentrePage() {
           href="https://www.quantifyterminal.com"
           aria-label="Quantify Terminal"
         >
-          <span>Quantify</span>
-          <span>Terminal</span>
+          <Wordmark size="large" />
         </a>
         <span className="status-public__title">Trust centre</span>
       </header>

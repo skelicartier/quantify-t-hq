@@ -411,47 +411,9 @@
     color: var(--text);
   }
 
-  .brand__mark {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    flex: 0 0 auto;
-  }
-
-  .brand__mark-img {
-    width: 26px;
-    height: 26px;
-  }
-
-  .brand__mark-img--light,
-  .shell[data-theme="light"] .brand__mark-img--dark {
+  /* No room for the wordmark in a collapsed rail; Home is one row below. */
+  .rail[data-collapsed] .brand {
     display: none;
-  }
-
-  .shell[data-theme="light"] .brand__mark-img--light {
-    display: block;
-  }
-
-  .brand__name {
-    display: flex;
-    gap: 6px;
-    line-height: 1;
-    white-space: nowrap;
-  }
-
-  .brand__name strong,
-  .brand__name span {
-    color: var(--text);
-    font-family: var(--font-heading);
-    font-size: 11.5px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-  }
-
-  .brand__name span {
-    color: var(--quiet);
   }
 
   .shell {
@@ -3306,29 +3268,16 @@
     justify-content: center;
   }
 
+  /* The wordmark as a link: the wordmark sets its own face, size and colour. */
   .auth__wordmark {
     display: inline-flex;
-    align-items: baseline;
-    gap: 0.6em;
     color: var(--text);
-    font-family: var(--font-heading);
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.24em;
-    text-transform: uppercase;
     text-decoration: none;
   }
 
-  .auth__wordmark span {
-    /* Both words carry the same weight, size and colour: one mark, not a name and a tagline. */
-    color: inherit;
-    font: inherit;
-    letter-spacing: inherit;
-  }
-
-  .auth__wordmark:hover,
-  .auth__wordmark:focus-visible {
-    color: var(--accent);
+  .auth__wordmark:hover .wordmark,
+  .auth__wordmark:focus-visible .wordmark {
+    opacity: 0.82;
   }
 
   .auth__header {
@@ -10824,12 +10773,21 @@
     font-weight: 600;
     letter-spacing: -0.01em;
     line-height: 1;
+    text-transform: none;
     color: var(--text);
     white-space: nowrap;
   }
 
   .wordmark--small {
-    font-size: 15px;
+    font-size: 16px;
+  }
+
+  .wordmark--rail {
+    font-size: 19px;
+  }
+
+  .wordmark--large {
+    font-size: 26px;
   }
 
   .wordmark__dot {

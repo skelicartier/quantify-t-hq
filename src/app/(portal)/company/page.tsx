@@ -3,7 +3,8 @@ import { updateCompanyAction } from "@/app/(portal)/company/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
 import { CompanyForm } from "@/components/company/company-form";
 import { DocumentTools } from "@/components/documents/document-tools";
-import { Letterhead, Wordmark } from "@/components/documents/letterhead";
+import { Wordmark } from "@/components/brand/wordmark";
+import { Letterhead } from "@/components/documents/letterhead";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
@@ -193,7 +194,7 @@ export default async function CompanyPage() {
 
         <RecordSection id="brand" title="The brand">
           <div className="paper paper--brand">
-            <Wordmark />
+            <Wordmark size="large" />
           </div>
           <dl className="brand-rules">
             {BRAND_RULES.map((rule) => (

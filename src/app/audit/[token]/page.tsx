@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { Wordmark } from "@/components/brand/wordmark";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { AUDIT_TOKEN, readAuditView, type AuditView } from "@/lib/api/controls";
 import { formatAbsolute, formatDate } from "@/lib/format";
@@ -46,8 +47,7 @@ export default async function AuditPage({ params }: { params: Params }) {
           href="https://www.quantifyterminal.com"
           aria-label="Quantify Terminal"
         >
-          <span>Quantify</span>
-          <span>Terminal</span>
+          <Wordmark size="large" />
         </a>
         <span className="status-public__title">Controls</span>
       </header>
