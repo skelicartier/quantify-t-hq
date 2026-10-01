@@ -1,7 +1,7 @@
 import "server-only";
 
 import * as fontkitModule from "@pdf-lib/fontkit";
-import { PDFDocument, rgb, type PDFFont, type PDFImage, type PDFPage, type RGB } from "pdf-lib";
+import { PDFDocument, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 
 import type { Letterhead } from "@/lib/api/company";
 import type { DocumentAssets } from "@/lib/documents/assets";
@@ -250,7 +250,6 @@ export async function buildTablePdf(
     mark: await face(assets.wordmark),
     markDot: await face(assets.wordmarkDot),
   };
-  const mark: PDFImage = await doc.embedPng(assets.mark);
   const set = new Typesetter(faces.text);
   const head = input.letterhead;
 
@@ -354,8 +353,8 @@ export async function buildTablePdf(
 
   // -- the first page: the letterhead, the title and what the file is ------------------
   newPage();
-  page.drawImage(mark, { x: MARGIN.x, y: y - 28, width: 28, height: 28 });
-  drawWordmark(page, faces, MARGIN.x + 36, y - 19, 15);
+  // The wordmark alone: no symbol beside it on any document.
+  drawWordmark(page, faces, MARGIN.x, y - 17, 17);
   const block: Array<{ text: string; face: Face; size: number; color: RGB }> = [];
   block.push({ text: head.name, face: faces.bold, size: 8.5, color: INK });
   for (const text of [

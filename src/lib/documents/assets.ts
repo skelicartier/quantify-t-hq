@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
- * The typefaces and the mark every PDF carries, read once per server instance. The
+ * The typefaces every PDF carries, read once per server instance. The
  * fonts are static instances of the portal's faces (Space Grotesk, JetBrains Mono) and
  * the wordmark's (Poppins), cut to Latin, currency and punctuation — SIL OFL, licences
  * beside them in `assets/pdf-fonts`. `next.config.ts` traces the folder into the export
@@ -17,7 +17,6 @@ export type DocumentAssets = {
   monoBold: Uint8Array;
   wordmark: Uint8Array;
   wordmarkDot: Uint8Array;
-  mark: Uint8Array;
 };
 
 let cached: Promise<DocumentAssets> | null = null;
@@ -33,15 +32,13 @@ export function loadDocumentAssets(): Promise<DocumentAssets> {
       read(join(fonts, "JetBrainsMono-SemiBold.ttf")),
       read(join(fonts, "Poppins-SemiBold.ttf")),
       read(join(fonts, "Poppins-Bold.ttf")),
-      read(join(process.cwd(), "public", "brand", "mark-light.png")),
-    ]).then(([text, textBold, mono, monoBold, wordmark, wordmarkDot, mark]) => ({
+    ]).then(([text, textBold, mono, monoBold, wordmark, wordmarkDot]) => ({
       text,
       textBold,
       mono,
       monoBold,
       wordmark,
       wordmarkDot,
-      mark,
     }));
     // A failed read is not remembered: the next export tries again.
     cached.catch(() => {

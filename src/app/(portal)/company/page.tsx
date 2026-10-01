@@ -35,8 +35,8 @@ const BRAND_RULES = [
       "Lowercase “quantify terminal.” in Poppins 600; the full stop in 700 and purple #9810fa.",
   },
   {
-    label: "Mark",
-    value: "The Q in a rounded square: ink on paper and light screens, pale on dark.",
+    label: "On documents",
+    value: "The wordmark alone, with its purple full stop; never the Q symbol beside it.",
   },
   {
     label: "Type",

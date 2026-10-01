@@ -10,9 +10,10 @@ export function Wordmark({ size = "default" }: { size?: "default" | "small" }) {
 }
 
 /**
- * The company's letterhead: the mark and wordmark on the left, the particulars the law
- * asks a document to carry on the right — worked out by the service from the company
- * page, so the screen, the printed page and the PDF agree to the letter.
+ * The company's letterhead: the wordmark alone on the left — no symbol beside it on any
+ * document — and on the right the particulars the law asks a document to carry, worked
+ * out by the service from the company page, so the screen, the printed page and the PDF
+ * agree to the letter.
  */
 export function Letterhead({ head }: { head: LetterheadData }) {
   const lines = [
@@ -26,24 +27,6 @@ export function Letterhead({ head }: { head: LetterheadData }) {
   return (
     <div className="letterhead">
       <div className="letterhead__brand">
-        {/* Both marks ship: the pale one on the dark console, the ink one on the light
-            console and on paper. Plain img, so print never waits on the optimiser. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          className="letterhead__mark letterhead__mark--pale"
-          src="/brand/mark-dark.png"
-          alt=""
-          width={30}
-          height={30}
-        />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          className="letterhead__mark letterhead__mark--ink"
-          src="/brand/mark-light.png"
-          alt=""
-          width={30}
-          height={30}
-        />
         <Wordmark />
       </div>
       <address className="letterhead__particulars">

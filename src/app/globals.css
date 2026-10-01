@@ -10851,21 +10851,6 @@
     gap: 10px;
   }
 
-  .letterhead__mark {
-    display: block;
-    width: 30px;
-    height: 30px;
-  }
-
-  .letterhead__mark--ink,
-  .shell[data-theme="light"] .letterhead__mark--pale {
-    display: none;
-  }
-
-  .shell[data-theme="light"] .letterhead__mark--ink {
-    display: block;
-  }
-
   .letterhead__particulars {
     display: grid;
     gap: 2px;
@@ -10907,14 +10892,6 @@
     border: 1px solid var(--line);
     color: #0b0e17;
     background: #ffffff;
-  }
-
-  .paper .letterhead__mark--pale {
-    display: none;
-  }
-
-  .paper .letterhead__mark--ink {
-    display: block;
   }
 
   .paper--brand {
@@ -11198,14 +11175,6 @@
     margin: 0;
     color: #5c6270;
     font-size: 8pt;
-  }
-
-  .letterhead__mark--pale {
-    display: none !important;
-  }
-
-  .letterhead__mark--ink {
-    display: block !important;
   }
 
   a {
