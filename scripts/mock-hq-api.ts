@@ -36375,12 +36375,1470 @@ routes.push(
   },
 );
 
+// --- references and business reviews (mirrors account_api/hq/references.py and relationship_routes.py) ---
+
+type ReferenceRow = {
+  id: string;
+  company_id: string;
+  person_id: string | null;
+  contact_name: string;
+  kinds: string[];
+  scope: string;
+  given_on: string;
+  expires_on: string;
+  evidence: string;
+  calls_per_quarter: number;
+  status: string;
+  withdrawn_on: string | null;
+  withdrawn_reason: string;
+  recorded_by: string;
+  created_at: string;
+};
+type ReferenceUseRow = {
+  id: string;
+  reference_id: string;
+  kind: string;
+  deal_id: string | null;
+  used_on: string;
+  note: string;
+  staff_id: string;
+};
+type BusinessReviewRow = {
+  id: string;
+  company_id: string;
+  period_start: string;
+  period_end: string;
+  title: string;
+  snapshot: Record<string, unknown>;
+  snapshot_at: string;
+  goals: string;
+  wins: string;
+  risks: string;
+  actions: string;
+  attendees: string;
+  held_on: string | null;
+  status: string;
+  finalised_by: string | null;
+  finalised_at: string | null;
+  created_by: string;
+  updated_at: string;
+};
+
+const REF_KINDS: Record<string, string> = {
+  call: "Reference calls",
+  logo: "Logo on our site and decks",
+  quote: "Quoted by name",
+  case_study: "A case study",
+};
+const REF_PUBLIC: Record<string, string> = {
+  logo: "logo",
+  quote: "quote",
+  case_study: "case study",
+};
+const referenceRows: ReferenceRow[] = [];
+const referenceUses: ReferenceUseRow[] = [];
+const businessReviews: BusinessReviewRow[] = [];
+const relBad = (details: Record<string, string>) => refuse(400, "malformed_request", details);
+
+function relQuarter(day: string): [string, string] {
+  const year = Number(day.slice(0, 4));
+  const first = 3 * Math.floor((Number(day.slice(5, 7)) - 1) / 3) + 1;
+  const start = `${year}-${String(first).padStart(2, "0")}-01`;
+  return [start, addDaysIso(addMonthsIso(start, 3), -1)];
+}
+const relQuarterLabel = (day: string) =>
+  `Q${Math.floor((Number(day.slice(5, 7)) - 1) / 3) + 1} ${day.slice(0, 4)}`;
+function relLastQuarter(day: string): [string, string] {
+  return relQuarter(addDaysIso(relQuarter(day)[0], -1));
+}
+function relTitle(start: string, end: string) {
+  const [qs, qe] = relQuarter(start);
+  if (qs === start && qe === end) return `Business review, ${relQuarterLabel(start)}`;
+  return `Business review, ${pvDay(start)} to ${pvDay(end)}`;
+}
+function relState(row: ReferenceRow) {
+  if (row.status === "withdrawn") return "withdrawn";
+  const day = todayIso();
+  if (row.expires_on < day) return "expired";
+  if (finDays(day, row.expires_on) <= 30) return "expiring";
+  return "active";
+}
+function relCallsIn(uses: ReferenceUseRow[], day: string) {
+  const [start, end] = relQuarter(day);
+  return uses.filter((use) => use.kind === "call" && use.used_on >= start && use.used_on <= end)
+    .length;
+}
+function relView(row: ReferenceRow) {
+  const uses = referenceUses.filter((use) => use.reference_id === row.id);
+  const person = row.person_id ? people.find((item) => item.id === row.person_id) : undefined;
+  return {
+    reference_id: row.id,
+    company_id: row.company_id,
+    company_name: companies.find((item) => item.id === row.company_id)?.name ?? "",
+    person_id: row.person_id,
+    person_name: person?.full_name || row.contact_name,
+    kinds: row.kinds,
+    kind_labels: row.kinds.map((kind) => REF_KINDS[kind] ?? kind),
+    scope: row.scope,
+    given_on: row.given_on,
+    expires_on: row.expires_on,
+    evidence: row.evidence,
+    state: relState(row),
+    calls_per_quarter: row.calls_per_quarter,
+    calls_this_quarter: relCallsIn(uses, todayIso()),
+    uses: uses.length,
+    last_used_on:
+      uses
+        .map((use) => use.used_on)
+        .sort()
+        .at(-1) ?? null,
+    withdrawn_on: row.withdrawn_on,
+    withdrawn_reason: row.withdrawn_reason,
+    recorded_by_name: nameOf(row.recorded_by),
+    created_at: row.created_at,
+  };
+}
+function relDetail(row: ReferenceRow) {
+  return {
+    reference: relView(row),
+    uses: referenceUses
+      .filter((use) => use.reference_id === row.id)
+      .sort((a, b) => b.used_on.localeCompare(a.used_on))
+      .map((use) => ({
+        kind: use.kind,
+        kind_label: REF_KINDS[use.kind] ?? use.kind,
+        deal_id: use.deal_id,
+        deal_name: use.deal_id ? (deals.find((deal) => deal.id === use.deal_id)?.name ?? "") : "",
+        used_on: use.used_on,
+        note: use.note,
+        staff_name: nameOf(use.staff_id),
+      })),
+  };
+}
+function relKinds(value: unknown): string[] | null {
+  const raw = Array.isArray(value) ? value : String(value ?? "").split(",");
+  const chosen = raw.map((item) => String(item).trim()).filter(Boolean);
+  if (!chosen.length || chosen.some((kind) => !(kind in REF_KINDS))) return null;
+  return Object.keys(REF_KINDS).filter((kind) => chosen.includes(kind));
+}
+function relDates(
+  body: Record<string, unknown>,
+): [string, string] | { status: number; body: unknown } {
+  const given = String(body.given_on || todayIso());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(given)) return relBad({ given_on: "a date, YYYY-MM-DD" });
+  if (given > todayIso()) return relBad({ given_on: "cannot be in the future" });
+  const expires = String(body.expires_on || addDaysIso(given, 365));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expires) || expires <= given || finDays(given, expires) > 3 * 366)
+    return relBad({ expires_on: "after the day it was given, and within three years" });
+  return [given, expires];
+}
+
+function relSnapshot(companyId: string, start: string, end: string) {
+  const asOf = end < todayIso() ? end : todayIso();
+  const rows = (csActiveContracts().get(companyId) ?? []).filter((row) => row.starts_on <= asOf);
+  const seats = rows.reduce((total, row) => total + row.seats, 0);
+  const logins = csLogins.get(companyId) ?? [];
+  const next = rows
+    .filter((row) => row.renews_on)
+    .sort((a, b) => a.renews_on!.localeCompare(b.renews_on!))[0];
+  const accounts = new Set(
+    people
+      .filter((person) => person.company_id === companyId && person.account_user_id)
+      .map((person) => person.account_user_id),
+  );
+  let ticketFigures: Record<string, unknown> | null = null;
+  let ticketsNote = "";
+  if (!accounts.size)
+    ticketsNote = "No product account is linked to this firm, so its tickets cannot be found.";
+  else {
+    const mine = tickets.filter((row) => accounts.has(row.account_id));
+    const waits = mine
+      .filter(
+        (row) =>
+          row.created_at.slice(0, 10) >= start &&
+          row.created_at.slice(0, 10) <= asOf &&
+          row.first_replied_at,
+      )
+      .map((row) => (Date.parse(row.first_replied_at!) - Date.parse(row.created_at)) / 3_600_000)
+      .sort((a, b) => a - b);
+    const median = waits.length
+      ? waits.length % 2
+        ? waits[(waits.length - 1) / 2]!
+        : (waits[waits.length / 2 - 1]! + waits[waits.length / 2]!) / 2
+      : null;
+    ticketFigures = {
+      opened: mine.filter(
+        (row) => row.created_at.slice(0, 10) >= start && row.created_at.slice(0, 10) <= asOf,
+      ).length,
+      resolved: mine.filter(
+        (row) =>
+          row.resolved_at &&
+          row.resolved_at.slice(0, 10) >= start &&
+          row.resolved_at.slice(0, 10) <= asOf,
+      ).length,
+      open_at_end: mine.filter(
+        (row) =>
+          row.created_at.slice(0, 10) <= asOf &&
+          (!row.resolved_at || row.resolved_at.slice(0, 10) > asOf),
+      ).length,
+      answered: waits.length,
+      median_first_reply_hours: median === null ? null : Math.round(median * 10) / 10,
+      slowest_first_reply_hours: waits.length ? Math.round(waits.at(-1)! * 10) / 10 : null,
+    };
+  }
+  const money: Record<string, { opening: number; closing: number; moves: Record<string, number> }> =
+    {};
+  for (const row of movements.filter((item) => item.company_id === companyId)) {
+    const entry = (money[row.currency] ??= { opening: 0, closing: 0, moves: {} });
+    if (row.effective_on < start) entry.opening += row.cents / 100;
+    if (row.effective_on <= asOf) entry.closing += row.cents / 100;
+    if (row.effective_on >= start && row.effective_on <= asOf)
+      entry.moves[row.kind] = (entry.moves[row.kind] ?? 0) + row.cents / 100;
+  }
+  for (const entry of Object.values(money)) {
+    entry.opening = finRound(entry.opening);
+    entry.closing = finRound(entry.closing);
+    for (const key of Object.keys(entry.moves)) entry.moves[key] = finRound(entry.moves[key]!);
+  }
+  const asks = featureAsks.filter((ask) => ask.company_id === companyId);
+  const inPeriod = asks.filter(
+    (ask) => ask.recorded_at.slice(0, 10) >= start && ask.recorded_at.slice(0, 10) <= asOf,
+  );
+  const askedIds = new Set(asks.map((ask) => ask.request_id));
+  const onboarding = onboardings
+    .filter((row) => row.company_id === companyId)
+    .sort((a, b) => a.starts_on.localeCompare(b.starts_on))
+    .at(-1);
+  return {
+    period_start: start,
+    period_end: end,
+    as_of: asOf,
+    seats_paid: seats,
+    usage: csUsage(seats, logins),
+    usage_read_on: todayIso(),
+    signals: csSignals(
+      seats,
+      logins,
+      next?.renews_on ?? null,
+      next?.renewal_status ?? "",
+      csLastContact(companyId),
+    ).map((item) => ({ label: item.label, rule: item.rule, evidence: item.evidence })),
+    money: Object.fromEntries(Object.entries(money).sort(([a], [b]) => a.localeCompare(b))),
+    tickets: ticketFigures,
+    tickets_note: ticketsNote,
+    asks: {
+      in_period: inPeriod.length,
+      blockers: inPeriod.filter((ask) => ask.importance === "blocker").length,
+      requests: [
+        ...new Set(
+          inPeriod
+            .map((ask) => featureRequests.find((row) => row.id === ask.request_id)?.title ?? "")
+            .filter(Boolean),
+        ),
+      ].sort(),
+    },
+    shipped: featureRequests
+      .filter(
+        (row) =>
+          askedIds.has(row.id) &&
+          row.status === "shipped" &&
+          row.shipped_on &&
+          row.shipped_on >= start &&
+          row.shipped_on <= asOf,
+      )
+      .map((row) => ({ title: row.title, shipped_on: row.shipped_on! })),
+    renewal:
+      next && next.renews_on
+        ? {
+            renews_on: next.renews_on,
+            notice_date: csNoticeDate(next),
+            status: next.renewal_status ?? "",
+          }
+        : null,
+    onboarding: onboarding
+      ? {
+          starts_on: onboarding.starts_on,
+          live_on: onboarding.live_on,
+          durations: csOnboardingView(onboarding).durations,
+        }
+      : null,
+  };
+}
+function relReviewView(
+  row: BusinessReviewRow,
+  headers: Record<string, string | string[] | undefined>,
+  full: boolean,
+) {
+  const base = {
+    review_id: row.id,
+    company_id: row.company_id,
+    company_name: companies.find((item) => item.id === row.company_id)?.name ?? "",
+    period_start: row.period_start,
+    period_end: row.period_end,
+    title: row.title,
+    status: row.status,
+    held_on: row.held_on,
+    snapshot_at: row.snapshot_at,
+    finalised_by_name: row.finalised_by ? nameOf(row.finalised_by) : "",
+    finalised_at: row.finalised_at,
+    created_by_name: nameOf(row.created_by),
+    updated_at: row.updated_at,
+  };
+  if (!full) return base;
+  return {
+    ...base,
+    snapshot: hasCap(headers, "revenue:read") ? row.snapshot : { ...row.snapshot, money: null },
+    goals: row.goals,
+    wins: row.wins,
+    risks: row.risks,
+    actions: row.actions,
+    attendees: row.attendees,
+    can_edit: hasCap(headers, "crm:write"),
+  };
+}
+
+function seedRelationships() {
+  referenceRows.length = 0;
+  referenceUses.length = 0;
+  businessReviews.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const SALES = "aa000000-0000-4000-8000-00000000000c";
+  const MERIDIAN = "c0000000-0000-4000-8000-000000000001";
+  const day = todayIso();
+  referenceRows.push(
+    {
+      id: "af000001-0000-4000-8000-000000000000",
+      company_id: MERIDIAN,
+      person_id: "p0000000-0000-4000-8000-000000000001",
+      contact_name: "",
+      kinds: ["call", "logo", "quote"],
+      scope: "Calls with hedge funds under 50 people; quote as approved in the email.",
+      given_on: addDaysIso(day, -200),
+      expires_on: addDaysIso(day, 165),
+      evidence: "Elena's email of consent, in the Meridian folder",
+      calls_per_quarter: 2,
+      status: "active",
+      withdrawn_on: null,
+      withdrawn_reason: "",
+      recorded_by: OWNER,
+      created_at: agoIso(24 * 200),
+    },
+    {
+      id: "af000002-0000-4000-8000-000000000000",
+      company_id: "c0000000-0000-4000-8000-000000000004",
+      person_id: null,
+      contact_name: "Their head of research",
+      kinds: ["call"],
+      scope: "",
+      given_on: addDaysIso(day, -350),
+      expires_on: addDaysIso(day, 15),
+      evidence: "Signed reference form",
+      calls_per_quarter: 1,
+      status: "active",
+      withdrawn_on: null,
+      withdrawn_reason: "",
+      recorded_by: SALES,
+      created_at: agoIso(24 * 350),
+    },
+  );
+  referenceUses.push({
+    id: randomUUID(),
+    reference_id: "af000001-0000-4000-8000-000000000000",
+    kind: "call",
+    deal_id: "d0000000-0000-4000-8000-000000000002",
+    used_on: addDaysIso(relQuarter(day)[0], 3) > day ? day : addDaysIso(relQuarter(day)[0], 3),
+    note: "Spoke to their CIO about the overnight brief",
+    staff_id: SALES,
+  });
+  const [start, end] = relLastQuarter(day);
+  businessReviews.push({
+    id: "b7100001-0000-4000-8000-000000000000",
+    company_id: MERIDIAN,
+    period_start: start,
+    period_end: end,
+    title: relTitle(start, end),
+    snapshot: relSnapshot(MERIDIAN, start, end),
+    snapshot_at: agoIso(30),
+    goals: "Roll the overnight brief out to the credit desk.",
+    wins: "Two desks live; first-reply times under an hour.",
+    risks: "Their renewal is called but not signed.",
+    actions: "Book a credit-desk demo; send the Q4 roadmap.",
+    attendees: "Elena Marsh (CIO), The Owner",
+    held_on: null,
+    status: "draft",
+    finalised_by: null,
+    finalised_at: null,
+    created_by: OWNER,
+    updated_at: agoIso(28),
+  });
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/references",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const companyId = String(query.company_id ?? "");
+      const kind = String(query.kind ?? "");
+      if (kind && !(kind in REF_KINDS)) return relBad({ kind: Object.keys(REF_KINDS).join(", ") });
+      const counts = { active: 0, expiring: 0, expired: 0, withdrawn: 0 };
+      const order: Record<string, number> = { active: 0, expiring: 1, expired: 2, withdrawn: 3 };
+      const views = referenceRows
+        .filter((row) => !companyId || row.company_id === companyId)
+        .map(relView)
+        .filter((view) => {
+          counts[view.state as keyof typeof counts] += 1;
+          return !kind || view.kinds.includes(kind);
+        })
+        .sort(
+          (a, b) =>
+            (order[a.state] ?? 9) - (order[b.state] ?? 9) ||
+            a.calls_this_quarter - b.calls_this_quarter ||
+            a.company_name.toLowerCase().localeCompare(b.company_name.toLowerCase()),
+        );
+      return ok({
+        references: views,
+        counts,
+        kinds: Object.entries(REF_KINDS).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/references/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const companyId = String(body.company_id ?? "").toLowerCase();
+      if (!companies.some((row) => row.id === companyId))
+        return relBad({ company_id: "which firm" });
+      const personId = String(body.person_id ?? "").toLowerCase() || null;
+      const contact = String(body.contact_name ?? "")
+        .trim()
+        .slice(0, 160);
+      if (personId) {
+        const person = people.find((row) => row.id === personId);
+        if (!person || person.company_id !== companyId)
+          return relBad({ person_id: "someone at this firm" });
+      } else if (!contact) return relBad({ contact_name: "who at the firm agreed" });
+      const evidence = String(body.evidence ?? "")
+        .trim()
+        .slice(0, 400);
+      if (!evidence)
+        return relBad({ evidence: "where the yes is written down — an email, a signed form" });
+      const kinds = relKinds(body.kinds);
+      if (!kinds) return relBad({ kinds: `one or more of ${Object.keys(REF_KINDS).join(", ")}` });
+      const dates = relDates(body);
+      if (!Array.isArray(dates)) return dates;
+      const calls = Number(body.calls_per_quarter ?? 2);
+      if (!Number.isInteger(calls) || calls < 0 || calls > 12)
+        return relBad({ calls_per_quarter: "0 to 12" });
+      const me = caller(headers)?.member.id ?? "";
+      const row: ReferenceRow = {
+        id: randomUUID(),
+        company_id: companyId,
+        person_id: personId,
+        contact_name: contact,
+        kinds,
+        scope: String(body.scope ?? "")
+          .trim()
+          .slice(0, 1000),
+        given_on: dates[0],
+        expires_on: dates[1],
+        evidence,
+        calls_per_quarter: calls,
+        status: "active",
+        withdrawn_on: null,
+        withdrawn_reason: "",
+        recorded_by: me,
+        created_at: now(),
+      };
+      referenceRows.push(row);
+      audit("reference.recorded", me || null, "company", companyId);
+      return ok({ reference: relView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/references/{reference_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params }) => {
+      const row = referenceRows.find((item) => item.id === params.reference_id);
+      if (!row) return refuse(404, "not_found");
+      return ok(relDetail(row));
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/references/{reference_id}/act",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const row = referenceRows.find((item) => item.id === params.reference_id);
+      if (!row) return refuse(404, "not_found");
+      const me = caller(headers)?.member.id ?? "";
+      const action = String(body.action ?? "");
+      const extra: Record<string, unknown> = {};
+      if (action === "use") {
+        const kind = String(body.kind ?? "");
+        if (!(kind in REF_KINDS)) return relBad({ kind: Object.keys(REF_KINDS).join(", ") });
+        const usedOn = String(body.used_on || todayIso());
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(usedOn)) return relBad({ used_on: "a date, YYYY-MM-DD" });
+        if (usedOn > todayIso()) return relBad({ used_on: "cannot be in the future" });
+        const dealId = String(body.deal_id ?? "").toLowerCase() || null;
+        if (dealId && !deals.some((deal) => deal.id === dealId))
+          return relBad({ deal_id: "not a deal" });
+        const uses = referenceUses.filter((use) => use.reference_id === row.id);
+        let why = "";
+        if (row.status === "withdrawn") why = "the firm withdrew its consent";
+        else if (usedOn > row.expires_on)
+          why = `the consent ran out on ${row.expires_on}; renew it first`;
+        else if (usedOn < row.given_on) why = "that is before the firm agreed";
+        else if (!row.kinds.includes(kind))
+          why = `the firm has not agreed to ${(REF_KINDS[kind] ?? kind).toLowerCase()}`;
+        else if (kind === "call") {
+          const asked = relCallsIn(uses, usedOn);
+          if (asked >= row.calls_per_quarter)
+            why = `asked ${asked} time${asked === 1 ? "" : "s"} in ${relQuarterLabel(usedOn)}; the firm's limit is ${row.calls_per_quarter} a quarter — ask another reference`;
+        }
+        if (why) return relBad({ kind: why });
+        referenceUses.push({
+          id: randomUUID(),
+          reference_id: row.id,
+          kind,
+          deal_id: dealId,
+          used_on: usedOn,
+          note: String(body.note ?? "")
+            .trim()
+            .slice(0, 400),
+          staff_id: me,
+        });
+      } else if (action === "withdraw") {
+        if (row.status === "withdrawn") return relBad({ status: "already withdrawn" });
+        const reason = String(body.reason ?? "")
+          .trim()
+          .slice(0, 400);
+        if (!reason) return relBad({ reason: "what the firm said" });
+        Object.assign(row, {
+          status: "withdrawn",
+          withdrawn_on: todayIso(),
+          withdrawn_reason: reason,
+        });
+        const shown = row.kinds.filter((kind) => kind in REF_PUBLIC);
+        if (shown.length) {
+          const firm = companies.find((item) => item.id === row.company_id)?.name ?? "the firm";
+          tasks.push({
+            id: randomUUID(),
+            title:
+              `Take down the ${shown.map((kind) => REF_PUBLIC[kind]).join(", ")} for ${firm}`.slice(
+                0,
+                200,
+              ),
+            body: `The firm withdrew its consent on ${todayIso()}: ${reason}`,
+            status: "open",
+            priority: "high",
+            due_on: addDaysIso(todayIso(), 7),
+            assignee_staff_id: me,
+            company_id: row.company_id,
+            person_id: row.person_id ?? "",
+            deal_id: "",
+            lead_id: "",
+            ticket_id: "",
+            origin: "reference",
+            completed_at: null,
+            created_at: now(),
+          });
+          extra.task_created = true;
+        }
+      } else if (action === "renew") {
+        const evidence = String(body.evidence ?? "")
+          .trim()
+          .slice(0, 400);
+        if (!evidence) return relBad({ evidence: "where the new yes is written down" });
+        const dates = relDates(body);
+        if (!Array.isArray(dates)) return dates;
+        if ("kinds" in body) {
+          const kinds = relKinds(body.kinds);
+          if (!kinds)
+            return relBad({ kinds: `one or more of ${Object.keys(REF_KINDS).join(", ")}` });
+          row.kinds = kinds;
+        }
+        Object.assign(row, {
+          given_on: dates[0],
+          expires_on: dates[1],
+          evidence,
+          status: "active",
+          withdrawn_on: null,
+          withdrawn_reason: "",
+        });
+      } else if (action === "edit") {
+        let changed = false;
+        if ("kinds" in body) {
+          const kinds = relKinds(body.kinds);
+          if (!kinds)
+            return relBad({ kinds: `one or more of ${Object.keys(REF_KINDS).join(", ")}` });
+          changed ||= kinds.join() !== row.kinds.join();
+          row.kinds = kinds;
+        }
+        for (const [name, limit] of [
+          ["scope", 1000],
+          ["contact_name", 160],
+        ] as const) {
+          if (name in body) {
+            const value = String(body[name] ?? "")
+              .trim()
+              .slice(0, limit);
+            changed ||= value !== row[name];
+            row[name] = value;
+          }
+        }
+        if ("evidence" in body) {
+          const evidence = String(body.evidence ?? "")
+            .trim()
+            .slice(0, 400);
+          if (!evidence) return relBad({ evidence: "cannot be empty" });
+          changed ||= evidence !== row.evidence;
+          row.evidence = evidence;
+        }
+        if ("calls_per_quarter" in body) {
+          const calls = Number(body.calls_per_quarter);
+          if (!Number.isInteger(calls) || calls < 0 || calls > 12)
+            return relBad({ calls_per_quarter: "0 to 12" });
+          changed ||= calls !== row.calls_per_quarter;
+          row.calls_per_quarter = calls;
+        }
+        if ("expires_on" in body) {
+          const expires = String(body.expires_on ?? "");
+          if (
+            !/^\d{4}-\d{2}-\d{2}$/.test(expires) ||
+            expires <= row.given_on ||
+            finDays(row.given_on, expires) > 3 * 366
+          )
+            return relBad({ expires_on: "after the day it was given, and within three years" });
+          changed ||= expires !== row.expires_on;
+          row.expires_on = expires;
+        }
+        if (!changed) return relBad({ fields: "nothing to change" });
+      } else return relBad({ action: "use, withdraw, renew, edit" });
+      audit(`reference.${action}`, me || null, "company", row.company_id);
+      return ok({ ...relDetail(row), ...extra });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/companies/{company_id}/reviews",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params, headers }) => {
+      if (!companies.some((row) => row.id === params.company_id)) return refuse(404, "not_found");
+      const [start, end] = relLastQuarter(todayIso());
+      return ok({
+        reviews: businessReviews
+          .filter((row) => row.company_id === params.company_id)
+          .sort((a, b) => b.period_end.localeCompare(a.period_end))
+          .map((row) => relReviewView(row, headers, false)),
+        suggested: { period_start: start, period_end: end, title: relTitle(start, end) },
+        can_create: hasCap(headers, "crm:write"),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/{company_id}/reviews/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const companyId = String(params.company_id);
+      if (!companies.some((row) => row.id === companyId)) return refuse(404, "not_found");
+      const [defaultStart, defaultEnd] = relLastQuarter(todayIso());
+      const start = String(body.period_start || defaultStart);
+      const end = String(body.period_end || defaultEnd);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return relBad({ period_start: "a date, YYYY-MM-DD" });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return relBad({ period_end: "a date, YYYY-MM-DD" });
+      if (end < start) return relBad({ period_end: "on or after the start" });
+      if (start > todayIso()) return relBad({ period_start: "a period that has begun" });
+      if (finDays(start, end) > 366) return relBad({ period_end: "a year at most" });
+      const me = caller(headers)?.member.id ?? "";
+      const row: BusinessReviewRow = {
+        id: randomUUID(),
+        company_id: companyId,
+        period_start: start,
+        period_end: end,
+        title:
+          String(body.title ?? "")
+            .trim()
+            .slice(0, 160) || relTitle(start, end),
+        snapshot: relSnapshot(companyId, start, end),
+        snapshot_at: now(),
+        goals: "",
+        wins: "",
+        risks: "",
+        actions: "",
+        attendees: "",
+        held_on: null,
+        status: "draft",
+        finalised_by: null,
+        finalised_at: null,
+        created_by: me,
+        updated_at: now(),
+      };
+      businessReviews.push(row);
+      audit("business_review.created", me || null, "company", companyId);
+      return ok({ review: relReviewView(row, headers, true) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/reviews/{review_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params, headers }) => {
+      const row = businessReviews.find((item) => item.id === params.review_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({ review: relReviewView(row, headers, true) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/reviews/{review_id}/act",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const row = businessReviews.find((item) => item.id === params.review_id);
+      if (!row) return refuse(404, "not_found");
+      const action = String(body.action ?? "");
+      if (!["edit", "refresh", "finalise"].includes(action))
+        return relBad({ action: "edit, refresh, finalise" });
+      if (row.status === "final") return relBad({ status: "final: it is kept as it was held" });
+      const me = caller(headers)?.member.id ?? "";
+      if (action === "edit") {
+        let any = false;
+        if ("title" in body && !String(body.title ?? "").trim())
+          return relBad({ title: "cannot be empty" });
+        for (const [name, limit] of [
+          ["title", 160],
+          ["goals", 4000],
+          ["wins", 4000],
+          ["risks", 4000],
+          ["actions", 4000],
+          ["attendees", 1000],
+        ] as const) {
+          if (name in body) {
+            row[name] = String(body[name] ?? "")
+              .trim()
+              .slice(0, limit);
+            any = true;
+          }
+        }
+        if ("held_on" in body) {
+          const held = String(body.held_on ?? "").trim();
+          if (held && !/^\d{4}-\d{2}-\d{2}$/.test(held))
+            return relBad({ held_on: "a date, YYYY-MM-DD" });
+          if (held > todayIso()) return relBad({ held_on: "cannot be in the future" });
+          row.held_on = held || null;
+          any = true;
+        }
+        if (!any) return relBad({ fields: "nothing to change" });
+      } else if (action === "refresh") {
+        Object.assign(row, {
+          snapshot: relSnapshot(row.company_id, row.period_start, row.period_end),
+          snapshot_at: now(),
+        });
+      } else {
+        const held = String(body.held_on || row.held_on || "");
+        if (!held) return relBad({ held_on: "the day the review was held" });
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(held)) return relBad({ held_on: "a date, YYYY-MM-DD" });
+        if (held > todayIso()) return relBad({ held_on: "cannot be in the future" });
+        Object.assign(row, {
+          status: "final",
+          held_on: held,
+          finalised_by: me,
+          finalised_at: now(),
+        });
+      }
+      row.updated_at = now();
+      audit(`business_review.${action}`, me || null, "company", row.company_id);
+      return ok({ review: relReviewView(row, headers, true) });
+    },
+  },
+);
+
+// --- the changelog and the help centre (mirrors account_api/hq/knowledge.py and knowledge_routes.py) ---
+
+type EntryRow = {
+  id: string;
+  title: string;
+  body: string;
+  kind: string;
+  status: string;
+  published_on: string | null;
+  published_by: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+type EntryLinkRow = { id: string; entry_id: string; request_id: string; created_at: string };
+type ArticleRow = {
+  id: string;
+  title: string;
+  body: string;
+  category: string;
+  tags: string[];
+  status: string;
+  owner_staff_id: string | null;
+  review_every_days: number;
+  reviewed_on: string | null;
+  published_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+type ArticleLinkRow = {
+  id: string;
+  article_id: string;
+  ticket_id: string;
+  linked_by: string;
+  created_at: string;
+};
+
+const KB_KINDS: Record<string, string> = { new: "New", improved: "Improved", fixed: "Fixed" };
+const KB_CATEGORIES: Record<string, string> = {
+  getting_started: "Getting started",
+  data: "Data and coverage",
+  accounts: "Accounts and access",
+  billing: "Billing",
+  troubleshooting: "Troubleshooting",
+  other: "Other",
+};
+const changelogEntries: EntryRow[] = [];
+const entryLinks: EntryLinkRow[] = [];
+const helpArticles: ArticleRow[] = [];
+const articleLinks: ArticleLinkRow[] = [];
+const kbBad = (details: Record<string, string>) => refuse(400, "malformed_request", details);
+const kbTags = (raw: unknown) => {
+  const items = Array.isArray(raw) ? raw : String(raw ?? "").split(",");
+  const out: string[] = [];
+  for (const item of items) {
+    const tag = String(item)
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+      .join("-")
+      .slice(0, 30);
+    if (tag && !out.includes(tag)) out.push(tag);
+  }
+  return out;
+};
+
+function kbEntryView(row: EntryRow) {
+  return {
+    entry_id: row.id,
+    title: row.title,
+    body: row.body,
+    kind: row.kind,
+    kind_label: KB_KINDS[row.kind] ?? row.kind,
+    status: row.status,
+    published_on: row.published_on,
+    published_by_name: row.published_by ? nameOf(row.published_by) : "",
+    created_by_name: nameOf(row.created_by),
+    updated_at: row.updated_at,
+    requests: entryLinks
+      .filter((link) => link.entry_id === row.id)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map((link) => {
+        const request = featureRequests.find((item) => item.id === link.request_id);
+        const asks = featureAsks.filter((ask) => ask.request_id === link.request_id);
+        return {
+          request_id: link.request_id,
+          title: request?.title ?? "",
+          status: request?.status ?? "",
+          asks: asks.length,
+          not_told: asks.filter((ask) => !ask.notified_at).length,
+        };
+      }),
+  };
+}
+
+function kbReviewDue(row: ArticleRow): string | null {
+  if (row.status !== "published") return null;
+  const since = row.reviewed_on ?? row.published_at?.slice(0, 10) ?? null;
+  return since ? addDaysIso(since, row.review_every_days) : null;
+}
+
+function kbArticleView(row: ArticleRow, full: boolean) {
+  const due = kbReviewDue(row);
+  const links = articleLinks.filter((link) => link.article_id === row.id);
+  const base = {
+    article_id: row.id,
+    title: row.title,
+    category: row.category,
+    category_label: KB_CATEGORIES[row.category] ?? row.category,
+    tags: row.tags,
+    status: row.status,
+    owner_staff_id: row.owner_staff_id,
+    owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+    review_every_days: row.review_every_days,
+    reviewed_on: row.reviewed_on,
+    review_due_on: due,
+    review_due: Boolean(due && due <= todayIso()),
+    tickets: links.length,
+    published_at: row.published_at,
+    updated_at: row.updated_at,
+  };
+  if (!full) return base;
+  return {
+    ...base,
+    body: row.body,
+    linked_tickets: links
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map((link) => {
+        const ticket = tickets.find((item) => item.id === link.ticket_id);
+        return {
+          ticket_id: link.ticket_id,
+          subject: ticket?.subject ?? "",
+          status: ticket?.status ?? "",
+          linked_at: link.created_at,
+        };
+      }),
+    tickets_readable: true,
+  };
+}
+
+function seedKnowledge() {
+  changelogEntries.length = 0;
+  entryLinks.length = 0;
+  helpArticles.length = 0;
+  articleLinks.length = 0;
+  const OWNER = "aa000000-0000-4000-8000-00000000000a";
+  const SUPPORT = "aa000000-0000-4000-8000-00000000000d";
+  const day = todayIso();
+  changelogEntries.push(
+    {
+      id: "ab100001-0000-4000-8000-000000000000",
+      title: "Shared notes on a company",
+      body: "One research note per company that the whole desk edits, with who changed what.",
+      kind: "new",
+      status: "published",
+      published_on: addDaysIso(day, -12),
+      published_by: OWNER,
+      created_by: OWNER,
+      created_at: agoIso(24 * 14),
+      updated_at: agoIso(24 * 12),
+    },
+    {
+      id: "ab100002-0000-4000-8000-000000000000",
+      title: "Fixed-income coverage",
+      body: "Government bonds and credit alongside equities, ten years back, in the same filings workflow.",
+      kind: "new",
+      status: "draft",
+      published_on: null,
+      published_by: null,
+      created_by: OWNER,
+      created_at: agoIso(20),
+      updated_at: agoIso(20),
+    },
+  );
+  entryLinks.push(
+    {
+      id: randomUUID(),
+      entry_id: "ab100001-0000-4000-8000-000000000000",
+      request_id: "ce000004-0000-4000-8000-000000000000",
+      created_at: agoIso(24 * 14),
+    },
+    {
+      id: randomUUID(),
+      entry_id: "ab100002-0000-4000-8000-000000000000",
+      request_id: "ce000001-0000-4000-8000-000000000000",
+      created_at: agoIso(20),
+    },
+  );
+  const article = (row: Omit<ArticleRow, "created_by" | "created_at" | "updated_at">) =>
+    helpArticles.push({
+      ...row,
+      created_by: SUPPORT,
+      created_at: agoIso(24 * 200),
+      updated_at: agoIso(24 * 30),
+    });
+  article({
+    id: "ab200001-0000-4000-8000-000000000000",
+    title: "Why is a chart blank after the laptop wakes?",
+    body: "Charts reconnect when the app regains the network. If one stays blank, close and reopen the panel; if every panel is blank, restart the app and tell us the version.",
+    category: "troubleshooting",
+    tags: ["charts"],
+    status: "published",
+    owner_staff_id: SUPPORT,
+    review_every_days: 180,
+    reviewed_on: addDaysIso(day, -40),
+    published_at: agoIso(24 * 190),
+  });
+  article({
+    id: "ab200002-0000-4000-8000-000000000000",
+    title: "How do seats and invoices line up?",
+    body: "Each seat is a named person. Adding one mid-term is billed from the day it is added.",
+    category: "billing",
+    tags: ["billing"],
+    status: "published",
+    owner_staff_id: OWNER,
+    review_every_days: 180,
+    reviewed_on: addDaysIso(day, -200),
+    published_at: agoIso(24 * 240),
+  });
+  article({
+    id: "ab200003-0000-4000-8000-000000000000",
+    title: "Exporting on a fiscal calendar",
+    body: "",
+    category: "data",
+    tags: ["exports"],
+    status: "draft",
+    owner_staff_id: SUPPORT,
+    review_every_days: 180,
+    reviewed_on: null,
+    published_at: null,
+  });
+  const charts = tickets.find((row) => row.tags.includes("charts"));
+  if (charts)
+    articleLinks.push({
+      id: randomUUID(),
+      article_id: "ab200001-0000-4000-8000-000000000000",
+      ticket_id: charts.id,
+      linked_by: SUPPORT,
+      created_at: agoIso(24 * 2),
+    });
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/changelog",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers }) => {
+      const rows = [...changelogEntries].sort(
+        (a, b) =>
+          Number(a.status !== "draft") - Number(b.status !== "draft") ||
+          (b.published_on ?? "").localeCompare(a.published_on ?? "") ||
+          b.created_at.localeCompare(a.created_at),
+      );
+      return ok({
+        entries: rows.map(kbEntryView),
+        kinds: Object.entries(KB_KINDS).map(([value, label]) => ({ value, label })),
+        requests: featureRequests
+          .filter((row) => row.status !== "declined")
+          .map((row) => ({ request_id: row.id, title: row.title, status: row.status }))
+          .sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase())),
+        can_write: hasCap(headers, "crm:write"),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/changelog/create",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 160);
+      if (!title) return kbBad({ title: "what changed, in a line" });
+      const kind = String(body.kind || "new");
+      if (!(kind in KB_KINDS)) return kbBad({ kind: Object.keys(KB_KINDS).join(", ") });
+      const me = caller(headers)?.member.id ?? "";
+      const row: EntryRow = {
+        id: randomUUID(),
+        title,
+        body: String(body.body ?? "")
+          .trim()
+          .slice(0, 20_000),
+        kind,
+        status: "draft",
+        published_on: null,
+        published_by: null,
+        created_by: me,
+        created_at: now(),
+        updated_at: now(),
+      };
+      const requestId = String(body.request_id ?? "").toLowerCase();
+      if (requestId && !featureRequests.some((item) => item.id === requestId))
+        return kbBad({ request_id: "not a feature request" });
+      changelogEntries.push(row);
+      if (requestId)
+        entryLinks.push({
+          id: randomUUID(),
+          entry_id: row.id,
+          request_id: requestId,
+          created_at: now(),
+        });
+      audit("changelog.created", me || null, "changelog_entry", row.id);
+      return ok({ entry: kbEntryView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/changelog/{entry_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params }) => {
+      const row = changelogEntries.find((item) => item.id === params.entry_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({ entry: kbEntryView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/changelog/{entry_id}/act",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const row = changelogEntries.find((item) => item.id === params.entry_id);
+      if (!row) return refuse(404, "not_found");
+      const me = caller(headers)?.member.id ?? "";
+      const action = String(body.action ?? "");
+      if (action === "edit") {
+        const next: Partial<EntryRow> = {};
+        if ("title" in body) {
+          const title = String(body.title ?? "")
+            .trim()
+            .slice(0, 160);
+          if (!title) return kbBad({ title: "cannot be empty" });
+          next.title = title;
+        }
+        if ("body" in body)
+          next.body = String(body.body ?? "")
+            .trim()
+            .slice(0, 20_000);
+        if ("kind" in body) {
+          if (!(String(body.kind) in KB_KINDS))
+            return kbBad({ kind: Object.keys(KB_KINDS).join(", ") });
+          next.kind = String(body.kind);
+        }
+        const changed = (Object.keys(next) as Array<keyof EntryRow>).filter(
+          (key) => next[key] !== row[key],
+        );
+        if (!changed.length) return kbBad({ fields: "nothing to change" });
+        if (row.status === "published" && !(next.body ?? row.body).trim())
+          return kbBad({ body: "a published entry says what changed" });
+        for (const key of changed) Object.assign(row, { [key]: next[key] });
+      } else if (action === "link") {
+        const requestId = String(body.request_id ?? "").toLowerCase();
+        if (!requestId) return kbBad({ request_id: "which request it answers" });
+        if (!featureRequests.some((item) => item.id === requestId))
+          return kbBad({ request_id: "not a feature request" });
+        if (entryLinks.some((link) => link.entry_id === row.id && link.request_id === requestId))
+          return kbBad({ request_id: "already linked" });
+        entryLinks.push({
+          id: randomUUID(),
+          entry_id: row.id,
+          request_id: requestId,
+          created_at: now(),
+        });
+      } else if (action === "unlink") {
+        const index = entryLinks.findIndex(
+          (link) =>
+            link.entry_id === row.id &&
+            link.request_id === String(body.request_id ?? "").toLowerCase(),
+        );
+        if (index < 0) return refuse(404, "not_found");
+        entryLinks.splice(index, 1);
+      } else if (action === "publish") {
+        if (row.status === "published") return kbBad({ status: "already published" });
+        if (!row.body.trim()) return kbBad({ body: "say what changed before it is published" });
+        const published = String(body.published_on || todayIso());
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(published) || published > todayIso())
+          return kbBad({ published_on: "a date, not in the future" });
+        Object.assign(row, { status: "published", published_on: published, published_by: me });
+        for (const link of entryLinks.filter((item) => item.entry_id === row.id)) {
+          const request = featureRequests.find((item) => item.id === link.request_id);
+          if (request && ["open", "planned", "building"].includes(request.status)) {
+            Object.assign(request, { status: "shipped", shipped_on: published });
+            audit("feature_request.shipped", me || null, "feature_request", request.id);
+          }
+        }
+      } else if (action === "unpublish") {
+        if (row.status !== "published") return kbBad({ status: "it is not published" });
+        if (!String(body.reason ?? "").trim()) return kbBad({ reason: "why it comes down" });
+        Object.assign(row, { status: "draft", published_on: null, published_by: null });
+      } else return kbBad({ action: "edit, link, unlink, publish, unpublish" });
+      row.updated_at = now();
+      audit(`changelog.${action}`, me || null, "changelog_entry", row.id);
+      return ok({ entry: kbEntryView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "public/changelog",
+    handler: () =>
+      ok({
+        entries: changelogEntries
+          .filter((row) => row.status === "published")
+          .sort(
+            (a, b) =>
+              (b.published_on ?? "").localeCompare(a.published_on ?? "") ||
+              b.created_at.localeCompare(a.created_at),
+          )
+          .slice(0, 50)
+          .map((row) => ({
+            title: row.title,
+            body: row.body,
+            kind: row.kind,
+            kind_label: KB_KINDS[row.kind] ?? row.kind,
+            published_on: row.published_on,
+          })),
+      }),
+  },
+  // Before hq/help/{article_id}: the mock matches in order, and "gaps" would read as an id.
+  {
+    method: "GET",
+    pattern: "hq/help/gaps",
+    auth: true,
+    capability: "tickets:read",
+    handler: () => {
+      const since = addDaysIso(todayIso(), -90);
+      const linked = new Set(articleLinks.map((link) => link.ticket_id));
+      const resolved = tickets.filter(
+        (row) => row.resolved_at && row.resolved_at.slice(0, 10) >= since,
+      );
+      const groups = new Map<string, TicketRow[]>();
+      for (const row of resolved) {
+        if (linked.has(row.id)) continue;
+        for (const tag of row.tags.length ? [...new Set(row.tags)].sort() : ["untagged"])
+          groups.set(tag, [...(groups.get(tag) ?? []), row]);
+      }
+      const published = helpArticles.filter((row) => row.status === "published");
+      return ok({
+        available: true,
+        reason: "",
+        gaps: {
+          since,
+          resolved: resolved.length,
+          answered_with_article: resolved.filter((row) => linked.has(row.id)).length,
+          groups: [...groups.entries()]
+            .map(([tag, rows]) => ({
+              tag,
+              tickets: rows.length,
+              articles_with_tag: published.filter((row) => row.tags.includes(tag)).length,
+              samples: rows
+                .sort((a, b) => (b.resolved_at ?? "").localeCompare(a.resolved_at ?? ""))
+                .slice(0, 5)
+                .map((row) => ({ ticket_id: row.id, subject: row.subject })),
+            }))
+            .sort((a, b) => b.tickets - a.tickets || a.tag.localeCompare(b.tag)),
+        },
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/help",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ query, headers }) => {
+      const ticketId = String(query.ticket_id ?? "");
+      let rows = helpArticles;
+      if (ticketId) {
+        const linked = new Set(
+          articleLinks.filter((link) => link.ticket_id === ticketId).map((link) => link.article_id),
+        );
+        rows = rows.filter((row) => linked.has(row.id));
+      }
+      const order: Record<string, number> = { published: 0, draft: 1, archived: 2 };
+      const views = rows
+        .map((row) => kbArticleView(row, false))
+        .sort(
+          (a, b) =>
+            (order[a.status] ?? 9) - (order[b.status] ?? 9) ||
+            Number(!a.review_due) - Number(!b.review_due) ||
+            a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
+        );
+      return ok({
+        articles: views,
+        counts: {
+          published: views.filter((view) => view.status === "published").length,
+          review_due: views.filter((view) => view.review_due).length,
+          drafts: views.filter((view) => view.status === "draft").length,
+        },
+        categories: Object.entries(KB_CATEGORIES).map(([value, label]) => ({ value, label })),
+        can_write: hasCap(headers, "tickets:write"),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/help/create",
+    auth: true,
+    capability: "tickets:write",
+    handler: ({ body, headers }) => {
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title) return kbBad({ title: "the question it answers" });
+      const category = String(body.category || "other");
+      if (!(category in KB_CATEGORIES))
+        return kbBad({ category: Object.keys(KB_CATEGORIES).join(", ") });
+      const tags = kbTags(body.tags);
+      if (tags.length > 8) return kbBad({ tags: "at most 8" });
+      const me = caller(headers)?.member.id ?? "";
+      const row: ArticleRow = {
+        id: randomUUID(),
+        title,
+        body: String(body.body ?? "")
+          .trim()
+          .slice(0, 20_000),
+        category,
+        tags,
+        status: "draft",
+        owner_staff_id: String(body.owner_staff_id || me) || null,
+        review_every_days: 180,
+        reviewed_on: null,
+        published_at: null,
+        created_by: me,
+        created_at: now(),
+        updated_at: now(),
+      };
+      helpArticles.push(row);
+      const ticketId = String(body.ticket_id ?? "").trim();
+      if (ticketId)
+        articleLinks.push({
+          id: randomUUID(),
+          article_id: row.id,
+          ticket_id: ticketId,
+          linked_by: me,
+          created_at: now(),
+        });
+      audit("help_article.created", me || null, "help_article", row.id);
+      return ok({ article: kbArticleView(row, true) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/help/{article_id}",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ params }) => {
+      const row = helpArticles.find((item) => item.id === params.article_id);
+      if (!row) return refuse(404, "not_found");
+      return ok({
+        article: kbArticleView(row, true),
+        staff: staff
+          .filter((member) => member.is_active)
+          .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
+          .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),
+        categories: Object.entries(KB_CATEGORIES).map(([value, label]) => ({ value, label })),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/help/{article_id}/act",
+    auth: true,
+    capability: "tickets:write",
+    handler: ({ params, body, headers }) => {
+      const row = helpArticles.find((item) => item.id === params.article_id);
+      if (!row) return refuse(404, "not_found");
+      const me = caller(headers)?.member.id ?? "";
+      const action = String(body.action ?? "");
+      const today = todayIso();
+      if (action === "edit") {
+        const next: Partial<ArticleRow> = {};
+        if ("title" in body) {
+          const title = String(body.title ?? "")
+            .trim()
+            .slice(0, 200);
+          if (!title) return kbBad({ title: "the question it answers" });
+          next.title = title;
+        }
+        if ("body" in body)
+          next.body = String(body.body ?? "")
+            .trim()
+            .slice(0, 20_000);
+        if ("category" in body) {
+          if (!(String(body.category) in KB_CATEGORIES))
+            return kbBad({ category: Object.keys(KB_CATEGORIES).join(", ") });
+          next.category = String(body.category);
+        }
+        if ("tags" in body) {
+          const tags = kbTags(body.tags);
+          if (tags.length > 8) return kbBad({ tags: "at most 8" });
+          next.tags = tags;
+        }
+        if ("owner_staff_id" in body) {
+          const owner = String(body.owner_staff_id ?? "").toLowerCase() || null;
+          if (owner && !staff.some((member) => member.id === owner))
+            return kbBad({ owner_staff_id: "choose someone on the team" });
+          next.owner_staff_id = owner;
+        }
+        if ("review_every_days" in body) {
+          const every = Number(body.review_every_days);
+          if (!Number.isInteger(every) || every < 30 || every > 730)
+            return kbBad({ review_every_days: "30 to 730 days" });
+          next.review_every_days = every;
+        }
+        const changed = (Object.keys(next) as Array<keyof ArticleRow>).filter(
+          (key) => JSON.stringify(next[key]) !== JSON.stringify(row[key]),
+        );
+        if (!changed.length) return kbBad({ fields: "nothing to change" });
+        if (row.status === "published" && changed.includes("body") && !next.body)
+          return kbBad({ body: "a published article answers the question" });
+        for (const key of changed) Object.assign(row, { [key]: next[key] });
+        if (row.status === "published" && changed.includes("body")) row.reviewed_on = today;
+      } else if (action === "publish") {
+        if (row.status === "published") return kbBad({ status: "already published" });
+        if (!row.body.trim()) return kbBad({ body: "write the answer before it is published" });
+        Object.assign(row, { status: "published", published_at: now(), reviewed_on: today });
+      } else if (action === "archive") {
+        if (row.status === "archived") return kbBad({ status: "already archived" });
+        row.status = "archived";
+      } else if (action === "restore") {
+        if (row.status !== "archived")
+          return kbBad({ status: "only an archived article is restored" });
+        row.status = "draft";
+      } else if (action === "reviewed") {
+        if (row.status !== "published")
+          return kbBad({ status: "only a published article is reviewed" });
+        row.reviewed_on = today;
+      } else if (action === "link_ticket") {
+        const ticketId = String(body.ticket_id ?? "").trim();
+        if (!ticketId) return kbBad({ ticket_id: "which ticket it answered" });
+        if (!tickets.some((item) => item.id === ticketId))
+          return kbBad({ ticket_id: "not a ticket on the desk" });
+        if (articleLinks.some((link) => link.article_id === row.id && link.ticket_id === ticketId))
+          return kbBad({ ticket_id: "already linked" });
+        articleLinks.push({
+          id: randomUUID(),
+          article_id: row.id,
+          ticket_id: ticketId,
+          linked_by: me,
+          created_at: now(),
+        });
+      } else if (action === "unlink_ticket") {
+        const index = articleLinks.findIndex(
+          (link) =>
+            link.article_id === row.id && link.ticket_id === String(body.ticket_id ?? "").trim(),
+        );
+        if (index < 0) return refuse(404, "not_found");
+        articleLinks.splice(index, 1);
+      } else
+        return kbBad({
+          action: "edit, publish, archive, restore, reviewed, link_ticket, unlink_ticket",
+        });
+      row.updated_at = now();
+      audit(`help_article.${action}`, me || null, "help_article", row.id);
+      return ok({ article: kbArticleView(row, true) });
+    },
+  },
+);
+
 // After their declarations: the seeds read the blocks' constants.
 seedCustomFields();
 seedAutomations();
 seedDigests();
 seedFinance();
 seedQuotes();
+seedRelationships();
+seedKnowledge();
 
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
@@ -36485,6 +37943,8 @@ function resetWorld() {
   seedDigests();
   seedFinance();
   seedQuotes();
+  seedRelationships();
+  seedKnowledge();
   seedInbox();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;

@@ -12,6 +12,8 @@ const PUBLIC_EXACT = new Set([
   "/forgot-password",
   "/reset-password",
   "/status",
+  // The public changelog: what changed, as the world may read it.
+  "/changelog",
   // The service's hourly digest pass: no session, the shared portal key checked in the handler.
   "/api/digests/render",
 ]);

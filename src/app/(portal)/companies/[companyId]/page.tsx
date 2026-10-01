@@ -46,6 +46,8 @@ import { RecordFollow } from "@/components/inbox/record-follow";
 import { ViewedBy } from "@/components/security/viewed-by";
 import { CompanyPrivacy } from "@/components/privacy/company-privacy";
 import { CompanySuccess } from "@/components/success/company-success";
+import { CompanyReferences } from "@/components/success/company-references";
+import { CompanyReviews } from "@/components/success/company-reviews";
 import { CompanyBilling } from "@/components/revenue/company-billing";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
@@ -659,9 +661,23 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
           </RecordSection>
         )}
         {tab === "success" && (
-          <RecordSection id="company-success" title="Customer success">
-            <CompanySuccess token={context.token} companyId={company.company_id} />
-          </RecordSection>
+          <>
+            <RecordSection id="company-success" title="Customer success">
+              <CompanySuccess token={context.token} companyId={company.company_id} />
+            </RecordSection>
+            <RecordSection id="company-reviews" title="Business reviews">
+              <CompanyReviews token={context.token} companyId={company.company_id} />
+            </RecordSection>
+            <RecordSection id="company-references" title="References">
+              <CompanyReferences
+                token={context.token}
+                companyId={company.company_id}
+                people={people}
+                canWrite={canWrite}
+                today={today}
+              />
+            </RecordSection>
+          </>
         )}
         {tab === "privacy" && (
           <RecordSection id="company-privacy" title="Privacy">

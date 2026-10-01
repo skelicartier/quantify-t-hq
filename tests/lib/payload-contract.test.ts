@@ -107,6 +107,8 @@ import * as tickets from "@/lib/api/tickets";
 import * as trustApi from "@/lib/api/trust";
 import * as financeApi from "@/lib/api/finance";
 import * as quotesApi from "@/lib/api/quotes";
+import * as relApi from "@/lib/api/relationships";
+import * as kbApi from "@/lib/api/knowledge";
 import * as fieldsApi from "@/lib/api/fields";
 import * as autoApi from "@/lib/api/automations";
 import * as digestApi from "@/lib/api/digests";
@@ -198,6 +200,15 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/outbound-webhooks/{endpoint_id}", () => platformApi.readWebhook(token, ids.endpoint_id!)],
   ["hq/settings/fields", () => fieldsApi.readFields(token)],
   ["hq/digests", () => digestApi.readDigests(token)],
+  ["hq/changelog", () => kbApi.readChangelog(token)],
+  ["hq/changelog/{entry_id}", () => kbApi.readEntry(token, ids.entry_id!)],
+  ["hq/help", () => kbApi.readHelp(token)],
+  ["hq/help/gaps", () => kbApi.readHelpGaps(token)],
+  ["hq/help/{article_id}", () => kbApi.readArticle(token, ids.article_id!)],
+  ["hq/references", () => relApi.readReferences(token)],
+  ["hq/references/{reference_id}", () => relApi.readReference(token, ids.reference_id!)],
+  ["hq/companies/{company_id}/reviews", () => relApi.readCompanyReviews(token, ids.company_id!)],
+  ["hq/reviews/{review_id}", () => relApi.readReview(token, ids.business_review_id!)],
   ["hq/quotes", () => quotesApi.readQuotes(token)],
   ["hq/quotes/{quote_id}", () => quotesApi.readQuote(token, ids.quote_id!)],
   ["hq/deals/{deal_id}/quotes", () => quotesApi.readDealQuotes(token, ids.deal_id!)],
@@ -310,6 +321,10 @@ describe("every portal read parses the service's own payload", () => {
     it("public/mail/unsubscribe/{token}", async () => {
       shared.role = "anonymous";
       await expect(mail.readUnsubscribe(ids.unsubscribe_token!)).resolves.toBeTruthy();
+    });
+    it("public/changelog", async () => {
+      shared.role = "anonymous";
+      await expect(kbApi.readPublicChangelog()).resolves.toBeTruthy();
     });
     it("public/status", async () => {
       shared.role = "anonymous";

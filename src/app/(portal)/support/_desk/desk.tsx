@@ -1,3 +1,4 @@
+import { TicketArticles } from "@/components/help/ticket-articles";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -646,6 +647,10 @@ export async function Desk({ context, filters, selected }: DeskProps) {
               </ul>
             </section>
           )}
+          <section className="props" aria-label="Answered with">
+            <h2 className="props__title">Answered with</h2>
+            <TicketArticles token={context.token} ticketId={ticket.id} canWrite={canWrite} />
+          </section>
           {canManage && (
             <section className="props" aria-label="Manage">
               <h2 className="props__title">Manage</h2>

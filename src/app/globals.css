@@ -10826,3 +10826,14 @@
     overflow: visible;
   }
 }
+
+/* Business reviews: short lists inside the figures' cards. */
+@layer pages {
+  .plain-list {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+}

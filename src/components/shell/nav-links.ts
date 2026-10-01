@@ -2,6 +2,7 @@ import {
   Activity,
   Award,
   BadgeCheck,
+  BookOpen,
   Bell,
   Building2,
   CalendarClock,
@@ -154,6 +155,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         activePrefix: "/support/",
         capability: "tickets:read",
         key: "s",
+      },
+      {
+        href: "/help",
+        label: "Help centre",
+        icon: BookOpen,
+        activePrefix: "/help/",
+        capability: "tickets:read",
       },
       {
         href: "/privacy",

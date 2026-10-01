@@ -4,6 +4,8 @@ const TABS = [
   { href: "/success", label: "Signals" },
   { href: "/success/requests", label: "Feature requests" },
   { href: "/success/onboarding", label: "Onboarding" },
+  { href: "/success/references", label: "References" },
+  { href: "/success/changelog", label: "Changelog" },
 ] as const;
 
 export function SuccessTabs({ current }: { current: (typeof TABS)[number]["href"] }) {

@@ -209,6 +209,35 @@ const SIGNED_IN_PAGES: Shot[] = [
   },
   { name: "expenses", path: "/expenses", ready: "main#main-content" },
   { name: "deals-quotes", path: "/deals/quotes", ready: "main#main-content" },
+  { name: "success-references", path: "/success/references", ready: "main#main-content" },
+  { name: "success-changelog", path: "/success/changelog", ready: "main#main-content" },
+  {
+    name: "success-changelog-draft",
+    path: "/success/changelog/ab100002-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  { name: "help", path: "/help", ready: "main#main-content" },
+  { name: "help-gaps", path: "/help/gaps", ready: "main#main-content" },
+  {
+    name: "help-article-due",
+    path: "/help/ab200002-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  {
+    name: "success-reference",
+    path: "/success/references/af000001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  {
+    name: "success-review",
+    path: "/success/reviews/b7100001-0000-4000-8000-000000000000",
+    ready: "main#main-content",
+  },
+  {
+    name: "company-success",
+    path: "/companies/c0000000-0000-4000-8000-000000000001?tab=success",
+    ready: "main#main-content",
+  },
   { name: "deals-quotes-waiting", path: "/deals/quotes?view=waiting", ready: "main#main-content" },
   {
     name: "quote-waiting",
@@ -544,6 +573,8 @@ async function captureInteractions(page: Page, folder: string) {
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
   await captureQuoteFlows(page, folder);
+  await captureRelationshipFlows(page, folder);
+  await captureKnowledgeFlows(page, folder);
 
   // A real CSV download through the route handler (the sudo window is still open).
   await page.goto(`${BASE}/reports`, { waitUntil: "networkidle" });
@@ -1151,6 +1182,136 @@ async function capturePlatformFlows(page: Page, folder: string) {
     await page.waitForSelector("#company-templates .form-sent", { timeout: 10_000 });
   }
   await shoot(page, `${folder}/company-threads`);
+}
+
+/**
+ * The changelog and the help centre: the drafted fixed-income entry published (its request
+ * ships); an article written, answered and published; the article past its review read
+ * again.
+ */
+async function captureKnowledgeFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  await page.goto(`${BASE}/success/changelog/ab100002-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("#entry-published").count()) > 0) {
+    await page.locator("button", { hasText: /^Publish$/ }).click();
+    await page.waitForSelector("#entry-reason", { timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  if ((await page.locator("td", { hasText: /^shipped$/ }).count()) === 0)
+    report(`${folder}/changelog-published`, "publishing did not ship the request it answers");
+  await shoot(page, `${folder}/changelog-published`);
+
+  await page.goto(`${BASE}/help`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Write an article" }).click();
+  await page.fill("#article-title", `Where are exports kept? ${stamp}`);
+  await page.fill("#article-tags", "exports");
+  await page.locator("button", { hasText: /^Start it$/ }).click();
+  await page
+    .waitForURL(/\/help\/[0-9a-f-]{36}$/, { timeout: 15_000 })
+    .catch(() => report(`${folder}/help-article-published`, "starting an article did not open it"));
+  await page.fill(
+    "#edit-body",
+    "Exports land in the Downloads folder unless one is chosen in Settings.",
+  );
+  await page.locator("button", { hasText: /^Save$/ }).click();
+  await page.waitForSelector("form:has(#edit-body) .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator("button", { hasText: /^Publish$/ }).click();
+  await page.waitForSelector("button:has-text('Still true')", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/help-article-published`);
+
+  await page.goto(`${BASE}/help/ab200002-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.getByText("Due for review since").count()) > 0) {
+    await page.locator("button", { hasText: /^Still true$/ }).click();
+    await page.waitForSelector("text=Due for review since", { state: "detached", timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/help-article-reviewed`);
+}
+
+/**
+ * References and reviews: consent recorded on a firm (calls and its logo); calls used up to
+ * the firm's quarterly limit and the next one refused; the expiring call-only consent
+ * withdrawn; last quarter's review written up and finalised; a new review started.
+ */
+async function captureRelationshipFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000001?tab=success`, {
+    waitUntil: "networkidle",
+  });
+  await page.locator("summary", { hasText: "Record consent" }).click();
+  await page.check("#ref-kind-logo");
+  await page.fill("#ref-evidence", `Email of consent ${stamp}`);
+  await page.locator("button", { hasText: /^Record it$/ }).click();
+  await page.waitForSelector("form:has(#ref-evidence) .form-sent", { timeout: 10_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await shoot(page, `${folder}/company-reference-recorded`);
+
+  await page.goto(`${BASE}/success/references/af000001-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  const recordCall = async () => {
+    await page.selectOption("#use-kind", "call");
+    await page.fill("#use-note", `Call ${stamp}`);
+    await page.locator("button", { hasText: "Record the use" }).click();
+    await page.waitForSelector("form:has(#use-note) .form-sent, form:has(#use-note) [role=alert]", {
+      timeout: 10_000,
+    });
+  };
+  // The firm's limit is two calls a quarter: by the third call of the quarter at the most,
+  // one is refused, whatever earlier passes (or a new quarter) left behind.
+  const refused = page.locator("form:has(#use-note) [role=alert]", { hasText: "limit is 2" });
+  for (let attempt = 0; attempt < 3 && (await refused.count()) === 0; attempt += 1) {
+    if (attempt > 0) await page.reload({ waitUntil: "networkidle" });
+    await recordCall();
+  }
+  if ((await refused.count()) === 0)
+    report(`${folder}/reference-rationed`, "a third call in the quarter was not refused");
+  await shoot(page, `${folder}/reference-rationed`);
+
+  await page.goto(`${BASE}/success/references/af000002-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("#withdraw-reason").count()) > 0) {
+    await page.fill("#withdraw-reason", "New compliance rules at the firm");
+    await page.locator("button", { hasText: "Record the withdrawal" }).click();
+    await page.waitForSelector("#withdraw-reason", { state: "detached", timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  await shoot(page, `${folder}/reference-withdrawn`);
+
+  await page.goto(`${BASE}/success/reviews/b7100001-0000-4000-8000-000000000000`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("#review-goals").count()) > 0) {
+    await page.fill(
+      "#review-actions",
+      "Book a credit-desk demo; send the Q4 roadmap; renewal call in November.",
+    );
+    await page.locator("button", { hasText: /^Save$/ }).click();
+    await page.waitForSelector("form:has(#review-actions) .form-sent", { timeout: 10_000 });
+    await page.locator("button", { hasText: /^Finalise$/ }).click();
+    await page.waitForSelector("#review-goals", { state: "detached", timeout: 10_000 });
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  if ((await page.getByText("renewal call in November").count()) === 0)
+    report(`${folder}/review-final`, "the saved actions are not on the final review");
+  await shoot(page, `${folder}/review-final`);
+
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002?tab=success`, {
+    waitUntil: "networkidle",
+  });
+  await page.locator("summary", { hasText: "Start a review" }).click();
+  await page.locator("button", { hasText: /^Start it$/ }).click();
+  await page
+    .waitForURL(/\/success\/reviews\/[0-9a-f-]{36}$/, { timeout: 15_000 })
+    .catch(() => report(`${folder}/review-started`, "starting a review did not open it"));
+  await shoot(page, `${folder}/review-started`);
 }
 
 /**
@@ -2029,6 +2190,11 @@ async function run(browser: Browser) {
     await captureUnsubscribe(page, `${viewport.name}/auth`);
     await captureReport(page, `${viewport.name}/auth`);
     await captureStatusPublic(page, `${viewport.name}/auth`);
+    await capture(page, `${viewport.name}/auth`, {
+      name: "changelog-public",
+      path: "/changelog",
+      ready: ".status-public__section",
+    });
 
     // The two-step and the code screen, mid-flow.
     await page.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
