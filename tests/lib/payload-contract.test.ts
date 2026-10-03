@@ -83,6 +83,7 @@ import * as auth from "@/lib/api/auth";
 import * as crm from "@/lib/api/crm";
 import * as dataQuality from "@/lib/api/data-quality";
 import * as reviewApi from "@/lib/api/review";
+import * as signalsApi from "@/lib/api/signals";
 import * as targetsApi from "@/lib/api/targets";
 import * as deals from "@/lib/api/deals";
 import * as home from "@/lib/api/home";
@@ -313,6 +314,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/reports/weekly", () => reports.readWeeklyReport(token, ids.week!)],
   ["hq/reports/attribution", () => reports.readAttribution(token, 90)],
   ["hq/targets", () => targetsApi.readTargets(token)],
+  ["hq/signals", () => signalsApi.readSignals(token)],
   ["hq/settings/crm", () => crm.readCrmSettings(token)],
   ["hq/settings/support", () => settings.readSupportSettings(token)],
   ["hq/webhooks", () => settings.readWebhooks(token)],

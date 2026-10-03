@@ -22,6 +22,11 @@ export const INBOX_REASONS: readonly { reason: string; label: string; hint: stri
   { reason: "mention", label: "Mentioned", hint: "Someone named you in a note or a thread." },
   { reason: "assigned", label: "Assigned", hint: "A record or a task given to you." },
   {
+    reason: "signal",
+    label: "Sign of interest",
+    hint: "Someone at a firm you work made a product account, clicked through or wrote in.",
+  },
+  {
     reason: "reply",
     label: "Reply",
     hint: "Someone wrote back on a ticket or a conversation you look after.",

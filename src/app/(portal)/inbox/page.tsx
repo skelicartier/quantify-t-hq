@@ -32,6 +32,7 @@ const REASON_TONES: Record<string, PillTone> = {
   review: "attention",
   mention: "live",
   assigned: "live",
+  signal: "live",
   reply: "attention",
   reminder: "neutral",
   state: "neutral",

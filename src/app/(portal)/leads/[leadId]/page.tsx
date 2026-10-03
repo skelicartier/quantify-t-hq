@@ -8,6 +8,7 @@ import { notFound } from "next/navigation";
 
 import { logActivityAction } from "@/app/(portal)/_actions/work";
 import {
+  decideSignalAction,
   convertLeadAction,
   endNurtureAction,
   nurtureLeadAction,
@@ -18,6 +19,7 @@ import { ActForm } from "@/components/ui/act-form";
 import { Field, Input } from "@/components/ui/field";
 import { RowAction } from "@/components/ui/row-action";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
+import { SignalList } from "@/components/crm/signal-list";
 import { ConvertLeadForm, LeadStageForm } from "@/components/crm/lead-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { FirstReplyClock, LeadStagePill, LifecyclePill } from "@/components/crm/pills";
@@ -648,6 +650,18 @@ export default async function LeadPage({ params }: LeadPageProps) {
               </KeyValue>
             )}
           </Card>
+          {detail.signals.length > 0 && (
+            <RecordSection id="lead-signals" title="Signs of interest">
+              <SignalList
+                signals={detail.signals}
+                now={now}
+                action={decideSignalAction}
+                canWrite={canWrite}
+                returnPath={`/leads/${lead.lead_id}`}
+                showSubject={false}
+              />
+            </RecordSection>
+          )}
           <RecordSection id="lead-comments" title="Threads">
             <RecordComments
               token={context.token}

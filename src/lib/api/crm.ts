@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
 import { customFieldSchema, customMapSchema, customValueSchema } from "@/lib/api/fields";
+import { signalSchema } from "@/lib/api/signals";
 import { targetSchema } from "@/lib/api/targets";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
@@ -186,6 +187,8 @@ const companyDetailSchema = okEnvelope.extend({
   custom_fields: z.array(customValueSchema).default([]),
   /** Its tier and short plan when it is a target account (0066). */
   target: targetSchema.nullable().default(null),
+  /** Its open signs of interest (0067). */
+  signals: z.array(signalSchema).default([]),
 });
 export type CompanyDetail = z.infer<typeof companyDetailSchema>;
 
@@ -515,6 +518,8 @@ const leadDetailSchema = okEnvelope.extend({
     .object({ kind: z.string(), id: z.string(), label: z.string(), exists: z.boolean() })
     .nullable()
     .default(null),
+  /** Its open signs of interest (0067). */
+  signals: z.array(signalSchema).default([]),
 });
 export type LeadDetail = z.infer<typeof leadDetailSchema>;
 

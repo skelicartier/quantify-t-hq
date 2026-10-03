@@ -121,6 +121,13 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "data-health", path: "/data-health", ready: ".stat-grid" },
   // The weekly review: the scorecard, the quarter's priorities, the note.
   { name: "reports-review", path: "/reports/review", ready: ".score-list" },
+  // Signs of interest: open ones with their evidence, and the closed ones with what was done.
+  { name: "leads-signals", path: "/leads/signals", ready: ".signal-list, .empty-state" },
+  {
+    name: "leads-signals-all",
+    path: "/leads/signals?state=all",
+    ready: ".signal-list, .empty-state",
+  },
   // Target accounts: the most wanted first, and those nobody has touched in two weeks.
   { name: "targets", path: "/targets", ready: ".data-table" },
   { name: "targets-untouched", path: "/targets?untouched=1", ready: "main#main-content" },
@@ -717,6 +724,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureTriageFlows(page, folder);
   await captureBranchFlows(page, folder);
   await captureTargetFlows(page, folder);
+  await captureSignalFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -3612,6 +3620,49 @@ async function captureTargetFlows(page: Page, folder: string) {
   console.log(`  ✓ ${folder}/company-target-removed`);
 }
 
+/**
+ * Signs of interest closed: the first open one acted on with a line, the next dismissed;
+ * then the closed ones say what was done. A later pass finds fewer open and works those.
+ */
+async function captureSignalFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/leads/signals`, { waitUntil: "networkidle" });
+  const rows = page.locator(".signal-list__row");
+  const before = await rows.count();
+  if (before > 0) {
+    const first = rows.first();
+    const evidence = (await first.locator(".signal-list__evidence").innerText()).trim();
+    await first.locator("summary", { hasText: "Acted on" }).click();
+    await first.locator("input[name=note]").fill("Called them the same morning.");
+    await first.getByRole("button", { name: "Save" }).click();
+    await page
+      .locator(".signal-list__row", { hasText: evidence })
+      .waitFor({ state: "detached", timeout: 15_000 })
+      .catch(() => report(`${folder}/signal-acted`, "the sign acted on is still listed as open"));
+    console.log(`  ✓ ${folder}/signal-acted`);
+  }
+  if ((await rows.count()) > 1) {
+    const next = rows.first();
+    const evidence = (await next.locator(".signal-list__evidence").innerText()).trim();
+    await next.getByRole("button", { name: /^Dismiss/ }).click();
+    await page
+      .locator(".signal-list__row", { hasText: evidence })
+      .waitFor({ state: "detached", timeout: 15_000 })
+      .catch(() =>
+        report(`${folder}/signal-dismissed`, "the dismissed sign is still listed as open"),
+      );
+    console.log(`  ✓ ${folder}/signal-dismissed`);
+  }
+  await page.goto(`${BASE}/leads/signals?state=acted`, { waitUntil: "networkidle" });
+  if (
+    before > 0 &&
+    (await page
+      .locator(".signal-list__row", { hasText: "Called them the same morning." })
+      .count()) === 0
+  )
+    report(`${folder}/signals-acted`, "the line said when acting on it is not shown");
+  await shoot(page, `${folder}/signals-acted`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -3622,6 +3673,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   triage: captureTriageFlows,
   branches: captureBranchFlows,
   targets: captureTargetFlows,
+  signals: captureSignalFlows,
   inbox: captureInboxFlows,
 };
 

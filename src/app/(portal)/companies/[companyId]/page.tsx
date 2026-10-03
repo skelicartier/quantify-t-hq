@@ -21,6 +21,8 @@ import {
   updateCompanyAction,
 } from "@/app/(portal)/companies/actions";
 import { TargetPlanForm } from "@/components/crm/target-plan-form";
+import { SignalList } from "@/components/crm/signal-list";
+import { decideSignalAction } from "@/app/(portal)/leads/actions";
 import { RowAction } from "@/components/ui/row-action";
 import { MergeRecordForm } from "@/components/crm/merge-record-form";
 import { createDealAction } from "@/app/(portal)/deals/actions";
@@ -749,6 +751,18 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                     </Popover>
                   </>
                 )}
+              </RecordSection>
+            )}
+            {detail.signals.length > 0 && (
+              <RecordSection id="company-signals" title="Signs of interest">
+                <SignalList
+                  signals={detail.signals}
+                  now={now}
+                  action={decideSignalAction}
+                  canWrite={canWrite}
+                  returnPath={`/companies/${company.company_id}`}
+                  showSubject={false}
+                />
               </RecordSection>
             )}
             <RecordSection id="company-deals" title="Open deals">

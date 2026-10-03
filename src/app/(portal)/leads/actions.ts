@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import * as crmApi from "@/lib/api/crm";
 import * as dataQualityApi from "@/lib/api/data-quality";
+import * as signalsApi from "@/lib/api/signals";
 import { saveSegment } from "@/lib/api/mail";
 import { fieldValue } from "@/lib/auth/forms";
 import { COLD_CHECKS, parseTags } from "@/lib/crm/prospects";
@@ -752,4 +753,33 @@ export async function endNurtureAction(
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/leads");
   return sent("Back on the working lists.");
+}
+
+/** Close a sign of interest: acted on (with a line, if any) or dismissed. */
+export async function decideSignalAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/signals");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const state = fieldValue(formData, "state", 10) === "dismissed" ? "dismissed" : "acted";
+  try {
+    await signalsApi.decideSignal(
+      context.token,
+      fieldValue(formData, "signal_id", 64),
+      state,
+      fieldValue(formData, "note", 400).trim(),
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/leads/signals");
+  const back = fieldValue(formData, "return_path", 300);
+  if (back.startsWith("/") && !back.startsWith("//")) revalidatePath(back);
+  return {
+    status: "sent",
+    message: state === "acted" ? "Marked acted on." : "Dismissed.",
+    sentAt: Date.now(),
+  };
 }

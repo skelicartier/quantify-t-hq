@@ -5477,6 +5477,56 @@
     display: contents;
   }
 
+  /* Signs of interest: what happened, what it rests on, and what was done. */
+  .signal-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .signal-list__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .signal-list__row:last-child {
+    border-bottom: 0;
+  }
+
+  .signal-list__main {
+    display: grid;
+    flex: 1 1 320px;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .signal-list__main p {
+    margin: 0;
+  }
+
+  .signal-list__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+  }
+
+  .signal-list__evidence {
+    overflow-wrap: anywhere;
+  }
+
+  .signal-list__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
   /* A target account's plan on the company page. */
   .target-plan {
     display: grid;

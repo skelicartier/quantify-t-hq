@@ -2759,6 +2759,29 @@ type AccountPlanRow = {
   updated_at: string;
 };
 const accountPlans: AccountPlanRow[] = [];
+// Signs of interest (0067): kept once, closed by acting or dismissing. The service finds
+// them in a sweep; the mock holds seeded ones, served and closed as the service does.
+type SignalRow = {
+  id: string;
+  kind: string;
+  subject_type: "lead" | "person" | "company";
+  subject_id: string;
+  evidence_key: string;
+  evidence: string;
+  observed_at: string;
+  created_at: string;
+  state: "open" | "acted" | "dismissed";
+  decided_by: string | null;
+  decided_at: string | null;
+  note: string;
+};
+const signalRows: SignalRow[] = [];
+const SIGNAL_KINDS: Record<string, string> = {
+  product_signup: "Made a product account",
+  mail_click: "Clicked through from our mail",
+  colleague_wrote_in: "A colleague wrote in",
+  product_use: "Using the product",
+};
 const accountPlanPeople: Array<{ company_id: string; person_id: string }> = [];
 const TARGET_UNTOUCHED_DAYS = 14;
 const apiKeys: ApiKeyRow[] = [];
@@ -6455,6 +6478,7 @@ const INBOX_REASONS: Record<string, [number, string]> = {
   review: [80, "Waiting on you"],
   mention: [70, "Mentioned"],
   assigned: [60, "Assigned"],
+  signal: [55, "Sign of interest"],
   reply: [50, "Reply"],
   reminder: [40, "Reminder"],
   state: [30, "Update"],
@@ -10483,6 +10507,65 @@ function seedCrm() {
       updated_at: agoIso(24 * 9),
     },
   );
+  signalRows.length = 0;
+  signalRows.push(
+    {
+      id: "51900000-0000-4000-8000-000000000001",
+      kind: "product_signup",
+      subject_type: "company",
+      subject_id: "c0000000-0000-4000-8000-000000000003",
+      evidence_key: "signup:cc000000-0000-4000-8000-0000000000b1",
+      evidence: "a…@bluecrestfo.com made a product account two days ago (free).",
+      observed_at: agoIso(48),
+      created_at: agoIso(47),
+      state: "open",
+      decided_by: null,
+      decided_at: null,
+      note: "",
+    },
+    {
+      id: "51900000-0000-4000-8000-000000000002",
+      kind: "mail_click",
+      subject_type: "lead",
+      subject_id: "1e000000-0000-4000-8000-000000000002",
+      evidence_key: "click:ea700000-0000-4000-8000-0000000000c2",
+      evidence: "Clicked through from “Quick question, Sofia” yesterday.",
+      observed_at: agoIso(26),
+      created_at: agoIso(25),
+      state: "open",
+      decided_by: null,
+      decided_at: null,
+      note: "",
+    },
+    {
+      id: "51900000-0000-4000-8000-000000000003",
+      kind: "product_use",
+      subject_type: "company",
+      subject_id: "c0000000-0000-4000-8000-000000000002",
+      evidence_key: "use:this-week",
+      evidence: "2 linked accounts signed in this week, the last this morning.",
+      observed_at: agoIso(4),
+      created_at: agoIso(3),
+      state: "open",
+      decided_by: null,
+      decided_at: null,
+      note: "",
+    },
+    {
+      id: "51900000-0000-4000-8000-000000000004",
+      kind: "mail_click",
+      subject_type: "lead",
+      subject_id: "1e000000-0000-4000-8000-000000000003",
+      evidence_key: "click:ea700000-0000-4000-8000-0000000000c3",
+      evidence: "Clicked through from “Following up” four days ago.",
+      observed_at: agoIso(96),
+      created_at: agoIso(95),
+      state: "acted",
+      decided_by: OWNER_STAFF,
+      decided_at: agoIso(80),
+      note: "Booked the Thursday slot.",
+    },
+  );
   accountPlanPeople.push(
     {
       company_id: "c0000000-0000-4000-8000-000000000003",
@@ -11702,7 +11785,50 @@ function companyDetailPayload(row: CompanyRow, money = true) {
     open_tasks: openTasks,
     activities: activityViews({ company_id: row.id }),
     target: targetViews(row.id)[0] ?? null,
+    signals: openSignalsFor("company", row.id),
   };
+}
+
+function signalSubjectLabel(row: SignalRow): string {
+  if (row.subject_type === "lead") {
+    const lead = leads.find((item) => item.id === row.subject_id);
+    return lead ? lead.full_name || lead.company_name || lead.email : "A lead";
+  }
+  if (row.subject_type === "person") {
+    const person = people.find((item) => item.id === row.subject_id);
+    return person ? person.full_name || person.email : "A person";
+  }
+  return companies.find((item) => item.id === row.subject_id)?.name ?? "A company";
+}
+
+function signalView(row: SignalRow) {
+  const links = { lead: "/leads/", person: "/people/", company: "/companies/" };
+  return {
+    signal_id: row.id,
+    kind: row.kind,
+    kind_label: SIGNAL_KINDS[row.kind] ?? row.kind,
+    subject_type: row.subject_type,
+    subject_id: row.subject_id,
+    subject_label: signalSubjectLabel(row),
+    link_path: `${links[row.subject_type]}${row.subject_id}`,
+    evidence: row.evidence,
+    observed_at: row.observed_at,
+    days_ago: Math.floor((Date.now() - Date.parse(row.observed_at)) / 86_400_000),
+    state: row.state,
+    decided_by_name: row.decided_by ? nameOf(row.decided_by) : "",
+    decided_at: row.decided_at,
+    note: row.note,
+  };
+}
+
+function openSignalsFor(subjectType: SignalRow["subject_type"], subjectId: string) {
+  return signalRows
+    .filter(
+      (row) =>
+        row.subject_type === subjectType && row.subject_id === subjectId && row.state === "open",
+    )
+    .sort((a, b) => b.observed_at.localeCompare(a.observed_at))
+    .map(signalView);
 }
 
 /** targets.touches: when each company and person was last touched — activity, a person
@@ -12165,6 +12291,71 @@ routes.push(
       companies.push(row);
       audit("company.created", found?.member.id ?? null, "company", row.id);
       return ok({ company: companyView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/signals",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const state = query.state ?? "open";
+      if (!["open", "acted", "dismissed", "all"].includes(state))
+        return refuse(400, "malformed_request", { state: "open, acted, dismissed or all" });
+      const kind = query.kind ?? "";
+      if (kind && !(kind in SIGNAL_KINDS))
+        return refuse(400, "malformed_request", {
+          kind: `one of ${Object.keys(SIGNAL_KINDS).join(", ")}`,
+        });
+      const open = signalRows.filter((row) => row.state === "open");
+      return ok({
+        signals: signalRows
+          .filter((row) => (state === "all" || row.state === state) && (!kind || row.kind === kind))
+          .sort((a, b) => b.observed_at.localeCompare(a.observed_at))
+          .slice(0, 300)
+          .map(signalView),
+        counts: {
+          open: open.length,
+          by_kind: Object.fromEntries(
+            Object.keys(SIGNAL_KINDS).map((key) => [
+              key,
+              open.filter((row) => row.kind === key).length,
+            ]),
+          ),
+        },
+        kinds: Object.entries(SIGNAL_KINDS).map(([key, label]) => ({ kind: key, label })),
+        lookback_days: 14,
+        swept_at: agoIso(0.1),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/signals/{signal_id}/decide",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = signalRows.find((item) => item.id === params.signal_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.state !== "open")
+        return refuse(400, "malformed_request", { state: `already ${row.state}` });
+      const state = String(body.state ?? "");
+      if (state !== "acted" && state !== "dismissed")
+        return refuse(400, "malformed_request", { state: "acted or dismissed" });
+      Object.assign(row, {
+        state,
+        decided_by: found.member.id,
+        decided_at: now(),
+        note: String(body.note ?? "")
+          .trim()
+          .slice(0, 400),
+      });
+      audit(`signal.${state}`, found.member.id, row.subject_type, row.subject_id, row.note, {
+        signal_id: row.id,
+        kind: row.kind,
+      });
+      return ok({ signal: signalView(row) });
     },
   },
   {
@@ -14533,6 +14724,7 @@ routes.push(
           company: company ? companyView(company) : null,
         },
         activities: activityViews({ lead_id: row.id }),
+        signals: openSignalsFor("lead", row.id),
         duplicate_of: (() => {
           if (!row.duplicate_of_id) return null;
           if (row.duplicate_of_kind === "person") {

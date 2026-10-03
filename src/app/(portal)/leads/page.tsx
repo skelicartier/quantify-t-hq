@@ -245,6 +245,7 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
               Set aside ({nurturingCount})
             </Link>
             <Link href="/leads/triage">Triage</Link>
+            <Link href="/leads/signals">Signs of interest</Link>
             <form className="filter-strip__search" action="/leads" role="search">
               {filters.stage && <input type="hidden" name="stage" value={filters.stage} />}
               {settings && (
