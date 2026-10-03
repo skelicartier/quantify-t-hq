@@ -2625,6 +2625,11 @@ type LeadRow = {
   /** 0061: a lead folded into another ("lead"), or found to be a CRM person ("person"). */
   duplicate_of_id?: string;
   duplicate_of_kind?: string;
+  /** 0063: set aside until this day (YYYY-MM-DD), by whom and why; when it came back. */
+  nurture_until?: string | null;
+  nurture_note?: string;
+  nurtured_by?: string;
+  nurture_returned_at?: string | null;
 };
 type DealRow = {
   id: string;
@@ -2684,6 +2689,8 @@ type TaskRow = {
   origin: string;
   completed_at: string | null;
   created_at: string;
+  /** 0062: "metric:<key>", "priority:<id>" or "review" for an action from the review. */
+  review_ref?: string;
 };
 type ApiKeyRow = {
   key_id: string;
@@ -7464,6 +7471,8 @@ function leadValidateRules(raw: unknown): {
   };
 }
 const LEAD_FIELDS: Record<string, string> = {
+  nurturing: "Set aside",
+  nurture_days: "Days until it comes back",
   origin: "Origin",
   stage: "Stage",
   source: "Source",
@@ -7596,6 +7605,12 @@ function leadReadField(
   stats?: MailStats,
 ): string | number | null {
   switch (field) {
+    case "nurturing":
+      return view.nurturing ? "yes" : "no";
+    case "nurture_days":
+      return view.nurturing && view.nurture_until
+        ? (Date.parse(`${view.nurture_until}T00:00:00Z`) - Date.now()) / 86_400_000
+        : null;
     case "origin":
       return view.origin;
     case "stage":
@@ -8523,6 +8538,8 @@ type LeadBulkSpec = {
   touchTags: boolean;
   /** A tidy-up from the data health page ("name_case" or "country"). */
   standardise?: string;
+  /** Set aside until this day, or "" to bring back (nurture.set_aside / bring_back). */
+  nurture?: { until: string; note: string; by: string };
 };
 type LeadJobRow = {
   id: string;
@@ -8577,6 +8594,16 @@ function leadBulkApply(row: LeadRow, spec: LeadBulkSpec): "changed" | "unchanged
     row.verified_state = spec.verified;
     row.verified_at = spec.verified ? now() : null;
     touched = true;
+  }
+  if (spec.nurture && ["new", "attempting", "connected"].includes(row.stage)) {
+    if (spec.nurture.until && row.nurture_until !== spec.nurture.until) {
+      nurtureSetAside(row, spec.nurture.until, spec.nurture.note, spec.nurture.by);
+      return "changed";
+    }
+    if (!spec.nurture.until && nurtureActive(row)) {
+      nurtureBringBack(row, false);
+      return "changed";
+    }
   }
   if (spec.standardise) {
     // Judged again as the lead now stands.
@@ -11091,6 +11118,11 @@ function leadView(row: LeadRow) {
     disqualify_reason: row.disqualify_reason,
     duplicate_of_kind: row.duplicate_of_kind ?? "",
     duplicate_of_id: row.duplicate_of_id ?? "",
+    nurture_until: row.nurture_until ?? null,
+    nurture_note: row.nurture_note ?? "",
+    nurtured_by: row.nurtured_by ?? "",
+    nurture_returned_at: row.nurture_returned_at ?? null,
+    nurturing: nurtureActive(row),
     owner_staff_id: row.owner_staff_id,
     first_replied_at: row.first_replied_at,
     waiting_minutes: waiting,
@@ -11195,6 +11227,7 @@ function taskView(row: TaskRow, withLabel = false) {
     origin: row.origin,
     completed_at: row.completed_at,
     created_at: row.created_at,
+    review_ref: row.review_ref ?? "",
   };
 }
 
@@ -12991,6 +13024,8 @@ routes.push(
         "tags_add",
         "tags_remove",
         "verified_state",
+        "nurture_until",
+        "nurture_note",
       ];
       const unknown = Object.keys(change)
         .filter((key) => !allowed.includes(key))
@@ -13023,6 +13058,21 @@ routes.push(
       const tagsRemove = "tags_remove" in change ? leadCleanTags(change.tags_remove) : [];
       const verified =
         "verified_state" in change ? String(change.verified_state ?? "").toLowerCase() : null;
+      let nurtureSpec: { until: string; note: string; by: string } | undefined;
+      if ("nurture_until" in change) {
+        const until = String(change.nurture_until ?? "").trim();
+        if (until) {
+          const refused = nurtureCheckUntil(until);
+          if (refused) return refused;
+        }
+        nurtureSpec = {
+          until,
+          note: String(change.nurture_note ?? "")
+            .trim()
+            .slice(0, 400),
+          by: found.member.id,
+        };
+      }
       if (verified !== null && !LEAD_VERIFIED_STATES.includes(verified))
         return refuse(400, "malformed_request", {
           verified_state: "valid, risky, invalid, or empty for unchecked",
@@ -13094,6 +13144,7 @@ routes.push(
         tagsRemove,
         verified,
         touchTags: "tags_add" in change || "tags_remove" in change,
+        ...(nurtureSpec ? { nurture: nurtureSpec } : {}),
       };
       if (targets.length > LEAD_JOB_INLINE_LIMIT) {
         // lead_jobs.py: more than a request can safely carry runs in the background; the
@@ -13209,7 +13260,12 @@ routes.push(
       if (reason && !allowed.includes(reason))
         return refuse(400, "malformed_request", { reason: `one of ${allowed.join(", ")}` });
       const offset = Math.max(0, Number.parseInt(String(query.offset ?? "0"), 10) || 0);
-      const groups = dqLeadGroups();
+      const leadFilter = String(query.lead ?? "")
+        .trim()
+        .toLowerCase();
+      const groups = dqLeadGroups().filter(
+        (group) => !leadFilter || group.lead_ids.includes(leadFilter),
+      );
       const kept =
         reason === "crm"
           ? groups.filter((group) => group.person_ids.length)
@@ -13678,6 +13734,8 @@ routes.push(
     auth: true,
     capability: "crm:read",
     handler: ({ query }) => {
+      // nurture.return_due runs hourly in the service; here, when the lists are read.
+      nurtureReturnDue();
       const origin = query.origin ?? "";
       if (origin && origin !== "inbound" && origin !== "prospect")
         return refuse(400, "malformed_request", { origin: "inbound or prospect" });
@@ -48649,6 +48707,1320 @@ const server = createServer((request, response) => {
   });
 });
 
+// ---------------------------------------------------------------------------------------
+// the weekly review (0062): the scorecard, the quarter's priorities, actions, the note
+// ---------------------------------------------------------------------------------------
+
+type WeeklyMetricRow = {
+  id: string;
+  metric_key: string;
+  owner_staff_id: string;
+  goal: number | null;
+  direction: "at_least" | "at_most";
+  position: number;
+  archived_at: string | null;
+  created_at: string;
+};
+type WeeklyPriorityRow = {
+  id: string;
+  quarter: string;
+  title: string;
+  detail: string;
+  owner_staff_id: string;
+  state: "open" | "done" | "dropped";
+  position: number;
+  closing_note: string;
+  created_at: string;
+  closed_at: string | null;
+};
+type WeeklyHealthRow = {
+  priority_id: string;
+  week: string;
+  health: string;
+  note: string;
+  staff_id: string;
+  at: string;
+};
+type WeeklyNoteRow = {
+  week: string;
+  went_well: string;
+  went_badly: string;
+  body: string;
+  sent_at: string | null;
+  sent_to: number;
+};
+const weeklyMetrics: WeeklyMetricRow[] = [];
+/** `${metric_key}|${week}` → the week's one comment. */
+const weeklyMetricNotes = new Map<string, { note: string; staff_id: string; at: string }>();
+const weeklyPriorities: WeeklyPriorityRow[] = [];
+const weeklyHealth: WeeklyHealthRow[] = [];
+const weeklyNotes = new Map<string, WeeklyNoteRow>();
+const weeklySettings = {
+  primary_metric: "new_mrr",
+  note_on: false,
+  note_weekday: 0,
+  note_hour_utc: 3,
+};
+const WEEKLY_WEEKDAYS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
+const WEEKLY_HEALTH = ["on_track", "at_risk", "off_track"];
+const WEEKLY_HEALTH_LABELS: Record<string, string> = {
+  on_track: "On track",
+  at_risk: "At risk",
+  off_track: "Off track",
+};
+
+/** review.week_label */
+function weeklyLabel(day: Date): string {
+  // The week's Thursday names its year; its week is the Thursday's place in that year.
+  const date = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const yearStart = Date.UTC(date.getUTCFullYear(), 0, 1);
+  const week = Math.ceil(((date.getTime() - yearStart) / 86_400_000 + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+/** Monday of an ISO week label, or null. */
+function weeklyStart(label: string): Date | null {
+  const found = /^(\d{4})-W(\d{2})$/.exec(label.toUpperCase());
+  if (!found) return null;
+  const year = Number(found[1]);
+  const week = Number(found[2]);
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const monday = new Date(
+    jan4.getTime() - ((jan4.getUTCDay() + 6) % 7) * 86_400_000 + (week - 1) * 7 * 86_400_000,
+  );
+  return weeklyLabel(monday) === `${year}-W${String(week).padStart(2, "0")}` ? monday : null;
+}
+function weeklyMonday(day: Date): Date {
+  const date = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+  return new Date(date.getTime() - ((date.getUTCDay() + 6) % 7) * 86_400_000);
+}
+function weeklyQuarter(day: Date): string {
+  return `${day.getUTCFullYear()}-Q${Math.floor(day.getUTCMonth() / 3) + 1}`;
+}
+/** review.week_quarter: a week belongs to its Thursday's quarter. */
+function weeklyWeekQuarter(monday: Date): string {
+  return weeklyQuarter(new Date(monday.getTime() + 3 * 86_400_000));
+}
+function weeklyQuarterEnd(label: string): Date | null {
+  const found = /^(\d{4})-Q([1-4])$/.exec(label.toUpperCase());
+  if (!found) return null;
+  const year = Number(found[1]);
+  const quarter = Number(found[2]);
+  return quarter === 4
+    ? new Date(Date.UTC(year + 1, 0, 1))
+    : new Date(Date.UTC(year, quarter * 3, 1));
+}
+function weeklyMedian(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return Math.round(
+    sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2,
+  );
+}
+const within = (stamp: string | null | undefined, start: number, end: number) => {
+  const at = stamp ? Date.parse(stamp) : Number.NaN;
+  return at >= start && at < end;
+};
+function weeklyMoved(start: number, end: number, kinds: string[]): number {
+  return (
+    movements
+      .filter(
+        (row) =>
+          row.currency === "USD" &&
+          kinds.includes(row.kind) &&
+          within(`${row.effective_on}T00:00:00Z`, start, end),
+      )
+      .reduce((total, row) => total + row.cents, 0) / 100
+  );
+}
+type WeeklyFigure = {
+  key: string;
+  label: string;
+  unit: "count" | "minutes" | "usd";
+  better: "up" | "down";
+  shape: "flow" | "level" | "wait";
+  area: string;
+  count: (start: number, end: number) => number | null;
+};
+/** review.METRICS, counted from the mock's records. */
+const WEEKLY_FIGURES: WeeklyFigure[] = [
+  {
+    key: "leads_received",
+    label: "Leads who wrote in",
+    unit: "count",
+    better: "up",
+    shape: "flow",
+    area: "Leads",
+    count: (start, end) =>
+      leads.filter(
+        (row) => (row.origin ?? "inbound") === "inbound" && within(row.created_at, start, end),
+      ).length,
+  },
+  {
+    key: "first_reply_minutes",
+    label: "Median first reply to a lead",
+    unit: "minutes",
+    better: "down",
+    shape: "wait",
+    area: "Leads",
+    count: (start, end) =>
+      weeklyMedian(
+        leads
+          .filter(
+            (row) =>
+              (row.origin ?? "inbound") === "inbound" &&
+              within(row.created_at, start, end) &&
+              row.first_replied_at,
+          )
+          .map((row) => (Date.parse(row.first_replied_at!) - Date.parse(row.created_at)) / 60_000)
+          .filter((minutes) => minutes >= 0),
+      ),
+  },
+  {
+    key: "leads_qualified",
+    label: "Leads qualified",
+    unit: "count",
+    better: "up",
+    shape: "flow",
+    area: "Leads",
+    count: (start, end) =>
+      leads.filter(
+        (row) => row.stage === "qualified" && within(row.updated_at ?? row.created_at, start, end),
+      ).length,
+  },
+  {
+    key: "demos_held",
+    label: "Demos held",
+    unit: "count",
+    better: "up",
+    shape: "flow",
+    area: "Meetings",
+    count: (start, end) =>
+      meetings.filter(
+        (row) =>
+          row.kind === "demo" && row.status === "completed" && within(row.starts_at, start, end),
+      ).length,
+  },
+  {
+    key: "no_shows",
+    label: "No-shows",
+    unit: "count",
+    better: "down",
+    shape: "flow",
+    area: "Meetings",
+    count: (start, end) =>
+      meetings.filter((row) => row.status === "no_show" && within(row.starts_at, start, end))
+        .length,
+  },
+  {
+    key: "deals_created",
+    label: "Deals opened",
+    unit: "count",
+    better: "up",
+    shape: "flow",
+    area: "Deals",
+    count: (start, end) => deals.filter((row) => within(row.created_at, start, end)).length,
+  },
+  {
+    key: "deals_won",
+    label: "Deals won",
+    unit: "count",
+    better: "up",
+    shape: "flow",
+    area: "Deals",
+    count: (start, end) =>
+      deals.filter((row) => row.status === "won" && within(row.closed_at, start, end)).length,
+  },
+  {
+    // The mock keeps no daily snapshot: the weighted pipeline is known for the stretch
+    // that ends now, and "not counted" before it.
+    key: "weighted_pipeline",
+    label: "Weighted pipeline",
+    unit: "usd",
+    better: "up",
+    shape: "level",
+    area: "Deals",
+    count: (_start, end) =>
+      end < Date.now() - 86_400_000
+        ? null
+        : deals
+            .filter((row) => row.status === "open" && row.currency === "USD")
+            .reduce(
+              (total, row) =>
+                total + (row.mrr_amount * (stageOf(row.stage_key)?.win_probability ?? 0)) / 100,
+              0,
+            ),
+  },
+  {
+    key: "new_mrr",
+    label: "New MRR",
+    unit: "usd",
+    better: "up",
+    shape: "flow",
+    area: "Revenue",
+    count: (start, end) => weeklyMoved(start, end, ["new", "expansion", "reactivation"]),
+  },
+  {
+    key: "lost_mrr",
+    label: "MRR lost",
+    unit: "usd",
+    better: "down",
+    shape: "flow",
+    area: "Revenue",
+    count: (start, end) => -weeklyMoved(start, end, ["contraction", "churn"]),
+  },
+  {
+    key: "net_new_mrr",
+    label: "Net new MRR",
+    unit: "usd",
+    better: "up",
+    shape: "flow",
+    area: "Revenue",
+    count: (start, end) =>
+      weeklyMoved(start, end, ["new", "expansion", "reactivation", "contraction", "churn"]),
+  },
+  {
+    key: "mrr",
+    label: "MRR",
+    unit: "usd",
+    better: "up",
+    shape: "level",
+    area: "Revenue",
+    count: (_start, end) =>
+      movements
+        .filter(
+          (row) => row.currency === "USD" && Date.parse(`${row.effective_on}T00:00:00Z`) < end,
+        )
+        .reduce((total, row) => total + row.cents, 0) / 100,
+  },
+  {
+    key: "tickets_opened",
+    label: "Tickets opened",
+    unit: "count",
+    better: "down",
+    shape: "flow",
+    area: "Desk",
+    count: (start, end) => tickets.filter((row) => within(row.created_at, start, end)).length,
+  },
+  {
+    key: "desk_first_reply_minutes",
+    label: "Median first reply to a ticket",
+    unit: "minutes",
+    better: "down",
+    shape: "wait",
+    area: "Desk",
+    count: (start, end) =>
+      weeklyMedian(
+        tickets
+          .filter((row) => within(row.created_at, start, end) && row.first_replied_at)
+          .map((row) => (Date.parse(row.first_replied_at!) - Date.parse(row.created_at)) / 60_000)
+          .filter((minutes) => minutes >= 0),
+      ),
+  },
+  {
+    key: "tickets_resolved",
+    label: "Tickets resolved",
+    unit: "count",
+    better: "up",
+    shape: "flow",
+    area: "Desk",
+    count: (start, end) =>
+      tickets.filter((row) => row.status === "resolved" && within(row.resolved_at, start, end))
+        .length,
+  },
+];
+const weeklyFigure = (key: string) => WEEKLY_FIGURES.find((item) => item.key === key);
+function weeklyCatalogue() {
+  return WEEKLY_FIGURES.map(({ key, label, unit, better, area }) => ({
+    key,
+    label,
+    unit,
+    better,
+    area,
+  }));
+}
+/** review.series: the week, the six before it, the twelve months up to it. */
+function weeklySeries(figure: WeeklyFigure, monday: Date) {
+  const nowMs = Date.now();
+  const weeks = [];
+  for (let back = 6; back >= 0; back -= 1) {
+    const start = monday.getTime() - back * 7 * 86_400_000;
+    const end = start + 7 * 86_400_000;
+    weeks.push({
+      week: weeklyLabel(new Date(start)),
+      starts_on: new Date(start).toISOString().slice(0, 10),
+      value: figure.count(start, figure.shape === "level" ? Math.min(end, nowMs) : end),
+      complete: end <= nowMs,
+    });
+  }
+  const months = [];
+  for (let back = 11; back >= 0; back -= 1) {
+    const first = new Date(Date.UTC(monday.getUTCFullYear(), monday.getUTCMonth() - back, 1));
+    const next = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 1));
+    if (first.getTime() >= nowMs) continue;
+    months.push({
+      month: first.toISOString().slice(0, 7),
+      value: figure.count(
+        first.getTime(),
+        figure.shape === "level" ? Math.min(next.getTime(), nowMs) : next.getTime(),
+      ),
+      complete: next.getTime() <= nowMs,
+    });
+  }
+  return { weeks, months };
+}
+function weeklyJudged(
+  value: number | null,
+  goal: number | null,
+  direction: string,
+  complete: boolean,
+): string {
+  if (goal === null || value === null) return "";
+  if (!complete) return "so_far";
+  return (direction === "at_least" ? value >= goal : value <= goal) ? "met" : "missed";
+}
+function weeklyPerson(staffId: string) {
+  return staffId ? { staff_id: staffId, name: mailStaffName(staffId) } : null;
+}
+function weeklyScorecard(monday: Date) {
+  const week = weeklyLabel(monday);
+  const complete = monday.getTime() + 7 * 86_400_000 <= Date.now();
+  return weeklyMetrics
+    .filter((row) => !row.archived_at)
+    .sort((a, b) => a.position - b.position)
+    .flatMap((row) => {
+      const figure = weeklyFigure(row.metric_key);
+      if (!figure) return [];
+      const history = weeklySeries(figure, monday);
+      const actual = history.weeks[history.weeks.length - 1]!.value;
+      const note = weeklyMetricNotes.get(`${row.metric_key}|${week}`);
+      return [
+        {
+          metric_id: row.id,
+          key: figure.key,
+          label: figure.label,
+          unit: figure.unit,
+          better: figure.better,
+          area: figure.area,
+          owner: weeklyPerson(row.owner_staff_id),
+          goal: row.goal,
+          direction: row.direction,
+          actual,
+          verdict: weeklyJudged(actual, row.goal, row.direction, complete),
+          weeks: history.weeks,
+          months: history.months,
+          note: note ? { text: note.note, by: weeklyPerson(note.staff_id), at: note.at } : null,
+        },
+      ];
+    });
+}
+function weeklyPriorityViews(quarter: string, week: string) {
+  return weeklyPriorities
+    .filter((row) => row.quarter === quarter)
+    .sort((a, b) => a.position - b.position)
+    .map((row) => {
+      const history = weeklyHealth
+        .filter((item) => item.priority_id === row.id)
+        .sort((a, b) => a.week.localeCompare(b.week))
+        .map((item) => ({
+          week: item.week,
+          health: item.health,
+          note: item.note,
+          by: weeklyPerson(item.staff_id),
+          at: item.at,
+        }));
+      return {
+        priority_id: row.id,
+        quarter: row.quarter,
+        title: row.title,
+        detail: row.detail,
+        owner: weeklyPerson(row.owner_staff_id),
+        state: row.state,
+        closing_note: row.closing_note,
+        closed_at: row.closed_at,
+        this_week: history.find((item) => item.week === week) ?? null,
+        latest: history[history.length - 1] ?? null,
+        history: history.slice(-13),
+      };
+    });
+}
+function weeklyFigureText(value: number | null, unit: string): string {
+  if (value === null) return "not counted";
+  if (unit === "usd")
+    return value < 0
+      ? `−$${Math.round(-value).toLocaleString("en-US")}`
+      : `$${Math.round(value).toLocaleString("en-US")}`;
+  if (unit === "minutes") {
+    const minutes = Math.round(value);
+    return minutes < 120
+      ? `${minutes} min`
+      : `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} min`;
+  }
+  return Math.round(value).toLocaleString("en-US");
+}
+/** review.compose_note */
+function weeklyCompose(
+  monday: Date,
+  scorecard: ReturnType<typeof weeklyScorecard>,
+  priorities: ReturnType<typeof weeklyPriorityViews>,
+) {
+  const week = weeklyLabel(monday);
+  const end = new Date(monday.getTime() + 6 * 86_400_000);
+  const fmt = (day: Date) =>
+    `${day.getUTCDate()} ${day.toLocaleString("en-GB", { month: "short", timeZone: "UTC" })}`;
+  const lines = [
+    `Week ${Number(week.slice(-2))} (${fmt(monday)} – ${fmt(end)} ${end.getUTCFullYear()})`,
+    "",
+  ];
+  const said = (row: (typeof scorecard)[number]) => {
+    let text = `${row.label}: ${weeklyFigureText(row.actual, row.unit)}`;
+    if (row.goal !== null) {
+      const word =
+        ({ met: "met", missed: "missed", so_far: "so far" } as Record<string, string>)[
+          row.verdict
+        ] ?? "";
+      text += ` against ${row.direction === "at_most" ? "at most" : "a goal of"} ${weeklyFigureText(row.goal, row.unit)}${word ? ` (${word})` : ""}`;
+    }
+    return text;
+  };
+  const first = scorecard.find((row) => row.key === weeklySettings.primary_metric);
+  if (first) lines.push(`The number. ${said(first)}.`, "");
+  const rest = scorecard.filter((row) => row.key !== weeklySettings.primary_metric);
+  if (rest.length) lines.push("The scorecard:", ...rest.map((row) => `- ${said(row)}`), "");
+  const words = weeklyNotes.get(week);
+  if (words?.went_well.trim()) lines.push(`Went well: ${words.went_well.trim()}`, "");
+  if (words?.went_badly.trim()) lines.push(`Went badly: ${words.went_badly.trim()}`, "");
+  const open = priorities.filter((item) => item.state === "open");
+  if (open.length) {
+    lines.push("This quarter's priorities:");
+    for (const item of open) {
+      const health = WEEKLY_HEALTH_LABELS[item.this_week?.health ?? ""] ?? "no update this week";
+      lines.push(
+        `- ${item.title}${item.owner?.name ? ` (${item.owner.name})` : ""} — ${health}${item.this_week?.note ? `: ${item.this_week.note}` : ""}`,
+      );
+    }
+    lines.push("");
+  }
+  const subject = `The week: ${week}${first ? ` · ${first.label} ${weeklyFigureText(first.actual, first.unit)}` : ""}`;
+  return { subject, body: `${lines.join("\n").trim()}\n` };
+}
+function weeklyWeekFrom(raw: unknown): Date | { refusal: ReturnType<typeof refuse> } {
+  const label = String(raw ?? "").trim();
+  const thisMonday = weeklyMonday(new Date());
+  if (!label) return new Date(thisMonday.getTime() - 7 * 86_400_000);
+  const monday = weeklyStart(label);
+  if (!monday) return { refusal: refuse(400, "malformed_request", { week: "expected YYYY-Www" }) };
+  if (monday.getTime() > Date.now())
+    return { refusal: refuse(400, "malformed_request", { week: "that week has not started" }) };
+  return monday;
+}
+function weeklyCanManage(headers: Record<string, string | string[] | undefined>) {
+  return hasCap(headers, "hq:admin");
+}
+
+function seedWeeklyReview() {
+  weeklyMetrics.length = 0;
+  weeklyMetricNotes.clear();
+  weeklyPriorities.length = 0;
+  weeklyHealth.length = 0;
+  weeklyNotes.clear();
+  Object.assign(weeklySettings, {
+    primary_metric: "new_mrr",
+    note_on: false,
+    note_weekday: 0,
+    note_hour_utc: 3,
+  });
+  const created = agoIso(24 * 60);
+  const figures: Array<[string, number | null, "at_least" | "at_most", string]> = [
+    ["new_mrr", 2000, "at_least", OWNER_STAFF],
+    ["leads_received", 6, "at_least", SALES_STAFF],
+    ["first_reply_minutes", 60, "at_most", SALES_STAFF],
+    ["demos_held", 3, "at_least", SALES_STAFF],
+    ["deals_won", 1, "at_least", OWNER_STAFF],
+    ["mrr", null, "at_least", OWNER_STAFF],
+  ];
+  figures.forEach(([key, goal, direction, owner], position) =>
+    weeklyMetrics.push({
+      id: `ab${String(position + 1).padStart(6, "0")}-0000-4000-8000-000000000062`,
+      metric_key: key,
+      owner_staff_id: owner,
+      goal,
+      direction,
+      position,
+      archived_at: null,
+      created_at: created,
+    }),
+  );
+  const thisMonday = weeklyMonday(new Date());
+  const lastMonday = new Date(thisMonday.getTime() - 7 * 86_400_000);
+  const lastWeek = weeklyLabel(lastMonday);
+  weeklyMetricNotes.set(`leads_received|${lastWeek}`, {
+    note: "The early-access form was down for most of Tuesday.",
+    staff_id: SALES_STAFF,
+    at: agoIso(24 * 2),
+  });
+  // The quarter of the week a review opens on (last week), so the demo's first screen
+  // has its priorities even when last week fell in the quarter before.
+  const quarter = weeklyWeekQuarter(lastMonday);
+  const priorities: Array<[string, string, string]> = [
+    [
+      "Twenty paying firms by the end of the quarter",
+      OWNER_STAFF,
+      "Twenty firms on a paid plan, invoiced.",
+    ],
+    [
+      "The overnight brief on every customer desk",
+      SALES_STAFF,
+      "Every paying firm has opened it twice in a week.",
+    ],
+    [
+      "Security assurance report fieldwork done",
+      OWNER_STAFF,
+      "The auditor has every control's evidence.",
+    ],
+  ];
+  priorities.forEach(([title, owner, detail], position) =>
+    weeklyPriorities.push({
+      id: `ac${String(position + 1).padStart(6, "0")}-0000-4000-8000-000000000062`,
+      quarter,
+      title,
+      detail,
+      owner_staff_id: owner,
+      state: "open",
+      position,
+      closing_note: "",
+      created_at: created,
+      closed_at: null,
+    }),
+  );
+  const history: Array<[number, number, string, string]> = [
+    [0, 3, "on_track", ""],
+    [0, 2, "on_track", ""],
+    [0, 1, "at_risk", "Two pilots stalled on procurement."],
+    [1, 2, "on_track", ""],
+    [1, 1, "on_track", ""],
+    [2, 2, "at_risk", "Two controls have no evidence yet."],
+    [2, 1, "off_track", "The auditor's start moved to next month."],
+  ];
+  for (const [index, weeksBack, health, note] of history)
+    weeklyHealth.push({
+      priority_id: weeklyPriorities[index]!.id,
+      week: weeklyLabel(new Date(thisMonday.getTime() - weeksBack * 7 * 86_400_000)),
+      health,
+      note,
+      staff_id: weeklyPriorities[index]!.owner_staff_id,
+      at: agoIso(24 * 7 * weeksBack),
+    });
+  tasks.push({
+    id: "ad000001-0000-4000-8000-000000000062",
+    title: "Put the early-access form behind an uptime check",
+    body: "",
+    status: "open",
+    priority: "medium",
+    due_on: new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10),
+    assignee_staff_id: SALES_STAFF,
+    company_id: "",
+    person_id: "",
+    deal_id: "",
+    lead_id: "",
+    ticket_id: "",
+    origin: "review",
+    completed_at: null,
+    created_at: agoIso(24 * 2),
+    review_ref: "metric:leads_received",
+  });
+  weeklyNotes.set(lastWeek, {
+    week: lastWeek,
+    went_well: "Two pilots signed, and the desk answered every ticket inside its time.",
+    went_badly: "The early-access form was down for a day.",
+    body: "",
+    sent_at: null,
+    sent_to: 0,
+  });
+}
+seedWeeklyReview();
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/review",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query, headers }) => {
+      const monday = weeklyWeekFrom(query.week);
+      if ("refusal" in monday) return monday.refusal;
+      const week = weeklyLabel(monday);
+      const quarter = String(query.quarter ?? "").trim() || weeklyWeekQuarter(monday);
+      if (!weeklyQuarterEnd(quarter))
+        return refuse(400, "malformed_request", { quarter: "expected YYYY-Qn" });
+      const scorecard = weeklyScorecard(monday);
+      const priorities = weeklyPriorityViews(quarter, week);
+      const words = weeklyNotes.get(week);
+      const composed = weeklyCompose(monday, scorecard, priorities);
+      const following = new Date(monday.getTime() + 7 * 86_400_000);
+      const since = monday.getTime();
+      const actions = tasks
+        .filter(
+          (row) =>
+            row.review_ref &&
+            (row.status === "open" || (row.completed_at && Date.parse(row.completed_at) >= since)),
+        )
+        .sort(
+          (a, b) =>
+            Number(a.status !== "open") - Number(b.status !== "open") ||
+            (a.due_on || "9999").localeCompare(b.due_on || "9999"),
+        )
+        .map((row) => taskView(row));
+      const onCard = new Set(scorecard.map((row) => row.key));
+      return ok({
+        week: {
+          label: week,
+          starts_on: monday.toISOString().slice(0, 10),
+          ends_on: new Date(monday.getTime() + 6 * 86_400_000).toISOString().slice(0, 10),
+          complete: following.getTime() <= Date.now(),
+          previous: weeklyLabel(new Date(monday.getTime() - 7 * 86_400_000)),
+          next: following.getTime() <= Date.now() ? weeklyLabel(following) : null,
+        },
+        quarter: { label: quarter, current: weeklyQuarter(new Date()), max_priorities: 3 },
+        scorecard,
+        catalogue: weeklyCatalogue(),
+        available: weeklyCatalogue().filter((item) => !onCard.has(item.key)),
+        priorities,
+        actions,
+        note: {
+          went_well: words?.went_well ?? "",
+          went_badly: words?.went_badly ?? "",
+          sent_at: words?.sent_at ?? null,
+          sent_to: words?.sent_to ?? 0,
+          subject: composed.subject,
+          body: words?.sent_at ? words.body : composed.body,
+        },
+        settings: { ...weeklySettings, weekdays: WEEKLY_WEEKDAYS },
+        health: WEEKLY_HEALTH,
+        can_manage: weeklyCanManage(headers),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/metrics/save",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const key = String(body.metric_key ?? "");
+      const figure = weeklyFigure(key);
+      if (!figure)
+        return refuse(400, "malformed_request", { metric_key: "a figure the service counts" });
+      const owner = String(body.owner_staff_id ?? "").trim();
+      if (owner && !staff.some((member) => member.id === owner && member.is_active))
+        return refuse(400, "malformed_request", { owner_staff_id: "an active member of staff" });
+      const rawGoal = String(body.goal ?? "")
+        .trim()
+        .replace(/,/g, "");
+      const goal = rawGoal === "" ? null : Number(rawGoal);
+      if (goal !== null && !Number.isFinite(goal))
+        return refuse(400, "malformed_request", { goal: "a number, or empty for none" });
+      const direction = String(body.direction ?? "");
+      if (direction && direction !== "at_least" && direction !== "at_most")
+        return refuse(400, "malformed_request", { direction: "at_least or at_most" });
+      const resolved = (direction || (figure.better === "down" ? "at_most" : "at_least")) as
+        "at_least" | "at_most";
+      const row = weeklyMetrics.find((item) => item.metric_key === key);
+      if (row)
+        Object.assign(row, { owner_staff_id: owner, goal, direction: resolved, archived_at: null });
+      else {
+        if (weeklyMetrics.filter((item) => !item.archived_at).length >= 20)
+          return refuse(400, "malformed_request", {
+            metric_key: "the scorecard holds 20 figures at most",
+          });
+        weeklyMetrics.push({
+          id: randomUUID(),
+          metric_key: key,
+          owner_staff_id: owner,
+          goal,
+          direction: resolved,
+          position: Math.max(-1, ...weeklyMetrics.map((item) => item.position)) + 1,
+          archived_at: null,
+          created_at: now(),
+        });
+      }
+      audit("review.metric_saved", found.member.id, "scorecard", key, "", {
+        owner,
+        goal: goal === null ? "" : String(goal),
+        direction: resolved,
+        added: !row,
+      });
+      return ok({
+        metric_id: (row ?? weeklyMetrics[weeklyMetrics.length - 1]!).id,
+        metric_key: key,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/metrics/remove",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const key = String(body.metric_key ?? "");
+      const row = weeklyMetrics.find((item) => item.metric_key === key && !item.archived_at);
+      if (!row) return refuse(404, "not_found", { metric_key: "not on the scorecard" });
+      row.archived_at = now();
+      audit("review.metric_removed", found.member.id, "scorecard", key);
+      return ok({ metric_key: key, removed: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/metrics/note",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const key = String(body.metric_key ?? "");
+      if (!weeklyMetrics.some((item) => item.metric_key === key && !item.archived_at))
+        return refuse(404, "not_found", { metric_key: "not on the scorecard" });
+      const monday = weeklyWeekFrom(body.week);
+      if ("refusal" in monday) return monday.refusal;
+      const week = weeklyLabel(monday);
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      if (note)
+        weeklyMetricNotes.set(`${key}|${week}`, { note, staff_id: found.member.id, at: now() });
+      else weeklyMetricNotes.delete(`${key}|${week}`);
+      audit("review.metric_noted", found.member.id, "scorecard", key, "", { week, cleared: !note });
+      return ok({ metric_key: key, week, note });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/priorities/create",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const quarter = String(body.quarter ?? "").trim() || weeklyQuarter(new Date());
+      const end = weeklyQuarterEnd(quarter);
+      if (!end) return refuse(400, "malformed_request", { quarter: "expected YYYY-Qn" });
+      if (end.getTime() <= Date.now())
+        return refuse(400, "malformed_request", { quarter: "that quarter is over" });
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title) return refuse(400, "malformed_request", { title: "what the priority is" });
+      const owner = String(body.owner_staff_id ?? "").trim();
+      if (owner && !staff.some((member) => member.id === owner && member.is_active))
+        return refuse(400, "malformed_request", { owner_staff_id: "an active member of staff" });
+      const rows = weeklyPriorities.filter((row) => row.quarter === quarter);
+      if (rows.filter((row) => row.state === "open").length >= 3)
+        return refuse(400, "malformed_request", {
+          title: "3 a quarter: close one before adding another",
+        });
+      const row: WeeklyPriorityRow = {
+        id: randomUUID(),
+        quarter,
+        title,
+        detail: String(body.detail ?? "")
+          .trim()
+          .slice(0, 1000),
+        owner_staff_id: owner,
+        state: "open",
+        position: Math.max(-1, ...rows.map((item) => item.position)) + 1,
+        closing_note: "",
+        created_at: now(),
+        closed_at: null,
+      };
+      weeklyPriorities.push(row);
+      if (owner)
+        inboxNotify({
+          recipients: [owner],
+          subject_type: "priority",
+          subject_id: row.id,
+          subject_label: title,
+          reason: "assigned",
+          summary: `${found.member.display_name || found.member.email} made you the owner of a priority for ${quarter}. Its health is asked for every week.`,
+          actor_id: found.member.id,
+          link_path: "/reports/review",
+        });
+      audit("review.priority_created", found.member.id, "priority", row.id, "", {
+        quarter,
+        title,
+        owner,
+      });
+      return ok({ priority_id: row.id });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/priorities/{priority_id}/update",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ params, body, headers }) => {
+      const found = caller(headers)!;
+      const row = weeklyPriorities.find((item) => item.id === params.priority_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.owner_staff_id !== found.member.id && !weeklyCanManage(headers))
+        return refuse(403, "forbidden", { reason: "the priority's owner, or an admin" });
+      if (row.state !== "open")
+        return refuse(400, "malformed_request", { state: `already ${row.state}` });
+      const health = String(body.health ?? "");
+      if (!WEEKLY_HEALTH.includes(health))
+        return refuse(400, "malformed_request", { health: "on_track, at_risk or off_track" });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      if (health !== "on_track" && !note)
+        return refuse(400, "malformed_request", { note: "say in a line what is in the way" });
+      let week = weeklyLabel(new Date());
+      if (body.week) {
+        const monday = weeklyWeekFrom(body.week);
+        if ("refusal" in monday) return monday.refusal;
+        week = weeklyLabel(monday);
+      }
+      const index = weeklyHealth.findIndex(
+        (item) => item.priority_id === row.id && item.week === week,
+      );
+      const entry = {
+        priority_id: row.id,
+        week,
+        health,
+        note,
+        staff_id: found.member.id,
+        at: now(),
+      };
+      if (index >= 0) weeklyHealth[index] = entry;
+      else weeklyHealth.push(entry);
+      audit("review.priority_updated", found.member.id, "priority", row.id, "", { week, health });
+      return ok({ priority_id: row.id, week, health });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/priorities/{priority_id}/close",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ params, body, headers }) => {
+      const found = caller(headers)!;
+      const row = weeklyPriorities.find((item) => item.id === params.priority_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.owner_staff_id !== found.member.id && !weeklyCanManage(headers))
+        return refuse(403, "forbidden", { reason: "the priority's owner, or an admin" });
+      if (row.state !== "open")
+        return refuse(400, "malformed_request", { state: `already ${row.state}` });
+      const state = String(body.state ?? "");
+      if (state !== "done" && state !== "dropped")
+        return refuse(400, "malformed_request", { state: "done or dropped" });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      if (state === "dropped" && !note)
+        return refuse(400, "malformed_request", { note: "say in a line why it was dropped" });
+      Object.assign(row, { state, closing_note: note, closed_at: now() });
+      audit("review.priority_closed", found.member.id, "priority", row.id, "", { state });
+      return ok({ priority_id: row.id, state });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/actions/create",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      let ref = String(body.ref ?? "review").trim() || "review";
+      if (ref.startsWith("metric:")) {
+        const key = ref.slice("metric:".length);
+        if (!weeklyMetrics.some((item) => item.metric_key === key && !item.archived_at))
+          return refuse(400, "malformed_request", { ref: "a figure on the scorecard" });
+      } else if (ref.startsWith("priority:")) {
+        const id = ref.slice("priority:".length).toLowerCase();
+        if (!weeklyPriorities.some((item) => item.id === id)) return refuse(404, "not_found");
+        ref = `priority:${id}`;
+      } else if (ref !== "review")
+        return refuse(400, "malformed_request", { ref: "metric:<key>, priority:<id> or review" });
+      const title = String(body.title ?? "")
+        .trim()
+        .slice(0, 200);
+      if (!title) return refuse(400, "malformed_request", { title: "what is to be done" });
+      const due = String(body.due_on ?? "").trim();
+      if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due))
+        return refuse(400, "malformed_request", { due_on: "expected YYYY-MM-DD" });
+      const assignee = String(body.assignee_staff_id ?? "").trim() || found.member.id;
+      if (!staff.some((member) => member.id === assignee && member.is_active))
+        return refuse(400, "malformed_request", { owner_staff_id: "an active member of staff" });
+      const row: TaskRow = {
+        id: randomUUID(),
+        title,
+        body: String(body.body ?? "").slice(0, 2000),
+        status: "open",
+        priority: "medium",
+        due_on: due,
+        assignee_staff_id: assignee,
+        company_id: "",
+        person_id: "",
+        deal_id: "",
+        lead_id: "",
+        ticket_id: "",
+        origin: "review",
+        completed_at: null,
+        created_at: now(),
+        review_ref: ref,
+      };
+      tasks.push(row);
+      if (assignee !== found.member.id)
+        inboxAssigned(
+          assignee,
+          "task",
+          row.id,
+          found.member,
+          `${found.member.display_name || found.member.email} gave you an action from the weekly review: ${title}`,
+        );
+      audit("review.action_created", found.member.id, "task", row.id, "", { ref, assignee });
+      return ok({ task: taskView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/note/save",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const monday = weeklyWeekFrom(body.week);
+      if ("refusal" in monday) return monday.refusal;
+      const week = weeklyLabel(monday);
+      if (weeklyNotes.get(week)?.sent_at)
+        return refuse(400, "malformed_request", { week: "this week's note has been sent" });
+      weeklyNotes.set(week, {
+        week,
+        went_well: String(body.went_well ?? "")
+          .trim()
+          .slice(0, 1000),
+        went_badly: String(body.went_badly ?? "")
+          .trim()
+          .slice(0, 1000),
+        body: "",
+        sent_at: null,
+        sent_to: 0,
+      });
+      audit("review.note_saved", found.member.id, "review", week);
+      return ok({ week });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/note/send",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const monday = weeklyWeekFrom(body.week);
+      if ("refusal" in monday) return monday.refusal;
+      const week = weeklyLabel(monday);
+      const kept = weeklyNotes.get(week);
+      if (kept?.sent_at && !body.again)
+        return refuse(400, "malformed_request", {
+          week: "already sent; send it again only on purpose",
+        });
+      const composed = weeklyCompose(
+        monday,
+        weeklyScorecard(monday),
+        weeklyPriorityViews(weeklyWeekQuarter(monday), week),
+      );
+      const readers = staff.filter(
+        (member) => member.is_active && (CAPABILITIES[member.role] ?? []).includes("revenue:read"),
+      );
+      weeklyNotes.set(week, {
+        week,
+        went_well: kept?.went_well ?? "",
+        went_badly: kept?.went_badly ?? "",
+        body: composed.body,
+        sent_at: now(),
+        sent_to: readers.length,
+      });
+      audit("review.note_sent", found.member.id, "review", week, "", { sent_to: readers.length });
+      return ok({ week, sent_to: readers.length, subject: composed.subject });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/review/settings/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const next = { ...weeklySettings };
+      if ("primary_metric" in body) {
+        const key = String(body.primary_metric ?? "");
+        if (!weeklyFigure(key))
+          return refuse(400, "malformed_request", {
+            primary_metric: "a figure the service counts",
+          });
+        next.primary_metric = key;
+      }
+      if ("note_on" in body) next.note_on = Boolean(body.note_on);
+      for (const [name, high] of [
+        ["note_weekday", 6],
+        ["note_hour_utc", 23],
+      ] as const) {
+        if (name in body) {
+          const value = Number(body[name]);
+          if (!Number.isInteger(value) || value < 0 || value > high)
+            return refuse(400, "malformed_request", { [name]: `a whole number from 0 to ${high}` });
+          next[name] = value;
+        }
+      }
+      Object.assign(weeklySettings, next);
+      audit("review.settings_updated", found.member.id, "settings", "review", "", {
+        changed: next,
+      });
+      return ok({ settings: { ...weeklySettings, weekdays: WEEKLY_WEEKDAYS } });
+    },
+  },
+);
+
+// ---------------------------------------------------------------------------------------
+// nurture (0063): a lead set aside until a date
+// ---------------------------------------------------------------------------------------
+
+function nurtureToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function nurtureActive(row: LeadRow): boolean {
+  return Boolean(row.nurture_until) && row.nurture_until! > nurtureToday();
+}
+/** nurture.parse_until: a day after today and within two years. */
+function nurtureCheckUntil(until: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until) || Number.isNaN(Date.parse(`${until}T00:00:00Z`)))
+    return refuse(400, "malformed_request", { until: "a date, YYYY-MM-DD" });
+  if (until <= nurtureToday())
+    return refuse(400, "malformed_request", { until: "a day after today" });
+  if (until > new Date(Date.now() + 730 * 86_400_000).toISOString().slice(0, 10))
+    return refuse(400, "malformed_request", { until: "within 730 days" });
+  return null;
+}
+function nurtureSetAside(row: LeadRow, until: string, note: string, by: string) {
+  Object.assign(row, {
+    nurture_until: until,
+    nurture_note: note,
+    nurtured_by: by,
+    nurture_returned_at: null,
+    updated_at: now(),
+  });
+}
+function nurtureBringBack(row: LeadRow, returned: boolean) {
+  Object.assign(row, {
+    nurture_until: null,
+    updated_at: now(),
+    ...(returned ? { nurture_returned_at: now() } : {}),
+  });
+}
+/** nurture.return_due, run when the lists are read: the mock has no hourly pass. */
+function nurtureReturnDue() {
+  const today = nurtureToday();
+  for (const row of leads) {
+    if (!row.nurture_until || row.nurture_until > today) continue;
+    nurtureBringBack(row, true);
+    recordActivity({ kind: "system", body: "Back from nurture", lead_id: row.id });
+    const who = row.nurtured_by || row.owner_staff_id;
+    if (who)
+      inboxNotify({
+        recipients: [who],
+        subject_type: "lead",
+        subject_id: row.id,
+        subject_label: row.full_name || row.email,
+        reason: "reminder",
+        summary: `Back from nurture${row.nurture_note ? `: ${row.nurture_note}` : ""}`,
+      });
+    audit("lead.nurture_returned", null, "lead", row.id, "", { notified: who ?? "" });
+  }
+}
+function nurtureLiveOrRefuse(leadId: string) {
+  const row = leads.find((lead) => lead.id === leadId);
+  if (!row) return { refusal: refuse(404, "not_found") };
+  if (row.anonymised_at) return { refusal: refuse(400, "malformed_request", ANONYMISED) };
+  return { row };
+}
+
+routes.push(
+  {
+    method: "POST",
+    pattern: "hq/leads/{lead_id}/nurture",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const found = caller(headers)!;
+      const live = nurtureLiveOrRefuse(params.lead_id ?? "");
+      if ("refusal" in live) return live.refusal;
+      const row = live.row;
+      if (row.stage === "qualified" || row.stage === "disqualified")
+        return refuse(400, "malformed_request", {
+          stage: `${row.stage}: only a lead still being worked is set aside`,
+        });
+      const until = String(body.until ?? "").trim();
+      const refused = nurtureCheckUntil(until);
+      if (refused) return refused;
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      nurtureSetAside(row, until, note, found.member.id);
+      recordActivity({
+        kind: "system",
+        body: `Set aside until ${until}${note ? `: ${note}` : ""}`,
+        lead_id: row.id,
+        staff_id: found.member.id,
+        staff_name: found.member.display_name,
+      });
+      audit("lead.nurtured", found.member.id, "lead", row.id, "", { until });
+      return ok({ lead: leadView(row) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/leads/{lead_id}/nurture/end",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, headers }) => {
+      const found = caller(headers)!;
+      const live = nurtureLiveOrRefuse(params.lead_id ?? "");
+      if ("refusal" in live) return live.refusal;
+      const row = live.row;
+      if (!nurtureActive(row)) return refuse(400, "malformed_request", { lead: "not set aside" });
+      nurtureBringBack(row, false);
+      recordActivity({
+        kind: "system",
+        body: "Brought back before its date",
+        lead_id: row.id,
+        staff_id: found.member.id,
+        staff_name: found.member.display_name,
+      });
+      audit("lead.nurture_ended", found.member.id, "lead", row.id);
+      return ok({ lead: leadView(row) });
+    },
+  },
+);
+
+/** Leads who wrote in, waiting for triage; one set aside, one back from it. */
+function seedNurture() {
+  const people: Array<[string, string, string, string, number]> = [
+    [
+      "Nadia Farouk",
+      "nadia@cedarbay.example",
+      "Cedar Bay Capital",
+      "We run a long-short book and want the overnight brief for our analysts.",
+      5,
+    ],
+    [
+      "Tomas Lind",
+      "tomas.lind@northlight.example",
+      "Northlight Partners",
+      "Is there a trial for a team of four?",
+      9,
+    ],
+    [
+      "Ishita Rao",
+      "ishita@monsoonfunds.example",
+      "Monsoon Funds",
+      "Looking at research tools before our budget round.",
+      14,
+    ],
+    [
+      "Owen Pike",
+      "owen@pikeresearch.example",
+      "Pike Research",
+      "Can we export the brief to our own notes system?",
+      20,
+    ],
+    [
+      "Lena Ward",
+      "lena.ward@harbourlane.example",
+      "Harbour Lane Advisers",
+      "Interested in a demo next week.",
+      27,
+    ],
+    ["Arif Haque", "arif@delta-pms.example", "Delta PMS", "Do you cover Indian mid-caps?", 33],
+  ];
+  people.forEach(([name, email, company, message, hours], index) =>
+    leads.push({
+      id: `ae${String(index + 1).padStart(6, "0")}-0000-4000-8000-000000000063`,
+      origin: "inbound",
+      source_key: "website_early_access",
+      email,
+      full_name: name,
+      company_name: company,
+      message,
+      payload: {},
+      stage: "new",
+      disqualify_reason: "",
+      owner_staff_id: "",
+      first_replied_at: null,
+      converted_company_id: "",
+      converted_person_id: "",
+      converted_deal_id: "",
+      created_at: agoIso(hours),
+    }),
+  );
+  leads.push(
+    {
+      id: "ae000007-0000-4000-8000-000000000063",
+      origin: "inbound",
+      source_key: "website_early_access",
+      email: "maria@quaycapital.example",
+      full_name: "Maria Quay",
+      company_name: "Quay Capital",
+      message: "Not this quarter, but please come back to us.",
+      payload: {},
+      stage: "attempting",
+      disqualify_reason: "",
+      owner_staff_id: SALES_STAFF,
+      first_replied_at: agoIso(24 * 6),
+      converted_company_id: "",
+      converted_person_id: "",
+      converted_deal_id: "",
+      created_at: agoIso(24 * 7),
+      nurture_until: new Date(Date.now() + 20 * 86_400_000).toISOString().slice(0, 10),
+      nurture_note: "Their budget opens next quarter.",
+      nurtured_by: SALES_STAFF,
+      nurture_returned_at: null,
+    },
+    {
+      id: "ae000008-0000-4000-8000-000000000063",
+      origin: "inbound",
+      source_key: "website_early_access",
+      email: "felix@ridgeway.example",
+      full_name: "Felix Ridgeway",
+      company_name: "Ridgeway Partners",
+      message: "Ask us again after our fund closes.",
+      payload: {},
+      stage: "attempting",
+      disqualify_reason: "",
+      owner_staff_id: OWNER_STAFF,
+      first_replied_at: agoIso(24 * 40),
+      converted_company_id: "",
+      converted_person_id: "",
+      converted_deal_id: "",
+      created_at: agoIso(24 * 41),
+      nurture_until: null,
+      nurture_note: "After their fund closes.",
+      nurtured_by: OWNER_STAFF,
+      nurture_returned_at: agoIso(5),
+    },
+  );
+}
+seedNurture();
+
 function resetWorld() {
   resetInbox();
   pendings.clear();
@@ -48697,6 +50069,8 @@ function resetWorld() {
   seedCompany();
   seedProductLinks();
   seedInbox();
+  seedWeeklyReview();
+  seedNurture();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;
   for (const member of staff) {

@@ -106,6 +106,8 @@ export const taskSchema = z.object({
   origin: z.string(),
   completed_at: z.string().nullable(),
   created_at: z.string().nullable(),
+  /** An action from the weekly review: "metric:<key>", "priority:<id>" or "review". */
+  review_ref: z.string().default(""),
 });
 export type Task = z.infer<typeof taskSchema>;
 
@@ -410,6 +412,13 @@ export const leadSchema = z.object({
   payload: z.record(z.string(), z.unknown()),
   stage: z.string(),
   disqualify_reason: z.string(),
+  /** Set aside until this day (it is off the working lists and the sends till then). */
+  nurture_until: z.string().nullable().default(null),
+  nurture_note: z.string().default(""),
+  nurtured_by: z.string().default(""),
+  /** When it last came back from being set aside. */
+  nurture_returned_at: z.string().nullable().default(null),
+  nurturing: z.boolean().default(false),
   /** Folded into another lead ("lead"), or found to be a CRM person ("person"). */
   duplicate_of_kind: z.string(),
   duplicate_of_id: z.string(),
@@ -516,6 +525,16 @@ const convertedSchema = okEnvelope.extend({
   person_id: z.string(),
   deal_id: z.string(),
 });
+
+/** Set a lead aside until a day: off the working lists and the sends till then. */
+export function nurtureLead(token: string, leadId: string, input: { until: string; note: string }) {
+  return postHqJson(`hq/leads/${leadId}/nurture`, leadEnvelope, { token, body: input });
+}
+
+/** Bring a lead back before its day. */
+export function endNurture(token: string, leadId: string) {
+  return postHqJson(`hq/leads/${leadId}/nurture/end`, leadEnvelope, { token, body: {} });
+}
 
 export function convertLead(token: string, leadId: string, input: Record<string, unknown>) {
   return postHqJson(`hq/leads/${leadId}/convert`, convertedSchema, { token, body: input });

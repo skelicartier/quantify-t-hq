@@ -43,6 +43,7 @@ import {
   ShieldEllipsis,
   UserCheck,
   Stethoscope,
+  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 
@@ -231,6 +232,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: FileSpreadsheet,
         capability: "revenue:read",
         key: "w",
+      },
+      {
+        href: "/reports/review",
+        label: "Weekly review",
+        icon: ListChecks,
+        capability: "revenue:read",
+        key: "y",
       },
       {
         href: "/finance",

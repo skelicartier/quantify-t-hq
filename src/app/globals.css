@@ -4347,6 +4347,236 @@
     font-size: 13px;
   }
 
+  /* triage: the lead on the left, the four verbs on the right (below on a phone) */
+  .triage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 22rem);
+    gap: 16px 32px;
+  }
+
+  .triage__lead {
+    min-width: 0;
+  }
+
+  .triage__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+  }
+
+  .triage__message {
+    margin: 12px 0;
+    padding: 12px 0;
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 14px;
+  }
+
+  .triage__acts {
+    display: grid;
+    gap: 16px;
+    align-content: start;
+  }
+
+  .triage__none {
+    margin: 0;
+  }
+
+  @media (max-width: 720px) {
+    .triage {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* the weekly review: a figure, its owner and comment, then the week, six weeks and a
+     year — beside it on a wide screen, below it on a phone */
+  .score-list,
+  .priority-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .score-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 30rem);
+    gap: 8px 24px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .score-row__head {
+    min-width: 0;
+  }
+
+  .score-row__note,
+  .priority__note {
+    margin: 6px 0 0;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .score-row__figures {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px 16px;
+    margin: 0;
+  }
+
+  .score-row__figures dt {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .score-row__figures dd {
+    display: grid;
+    gap: 4px;
+    margin: 4px 0 0;
+    justify-items: start;
+  }
+
+  .score-row__actual {
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .score-row__series {
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  .score-row__tools {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px 16px;
+  }
+
+  .score-row__tool {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .score-row__tool > summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 12.5px;
+  }
+
+  .score-row__tool[open] {
+    flex-basis: 100%;
+  }
+
+  .score-row__tool[open] > summary {
+    margin-bottom: 8px;
+  }
+
+  .score-add {
+    margin-top: 12px;
+  }
+
+  .sparkline {
+    display: inline-block;
+    line-height: 0;
+  }
+
+  .sparkline__svg {
+    width: 120px;
+    height: 28px;
+    overflow: visible;
+  }
+
+  .sparkline__line {
+    stroke: var(--accent);
+    stroke-width: 1.5;
+  }
+
+  .sparkline__zero {
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+
+  .sparkline__dot {
+    fill: var(--accent);
+  }
+
+  .sparkline__dot--open {
+    fill: var(--surface);
+    stroke: var(--accent);
+    stroke-width: 1.5;
+  }
+
+  .sparkline__hover {
+    fill: transparent;
+  }
+
+  .priority {
+    display: grid;
+    gap: 4px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .priority__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+  }
+
+  .priority__history {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12px;
+  }
+
+  .note-preview {
+    display: grid;
+    gap: 6px;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  .note-preview__subject {
+    margin: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .note-preview__body {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+  }
+
+  @media (max-width: 720px) {
+    .score-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .score-row__figures {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .score-row__figures > div:first-child {
+      grid-column: 1 / -1;
+    }
+  }
+
   /* the data health list: a check and its records, then three figures — beside it on a
      wide screen under one header, below it on a phone with each figure named */
   .health-head,
@@ -9082,6 +9312,7 @@
   /* --- The weekly report -------------------------------------------------------------- */
   .week-nav {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
   }

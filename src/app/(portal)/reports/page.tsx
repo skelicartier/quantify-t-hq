@@ -161,6 +161,12 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
               ) : (
                 <span className="week-nav__current week-nav__current--quiet">This week</span>
               )}
+              <Link
+                className="btn btn--small btn--ghost"
+                href={`/reports/review?week=${report.week.label}`}
+              >
+                Review the week
+              </Link>
             </nav>
           )
         }

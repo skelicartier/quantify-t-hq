@@ -118,6 +118,11 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: "#merge-keep",
   },
   { name: "data-health", path: "/data-health", ready: ".stat-grid" },
+  // The weekly review: the scorecard, the quarter's priorities, the note.
+  { name: "reports-review", path: "/reports/review", ready: ".score-list" },
+  // Triage and the leads set aside.
+  { name: "leads-triage", path: "/leads/triage", ready: "main#main-content" },
+  { name: "leads-set-aside", path: "/leads?nurturing=1", ready: ".data-table" },
   { name: "data-health-tidy", path: "/data-health/tidy?kind=name_case", ready: ".data-table" },
   {
     name: "lead-rules-country",
@@ -689,6 +694,8 @@ async function captureInteractions(page: Page, folder: string) {
   await captureFieldFlows(page, folder);
   await captureProspectFlows(page, folder);
   await captureDataQualityFlows(page, folder);
+  await captureReviewFlows(page, folder);
+  await captureTriageFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -2239,6 +2246,111 @@ async function captureDataQualityFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/data-health-after`);
 }
 
+/**
+ * The weekly review: a comment on a figure, an action from it, this week's health of a
+ * priority the signed-in owner owns, the week's words, and the note sent. A later pass
+ * finds the note sent and the health given, and checks what they read instead.
+ */
+async function captureReviewFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/reports/review`, { waitUntil: "networkidle" });
+  const figure = page.locator("#figure-new_mrr");
+  await figure.locator("summary", { hasText: /Comment on it|Change the comment/ }).click();
+  await figure.locator("textarea[name=note]").fill("Two pilots converted on Friday.");
+  await figure.locator("button", { hasText: "Save the comment" }).click();
+  await figure
+    .locator(".score-row__note", { hasText: "Two pilots converted on Friday." })
+    .waitFor({ timeout: 15_000 });
+  await figure.locator("summary", { hasText: "Add an action" }).click();
+  await figure.locator("input[name=title]").fill("Ask both pilots for a reference");
+  await figure.locator("button", { hasText: "Add the action" }).click();
+  await page
+    .locator("section[aria-labelledby='review-actions']", {
+      hasText: "Ask both pilots for a reference",
+    })
+    .waitFor({ timeout: 15_000 });
+
+  const priority = page.locator(".priority", { hasText: "Twenty paying firms" });
+  const healthForm = priority.locator("form:has(input[name=health])");
+  if (!(await healthForm.isVisible()))
+    await priority.locator("summary", { hasText: /health$/ }).click();
+  await healthForm.locator("input[value=at_risk]").check();
+  await healthForm.locator("input[name=note]").fill("Two pilots are waiting on procurement.");
+  await healthForm.locator("button", { hasText: "Save the health" }).click();
+  await priority.locator(".pill", { hasText: "At risk" }).waitFor({ timeout: 15_000 });
+  await shoot(page, `${folder}/review-worked`);
+
+  const words = page.locator("form:has(#went-well)");
+  if ((await words.count()) > 0) {
+    await page.fill("#went-well", "Two pilots signed.");
+    await page.fill("#went-badly", "The early-access form was down for a day.");
+    await words.locator("button", { hasText: /^Save$/ }).click();
+    await words.locator(".form-sent", { hasText: "Saved" }).waitFor({ timeout: 15_000 });
+    await page.locator("button", { hasText: "Send it now" }).click();
+    // The words' form goes once the note is sent; the section then says to how many.
+    await page
+      .locator("section[aria-labelledby='review-note'] .page-note", { hasText: /^Sent to \d+/ })
+      .waitFor({ timeout: 15_000 });
+  }
+  const note = (await page.locator(".note-preview").innerText()).replace(/\s+/g, " ");
+  if (!note.includes("The number.") || !note.includes("Went well: Two pilots signed."))
+    report(`${folder}/review-sent`, `the note reads "${note.slice(0, 200)}"`);
+  await shoot(page, `${folder}/review-sent`);
+}
+
+/**
+ * Triage on the keyboard: the longest-waiting new lead taken with `1`, the next set aside
+ * with `h` (its date and line typed), the next disqualified with `3`; then the lead set
+ * aside is on the "Set aside" list and brought back from its record. A later pass finds a
+ * shorter queue and works what is left of it.
+ */
+async function captureTriageFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/leads/triage`, { waitUntil: "networkidle" });
+  const title = page.locator("#triage-lead");
+  const heading = async () => ((await title.count()) ? (await title.innerText()).trim() : "");
+  const next = async (before: string) =>
+    page.waitForFunction(
+      (previous) => (document.querySelector("#triage-lead")?.textContent ?? "").trim() !== previous,
+      before,
+      { timeout: 15_000 },
+    );
+  let setAsideName = "";
+  for (const act of ["take", "aside", "disqualify"] as const) {
+    const before = await heading();
+    if (!before) break;
+    if (act === "take") {
+      await page.keyboard.press("1");
+    } else if (act === "aside") {
+      await page.keyboard.press("h");
+      if (!(await page.locator("#triage-until:focus").count()))
+        report(`${folder}/leads-triage-aside`, "h did not put the cursor in the date");
+      await page.fill("#triage-why", "Budget opens next quarter.");
+      await shoot(page, `${folder}/leads-triage-aside`);
+      await page.locator("button", { hasText: "H · Set it aside" }).click();
+      setAsideName = before;
+    } else {
+      await page.keyboard.press("3");
+      await page.selectOption("#triage-reason", "not_a_fit");
+      await page.locator("button", { hasText: "3 · Disqualify" }).click();
+    }
+    await next(before);
+  }
+  await shoot(page, `${folder}/leads-triage-after`);
+
+  if (setAsideName) {
+    await page.goto(`${BASE}/leads?nurturing=1`, { waitUntil: "networkidle" });
+    const row = page.locator("tr", { hasText: setAsideName });
+    if ((await row.count()) === 0) {
+      report(`${folder}/leads-set-aside`, `${setAsideName} is not on the "Set aside" list`);
+      return;
+    }
+    await row.locator("a.table-title").click();
+    await page.waitForSelector("#lead-nurture", { timeout: 15_000 });
+    await page.locator("button", { hasText: "Bring it back now" }).click();
+    await page.locator("#lead-nurture-until").waitFor({ timeout: 15_000 });
+    await shoot(page, `${folder}/lead-brought-back`);
+  }
+}
+
 async function captureProspectFlows(page: Page, folder: string) {
   const stamp = Date.now().toString(36);
   const csv = [
@@ -3363,6 +3475,8 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   mailboxes: captureMailboxFlows,
   fields: captureFieldFlows,
   quality: captureDataQualityFlows,
+  review: captureReviewFlows,
+  triage: captureTriageFlows,
 };
 
 async function runPart(browser: Browser) {

@@ -74,10 +74,17 @@ const leadDuplicatesSchema = okEnvelope.extend({
 });
 export type LeadDuplicates = z.infer<typeof leadDuplicatesSchema>;
 
-/** `reason` is a reason code, or `crm` (a CRM person is in the group) or `leads`. */
-export function readLeadDuplicates(token: string, filters: { reason?: string; offset?: number }) {
+/**
+ * `reason` is a reason code, or `crm` (a CRM person is in the group) or `leads`; `lead`
+ * keeps the groups one lead is in.
+ */
+export function readLeadDuplicates(
+  token: string,
+  filters: { reason?: string; offset?: number; lead?: string },
+) {
   const query: Record<string, string> = {};
   if (filters.reason) query.reason = filters.reason;
+  if (filters.lead) query.lead = filters.lead;
   if (filters.offset) query.offset = String(filters.offset);
   return fetchHqJson("hq/leads/duplicates", leadDuplicatesSchema, { token, query });
 }

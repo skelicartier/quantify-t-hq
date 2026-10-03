@@ -9,9 +9,14 @@ import { notFound } from "next/navigation";
 import { logActivityAction } from "@/app/(portal)/_actions/work";
 import {
   convertLeadAction,
+  endNurtureAction,
+  nurtureLeadAction,
   updateLeadAction,
   updateLeadStageAction,
 } from "@/app/(portal)/leads/actions";
+import { ActForm } from "@/components/ui/act-form";
+import { Field, Input } from "@/components/ui/field";
+import { RowAction } from "@/components/ui/row-action";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
 import { ConvertLeadForm, LeadStageForm } from "@/components/crm/lead-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
@@ -348,6 +353,70 @@ export default async function LeadPage({ params }: LeadPageProps) {
               recordId={lead.lead_id}
               returnPath={`/leads/${lead.lead_id}`}
             />
+            {(lead.nurturing ||
+              (canWrite && ["new", "attempting", "connected"].includes(lead.stage))) && (
+              <Card title={lead.nurturing ? "Set aside" : "Set it aside"} titleAs="h3">
+                {lead.nurturing ? (
+                  <>
+                    <p className="side-quiet" id="lead-nurture">
+                      Until {formatDate(lead.nurture_until)}
+                      {lead.nurtured_by ? `, by ${nameFor(names, lead.nurtured_by)}` : ""}
+                      {lead.nurture_note ? `: ${lead.nurture_note}` : "."} It is off the working
+                      lists and the sends until then, and comes back unread on the day.
+                    </p>
+                    {canWrite && (
+                      <RowAction
+                        action={endNurtureAction}
+                        fields={{ lead_id: lead.lead_id }}
+                        buttons={[
+                          {
+                            label: "Bring it back now",
+                            className: "btn btn--small",
+                            pendingLabel: "Bringing it back…",
+                          },
+                        ]}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <ActForm
+                    action={nurtureLeadAction}
+                    hidden={{ lead_id: lead.lead_id, from: "record" }}
+                    act="nurture"
+                    label="Set it aside"
+                  >
+                    <Field
+                      id="lead-nurture-until"
+                      label="Until"
+                      hint="Off the working lists and the sends till then; back to you, unread, on the day."
+                    >
+                      <Input
+                        id="lead-nurture-until"
+                        name="until"
+                        type="date"
+                        min={isoDayPlus(now, 1)}
+                        defaultValue={isoDayPlus(now, 30)}
+                        required
+                      />
+                    </Field>
+                    <Field id="lead-nurture-note" label="In a line">
+                      <Input
+                        id="lead-nurture-note"
+                        name="note"
+                        maxLength={400}
+                        placeholder="Budget opens in January."
+                      />
+                    </Field>
+                  </ActForm>
+                )}
+                {lead.nurture_returned_at && !lead.nurturing && (
+                  <p className="side-quiet">
+                    Back from being set aside{" "}
+                    <Timestamp value={lead.nurture_returned_at} now={now} mode="relative" />.
+                  </p>
+                )}
+              </Card>
+            )}
             {lead.stage === "qualified" && (
               <Card title="Converted" titleAs="h3" important>
                 <ul className="side-list">

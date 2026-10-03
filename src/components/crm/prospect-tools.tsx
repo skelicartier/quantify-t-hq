@@ -77,6 +77,8 @@ const CHANGES = [
   { key: "tags_add", label: "Add a tag" },
   { key: "tags_remove", label: "Remove a tag" },
   { key: "verified", label: "Verified" },
+  { key: "nurture", label: "Set aside until" },
+  { key: "nurture_end", label: "Bring back from set aside" },
 ] as const;
 
 /**
@@ -180,6 +182,31 @@ export function BulkViewForm({
             disabled={isPending}
           />
         </Field>
+      )}
+      {change === "nurture" && (
+        <>
+          <Field
+            id="bulk-nurture"
+            label="Until"
+            hint="Off the working lists and the sends till then."
+          >
+            <Input
+              id="bulk-nurture"
+              name="value_nurture"
+              type="date"
+              required
+              disabled={isPending}
+            />
+          </Field>
+          <Field id="bulk-nurture-note" label="In a line">
+            <Input
+              id="bulk-nurture-note"
+              name="nurture_note"
+              maxLength={400}
+              disabled={isPending}
+            />
+          </Field>
+        </>
       )}
       {change === "verified" && (
         <Field id="bulk-verified" label="To">

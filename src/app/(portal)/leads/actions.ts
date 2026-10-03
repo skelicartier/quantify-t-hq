@@ -341,7 +341,15 @@ export async function rollbackLeadImportAction(
   }
 }
 
-const BULK_CHANGES = ["owner", "stage", "tags_add", "tags_remove", "verified"] as const;
+const BULK_CHANGES = [
+  "owner",
+  "stage",
+  "tags_add",
+  "tags_remove",
+  "verified",
+  "nurture",
+  "nurture_end",
+] as const;
 
 /** One change to everything the current view matches: one request, one audit row. */
 export async function bulkProspectsAction(
@@ -362,6 +370,10 @@ export async function bulkProspectsAction(
     if (value === "disqualified")
       set.disqualify_reason = fieldValue(formData, "disqualify_reason", 40) || "not_a_fit";
   } else if (change === "verified") set.verified_state = value;
+  else if (change === "nurture") {
+    set.nurture_until = value;
+    set.nurture_note = fieldValue(formData, "nurture_note", 400).trim();
+  } else if (change === "nurture_end") set.nurture_until = "";
   else {
     const tags = parseTags(value);
     if (!tags.length) return { status: "error", message: "Type at least one tag." };
@@ -638,4 +650,106 @@ export async function applyStandardiseAction(
   // Past the inline limit it runs in the background: Prospects shows how far it has got.
   if (result.queued) redirect("/leads/prospects");
   return sent(`Changed ${plural(result.changed, "lead", "leads")}.`);
+}
+
+// ---------------------------------------------------------------------------------------
+// triage, and a lead set aside until a date
+// ---------------------------------------------------------------------------------------
+
+const TRIAGE = "/leads/triage";
+
+/** The triage queue again, with the leads already dealt with this round left out. */
+function nextInTriage(formData: FormData, leadId: string): never {
+  const skipped = fieldValue(formData, "skip", 2_000)
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  revalidatePath("/leads");
+  revalidatePath(TRIAGE);
+  redirect(`${TRIAGE}?skip=${[...skipped, leadId].slice(-50).join(",")}`);
+}
+
+/** Triage's "take it": the lead is yours, and the next one comes up. */
+export async function takeLeadAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(TRIAGE);
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const leadId = fieldValue(formData, "lead_id", 64);
+  const me = context.me.staff.staff_id;
+  if (fieldValue(formData, "owner_staff_id", 64) !== me) {
+    try {
+      await crmApi.updateLead(context.token, leadId, { owner_staff_id: me });
+    } catch (error) {
+      return crmRefusal(error);
+    }
+  }
+  nextInTriage(formData, leadId);
+}
+
+/** Triage's "disqualify", with its reason; the next one comes up. */
+export async function disqualifyFromTriageAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(TRIAGE);
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const leadId = fieldValue(formData, "lead_id", 64);
+  try {
+    await crmApi.updateLead(context.token, leadId, {
+      stage: "disqualified",
+      disqualify_reason: fieldValue(formData, "disqualify_reason", 40),
+    });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  nextInTriage(formData, leadId);
+}
+
+/**
+ * Set a lead aside until a date. From triage the next one comes up; from the record the
+ * record says until when.
+ */
+export async function nurtureLeadAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const leadId = fieldValue(formData, "lead_id", 64);
+  try {
+    await crmApi.nurtureLead(context.token, leadId, {
+      until: fieldValue(formData, "until", 10),
+      note: fieldValue(formData, "note", 400).trim(),
+    });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  if (fieldValue(formData, "from", 10) !== "record") nextInTriage(formData, leadId);
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
+  return sent("Set aside. It comes back to you on the day, unread.");
+}
+
+/** Bring a lead back before its day. */
+export async function endNurtureAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const leadId = fieldValue(formData, "lead_id", 64);
+  try {
+    await crmApi.endNurture(context.token, leadId);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/leads");
+  return sent("Back on the working lists.");
 }

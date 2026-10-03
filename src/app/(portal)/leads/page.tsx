@@ -126,7 +126,14 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
   const conditions = parseFilters(filterParams, filterFields);
   const readField = (lead: LeadsPage["leads"][number], field: string) =>
     readLeadField(lead, field, names);
-  const filtered = applyFilters(page?.leads ?? [], conditions, readField);
+  // A lead set aside is off the working list until its day; "Set aside" shows only those.
+  const setAside = firstSearchValue(parameters.nurturing) === "1";
+  const nurturingCount = (page?.leads ?? []).filter((lead) => lead.nurturing).length;
+  const filtered = applyFilters(
+    (page?.leads ?? []).filter((lead) => lead.nurturing === setAside),
+    conditions,
+    readField,
+  );
   const leads = sortRows(filtered, sort, {
     lead: (lead) => lead.full_name || lead.email,
     source: (lead) => sourceLabel(lead.source_key, sourceNames),
@@ -226,11 +233,18 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
               <Link
                 key={stage}
                 href={filterLink("stage", stage)}
-                aria-current={filters.stage === stage ? "page" : undefined}
+                aria-current={filters.stage === stage && !setAside ? "page" : undefined}
               >
                 {LEAD_STAGE_LABELS[stage]}
               </Link>
             ))}
+            <Link
+              href={setAside ? "/leads" : "/leads?nurturing=1"}
+              aria-current={setAside ? "page" : undefined}
+            >
+              Set aside ({nurturingCount})
+            </Link>
+            <Link href="/leads/triage">Triage</Link>
             <form className="filter-strip__search" action="/leads" role="search">
               {filters.stage && <input type="hidden" name="stage" value={filters.stage} />}
               {settings && (

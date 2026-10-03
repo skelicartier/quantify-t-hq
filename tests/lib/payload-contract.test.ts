@@ -82,6 +82,7 @@ vi.mock("@/lib/api/core", async (importOriginal) => {
 import * as auth from "@/lib/api/auth";
 import * as crm from "@/lib/api/crm";
 import * as dataQuality from "@/lib/api/data-quality";
+import * as reviewApi from "@/lib/api/review";
 import * as deals from "@/lib/api/deals";
 import * as home from "@/lib/api/home";
 import * as inboxApi from "@/lib/api/inbox";
@@ -295,6 +296,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/crm/duplicates", () => crm.readDuplicates(token)],
   ["hq/data/health", () => dataQuality.readDataHealth(token)],
   ["hq/data/standardise", () => dataQuality.readStandardisePreview(token, "name_case")],
+  ["hq/review", () => reviewApi.readReview(token, { quarter: ids.review_quarter! })],
   ["hq/leads/suggestions", () => crm.readLeadSuggestions(token)],
   ["hq/settings/leads", () => crm.readLeadSettings(token)],
   ["hq/settings/cold", () => crm.readColdSettings(token)],

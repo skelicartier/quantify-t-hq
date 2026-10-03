@@ -275,6 +275,16 @@ export function prospectFilterFields(
     },
     { key: "campaign", label: "Was sent campaign", kind: "text" },
     {
+      key: "nurturing",
+      label: "Set aside",
+      kind: "choice",
+      choices: [
+        { value: "yes", label: "Yes" },
+        { value: "no", label: "No" },
+      ],
+    },
+    { key: "nurture_days", label: "Days until it comes back", kind: "number" },
+    {
       key: "origin",
       label: "Origin",
       kind: "choice",
@@ -314,6 +324,8 @@ export const PROSPECT_FIELD_KEYS = [
   "bounced",
   "clicked",
   "campaign",
+  "nurturing",
+  "nurture_days",
 ] as const;
 
 /** The list's column → the service's sort name. */
