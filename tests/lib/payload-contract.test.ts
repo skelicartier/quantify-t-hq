@@ -139,6 +139,10 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/mail/segments", () => mail.readSegments(token)],
   ["hq/mail/campaigns", () => mail.readCampaigns(token)],
   ["hq/mail/campaigns/{campaign_id}", () => mail.readCampaign(token, ids.mail_campaign_id!)],
+  [
+    "hq/mail/campaigns/{campaign_id}/breakdown",
+    () => mail.readCampaignBreakdown(token, ids.mail_campaign_id!, "country"),
+  ],
   ["hq/mail/sequences", () => mail.readSequences(token)],
   ["hq/mail/sequences/{sequence_id}", () => mail.readSequence(token, ids.mail_sequence_id!)],
   ["hq/mail/replies", () => mail.readReplies(token)],

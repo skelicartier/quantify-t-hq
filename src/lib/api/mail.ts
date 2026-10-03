@@ -4,11 +4,14 @@ import { z } from "zod";
 
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
 import {
+  breakdownSchema,
   campaignSchema,
   checklistItemSchema,
   conditionSchema,
   consentSchema,
   enrolmentSchema,
+  feedJudgeSchema,
+  feedSchema,
   healthSchema,
   messageSchema,
   previewSchema,
@@ -394,6 +397,26 @@ export function updateCampaign(token: string, campaignId: string, input: Record<
   });
 }
 
+/** The next slice of a capped send: a new draft that leaves out whoever an earlier slice reached. */
+export function continueCampaign(token: string, campaignId: string, limit: number | null) {
+  return postHqJson(`hq/mail/campaigns/${campaignId}/continue`, campaignEnvelope, {
+    token,
+    body: limit === null ? {} : { limit },
+  });
+}
+
+/** How a send went, by one of a lead recipient's own columns. */
+export function readCampaignBreakdown(token: string, campaignId: string, by: string) {
+  return fetchHqJson(
+    `hq/mail/campaigns/${campaignId}/breakdown`,
+    okEnvelope.merge(breakdownSchema),
+    {
+      token,
+      query: { by },
+    },
+  );
+}
+
 export function previewCampaign(token: string, campaignId: string) {
   return postHqJson(
     `hq/mail/campaigns/${campaignId}/preview`,
@@ -502,12 +525,49 @@ const sequenceDetailSchema = okEnvelope.extend({
   sequence: sequenceSchema,
   enrolments: z.array(enrolmentSchema),
   per_step: z.array(perStepSchema),
+  feeds: z.array(feedSchema),
+  /** The segments a feed may take from, for the form. */
+  segments: z.array(
+    z.object({
+      segment_id: z.string(),
+      name: z.string(),
+      kind: z.string(),
+      last_count: z.number().nullable(),
+    }),
+  ),
+  max_daily_cap: z.number(),
   may_send: z.boolean(),
 });
 export type SequenceDetail = z.infer<typeof sequenceDetailSchema>;
 
 export function readSequence(token: string, sequenceId: string) {
   return fetchHqJson(`hq/mail/sequences/${sequenceId}`, sequenceDetailSchema, { token });
+}
+
+// -- feeds: a sequence takes from a segment every day --
+
+/** What a feed with this segment and cap would take today, before it exists. */
+export function previewFeed(token: string, sequenceId: string, input: Record<string, unknown>) {
+  return postHqJson(`hq/mail/sequences/${sequenceId}/feeds/preview`, feedJudgeSchema, {
+    token,
+    body: input,
+  });
+}
+
+export function createFeed(token: string, sequenceId: string, input: Record<string, unknown>) {
+  return postHqJson(
+    `hq/mail/sequences/${sequenceId}/feeds/create`,
+    okEnvelope.extend({ feed: feedSchema, today: feedJudgeSchema }),
+    { token, body: input },
+  );
+}
+
+/** Paused, resumed, ended, or given a new cap. */
+export function updateFeed(token: string, feedId: string, input: Record<string, unknown>) {
+  return postHqJson(`hq/mail/feeds/${feedId}/update`, okEnvelope.extend({ feed: feedSchema }), {
+    token,
+    body: input,
+  });
 }
 
 export function saveSequence(token: string, input: Record<string, unknown>) {

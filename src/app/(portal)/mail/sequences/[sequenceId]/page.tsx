@@ -4,18 +4,24 @@ import { notFound } from "next/navigation";
 import {
   enrolAction,
   enrolPreviewAction,
+  feedCreateAction,
+  feedPreviewAction,
+  feedUpdateAction,
   outcomeAction,
   resumeEnrolmentAction,
   saveSequenceAction,
   sequenceStateAction,
 } from "@/app/(portal)/mail/actions";
 import { EnrolPanel } from "@/components/mail/enrol-panel";
+import { FeedPanel } from "@/components/mail/feed-panel";
 import { MailForm } from "@/components/mail/mail-form";
 import { EnrolmentStatePill } from "@/components/mail/pills";
 import { SequenceEditor } from "@/components/mail/sequence-editor";
 import { Callout } from "@/components/ui/callout";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Field, Input } from "@/components/ui/field";
+import { Popover } from "@/components/ui/popover";
 import {
   Properties,
   Property,
@@ -32,13 +38,15 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
   EXIT_REASON_LABELS,
+  FEED_STATE_LABELS,
+  SKIP_REASON_LABELS,
   readSenders,
   readSequence,
   readTemplates,
   type SequenceDetail,
 } from "@/lib/api/mail";
 import { audienceOptions } from "@/lib/mail/options";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatNumber } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -48,9 +56,26 @@ export const dynamic = "force-dynamic";
 const TABS = [
   { key: "people", label: "People" },
   { key: "enrol", label: "Enrol" },
+  { key: "feeds", label: "Daily feed" },
   { key: "steps", label: "Steps" },
   { key: "results", label: "Results" },
 ];
+
+const FEED_COLUMNS = [
+  { key: "segment", label: "Takes from" },
+  { key: "cap", label: "A day", align: "end" as const },
+  { key: "state", label: "State" },
+  { key: "last", label: "Last take" },
+  { key: "total", label: "Enrolled so far", align: "end" as const },
+  { key: "by", label: "Set by" },
+  { key: "actions", label: "" },
+];
+
+const FEED_TONES: Record<string, "live" | "attention" | "neutral"> = {
+  active: "live",
+  paused: "attention",
+  ended: "neutral",
+};
 
 const ENROLMENT_COLUMNS = [
   { key: "who", label: "Person" },
@@ -191,7 +216,13 @@ export default async function SequencePage({ params, searchParams }: SequencePag
       )}
       <RecordTabs
         base={base}
-        tabs={[{ ...TABS[0]!, count: live.length }, TABS[1]!, TABS[2]!, TABS[3]!]}
+        tabs={[
+          { ...TABS[0]!, count: live.length },
+          TABS[1]!,
+          { ...TABS[2]!, count: sequence.feeds.active || undefined },
+          TABS[3]!,
+          TABS[4]!,
+        ]}
         current={tab}
         label="Sequence sections"
       />
@@ -219,6 +250,23 @@ export default async function SequencePage({ params, searchParams }: SequencePag
             </Property>
             <Property label="Ends on">
               A reply you record, a meeting, a deal, a lead moving on, a bounce, a stop
+            </Property>
+            <Property label="Fed from">
+              {sequence.feeds.active > 0 ? (
+                <Link href={`${base}?tab=feeds`}>
+                  {sequence.feeds.active === 1
+                    ? "One segment"
+                    : `${sequence.feeds.active} segments`}
+                  , up to {formatNumber(sequence.feeds.daily_cap)} a day
+                </Link>
+              ) : sequence.feeds.total > 0 ? (
+                <Link href={`${base}?tab=feeds`}>
+                  {sequence.feeds.total === 1 ? "One feed" : `${sequence.feeds.total} feeds`}, none
+                  taking today
+                </Link>
+              ) : (
+                <Link href={`${base}?tab=feeds`}>Nothing yet · set a daily feed</Link>
+              )}
             </Property>
             <Property label="Steps">
               <ol className="step-lines">
@@ -379,6 +427,147 @@ export default async function SequencePage({ params, searchParams }: SequencePag
               disabled={sequence.state !== "active" || !canWrite}
             />
           </RecordSection>
+        )}
+        {tab === "feeds" && (
+          <>
+            <RecordSection id="sequence-feeds" title="Fed from a segment, a little every day">
+              <p className="page-note">
+                A feed takes up to its cap from a segment each day — best fit first, under the
+                sending rules and this sequence&rsquo;s own — and enrols them. It never takes anyone
+                twice, waits while sending is off or the sequence is paused, and each day&rsquo;s
+                take is one line in the audit log.
+              </p>
+              <DataTable
+                caption="Feeds"
+                columns={FEED_COLUMNS}
+                isEmpty={detail.feeds.length === 0}
+                empty={
+                  <EmptyState
+                    compact
+                    title="No feed yet"
+                    description="Start one below: choose a segment and how many a day."
+                  />
+                }
+              >
+                {detail.feeds.map((feed) => (
+                  <tr
+                    key={feed.feed_id}
+                    className={feed.state === "ended" ? "row--muted" : undefined}
+                  >
+                    <td>
+                      <Link className="table-title" href="/mail/segments">
+                        {feed.segment.name || "A segment since removed"}
+                      </Link>
+                      {feed.note && <span className="table-sub">{feed.note}</span>}
+                    </td>
+                    <td className="data-table__num">{formatNumber(feed.daily_cap)}</td>
+                    <td className="nowrap">
+                      <StatusPill
+                        value={feed.state}
+                        label={FEED_STATE_LABELS[feed.state] ?? feed.state}
+                        tone={FEED_TONES[feed.state] ?? "neutral"}
+                      />
+                      {feed.state === "ended" && feed.end_reason_label && (
+                        <span className="table-sub">{feed.end_reason_label}</span>
+                      )}
+                    </td>
+                    <td>
+                      {feed.last_run_on ? (
+                        <>
+                          {formatDate(feed.last_run_on)} · {formatNumber(feed.last_enrolled)}{" "}
+                          enrolled
+                          {feed.last_considered > feed.last_enrolled &&
+                            ` of ${formatNumber(feed.last_considered)} judged`}
+                          {Object.keys(feed.last_reasons).length > 0 && (
+                            <span className="table-sub">
+                              Held:{" "}
+                              {Object.entries(feed.last_reasons)
+                                .map(
+                                  ([reason, count]) =>
+                                    `${SKIP_REASON_LABELS[reason] ?? reason} (${count})`,
+                                )
+                                .join(" · ")}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="table-sub">Not yet: with the next sending pass</span>
+                      )}
+                    </td>
+                    <td className="data-table__num">
+                      {formatNumber(feed.enrolled_total)}
+                      <span className="table-sub">
+                        {feed.days_run === 1 ? "1 day" : `${formatNumber(feed.days_run)} days`}
+                      </span>
+                    </td>
+                    <td className="nowrap">{feed.created_by?.name ?? "—"}</td>
+                    <td>
+                      {detail.may_send && feed.state !== "ended" && (
+                        <div className="row-actions">
+                          <MailForm
+                            action={feedUpdateAction}
+                            fields={{
+                              feed_id: feed.feed_id,
+                              sequence_id: sequence.sequence_id,
+                              state: feed.state === "active" ? "paused" : "active",
+                            }}
+                            submitLabel={feed.state === "active" ? "Pause" : "Resume"}
+                            className="inline-form"
+                          />
+                          <Popover label="Change the cap" align="end">
+                            <MailForm
+                              action={feedUpdateAction}
+                              fields={{ feed_id: feed.feed_id, sequence_id: sequence.sequence_id }}
+                              submitLabel="Save the cap"
+                            >
+                              <Field id={`cap-${feed.feed_id}`} label="Up to, each day">
+                                <Input
+                                  id={`cap-${feed.feed_id}`}
+                                  name="daily_cap"
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={1}
+                                  max={detail.max_daily_cap}
+                                  defaultValue={feed.daily_cap}
+                                  required
+                                />
+                              </Field>
+                            </MailForm>
+                          </Popover>
+                          <MailForm
+                            action={feedUpdateAction}
+                            fields={{
+                              feed_id: feed.feed_id,
+                              sequence_id: sequence.sequence_id,
+                              state: "ended",
+                            }}
+                            submitLabel="End"
+                            variant="ghost"
+                            className="inline-form"
+                          />
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </DataTable>
+            </RecordSection>
+            <RecordSection id="sequence-feed-new" title="Start a feed">
+              {sequence.state !== "active" && (
+                <Callout tone="attention" compact>
+                  The sequence is not live: you can check what a feed would take, not start one.
+                </Callout>
+              )}
+              <FeedPanel
+                sequenceId={sequence.sequence_id}
+                segments={detail.segments}
+                maxDailyCap={detail.max_daily_cap}
+                previewAction={feedPreviewAction}
+                createAction={feedCreateAction}
+                disabled={sequence.state !== "active" || !detail.may_send}
+              />
+            </RecordSection>
+          </>
         )}
         {tab === "steps" && senders && templates && (
           <SequenceEditor

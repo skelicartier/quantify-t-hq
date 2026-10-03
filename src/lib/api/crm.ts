@@ -535,6 +535,13 @@ const leadImportSchema = z.object({
   rolled_back_count: z.number(),
   /** Leads still carrying this import: what taking it back would look at. */
   remaining: z.number(),
+  /** What came of the file's addresses so far, from the mail ledger and the stop list. */
+  health: z.object({
+    written_to: z.number(),
+    bounced: z.number(),
+    clicked: z.number(),
+    stopped: z.number(),
+  }),
 });
 export type LeadImport = z.infer<typeof leadImportSchema>;
 

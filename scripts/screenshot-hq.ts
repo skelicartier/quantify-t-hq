@@ -58,6 +58,9 @@ const MAIL = {
   berlinList: "ea800000-0000-4000-8000-000000000002",
   followUp: "ea400000-0000-4000-8000-000000000006",
   fundIntro: "ea500000-0000-4000-8000-000000000001",
+  pmsIntroOne: "ea400000-0000-4000-8000-000000000007",
+  pmsIntroTwo: "ea400000-0000-4000-8000-000000000008",
+  leadsThisMonth: "ea300000-0000-4000-8000-000000000003",
   // Three September messages whose footer links the public page is walked with: one only
   // looked at, one unsubscribed by its button, one by the mailbox's one-click POST.
   stopLooked: "ea600000-0000-4000-8000-000000000001",
@@ -495,6 +498,22 @@ const SIGNED_IN_PAGES: Shot[] = [
     name: "mail-sequence-steps",
     path: `/mail/sequences/${MAIL.fundIntro}?tab=steps`,
     ready: "main#main-content",
+  },
+  {
+    name: "mail-sequence-feeds",
+    path: `/mail/sequences/${MAIL.fundIntro}?tab=feeds`,
+    ready: ".enrol-panel",
+  },
+  // The programme's first slice, sent, with its results by country; and the drafted second.
+  {
+    name: "mail-campaign-series",
+    path: `/mail/campaigns/${MAIL.pmsIntroOne}?by=country`,
+    ready: "#campaign-breakdown",
+  },
+  {
+    name: "mail-campaign-next-draft",
+    path: `/mail/campaigns/${MAIL.pmsIntroTwo}`,
+    ready: "#campaign-audience",
   },
   {
     name: "mail-sequence-results",
@@ -2042,6 +2061,46 @@ async function captureProspectFlows(page: Page, folder: string) {
     report(`${folder}/mail-campaign-capped`, `the capped campaign reads "${reach.slice(0, 200)}"`);
   await shoot(page, `${folder}/mail-campaign-capped`);
 
+  // The capped send goes out (five people, no customer: no second approval), its results
+  // break down by the file's one firm type, and its next slice is one press: a draft that
+  // leaves out the five it reached.
+  await page.locator("button", { hasText: "Send me a test" }).click();
+  await page.waitForSelector("button:has-text('Submit'):not([disabled])", { timeout: 15_000 });
+  await page.locator("button", { hasText: "Submit" }).click();
+  await page.waitForSelector("button:has-text('Start sending')", { timeout: 15_000 });
+  await page.locator("button", { hasText: "Start sending" }).click();
+  await page.waitForSelector("button:has-text('Pause'), .rhead__status:has-text('Sent')", {
+    timeout: 15_000,
+  });
+  await page.waitForSelector("#campaign-breakdown", { timeout: 15_000 });
+  const byType = (
+    await page.locator("section[aria-labelledby='campaign-breakdown']").innerText()
+  ).replace(/\s+/g, " ");
+  if (!/Harness fund\s+5/.test(byType))
+    report(
+      `${folder}/mail-campaign-breakdown`,
+      `the results by firm type read "${byType.slice(0, 160)}"`,
+    );
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shoot(page, `${folder}/mail-campaign-breakdown`);
+  await page.locator("button", { hasText: "Draft the next slice" }).click();
+  await page.waitForURL(/\/mail\/campaigns\/[0-9a-f-]{36}$/, { timeout: 15_000 });
+  await page.waitForSelector("#campaign-audience", { timeout: 15_000 });
+  const slice = (
+    await page.locator("section[aria-labelledby='campaign-audience']").innerText()
+  ).replace(/\s+/g, " ");
+  const sliceTitle = await page.locator("h1").first().innerText();
+  if (
+    !/part 2/.test(sliceTitle) ||
+    !/5 will get it/.test(slice) ||
+    !/Reached by an earlier slice/.test(slice)
+  )
+    report(
+      `${folder}/mail-campaign-next-slice`,
+      `the next slice reads "${sliceTitle}" / "${slice.slice(0, 200)}"`,
+    );
+  await shoot(page, `${folder}/mail-campaign-next-slice`);
+
   // Edit one in place: it is no longer untouched, so taking the file back leaves it.
   await page.goto(
     `${BASE}/leads/prospects?f=${encodeURIComponent(`import:is:harness-${stamp}.csv`)}&sort=lead`,
@@ -2165,6 +2224,40 @@ async function captureProspectFlows(page: Page, folder: string) {
     },
   );
   await shoot(page, `${folder}/lead-import-taken-back`);
+
+  // A feed: the intro sequence takes up to two a day from "Leads this month" — checked
+  // first, started, paused, resumed and ended. Each pass ends its own, so the next pass
+  // may start one on the same segment.
+  await page.goto(`${BASE}/mail/sequences/${MAIL.fundIntro}?tab=feeds`, {
+    waitUntil: "networkidle",
+  });
+  await page.selectOption("#feed-segment", MAIL.leadsThisMonth);
+  await page.fill("#feed-cap", "2");
+  await page.locator("button", { hasText: "Check today's take" }).click();
+  await page.waitForSelector(".feed-judge", { timeout: 15_000 });
+  await shoot(page, `${folder}/sequence-feed-checked`);
+  await page.locator("button", { hasText: "Start the feed" }).click();
+  await page.waitForSelector("text=/Started: up to 2 a day/", { timeout: 15_000 });
+  const feedRow = page.locator(
+    'tr:has-text("Leads this month"):has-text("Taking daily"):not(:has-text("Ended"))',
+  );
+  await feedRow.waitFor({ timeout: 15_000 });
+  await feedRow.locator("button", { hasText: "Pause" }).click();
+  const pausedRow = page.locator(
+    'tr:has-text("Leads this month"):has-text("Paused"):not(:has-text("Ended"))',
+  );
+  await pausedRow.locator("button", { hasText: "Resume" }).waitFor({ timeout: 15_000 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shoot(page, `${folder}/sequence-feed-started`);
+  await pausedRow.locator("button", { hasText: "End" }).click();
+  // An earlier pass left its own ended row, so the proof is this row leaving, not one arriving.
+  await pausedRow.waitFor({ state: "detached", timeout: 15_000 });
+  if (
+    (await page
+      .locator('tr:has-text("Leads this month"):has-text("Ended by a colleague")')
+      .count()) === 0
+  )
+    report(`${folder}/sequence-feed-ended`, "the ended feed does not say who ended it");
 }
 
 /**

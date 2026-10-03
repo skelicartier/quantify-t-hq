@@ -246,6 +246,25 @@ export function prospectFilterFields(
     { key: "emails_sent", label: "Emails sent", kind: "number" },
     { key: "last_emailed_days", label: "Days since last email", kind: "number" },
     {
+      key: "bounced",
+      label: "Address bounced",
+      kind: "choice",
+      choices: [
+        { value: "yes", label: "Yes" },
+        { value: "no", label: "No" },
+      ],
+    },
+    {
+      key: "clicked",
+      label: "Clicked an email",
+      kind: "choice",
+      choices: [
+        { value: "yes", label: "Yes" },
+        { value: "no", label: "No" },
+      ],
+    },
+    { key: "campaign", label: "Was sent campaign", kind: "text" },
+    {
       key: "origin",
       label: "Origin",
       kind: "choice",
@@ -282,6 +301,9 @@ export const PROSPECT_FIELD_KEYS = [
   "created_days",
   "emails_sent",
   "last_emailed_days",
+  "bounced",
+  "clicked",
+  "campaign",
 ] as const;
 
 /** The list's column → the service's sort name. */

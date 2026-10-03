@@ -44,8 +44,19 @@ const COLUMNS = [
   { key: "updated", label: "Filled in", align: "end" as const },
   { key: "skipped", label: "Left out", align: "end" as const },
   { key: "remaining", label: "Still here", align: "end" as const },
+  { key: "health", label: "Since then" },
   { key: "actions", label: "" },
 ];
+
+/** What came of a file's addresses, in one line; nothing sent reads as that. */
+function healthLine(health: LeadImportsPage["imports"][number]["health"]): string {
+  if (health.written_to === 0 && health.stopped === 0) return "Nothing sent yet";
+  const parts = [`${formatNumber(health.written_to)} written to`];
+  if (health.bounced) parts.push(`${formatNumber(health.bounced)} bounced`);
+  if (health.clicked) parts.push(`${formatNumber(health.clicked)} clicked`);
+  if (health.stopped) parts.push(`${formatNumber(health.stopped)} stopped`);
+  return parts.join(" · ");
+}
 
 export default async function LeadImportPage() {
   const context = await requireStaff(BASE);
@@ -161,6 +172,13 @@ export default async function LeadImportPage() {
                     <td className="data-table__num">{formatNumber(row.updated)}</td>
                     <td className="data-table__num">{formatNumber(row.skipped)}</td>
                     <td className="data-table__num">{formatNumber(row.remaining)}</td>
+                    <td className="nowrap">
+                      {row.health.written_to === 0 && row.health.stopped === 0 ? (
+                        <span className="table-sub">{healthLine(row.health)}</span>
+                      ) : (
+                        healthLine(row.health)
+                      )}
+                    </td>
                     <td>
                       {row.rolled_back_at ? (
                         <span className="table-sub">

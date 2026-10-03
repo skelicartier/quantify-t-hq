@@ -120,8 +120,35 @@ export const campaignSchema = z.object({
   created_by: personRefSchema.nullable(),
   created_at: z.string().nullable(),
   updated_at: z.string().nullable(),
+  /** The series: the earlier send this one continues, and the sends that continue it. */
+  continues: z.object({ campaign_id: z.string(), name: z.string(), state: z.string() }).nullable(),
+  continued_by: z.array(z.object({ campaign_id: z.string(), name: z.string(), state: z.string() })),
+  /** A capped send of a segment, past draft: it has a next slice. */
+  may_continue: z.boolean(),
 });
 export type MailCampaign = z.infer<typeof campaignSchema>;
+
+export const breakdownSchema = z.object({
+  by: z.string(),
+  fields: z.array(z.object({ key: z.string(), label: z.string() })),
+  rows: z.array(
+    z.object({
+      value: z.string(),
+      recipients: z.number(),
+      sent: z.number(),
+      delivered: z.number(),
+      hard_bounced: z.number(),
+      soft_bounced: z.number(),
+      complained: z.number(),
+      unsubscribed: z.number(),
+      clicked: z.number(),
+      skipped: z.number(),
+    }),
+  ),
+  /** Recipients who are not leads (a CRM person has no firm type or fit), counted once. */
+  not_leads: z.number(),
+});
+export type CampaignBreakdown = z.infer<typeof breakdownSchema>;
 
 export const messageSchema = z.object({
   message_id: z.string(),
@@ -243,8 +270,50 @@ export const sequenceSchema = z.object({
   created_by: personRefSchema.nullable(),
   created_at: z.string().nullable(),
   updated_at: z.string().nullable(),
+  /** Standing takes from segments: how many run, and how many a day they may enrol together. */
+  feeds: z.object({ active: z.number(), daily_cap: z.number(), total: z.number() }),
 });
 export type MailSequence = z.infer<typeof sequenceSchema>;
+
+export const feedSchema = z.object({
+  feed_id: z.string(),
+  sequence_id: z.string(),
+  segment: z.object({ segment_id: z.string(), name: z.string(), archived: z.boolean() }),
+  daily_cap: z.number(),
+  /** "active" takes every day; "paused" waits; "ended" is over and keeps its record. */
+  state: z.string(),
+  created_by: personRefSchema.nullable(),
+  created_at: z.string().nullable(),
+  /** The UTC day of the last take, and what it did. */
+  last_run_on: z.string().nullable(),
+  last_considered: z.number(),
+  last_enrolled: z.number(),
+  last_reasons: z.record(z.string(), z.number()),
+  enrolled_total: z.number(),
+  days_run: z.number(),
+  ended_at: z.string().nullable(),
+  end_reason: z.string(),
+  end_reason_label: z.string(),
+  note: z.string(),
+});
+export type MailFeed = z.infer<typeof feedSchema>;
+
+/** What a feed's take would do today: nothing is written. */
+export const feedJudgeSchema = z.object({
+  would_enrol: z.number(),
+  considered: z.number(),
+  pool: z.number(),
+  already_had: z.number(),
+  reasons: z.record(z.string(), z.number()),
+  sample: z.array(z.object({ name: z.string(), email: z.string(), company: z.string() })),
+});
+export type FeedJudge = z.infer<typeof feedJudgeSchema>;
+
+export const FEED_STATE_LABELS: Record<string, string> = {
+  active: "Taking daily",
+  paused: "Paused",
+  ended: "Ended",
+};
 
 export const enrolmentSchema = z.object({
   enrolment_id: z.string(),
@@ -404,6 +473,7 @@ export const SKIP_REASON_LABELS: Record<string, string> = {
   NO_RULE_FOR_COUNTRY: "No rule is set for the country",
   FIRM_COVERED: "A colleague at the firm is in this send",
   FIRM_STOPPED: "The firm asked not to be written to",
+  HAD_EARLIER_SEND: "Reached by an earlier slice of this series",
   DUPLICATE: "Same address twice",
   ALREADY_IN_SEQUENCE: "Already in a sequence",
   ALREADY_HAD_SEQUENCE: "Had this sequence recently",

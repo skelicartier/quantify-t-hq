@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import {
   campaignControlAction,
+  continueCampaignAction,
   decideCampaignAction,
   scheduleCampaignAction,
   submitCampaignAction,
@@ -38,17 +39,22 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
+  CAMPAIGN_STATE_LABELS,
   SKIP_REASON_LABELS,
   previewTemplate,
   readCampaign,
+  readCampaignBreakdown,
   readLists,
   readSegments,
   readSenders,
   readTemplates,
   readCampaigns,
+  type CampaignBreakdown,
   type CampaignDetail,
   type RenderedPreview as Rendered,
 } from "@/lib/api/mail";
+import { facetLabel } from "@/lib/crm/prospects";
+import { LEAD_STAGE_LABELS } from "@/lib/crm/vocabulary";
 import { formatAbsolute } from "@/lib/format";
 import { audienceOptions } from "@/lib/mail/options";
 import { requestNow } from "@/lib/request-time";
@@ -145,6 +151,19 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
     list_id?: string;
     limit?: number;
   };
+  // How the send went, by one of a lead recipient's own columns.
+  const by = firstSearchValue(parameters.by) ?? "firm_type";
+  let breakdown: CampaignBreakdown | null = null;
+  if (tab === "overview" && started) {
+    try {
+      breakdown = await readCampaignBreakdown(context.token, campaign.campaign_id, by);
+    } catch (error) {
+      if (error instanceof HqApiRequestError && error.status === 400) {
+        breakdown = await readCampaignBreakdown(context.token, campaign.campaign_id, "firm_type");
+      } else if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+        throw error;
+    }
+  }
 
   const actions = (
     <>
@@ -212,6 +231,45 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
         ]}
         actions={actions}
       />
+      {(campaign.continues || campaign.continued_by.length > 0) && (
+        <Callout tone="neutral" compact title="Part of a series">
+          {campaign.continues && (
+            <>
+              Continues{" "}
+              <Link
+                className="text-link"
+                href={`/mail/campaigns/${campaign.continues.campaign_id}`}
+              >
+                {campaign.continues.name}
+              </Link>{" "}
+              (
+              {CAMPAIGN_STATE_LABELS[
+                campaign.continues.state as keyof typeof CAMPAIGN_STATE_LABELS
+              ] ?? campaign.continues.state}
+              ): whoever it reached is left out of this send.
+            </>
+          )}
+          {campaign.continues && campaign.continued_by.length > 0 && " "}
+          {campaign.continued_by.length > 0 && (
+            <>
+              Continued by{" "}
+              {campaign.continued_by.map((next, index) => (
+                <span key={next.campaign_id}>
+                  {index > 0 && ", "}
+                  <Link className="text-link" href={`/mail/campaigns/${next.campaign_id}`}>
+                    {next.name}
+                  </Link>{" "}
+                  (
+                  {CAMPAIGN_STATE_LABELS[next.state as keyof typeof CAMPAIGN_STATE_LABELS] ??
+                    next.state}
+                  )
+                </span>
+              ))}
+              .
+            </>
+          )}
+        </Callout>
+      )}
       {(campaign.state === "auto_paused" ||
         (campaign.state === "paused" && campaign.pause_reason) ||
         campaign.state === "review") && (
@@ -332,6 +390,40 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
                     hint="Leave empty to start now. Each recipient still gets it in their own working hours."
                   >
                     <Input id="schedule-at" name="scheduled_at" type="datetime-local" />
+                  </Field>
+                </MailForm>
+              </section>
+            )}
+            {campaign.may_continue && canWrite && (
+              <section className="side-panel" aria-labelledby="campaign-next-slice">
+                <h2 id="campaign-next-slice" className="record-section__title">
+                  The next slice
+                </h2>
+                <p className="page-note">
+                  A new draft on the same segment, sender and template that leaves out everyone this
+                  send, and any earlier slice, reached. Nothing goes out until it is submitted.
+                </p>
+                <MailForm
+                  action={continueCampaignAction}
+                  fields={idField}
+                  submitLabel="Draft the next slice"
+                  pendingLabel="Drafting…"
+                  variant="primary"
+                >
+                  <Field
+                    id="continue-limit"
+                    label="Send to at most"
+                    hint={`Leave empty to keep ${audience.limit ?? "the same cap"}.`}
+                  >
+                    <Input
+                      id="continue-limit"
+                      name="limit"
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={25000}
+                      placeholder={String(audience.limit ?? "")}
+                    />
                   </Field>
                 </MailForm>
               </section>
@@ -482,6 +574,72 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
                   Opens are not counted: mail privacy proxies open every message, so an open proves
                   nothing.
                 </p>
+              </RecordSection>
+            )}
+            {started && breakdown && (breakdown.rows.length > 0 || breakdown.not_leads === 0) && (
+              <RecordSection
+                id="campaign-breakdown"
+                title="Results by"
+                actions={
+                  <nav className="filter-strip" aria-label="Break the results down by">
+                    {breakdown.fields.map((field) => (
+                      <Link
+                        key={field.key}
+                        href={`${base}?tab=overview&by=${field.key}`}
+                        aria-current={field.key === breakdown.by ? "page" : undefined}
+                      >
+                        {field.label}
+                      </Link>
+                    ))}
+                  </nav>
+                }
+              >
+                <DataTable
+                  caption="Results by facet"
+                  columns={[
+                    {
+                      key: "value",
+                      label:
+                        breakdown.fields.find((field) => field.key === breakdown.by)?.label ??
+                        "Value",
+                    },
+                    { key: "recipients", label: "Written to", align: "end" as const },
+                    { key: "sent", label: "Sent", align: "end" as const },
+                    { key: "delivered", label: "Delivered", align: "end" as const },
+                    { key: "hard_bounced", label: "Bounced", align: "end" as const },
+                    { key: "clicked", label: "Clicked", align: "end" as const },
+                    { key: "unsubscribed", label: "Unsubscribed", align: "end" as const },
+                    { key: "skipped", label: "Skipped", align: "end" as const },
+                  ]}
+                  columnMenu={false}
+                  scroll={false}
+                  isEmpty={breakdown.rows.length === 0}
+                  empty={
+                    <p className="page-note">
+                      Nobody in this send is a lead, so there is nothing to break down by.
+                    </p>
+                  }
+                >
+                  {breakdown.rows.map((row) => (
+                    <tr key={row.value || "none"}>
+                      <td>{facetLabel(breakdown.by, row.value, LEAD_STAGE_LABELS)}</td>
+                      <td className="data-table__num">{row.recipients}</td>
+                      <td className="data-table__num">{row.sent}</td>
+                      <td className="data-table__num">{row.delivered}</td>
+                      <td className="data-table__num">{row.hard_bounced}</td>
+                      <td className="data-table__num">{row.clicked}</td>
+                      <td className="data-table__num">{row.unsubscribed}</td>
+                      <td className="data-table__num">{row.skipped}</td>
+                    </tr>
+                  ))}
+                </DataTable>
+                {breakdown.not_leads > 0 && (
+                  <p className="page-note">
+                    {breakdown.not_leads}{" "}
+                    {breakdown.not_leads === 1 ? "recipient is" : "recipients are"} not leads and{" "}
+                    {breakdown.not_leads === 1 ? "is" : "are"} not in the table.
+                  </p>
+                )}
               </RecordSection>
             )}
           </>

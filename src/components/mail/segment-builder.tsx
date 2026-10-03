@@ -33,6 +33,9 @@ const VALUE_HINTS: Record<string, string> = {
   emails_sent: "a number of emails; 0 for never written to",
   verified_days: "a number of days",
   firm_domain: "a web domain, such as fund.com",
+  bounced: "yes or no",
+  clicked: "yes or no",
+  campaign: "a campaign's name, as it appears under Campaigns",
   customer_days: "a number of days",
   created_days: "a number of days",
 };

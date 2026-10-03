@@ -811,6 +811,120 @@ function contactsFrom(formData: FormData): Contact[] {
   );
 }
 
+/** What a feed with this segment and cap would take today — a read, so no attempt key. */
+export async function feedPreviewAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/mail/sequences");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const cap = wholeNumber(formData, "daily_cap");
+  if (cap === null || cap < 1)
+    return { status: "error", message: "Say how many a day, as a whole number." };
+  try {
+    const judged = await mailApi.previewFeed(
+      context.token,
+      fieldValue(formData, "sequence_id", 64),
+      { segment_id: fieldValue(formData, "segment_id", 64), daily_cap: cap },
+    );
+    return sent(null, { detail: JSON.stringify(judged) });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+/** A standing take from a segment: the sequence enrols up to the cap every day. */
+export async function feedCreateAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/sequences");
+  if (!hasCapability(context, "mail:send")) return NOT_SENDER;
+  const sequenceId = fieldValue(formData, "sequence_id", 64);
+  const cap = wholeNumber(formData, "daily_cap");
+  if (cap === null || cap < 1)
+    return { status: "error", message: "Say how many a day, as a whole number." };
+  try {
+    const result = await mailApi.createFeed(context.token, sequenceId, {
+      segment_id: fieldValue(formData, "segment_id", 64),
+      daily_cap: cap,
+      note: fieldValue(formData, "note", 400).trim(),
+    });
+    refresh("/mail/sequences", `/mail/sequences/${sequenceId}`);
+    return sent(
+      `Started: up to ${result.feed.daily_cap} a day from “${result.feed.segment.name}”. Today's take would be ${result.today.would_enrol}; it runs with the next sending pass.`,
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+/** A feed paused, resumed, ended, or given a new cap. */
+export async function feedUpdateAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/sequences");
+  if (!hasCapability(context, "mail:send")) return NOT_SENDER;
+  const sequenceId = fieldValue(formData, "sequence_id", 64);
+  const input: Record<string, unknown> = {};
+  const state = fieldValue(formData, "state", 10);
+  if (state) input.state = state;
+  if (formData.has("daily_cap")) {
+    const cap = wholeNumber(formData, "daily_cap");
+    if (cap === null || cap < 1)
+      return { status: "error", message: "Say how many a day, as a whole number." };
+    input.daily_cap = cap;
+  }
+  try {
+    const result = await mailApi.updateFeed(
+      context.token,
+      fieldValue(formData, "feed_id", 64),
+      input,
+    );
+    refresh("/mail/sequences", `/mail/sequences/${sequenceId}`);
+    return sent(
+      result.feed.state === "ended"
+        ? "Ended. Its record stays."
+        : result.feed.state === "paused"
+          ? "Paused: no take until it is resumed."
+          : `Taking up to ${result.feed.daily_cap} a day.`,
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+/** The next slice of a capped send: a new draft, opened for review. */
+export async function continueCampaignAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/campaigns");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const campaignId = fieldValue(formData, "campaign_id", 64);
+  const raw = fieldValue(formData, "limit", 8).trim();
+  const limit = raw ? wholeNumber(formData, "limit") : null;
+  if (raw && (limit === null || limit < 1))
+    return {
+      status: "error",
+      message: "The cap is a whole number, or empty to keep the same one.",
+    };
+  let nextId: string;
+  try {
+    nextId = (await mailApi.continueCampaign(context.token, campaignId, limit)).campaign
+      .campaign_id;
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refresh("/mail/campaigns", `/mail/campaigns/${campaignId}`);
+  redirect(`/mail/campaigns/${nextId}`);
+}
+
 export async function enrolPreviewAction(
   _previous: ActionState,
   formData: FormData,
