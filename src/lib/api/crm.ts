@@ -231,10 +231,23 @@ export function importPeople(
   return postHqJson("hq/people/import", importResultSchema, { token, body: { rows, reason } });
 }
 
+/** A group someone judged "not the same", remembered by its exact records. */
+export const dismissalSchema = z.object({
+  key: z.string(),
+  kind: z.string(),
+  record_ids: z.array(z.string()),
+  reason: z.string(),
+  dismissed_by: z.object({ staff_id: z.string(), name: z.string() }).nullable(),
+  dismissed_at: z.string().nullable(),
+});
+export type Dismissal = z.infer<typeof dismissalSchema>;
+
 const duplicatesSchema = okEnvelope.extend({
   groups: z.array(
     z.object({
       kind: z.enum(["company", "person"]),
+      /** The group's records, as a "not the same" judgement remembers them. */
+      key: z.string(),
       reason: z.string(),
       records: z.array(
         z.object({
@@ -252,6 +265,8 @@ const duplicatesSchema = okEnvelope.extend({
   ),
   companies: z.number(),
   people: z.number(),
+  /** Groups judged "not the same", newest first. */
+  dismissed: z.array(dismissalSchema),
 });
 export type DuplicateGroups = z.infer<typeof duplicatesSchema>;
 
@@ -395,6 +410,9 @@ export const leadSchema = z.object({
   payload: z.record(z.string(), z.unknown()),
   stage: z.string(),
   disqualify_reason: z.string(),
+  /** Folded into another lead ("lead"), or found to be a CRM person ("person"). */
+  duplicate_of_kind: z.string(),
+  duplicate_of_id: z.string(),
   owner_staff_id: z.string(),
   first_replied_at: z.string().nullable(),
   waiting_minutes: z.number().nullable(),
@@ -469,6 +487,11 @@ const leadDetailSchema = okEnvelope.extend({
   /** The file the lead came in with, when it came in with one. */
   import: z
     .object({ import_id: z.string(), label: z.string(), started_at: z.string().nullable() })
+    .nullable()
+    .default(null),
+  /** What this lead was folded into, or the CRM person it already is, by name. */
+  duplicate_of: z
+    .object({ kind: z.string(), id: z.string(), label: z.string(), exists: z.boolean() })
     .nullable()
     .default(null),
 });

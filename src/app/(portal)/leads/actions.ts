@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import * as crmApi from "@/lib/api/crm";
+import * as dataQualityApi from "@/lib/api/data-quality";
 import { saveSegment } from "@/lib/api/mail";
 import { fieldValue } from "@/lib/auth/forms";
 import { COLD_CHECKS, parseTags } from "@/lib/crm/prospects";
@@ -501,4 +502,140 @@ export async function saveFitRulesAction(
   } catch (error) {
     return crmRefusal(error);
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// duplicates and tidying
+// ---------------------------------------------------------------------------------------
+
+function idList(formData: FormData, name: string, most: number): string[] {
+  return fieldValue(formData, name, 4_000)
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, most);
+}
+
+/** Fold leads into the one chosen to stay; each field's choice is a `choose.<field>` radio. */
+export async function mergeLeadsAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/duplicates");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const keep = fieldValue(formData, "keep", 64).trim();
+  const fold = idList(formData, "fold", 9);
+  if (!keep || fold.length === 0) {
+    return { status: "error", message: "Choose the leads to merge from the duplicates review." };
+  }
+  const choose: Record<string, string> = {};
+  for (const [name, value] of formData.entries()) {
+    if (typeof value === "string" && name.startsWith("choose.")) {
+      choose[name.slice("choose.".length, 40)] = value.slice(0, 64);
+    }
+  }
+  try {
+    await dataQualityApi.mergeLeads(context.token, keep, fold, choose);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/leads/duplicates");
+  revalidatePath("/leads/prospects");
+  revalidatePath("/data-health");
+  redirect(`/leads/${keep}`);
+}
+
+/** Leads that are a CRM person already: disqualified as that person's duplicates. */
+export async function markLeadsAsPersonAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/duplicates");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const personId = fieldValue(formData, "person_id", 64).trim();
+  const leadIds = idList(formData, "lead_ids", 10);
+  try {
+    const result = await dataQualityApi.markLeadsAsPerson(context.token, leadIds, personId);
+    revalidatePath("/leads/duplicates");
+    revalidatePath("/data-health");
+    return sent(
+      `Marked ${plural(result.marked.length, "lead", "leads")} as the CRM person${
+        result.filled.length
+          ? `; the person's ${result.filled.join(" and ")} filled in from it`
+          : ""
+      }.`,
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+/** "Not the same": the review stops asking about these records until another joins them. */
+export async function dismissLeadGroupAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/duplicates");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  try {
+    await dataQualityApi.dismissDuplicates(context.token, {
+      kind: "lead",
+      ids: idList(formData, "ids", 20),
+      person_ids: idList(formData, "person_ids", 20),
+      reason: fieldValue(formData, "reason", 200).trim(),
+    });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/leads/duplicates");
+  revalidatePath("/data-health");
+  return sent("Kept apart. The review asks again only if another look-alike joins them.");
+}
+
+/** A group judged "not the same", back in the review. */
+export async function restoreDuplicatesAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/duplicates");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const back =
+    fieldValue(formData, "back", 64) === "/companies/duplicates"
+      ? "/companies/duplicates"
+      : "/leads/duplicates";
+  try {
+    await dataQualityApi.restoreDuplicates(context.token, fieldValue(formData, "key", 64).trim());
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath(back);
+  revalidatePath("/data-health");
+  return sent("Back in the review.");
+}
+
+/** A tidy-up from the data health page, after its preview. */
+export async function applyStandardiseAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/data-health");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const kind = fieldValue(formData, "kind", 20);
+  let result: Awaited<ReturnType<typeof dataQualityApi.applyStandardise>>;
+  try {
+    result = await dataQualityApi.applyStandardise(context.token, kind);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath("/data-health");
+  revalidatePath("/data-health/tidy");
+  revalidatePath("/leads/prospects");
+  // Past the inline limit it runs in the background: Prospects shows how far it has got.
+  if (result.queued) redirect("/leads/prospects");
+  return sent(`Changed ${plural(result.changed, "lead", "leads")}.`);
 }

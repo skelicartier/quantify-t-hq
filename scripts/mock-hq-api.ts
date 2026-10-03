@@ -2342,6 +2342,7 @@ const DISQUALIFY_REASONS = [
   "competitor",
   "spam",
   "no_response",
+  "duplicate",
   "other",
 ];
 
@@ -2621,6 +2622,9 @@ type LeadRow = {
   verified_detail?: string;
   verified_at?: string | null;
   import_id?: string;
+  /** 0061: a lead folded into another ("lead"), or found to be a CRM person ("person"). */
+  duplicate_of_id?: string;
+  duplicate_of_kind?: string;
 };
 type DealRow = {
   id: string;
@@ -7161,9 +7165,12 @@ const LEAD_REGIONS: Record<string, string[]> = {
   ],
 };
 function leadRegionOf(country: string): string {
-  const wanted = country.trim().toLowerCase();
-  for (const [region, countries] of Object.entries(LEAD_REGIONS))
-    if (countries.some((name) => name.toLowerCase() === wanted)) return region;
+  const lowered = country.trim().split(/\s+/).join(" ").toLowerCase();
+  const alias =
+    COLD_ALIASES[lowered] ?? COLD_ALIASES[lowered.replace(/\.+$/, "").replace(/\./g, "")];
+  for (const wanted of [lowered, alias?.toLowerCase() ?? ""].filter(Boolean))
+    for (const [region, countries] of Object.entries(LEAD_REGIONS))
+      if (countries.some((name) => name.toLowerCase() === wanted)) return region;
   return "Unknown";
 }
 const LEAD_EMAIL_KINDS = ["named", "role", "personal-domain"];
@@ -7892,17 +7899,139 @@ const COLD_ALIASES: Record<string, string> = {
   "u.s.": "United States",
   "u.s.a.": "United States",
   "united states of america": "United States",
+  america: "United States",
   uk: "United Kingdom",
   "u.k.": "United Kingdom",
+  gb: "United Kingdom",
+  gbr: "United Kingdom",
   "great britain": "United Kingdom",
+  britain: "United Kingdom",
   england: "United Kingdom",
   scotland: "United Kingdom",
+  wales: "United Kingdom",
+  "northern ireland": "United Kingdom",
   uae: "United Arab Emirates",
+  "u.a.e.": "United Arab Emirates",
+  ae: "United Arab Emirates",
+  are: "United Arab Emirates",
+  emirates: "United Arab Emirates",
   deutschland: "Germany",
   österreich: "Austria",
   "the netherlands": "Netherlands",
   holland: "Netherlands",
   "hong kong sar": "Hong Kong",
+  "hong kong sar china": "Hong Kong",
+  hk: "Hong Kong",
+  hkg: "Hong Kong",
+  in: "India",
+  ind: "India",
+  bharat: "India",
+  "republic of india": "India",
+  sg: "Singapore",
+  sgp: "Singapore",
+  "republic of singapore": "Singapore",
+  ksa: "Saudi Arabia",
+  sau: "Saudi Arabia",
+  "kingdom of saudi arabia": "Saudi Arabia",
+  jp: "Japan",
+  jpn: "Japan",
+  au: "Australia",
+  aus: "Australia",
+  nz: "New Zealand",
+  nzl: "New Zealand",
+  ca: "Canada",
+  can: "Canada",
+  de: "Germany",
+  deu: "Germany",
+  fr: "France",
+  fra: "France",
+  ch: "Switzerland",
+  che: "Switzerland",
+  nl: "Netherlands",
+  nld: "Netherlands",
+  se: "Sweden",
+  dk: "Denmark",
+  fi: "Finland",
+  ie: "Ireland",
+  irl: "Ireland",
+  es: "Spain",
+  pt: "Portugal",
+  pl: "Poland",
+  cz: "Czech Republic",
+  gr: "Greece",
+  mt: "Malta",
+  cy: "Cyprus",
+  lu: "Luxembourg",
+  li: "Liechtenstein",
+  mc: "Monaco",
+  hu: "Hungary",
+  ro: "Romania",
+  hr: "Croatia",
+  bg: "Bulgaria",
+  kw: "Kuwait",
+  om: "Oman",
+  bh: "Bahrain",
+  qa: "Qatar",
+  qat: "Qatar",
+  il: "Israel",
+  isr: "Israel",
+  jo: "Jordan",
+  lb: "Lebanon",
+  eg: "Egypt",
+  tr: "Turkey",
+  türkiye: "Turkey",
+  turkiye: "Turkey",
+  br: "Brazil",
+  bra: "Brazil",
+  mx: "Mexico",
+  mex: "Mexico",
+  cl: "Chile",
+  ar: "Argentina",
+  co: "Colombia",
+  pe: "Peru",
+  ky: "Cayman Islands",
+  bm: "Bermuda",
+  bs: "Bahamas",
+  vg: "British Virgin Islands",
+  bvi: "British Virgin Islands",
+  uy: "Uruguay",
+  pa: "Panama",
+  mu: "Mauritius",
+  mus: "Mauritius",
+  za: "South Africa",
+  zaf: "South Africa",
+  rsa: "South Africa",
+  ng: "Nigeria",
+  ke: "Kenya",
+  gh: "Ghana",
+  bw: "Botswana",
+  th: "Thailand",
+  tha: "Thailand",
+  vn: "Vietnam",
+  "viet nam": "Vietnam",
+  ph: "Philippines",
+  phl: "Philippines",
+  tw: "Taiwan",
+  kr: "South Korea",
+  kor: "South Korea",
+  korea: "South Korea",
+  "republic of korea": "South Korea",
+  np: "Nepal",
+  npl: "Nepal",
+  bd: "Bangladesh",
+  bgd: "Bangladesh",
+  lk: "Sri Lanka",
+  lka: "Sri Lanka",
+  cn: "China",
+  chn: "China",
+  prc: "China",
+  "people's republic of china": "China",
+  pk: "Pakistan",
+  pak: "Pakistan",
+  kh: "Cambodia",
+  kz: "Kazakhstan",
+  mys: "Malaysia",
+  idn: "Indonesia",
 };
 const COLD_RULE_LABELS: Record<string, string> = {
   opt_out: "May be written to first",
@@ -8392,6 +8521,8 @@ type LeadBulkSpec = {
   tagsRemove: string[];
   verified: string | null;
   touchTags: boolean;
+  /** A tidy-up from the data health page ("name_case" or "country"). */
+  standardise?: string;
 };
 type LeadJobRow = {
   id: string;
@@ -8447,6 +8578,14 @@ function leadBulkApply(row: LeadRow, spec: LeadBulkSpec): "changed" | "unchanged
     row.verified_at = spec.verified ? now() : null;
     touched = true;
   }
+  if (spec.standardise) {
+    // Judged again as the lead now stands.
+    const fixes = dqFixes(row, spec.standardise);
+    if (Object.keys(fixes).length) {
+      Object.assign(row, fixes);
+      touched = true;
+    }
+  }
   if (!touched) return "unchanged";
   row.updated_at = now();
   return "changed";
@@ -8501,6 +8640,946 @@ function leadJobView(job: LeadJobRow) {
     finished_at: job.finished_at,
     last_error: job.last_error,
   };
+}
+
+// ---------------------------------------------------------------------------------------
+// data quality (0061): look-alike leads, merging them, one spelling, the data's health
+// ---------------------------------------------------------------------------------------
+
+/** data_quality.REASONS, in the order a group lists them. */
+const DQ_REASONS: Record<string, string> = {
+  same_address: "the same address",
+  same_mailbox: "the same mailbox once dots and plus-tags are taken out",
+  same_name_firm: "the same name at the same firm",
+  crm_address: "a CRM person has this address",
+  crm_name_firm: "a CRM person of the same name at the same firm",
+};
+const DQ_LIVE = ["new", "attempting", "connected"];
+const DQ_STAGE_RANK: Record<string, number> = { new: 0, attempting: 1, connected: 2, qualified: 3 };
+const DQ_HONORIFICS = new Set([
+  "mr",
+  "mrs",
+  "ms",
+  "miss",
+  "mx",
+  "dr",
+  "prof",
+  "sir",
+  "shri",
+  "sri",
+  "smt",
+  "kumari",
+  "ca",
+  "cs",
+  "cfa",
+  "adv",
+  "er",
+  "capt",
+  "col",
+]);
+const DQ_PAGE = 50;
+const DQ_MAX_FOLD = 9;
+const DQ_PREVIEW_ROWS = 100;
+const DQ_QUIET_DAYS = 90;
+const DQ_SAMPLE = 8;
+const DQ_MERGE_FIELDS: Array<[string, string, string[]]> = [
+  ["name", "Name", ["full_name", "first_name", "last_name"]],
+  ["title", "Title", ["title"]],
+  ["company_name", "Firm", ["company_name"]],
+  ["firm_type", "Firm type", ["firm_type"]],
+  ["website", "Website", ["website"]],
+  ["country", "Country", ["country"]],
+  ["city", "City", ["city"]],
+  ["phone", "Phone", ["phone"]],
+  ["registration_no", "Registration number", ["registration_no"]],
+  ["source_url", "Where the address was published", ["source_url"]],
+  ["owner_staff_id", "Owner", ["owner_staff_id"]],
+  ["source_key", "Source", ["source_key"]],
+];
+type DismissalRow = {
+  group_key: string;
+  kind: string;
+  record_ids: string[];
+  reason: string;
+  dismissed_by: string;
+  dismissed_at: string;
+};
+/** 0061: groups judged "not the same", by the exact records in them. */
+const duplicateDismissals: DismissalRow[] = [];
+/** 0061: the data health counts, one row a day (ISO day → counts). */
+const dataHealthDays = new Map<string, Record<string, number>>();
+
+function dqFold(text: string): string {
+  return text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+}
+/** data_quality.name_key: two words of more than one letter, honorifics out, sorted. */
+function dqNameKey(full: string): string {
+  const words = dqFold(full)
+    .replace(/[^\p{L}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((word) => word && !DQ_HONORIFICS.has(word));
+  if (words.filter((word) => word.length > 1).length < 2) return "";
+  return words.sort().join(" ");
+}
+/** data_quality.mailbox_key: "a.sharma+pms@firm.in" is "asharma@firm.in". */
+function dqMailboxKey(email: string): string {
+  const norm = email.trim().toLowerCase();
+  const at = norm.lastIndexOf("@");
+  if (at < 0) return "";
+  const domain = norm.slice(at + 1) === "googlemail.com" ? "gmail.com" : norm.slice(at + 1);
+  const local = norm.slice(0, at).split("+")[0]!.replace(/\./g, "");
+  return local && domain ? `${local}@${domain}` : "";
+}
+function dqFirmKeys(domains: string[], names: string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const value of domains) {
+    const domain = normaliseDomain(value);
+    if (domain && !FREE_MAIL.has(domain)) keys.add(`d:${domain}`);
+  }
+  for (const value of names) {
+    const name = normaliseCompanyName(value);
+    if (name) keys.add(`n:${name}`);
+  }
+  return keys;
+}
+function dqLeadFirmKeys(row: LeadRow): Set<string> {
+  return dqFirmKeys([row.website ?? "", row.email.split("@")[1] ?? ""], [row.company_name]);
+}
+function dqGroupKey(kind: string, ids: string[]): string {
+  const joined = [...new Set(ids.filter(Boolean).map((id) => id.toLowerCase()))].sort().join(",");
+  return createHash("sha256").update(`${kind}|${joined}`).digest("hex");
+}
+function dqLive(row: LeadRow): boolean {
+  return !row.anonymised_at && DQ_LIVE.includes(row.stage);
+}
+function dqLeadName(row: LeadRow): string {
+  return row.full_name || [row.first_name, row.last_name].filter(Boolean).join(" ");
+}
+/** Someone who wrote in and has not been answered. */
+function dqOwed(row: LeadRow): boolean {
+  return (row.origin ?? "inbound") === "inbound" && !row.first_replied_at;
+}
+/** data_quality.keeper_rank: wrote in, worked furthest, valid, a person's own, oldest. */
+function dqKeeperRank(row: LeadRow): number[] {
+  const kind = row.email_kind === "named" ? 2 : row.email_kind === "personal-domain" ? 1 : 0;
+  return [
+    (row.origin ?? "inbound") === "inbound" ? 1 : 0,
+    DQ_STAGE_RANK[row.stage] ?? 0,
+    row.verified_state === "valid" ? 1 : 0,
+    kind,
+    -Date.parse(row.created_at),
+  ];
+}
+function dqRankAbove(a: number[], b: number[]): boolean {
+  for (let index = 0; index < a.length; index += 1)
+    if (a[index] !== b[index]) return a[index]! > b[index]!;
+  return false;
+}
+type DqGroup = {
+  key: string;
+  reasons: string[];
+  lead_ids: string[];
+  person_ids: string[];
+  keep: string;
+};
+/** data_quality.lead_groups: look-alike live leads joined into groups, with CRM people. */
+function dqLeadGroups(): DqGroup[] {
+  const live = new Map(leads.filter(dqLive).map((row) => [row.id, row] as const));
+  const parent = new Map<string, string>();
+  const find = (item: string): string => {
+    let root = item;
+    while ((parent.get(root) ?? root) !== root) root = parent.get(root)!;
+    parent.set(item, root);
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const first = find(a);
+    const second = find(b);
+    if (first !== second)
+      parent.set(first > second ? first : second, first > second ? second : first);
+  };
+  const buckets = new Map<string, { reason: string; ids: Set<string> }>();
+  const add = (reason: string, key: string, id: string) => {
+    const name = `${reason}\u0000${key}`;
+    const bucket = buckets.get(name) ?? { reason, ids: new Set<string>() };
+    bucket.ids.add(id);
+    buckets.set(name, bucket);
+  };
+  for (const [id, row] of live) {
+    find(id);
+    const email = row.email.trim().toLowerCase();
+    if (email) {
+      add("same_address", email, id);
+      const mailbox = dqMailboxKey(email);
+      if (mailbox) add("same_mailbox", mailbox, id);
+    }
+    const name = dqNameKey(dqLeadName(row));
+    if (name) for (const firm of dqLeadFirmKeys(row)) add("same_name_firm", `${firm}|${name}`, id);
+  }
+  const joined: Array<{ reason: string; ids: string[] }> = [];
+  for (const bucket of buckets.values()) {
+    const ids = [...bucket.ids].sort();
+    if (ids.length < 2) continue;
+    if (
+      bucket.reason === "same_mailbox" &&
+      new Set(ids.map((id) => live.get(id)!.email.trim().toLowerCase())).size < 2
+    )
+      continue;
+    joined.push({ reason: bucket.reason, ids });
+    for (const other of ids.slice(1)) union(ids[0]!, other);
+  }
+  const byEmail = new Map<string, Set<string>>();
+  const byNameFirm = new Map<string, Set<string>>();
+  const into = (map: Map<string, Set<string>>, key: string, id: string) =>
+    map.set(key, new Set([...(map.get(key) ?? []), id]));
+  for (const person of people) {
+    if (person.archived) continue;
+    const email = person.email.trim().toLowerCase();
+    if (email) into(byEmail, email, person.id);
+    const name = dqNameKey(person.full_name);
+    if (!name) continue;
+    const company = companies.find((row) => row.id === person.company_id);
+    for (const firm of dqFirmKeys(
+      [company?.domain ?? "", email.split("@")[1] ?? ""],
+      [company?.name ?? ""],
+    ))
+      into(byNameFirm, `${firm}|${name}`, person.id);
+  }
+  const reasons = new Map<string, Set<string>>();
+  const peopleOf = new Map<string, Set<string>>();
+  for (const { reason, ids } of joined) into(reasons, find(ids[0]!), reason);
+  for (const [id, row] of live) {
+    const root = find(id);
+    const email = row.email.trim().toLowerCase();
+    const matched = email ? (byEmail.get(email) ?? new Set<string>()) : new Set<string>();
+    if (matched.size) {
+      into(reasons, root, "crm_address");
+      for (const personId of matched) into(peopleOf, root, personId);
+    }
+    const name = dqNameKey(dqLeadName(row));
+    if (name) {
+      const byName = new Set<string>();
+      for (const firm of dqLeadFirmKeys(row))
+        for (const personId of byNameFirm.get(`${firm}|${name}`) ?? []) byName.add(personId);
+      if ([...byName].some((personId) => !matched.has(personId))) {
+        into(reasons, root, "crm_name_firm");
+        for (const personId of byName) into(peopleOf, root, personId);
+      }
+    }
+  }
+  const members = new Map<string, string[]>();
+  for (const id of live.keys()) members.set(find(id), [...(members.get(find(id)) ?? []), id]);
+  const dismissed = new Set(duplicateDismissals.map((row) => row.group_key));
+  const groups: Array<DqGroup & { newest: string }> = [];
+  for (const [root, ids] of members) {
+    const personIds = [...(peopleOf.get(root) ?? [])].sort();
+    if (ids.length < 2 && personIds.length === 0) continue;
+    const leadIds = [...ids].sort((a, b) =>
+      live.get(a)!.created_at.localeCompare(live.get(b)!.created_at),
+    );
+    const key = dqGroupKey("lead", [...leadIds, ...personIds]);
+    if (dismissed.has(key)) continue;
+    const keep = leadIds.reduce((best, id) =>
+      dqRankAbove(dqKeeperRank(live.get(id)!), dqKeeperRank(live.get(best)!)) ? id : best,
+    );
+    groups.push({
+      key,
+      reasons: Object.keys(DQ_REASONS).filter((reason) => reasons.get(root)?.has(reason)),
+      lead_ids: leadIds,
+      person_ids: personIds,
+      keep,
+      newest:
+        leadIds
+          .map((id) => live.get(id)!.created_at)
+          .sort()
+          .at(-1) ?? "",
+    });
+  }
+  groups.sort((a, b) => b.newest.localeCompare(a.newest));
+  groups.sort(
+    (a, b) =>
+      (a.person_ids.length ? 0 : 1) - (b.person_ids.length ? 0 : 1) ||
+      b.lead_ids.length - a.lead_ids.length,
+  );
+  return groups.map((group) => ({
+    key: group.key,
+    reasons: group.reasons,
+    lead_ids: group.lead_ids,
+    person_ids: group.person_ids,
+    keep: group.keep,
+  }));
+}
+function dqLeadBrief(row: LeadRow, stats: MailStats) {
+  const view = leadView(row);
+  const sent = stats.get(mailNorm(row.email));
+  return {
+    lead_id: view.lead_id,
+    origin: view.origin,
+    full_name: view.full_name,
+    email: view.email,
+    email_kind: view.email_kind,
+    company_name: view.company_name,
+    title: view.title,
+    firm_type: view.firm_type,
+    country: view.country,
+    stage: view.stage,
+    owner_staff_id: view.owner_staff_id,
+    verified_state: view.verified_state,
+    verified_at: view.verified_at,
+    firm_domain: view.firm_domain,
+    fit_band: view.fit_band,
+    fit_score: view.fit_score,
+    created_at: view.created_at,
+    first_replied_at: view.first_replied_at,
+    converted_person_id: view.converted_person_id,
+    emails_sent: sent?.sent ?? 0,
+    last_emailed_at: sent?.last_sent_at ?? null,
+  };
+}
+function dqPersonBrief(row: PersonRow) {
+  return {
+    person_id: row.id,
+    full_name: row.full_name,
+    email: row.email,
+    title: row.title,
+    company_id: row.company_id,
+    company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
+    do_not_contact: Boolean(row.do_not_contact),
+  };
+}
+function dqDismissalView(row: DismissalRow) {
+  return {
+    key: row.group_key,
+    kind: row.kind,
+    record_ids: row.record_ids,
+    reason: row.reason,
+    dismissed_by: row.dismissed_by
+      ? { staff_id: row.dismissed_by, name: mailStaffName(row.dismissed_by) }
+      : null,
+    dismissed_at: row.dismissed_at,
+  };
+}
+function dqShown(row: LeadRow, key: string): string {
+  if (key === "name") return dqLeadName(row);
+  return String((row as Record<string, unknown>)[key] ?? "");
+}
+function dqMergeNotes(kept: string, folded: string, label: string): string {
+  const extra = folded.trim();
+  if (!extra || kept.includes(extra)) return kept;
+  const line = `[Merged from ${label}] ${extra}`;
+  return (kept.trim() ? `${kept.trimEnd()}\n\n${line}` : line).slice(0, 4000);
+}
+/** data_quality.merge_plan: what the kept lead becomes, field by field. */
+function dqMergePlan(keep: LeadRow, folds: LeadRow[], choose: Record<string, string> = {}) {
+  const rows = [keep, ...folds];
+  const byId = new Map(rows.map((row) => [row.id, row] as const));
+  const fields: Array<Record<string, unknown>> = [];
+  const fills: Record<string, unknown> = {};
+  for (const [key, label, columns] of DQ_MERGE_FIELDS) {
+    const values = rows.map((row) => ({ lead_id: row.id, value: dqShown(row, key) }));
+    let chosen = (choose[key] ?? "").toLowerCase();
+    if (!byId.has(chosen))
+      chosen = dqShown(keep, key)
+        ? keep.id
+        : (folds.find((row) => dqShown(row, key))?.id ?? keep.id);
+    const source = byId.get(chosen)!;
+    if (chosen !== keep.id)
+      for (const column of columns) {
+        const value = String((source as Record<string, unknown>)[column] ?? "");
+        if (
+          value.toLowerCase() !==
+          String((keep as Record<string, unknown>)[column] ?? "").toLowerCase()
+        )
+          fills[column] = value;
+      }
+    fields.push({
+      key,
+      label,
+      values,
+      chosen,
+      differs: new Set(values.map((entry) => entry.value).filter(Boolean)).size > 1,
+      result: dqShown(source, key),
+    });
+  }
+  const tags = leadCleanTags([...(keep.tags ?? []), ...folds.flatMap((row) => row.tags ?? [])]);
+  if (tags.join(",") !== (keep.tags ?? []).join(",")) fills.tags = tags;
+  let notes = keep.notes ?? "";
+  for (const row of folds) {
+    notes = dqMergeNotes(notes, row.notes ?? "", dqLeadName(row) || row.email);
+    if ((row.origin ?? "inbound") === "inbound" && row.message.trim())
+      notes = dqMergeNotes(notes, row.message, `${dqLeadName(row) || row.email}'s message`);
+  }
+  if (notes !== (keep.notes ?? "")) fills.notes = notes;
+  let stage = keep.stage;
+  if (DQ_LIVE.includes(stage)) {
+    const furthest = rows
+      .map((row) => row.stage)
+      .filter((value) => DQ_LIVE.includes(value))
+      .reduce(
+        (best, value) => (DQ_STAGE_RANK[value]! > DQ_STAGE_RANK[best]! ? value : best),
+        stage,
+      );
+    if (furthest !== stage) {
+      fills.stage = furthest;
+      stage = furthest;
+    }
+  }
+  const replied = rows
+    .map((row) => row.first_replied_at)
+    .filter((value): value is string => Boolean(value))
+    .sort();
+  if ((keep.origin ?? "inbound") === "inbound" && replied[0] && !keep.first_replied_at)
+    fills.first_replied_at = replied[0];
+  return {
+    fields,
+    fills,
+    tags,
+    stage,
+    notes,
+    first_replied_at: (fills.first_replied_at as string | undefined) ?? keep.first_replied_at,
+  };
+}
+/** data_quality_routes._merge_inputs: the lead that stays and the ones folded into it. */
+function dqMergeInputs(
+  keepId: string,
+  raw: unknown,
+): { keep: LeadRow; folds: LeadRow[] } | { refusal: ReturnType<typeof refuse> } {
+  const keep = leads.find((row) => row.id === keepId.toLowerCase());
+  if (!keep) return { refusal: refuse(404, "not_found") };
+  if (keep.anonymised_at)
+    return {
+      refusal: refuse(400, "malformed_request", { lead: "anonymised: kept for the counts only" }),
+    };
+  if (keep.stage === "disqualified")
+    return {
+      refusal: refuse(400, "malformed_request", {
+        lead: "disqualified: move it back to work before folding others into it",
+      }),
+    };
+  const values = Array.isArray(raw) ? raw.map(String) : String(raw ?? "").split(",");
+  const ids: string[] = [];
+  for (const value of values) {
+    const id = value.trim().toLowerCase();
+    if (id && id !== keep.id && !ids.includes(id)) ids.push(id);
+  }
+  if (!ids.length)
+    return {
+      refusal: refuse(400, "malformed_request", { fold: "the leads to fold into this one" }),
+    };
+  if (ids.length > DQ_MAX_FOLD)
+    return {
+      refusal: refuse(400, "malformed_request", { fold: `at most ${DQ_MAX_FOLD} at once` }),
+    };
+  const folds: LeadRow[] = [];
+  for (const id of ids) {
+    const row = leads.find((lead) => lead.id === id);
+    if (!row) return { refusal: refuse(404, "not_found", { fold: id }) };
+    const label = dqLeadName(row) || row.email;
+    if (!dqLive(row))
+      return {
+        refusal: refuse(400, "malformed_request", {
+          fold: `${label} is ${row.anonymised_at ? "anonymised" : row.stage}: only a lead still being worked is folded`,
+        }),
+      };
+    if (dqOwed(row) && (keep.origin ?? "inbound") !== "inbound")
+      return {
+        refusal: refuse(400, "malformed_request", {
+          fold: `${label} wrote in and has not been answered: keep that one, or answer it first`,
+        }),
+      };
+    folds.push(row);
+  }
+  return { keep, folds };
+}
+function dqProperWord(word: string): string {
+  let start = true;
+  let out = "";
+  for (const ch of word.toLowerCase()) {
+    const letter = /\p{L}/u.test(ch);
+    out += start && letter ? ch.toUpperCase() : ch;
+    if (letter) start = false;
+    else if ("-'’.".includes(ch)) start = true;
+  }
+  return out;
+}
+/** data_quality.proper_case: capitals or all lower case read as a name; mixed is left. */
+function dqProperCase(value: string): string {
+  const letters = [...value].filter((ch) => /\p{L}/u.test(ch)).length;
+  if (letters < 2 || !(value === value.toUpperCase() || value === value.toLowerCase()))
+    return value;
+  return value.replace(/\S+/g, (word) => dqProperWord(word));
+}
+/** data_quality.country_spelling: the table's spelling, or "" for a value it does not know. */
+function dqCountrySpelling(value: string): string {
+  const text = value.replace(/’/g, "'").trim().split(/\s+/).join(" ");
+  if (!text) return "";
+  const lowered = text.toLowerCase().replace(/\.+$/, "");
+  const compact = lowered.replace(/\./g, "");
+  const named = [...Object.values(LEAD_REGIONS).flat(), ...Object.keys(COLD_DEFAULTS)].find(
+    (name) => name.toLowerCase() === lowered,
+  );
+  return named ?? COLD_ALIASES[lowered] ?? COLD_ALIASES[compact] ?? "";
+}
+/** data_quality.fixes_for: what a tidy-up would change on one lead. */
+function dqFixes(row: LeadRow, kind: string): Partial<LeadRow> {
+  const fixes: Record<string, string> = {};
+  if (kind === "name_case")
+    for (const column of ["full_name", "first_name", "last_name"] as const) {
+      const value = row[column] ?? "";
+      const fixed = dqProperCase(value);
+      if (fixed !== value) fixes[column] = fixed;
+    }
+  if (kind === "country") {
+    const value = row.country ?? "";
+    const spelled = dqCountrySpelling(value);
+    if (spelled && spelled !== value) fixes.country = spelled;
+  }
+  return fixes as Partial<LeadRow>;
+}
+const DQ_FIXES = ["name_case", "country"];
+function dqDaysAgoIso(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
+/** data_health.compute: every check, from the records as they stand. */
+function dqHealthChecks() {
+  const checks: Array<Record<string, unknown> & { key: string; count: number }> = [];
+  const check = (
+    key: string,
+    area: string,
+    label: string,
+    why: string,
+    count: number,
+    of: number,
+    extra: { tone?: string; view?: Record<string, unknown>; fix?: string; sample?: unknown[] } = {},
+  ) =>
+    checks.push({
+      key,
+      area,
+      label,
+      why,
+      count,
+      of,
+      tone: count ? (extra.tone ?? "attention") : "ok",
+      view: extra.view ?? null,
+      fix: extra.fix ?? "",
+      sample: (extra.sample ?? []).slice(0, DQ_SAMPLE),
+      week_ago: null,
+      month_ago: null,
+    });
+  const groups = dqLeadGroups();
+  const byPerson = groups.filter((group) => group.person_ids.length).length;
+  const liveLeads = leads.filter(dqLive);
+  check(
+    "lead_duplicates",
+    "Leads",
+    "Look-alike leads to review",
+    "The same person under two addresses is written to twice, and each record holds half of what the team knows.",
+    groups.length - byPerson,
+    liveLeads.length,
+    { view: { list: "lead_duplicates", reason: "leads" } },
+  );
+  check(
+    "lead_crm_duplicates",
+    "Leads",
+    "Leads the CRM already holds",
+    "A lead whose address, or whose name at the same firm, is already a CRM person: a cold email to someone the team knows.",
+    byPerson,
+    liveLeads.length,
+    { tone: "danger", view: { list: "lead_duplicates", reason: "crm" } },
+  );
+  const live = liveLeads
+    .filter((row) => (row.origin ?? "inbound") === "prospect")
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const LIVE = "stage:in:new,attempting,connected";
+  const prospectsView = (...conditions: string[]) => ({
+    list: "prospects",
+    conditions: [...conditions, LIVE],
+  });
+  const stale = coldSettings.verify_stale_days;
+  const staleCutoff = Date.now() - stale * 86_400_000;
+  const unknownCountry = live.filter(
+    (row) => (row.country ?? "").trim() && leadRegionOf(row.country ?? "") === "Unknown",
+  );
+  const countryCounts = new Map<string, number>();
+  for (const row of unknownCountry) {
+    const value = (row.country ?? "").trim();
+    countryCounts.set(value, (countryCounts.get(value) ?? 0) + 1);
+  }
+  check(
+    "prospects_unverified",
+    "Prospects",
+    "Never verified",
+    "A first email goes only to an address a verification called valid: these wait for one.",
+    live.filter((row) => !row.verified_state).length,
+    live.length,
+    { view: prospectsView("verified:is:unchecked") },
+  );
+  check(
+    "prospects_stale",
+    "Prospects",
+    `Verified more than ${stale} days ago`,
+    "Past the window the sending rules set, a valid result counts as no check at all.",
+    live.filter(
+      (row) =>
+        row.verified_state === "valid" &&
+        (row.verified_at ? Date.parse(row.verified_at) : staleCutoff) <= staleCutoff,
+    ).length,
+    live.length,
+    { view: prospectsView("verified:is:valid", `verified_days:gt:${stale}`) },
+  );
+  check(
+    "prospects_invalid",
+    "Prospects",
+    "Invalid but still open",
+    "No email can reach them. Disqualify them from the list so they leave the counts and the segments.",
+    live.filter((row) => row.verified_state === "invalid").length,
+    live.length,
+    { tone: "danger", view: prospectsView("verified:is:invalid") },
+  );
+  check(
+    "prospects_no_country",
+    "Prospects",
+    "No country",
+    "The sending rules go by country, and hold anyone whose country is not known.",
+    live.filter((row) => !(row.country ?? "").trim()).length,
+    live.length,
+    { view: prospectsView("country:empty:") },
+  );
+  check(
+    "prospects_unknown_country",
+    "Prospects",
+    "A country HQ does not recognise",
+    "Held by the sending rules and left out of every region. Correct the spelling on the record or in the file.",
+    unknownCountry.length,
+    live.length,
+    {
+      view: prospectsView("region:is:Unknown", "country:set:"),
+      sample: [...countryCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([value, count]) => ({
+          kind: "value",
+          id: value,
+          label: value,
+          sub: `${count} ${count === 1 ? "lead" : "leads"}`,
+        })),
+    },
+  );
+  check(
+    "prospects_no_firm_type",
+    "Prospects",
+    "No firm type",
+    "Fit counts the firm type first; without one a lead scores as a poor fit whatever it is.",
+    live.filter((row) => !(row.firm_type ?? "").trim()).length,
+    live.length,
+    { view: prospectsView("firm_type:empty:") },
+  );
+  check(
+    "prospects_no_name",
+    "Prospects",
+    "No name",
+    "A first email cannot greet them by name, and a shared mailbox is the likelier reader.",
+    live.filter((row) => !(row.first_name || row.full_name)).length,
+    live.length,
+    { view: prospectsView("named:is:no") },
+  );
+  check(
+    "prospects_unowned",
+    "Prospects",
+    "Being worked with no owner",
+    "Written to or answered, and nobody's: a reply to them has no one to land with.",
+    live.filter((row) => ["attempting", "connected"].includes(row.stage) && !row.owner_staff_id)
+      .length,
+    live.length,
+    { view: { list: "prospects", conditions: ["owner:empty:", "stage:in:attempting,connected"] } },
+  );
+  const present = leads.filter((row) => !row.anonymised_at);
+  const capitals = present
+    .map((row) => [row, dqFixes(row, "name_case")] as const)
+    .filter(([, fixes]) => Object.keys(fixes).length);
+  const spelled = present
+    .map((row) => [row, dqFixes(row, "country")] as const)
+    .filter(([, fixes]) => Object.keys(fixes).length);
+  const spellings = new Map<string, number>();
+  for (const [row, fixes] of spelled) {
+    const key = `${row.country ?? ""}\u0000${fixes.country}`;
+    spellings.set(key, (spellings.get(key) ?? 0) + 1);
+  }
+  check(
+    "names_in_capitals",
+    "Prospects",
+    "Names in capitals or all lower case",
+    "A greeting reads “Dear RAHUL”. Put right in bulk, after a preview of every change.",
+    capitals.length,
+    present.length,
+    {
+      fix: "name_case",
+      sample: capitals.map(([row, fixes]) => ({
+        kind: "lead",
+        id: row.id,
+        label: dqLeadName(row),
+        sub: fixes.full_name ?? Object.values(fixes).join(" "),
+      })),
+    },
+  );
+  check(
+    "countries_spelled_otherwise",
+    "Prospects",
+    "Countries written another way",
+    "“IN”, “india” and “India” are one country: until they are written one way, each is its own row in every breakdown.",
+    spelled.length,
+    present.length,
+    {
+      fix: "country",
+      sample: [...spellings.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([key, count]) => {
+          const [value, fixed] = key.split("\u0000") as [string, string];
+          return {
+            kind: "value",
+            id: value,
+            label: value,
+            sub: `${fixed} · ${count} ${count === 1 ? "lead" : "leads"}`,
+          };
+        }),
+    },
+  );
+  // Companies and people.
+  const liveCompanies = companies.filter((row) => !row.archived);
+  const cutoff = Date.now() - DQ_QUIET_DAYS * 86_400_000;
+  const lastActivity = (column: "company_id" | "person_id", id: string) =>
+    activities
+      .filter((row) => row[column] === id)
+      .map((row) => Date.parse(row.at))
+      .sort((a, b) => b - a)[0];
+  const worked = liveCompanies.filter((row) =>
+    ["customer", "early_access"].includes(row.lifecycle),
+  );
+  const quietCompanies = worked
+    .filter((row) => {
+      if (Date.parse(row.created_at) > cutoff) return false;
+      const last = lastActivity("company_id", row.id);
+      return last === undefined || last < cutoff;
+    })
+    .sort(
+      (a, b) => (lastActivity("company_id", a.id) ?? 0) - (lastActivity("company_id", b.id) ?? 0),
+    );
+  const dismissedKeys = new Set(duplicateDismissals.map((row) => row.group_key));
+  const crm = dqCrmGroups().filter((group) => !dismissedKeys.has(group.key));
+  check(
+    "company_duplicates",
+    "Companies",
+    "Look-alike companies",
+    "Two records of one firm split its people, deals and history between them.",
+    crm.filter((group) => group.kind === "company").length,
+    liveCompanies.length,
+    { view: { list: "crm_duplicates" } },
+  );
+  check(
+    "companies_no_domain",
+    "Companies",
+    "No web domain",
+    "A company is found by its domain: without one, a new lead or contact from the firm is not linked to it.",
+    liveCompanies.filter((row) => !row.domain).length,
+    liveCompanies.length,
+    { view: { list: "companies", conditions: ["domain:empty:"] } },
+  );
+  check(
+    "companies_unowned",
+    "Companies",
+    "No owner",
+    "Nobody is told when something happens at the firm, and its renewals fall to no one.",
+    liveCompanies.filter((row) => !row.owner_staff_id && row.lifecycle !== "disqualified").length,
+    liveCompanies.length,
+    { view: { list: "companies", conditions: ["owner:empty:"] } },
+  );
+  check(
+    "companies_quiet",
+    "Companies",
+    `Customers and early access quiet for ${DQ_QUIET_DAYS} days`,
+    "Nothing logged against the firm in three months: a renewal or a churn nobody saw coming.",
+    quietCompanies.length,
+    worked.length,
+    {
+      sample: quietCompanies.map((row) => {
+        const last = lastActivity("company_id", row.id);
+        return {
+          kind: "company",
+          id: row.id,
+          label: row.name,
+          sub: last
+            ? `Last activity ${new Date(last).toISOString().slice(0, 10)}`
+            : row.domain || "No web domain",
+        };
+      }),
+    },
+  );
+  const livePeople = people.filter((row) => !row.archived);
+  const personSample = (rows: PersonRow[]) =>
+    rows.map((row) => ({
+      kind: "person",
+      id: row.id,
+      label: row.full_name || row.email || "Unnamed",
+      sub: [row.email, companies.find((company) => company.id === row.company_id)?.name ?? ""]
+        .filter(Boolean)
+        .join(" · "),
+    }));
+  const workedIds = new Set(worked.map((row) => row.id));
+  const atWorked = livePeople.filter((row) => workedIds.has(row.company_id) && !row.do_not_contact);
+  const quietPeople = atWorked.filter((row) => {
+    if (Date.parse(row.created_at) > cutoff) return false;
+    const stamps = [
+      lastActivity("person_id", row.id),
+      row.last_contacted_at ? Date.parse(row.last_contacted_at) : undefined,
+    ].filter((value): value is number => value !== undefined);
+    return !stamps.length || Math.max(...stamps) < cutoff;
+  });
+  const bounced = new Set(
+    mailSuppressions
+      .filter((row) => !row.released_at && row.reason === "hard_bounce")
+      .map((row) => row.email_norm),
+  );
+  const noCompany = livePeople.filter((row) => !row.company_id);
+  const noEmail = livePeople.filter((row) => !row.email);
+  const bouncedPeople = livePeople.filter((row) => bounced.has(row.email.toLowerCase()));
+  check(
+    "person_duplicates",
+    "People",
+    "Look-alike people",
+    "Two records of one person: the history is split and both are written to.",
+    crm.filter((group) => group.kind === "person").length,
+    livePeople.length,
+    { view: { list: "crm_duplicates" } },
+  );
+  check(
+    "people_no_company",
+    "People",
+    "No company",
+    "Left out of their firm's page, its renewals and its tickets.",
+    noCompany.length,
+    livePeople.length,
+    { sample: personSample(noCompany) },
+  );
+  check(
+    "people_no_email",
+    "People",
+    "No address",
+    "Nothing can be sent to them and nothing they send is matched to them.",
+    noEmail.length,
+    livePeople.length,
+    { sample: personSample(noEmail) },
+  );
+  check(
+    "people_bounced",
+    "People",
+    "Address bounced",
+    "Their address is on the stop list after a hard bounce: they have moved on, or the address changed.",
+    bouncedPeople.length,
+    livePeople.length,
+    { tone: "danger", sample: personSample(bouncedPeople) },
+  );
+  check(
+    "people_quiet",
+    "People",
+    `People at customers quiet for ${DQ_QUIET_DAYS} days`,
+    "Nobody has spoken to them in three months.",
+    quietPeople.length,
+    atWorked.length,
+    { sample: personSample(quietPeople) },
+  );
+  const fields = customFields.filter((row) => !row.archived_at);
+  const filled = new Set<string>();
+  for (const [key, value] of customValues) if (value.trim()) filled.add(key.split("\u0000")[0]!);
+  const unused = fields.filter((row) => !filled.has(row.id));
+  check(
+    "fields_unused",
+    "Fields",
+    "Custom fields nobody fills",
+    "No value on any record after 14 days: retire it, or make it part of the work.",
+    unused.length,
+    fields.length,
+    {
+      view: { list: "fields" },
+      sample: unused.map((row) => ({
+        kind: "field",
+        id: row.id,
+        label: row.label,
+        sub: row.record_type,
+      })),
+    },
+  );
+  return checks;
+}
+
+/** Companies and people that look alike (crm_routes.crm_duplicate_groups), keyed. */
+function dqCrmGroups() {
+  const byKey = new Map<string, CompanyRow[]>();
+  for (const row of companies.filter((company) => !company.archived)) {
+    const key = normaliseCompanyName(row.name);
+    if (key) byKey.set(key, [...(byKey.get(key) ?? []), row]);
+  }
+  const companyGroups = [...byKey.values()]
+    .filter((rows) => rows.length > 1)
+    .map((rows) => ({
+      kind: "company",
+      reason: "same name once legal suffixes are removed",
+      records: rows
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        .map((row) => ({
+          company_id: row.id,
+          name: row.name,
+          domain: row.domain,
+          lifecycle: row.lifecycle,
+        })),
+    }));
+  const groups = new Map<string, PersonRow[]>();
+  for (const row of people.filter((person) => !person.archived)) {
+    const full = row.full_name.toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+    if (full && row.company_id)
+      groups.set(`name:${row.company_id}:${full}`, [
+        ...(groups.get(`name:${row.company_id}:${full}`) ?? []),
+        row,
+      ]);
+    if (row.email.includes("@")) {
+      const [local, domain] = row.email.toLowerCase().split("@") as [string, string];
+      const key = `email:${domain}:${local.split("+")[0]!.replace(/\./g, "")}`;
+      groups.set(key, [...(groups.get(key) ?? []), row]);
+    }
+  }
+  const seen = new Set<string>();
+  const peopleGroups: { kind: string; reason: string; records: Record<string, string>[] }[] = [];
+  for (const [key, rows] of groups) {
+    if (rows.length < 2) continue;
+    const ids = rows
+      .map((row) => row.id)
+      .sort()
+      .join(",");
+    if (seen.has(ids)) continue;
+    seen.add(ids);
+    peopleGroups.push({
+      kind: "person",
+      reason: key.startsWith("name:")
+        ? "same name at the same company"
+        : "same address once dots and plus-tags are removed",
+      records: rows
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        .map((row) => ({
+          person_id: row.id,
+          full_name: row.full_name,
+          email: row.email,
+          company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
+        })),
+    });
+  }
+  return [...companyGroups, ...peopleGroups].map((group) => ({
+    ...group,
+    key: dqGroupKey(
+      group.kind,
+      group.records.map((record) => {
+        const fields = record as Record<string, string>;
+        return fields.company_id ?? fields.person_id ?? "";
+      }),
+    ),
+  }));
 }
 
 /**
@@ -8745,6 +9824,177 @@ function seedProspects() {
       });
       created += 1;
     }
+  // Look-alikes for the duplicates review: one person under two addresses at one firm,
+  // one mailbox written two ways, a prospect the CRM already holds as a person — and
+  // names and countries the way a careless file writes them.
+  const alike = (serialNo: number, row: Partial<LeadRow> & { email: string }) => {
+    leads.push({
+      id: `1f${String(900 + serialNo).padStart(6, "0")}-0000-4000-8000-000000000001`,
+      origin: "prospect",
+      source_key: "outbound",
+      full_name: "",
+      first_name: "",
+      last_name: "",
+      title: "",
+      company_name: "",
+      firm_type: "",
+      website: "",
+      country: "",
+      city: "",
+      phone: "",
+      registration_no: "",
+      source_url: "https://firm.example/team",
+      email_kind: "named",
+      notes: "",
+      tags: [],
+      verified_state: "",
+      verified_detail: "",
+      verified_at: null,
+      import_id: importId,
+      message: "",
+      payload: {},
+      stage: "new",
+      disqualify_reason: "",
+      owner_staff_id: "",
+      first_replied_at: null,
+      converted_company_id: "",
+      converted_person_id: "",
+      converted_deal_id: "",
+      created_at: agoIso(24 * 2),
+      ...row,
+    });
+    created += 1;
+  };
+  alike(1, {
+    email: "kavya.bose@marigoldcapital.example",
+    full_name: "Kavya Bose",
+    first_name: "Kavya",
+    last_name: "Bose",
+    title: "Portfolio Manager",
+    company_name: "Marigold Capital",
+    firm_type: "Hedge fund",
+    website: "marigoldcapital.example",
+    country: "Singapore",
+    stage: "attempting",
+    owner_staff_id: SALES_STAFF,
+    verified_state: "valid",
+    verified_detail: "deliverable",
+    verified_at: agoIso(24 * 3),
+    created_at: agoIso(24 * 6),
+  });
+  alike(2, {
+    email: "kbose@marigoldcapital.example",
+    full_name: "Bose Kavya",
+    first_name: "Bose",
+    last_name: "Kavya",
+    company_name: "Marigold Capital",
+    firm_type: "Hedge fund",
+    website: "marigoldcapital.example",
+    country: "Singapore",
+    phone: "+65 6555 0142",
+    notes: "Met at the Singapore conference.",
+    tags: ["conference"],
+  });
+  alike(3, {
+    email: "r.iyer+desk@lotusalternatives.example",
+    full_name: "Rohan Iyer",
+    first_name: "Rohan",
+    last_name: "Iyer",
+    title: "Partner",
+    company_name: "Lotus Alternatives",
+    firm_type: "AIF",
+    website: "lotusalternatives.example",
+    country: "India",
+  });
+  alike(4, {
+    email: "riyer@lotusalternatives.example",
+    full_name: "R Iyer",
+    first_name: "R",
+    last_name: "Iyer",
+    company_name: "Lotus Alternatives",
+    firm_type: "AIF",
+    website: "lotusalternatives.example",
+    country: "India",
+  });
+  alike(5, {
+    email: "jonas.keller@northwall-advisors.example",
+    full_name: "Jonas Keller",
+    first_name: "Jonas",
+    last_name: "Keller",
+    title: "Managing Partner",
+    company_name: "Northwall Advisors",
+    firm_type: "Investment firm",
+    country: "Switzerland",
+  });
+  alike(6, {
+    email: "meera.kapoor@cobaltresearch.example",
+    full_name: "MEERA KAPOOR",
+    first_name: "MEERA",
+    last_name: "KAPOOR",
+    title: "Research Analyst",
+    company_name: "Cobalt Research",
+    firm_type: "Research analyst",
+    website: "cobaltresearch.example",
+    country: "IN",
+  });
+  alike(7, {
+    email: "dev.reddy@quillcapital.example",
+    full_name: "dev reddy",
+    first_name: "dev",
+    last_name: "reddy",
+    title: "Analyst",
+    company_name: "Quill Capital",
+    firm_type: "Hedge fund",
+    website: "quillcapital.example",
+    country: "U.K.",
+  });
+  alike(8, {
+    email: "asha.menon@tealwealth.example",
+    full_name: "Asha Menon",
+    first_name: "Asha",
+    last_name: "Menon",
+    title: "Investment Manager",
+    company_name: "Teal Wealth",
+    firm_type: "Wealth manager",
+    website: "tealwealth.example",
+    country: "india",
+  });
+  // Two more for the harness's flow to merge and to mark, so the screens keep theirs.
+  alike(9, {
+    email: "arjun.nair@harbourpartners.example",
+    full_name: "Arjun Nair",
+    first_name: "Arjun",
+    last_name: "Nair",
+    title: "Fund Manager",
+    company_name: "Harbour Partners",
+    firm_type: "PMS",
+    website: "harbourpartners.example",
+    country: "India",
+    created_at: agoIso(24 * 5),
+  });
+  alike(10, {
+    email: "anair@harbourpartners.example",
+    full_name: "Nair Arjun",
+    first_name: "Nair",
+    last_name: "Arjun",
+    company_name: "Harbour Partners",
+    firm_type: "PMS",
+    website: "harbourpartners.example",
+    country: "India",
+    phone: "+91 22 5555 0199",
+  });
+  alike(11, {
+    email: "elena.marsh@meridian-capital.example",
+    full_name: "Elena Marsh",
+    first_name: "Elena",
+    last_name: "Marsh",
+    title: "Chief Investment Officer",
+    company_name: "Meridian Capital",
+    firm_type: "Hedge fund",
+    country: "United Kingdom",
+  });
+  duplicateDismissals.length = 0;
+  dataHealthDays.clear();
   leadImports.length = 0;
   leadImports.push({
     id: importId,
@@ -9839,6 +11089,8 @@ function leadView(row: LeadRow) {
     payload: row.payload,
     stage: row.stage,
     disqualify_reason: row.disqualify_reason,
+    duplicate_of_kind: row.duplicate_of_kind ?? "",
+    duplicate_of_id: row.duplicate_of_id ?? "",
     owner_staff_id: row.owner_staff_id,
     first_replied_at: row.first_replied_at,
     waiting_minutes: waiting,
@@ -10981,69 +12233,17 @@ routes.push(
     auth: true,
     capability: "crm:read",
     handler: () => {
-      const byKey = new Map<string, CompanyRow[]>();
-      for (const row of companies.filter((company) => !company.archived)) {
-        const key = normaliseCompanyName(row.name);
-        if (key) byKey.set(key, [...(byKey.get(key) ?? []), row]);
-      }
-      const companyGroups = [...byKey.values()]
-        .filter((rows) => rows.length > 1)
-        .map((rows) => ({
-          kind: "company",
-          reason: "same name once legal suffixes are removed",
-          records: rows
-            .sort((a, b) => a.created_at.localeCompare(b.created_at))
-            .map((row) => ({
-              company_id: row.id,
-              name: row.name,
-              domain: row.domain,
-              lifecycle: row.lifecycle,
-            })),
-        }));
-      const groups = new Map<string, PersonRow[]>();
-      for (const row of people.filter((person) => !person.archived)) {
-        const full = row.full_name.toLowerCase().split(/\s+/).filter(Boolean).join(" ");
-        if (full && row.company_id)
-          groups.set(`name:${row.company_id}:${full}`, [
-            ...(groups.get(`name:${row.company_id}:${full}`) ?? []),
-            row,
-          ]);
-        if (row.email.includes("@")) {
-          const [local, domain] = row.email.toLowerCase().split("@") as [string, string];
-          const key = `email:${domain}:${local.split("+")[0]!.replace(/\./g, "")}`;
-          groups.set(key, [...(groups.get(key) ?? []), row]);
-        }
-      }
-      const seen = new Set<string>();
-      const peopleGroups: { kind: string; reason: string; records: Record<string, string>[] }[] =
-        [];
-      for (const [key, rows] of groups) {
-        if (rows.length < 2) continue;
-        const ids = rows
-          .map((row) => row.id)
-          .sort()
-          .join(",");
-        if (seen.has(ids)) continue;
-        seen.add(ids);
-        peopleGroups.push({
-          kind: "person",
-          reason: key.startsWith("name:")
-            ? "same name at the same company"
-            : "same address once dots and plus-tags are removed",
-          records: rows
-            .sort((a, b) => a.created_at.localeCompare(b.created_at))
-            .map((row) => ({
-              person_id: row.id,
-              full_name: row.full_name,
-              email: row.email,
-              company_name: companies.find((company) => company.id === row.company_id)?.name ?? "",
-            })),
-        });
-      }
+      // crm_routes.crm_duplicate_groups: the groups with their keys; dismissed ones out.
+      const dismissed = new Set(duplicateDismissals.map((row) => row.group_key));
+      const keyed = dqCrmGroups().filter((group) => !dismissed.has(group.key));
       return ok({
-        groups: [...companyGroups, ...peopleGroups],
-        companies: companyGroups.length,
-        people: peopleGroups.length,
+        groups: keyed,
+        companies: keyed.filter((group) => group.kind === "company").length,
+        people: keyed.filter((group) => group.kind === "person").length,
+        dismissed: duplicateDismissals
+          .filter((row) => row.kind !== "lead")
+          .slice(0, 50)
+          .map(dqDismissalView),
       });
     },
   },
@@ -11997,6 +13197,430 @@ routes.push(
       return ok({ job: leadJobView(job) });
     },
   },
+  // -- data quality (0061): look-alike leads, merging them, the data's health ----------------
+  {
+    method: "GET",
+    pattern: "hq/leads/duplicates",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const reason = String(query.reason ?? "").trim();
+      const allowed = [...Object.keys(DQ_REASONS), "crm", "leads"];
+      if (reason && !allowed.includes(reason))
+        return refuse(400, "malformed_request", { reason: `one of ${allowed.join(", ")}` });
+      const offset = Math.max(0, Number.parseInt(String(query.offset ?? "0"), 10) || 0);
+      const groups = dqLeadGroups();
+      const kept =
+        reason === "crm"
+          ? groups.filter((group) => group.person_ids.length)
+          : reason === "leads"
+            ? groups.filter((group) => !group.person_ids.length)
+            : reason
+              ? groups.filter((group) => group.reasons.includes(reason))
+              : groups;
+      const page = kept.slice(offset, offset + DQ_PAGE);
+      const stats = mailSendStats();
+      const dismissed = duplicateDismissals.filter((row) => row.kind === "lead");
+      return ok({
+        groups: page.map((group) => ({
+          key: group.key,
+          reasons: group.reasons,
+          keep: group.keep,
+          leads: group.lead_ids.map((id) =>
+            dqLeadBrief(
+              leads.find((row) => row.id === id)!,
+              stats,
+            ),
+          ),
+          people: group.person_ids
+            .map((id) => people.find((row) => row.id === id))
+            .filter((row): row is PersonRow => Boolean(row))
+            .map(dqPersonBrief),
+        })),
+        total: groups.length,
+        matched: kept.length,
+        with_people: groups.filter((group) => group.person_ids.length).length,
+        by_reason: Object.fromEntries(
+          Object.keys(DQ_REASONS).map((key) => [
+            key,
+            groups.filter((group) => group.reasons.includes(key)).length,
+          ]),
+        ),
+        reasons: DQ_REASONS,
+        offset,
+        limit: DQ_PAGE,
+        dismissed: dismissed.slice(0, 50).map(dqDismissalView),
+        dismissed_total: dismissed.length,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/leads/merge-preview",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const keepId = String(query.keep ?? "").trim();
+      if (!keepId) return refuse(400, "malformed_request", { keep: "the lead that stays" });
+      const inputs = dqMergeInputs(keepId, query.fold);
+      if ("refusal" in inputs) return inputs.refusal;
+      const { keep, folds } = inputs;
+      const plan = dqMergePlan(keep, folds);
+      const stats = mailSendStats();
+      const foldIds = new Set(folds.map((row) => row.id));
+      return ok({
+        keep: dqLeadBrief(keep, stats),
+        folds: folds.map((row) => dqLeadBrief(row, stats)),
+        fields: plan.fields,
+        after: {
+          stage: plan.stage,
+          tags: plan.tags,
+          notes: plan.notes,
+          first_replied_at: plan.first_replied_at,
+        },
+        moves: {
+          activities: activities.filter((row) => foldIds.has(row.lead_id)).length,
+          tasks: tasks.filter((row) => foldIds.has(row.lead_id)).length,
+        },
+        max_fold: DQ_MAX_FOLD,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/leads/{lead_id}/merge",
+    auth: true,
+    capability: "crm:write",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const found = caller(headers)!;
+      const inputs = dqMergeInputs(params.lead_id ?? "", body.fold);
+      if ("refusal" in inputs) return inputs.refusal;
+      const { keep, folds } = inputs;
+      const choose: Record<string, string> = {};
+      if (body.choose && typeof body.choose === "object")
+        for (const [key, value] of Object.entries(body.choose as Record<string, unknown>))
+          if (DQ_MERGE_FIELDS.some(([name]) => name === key))
+            choose[key] = String(value ?? "").toLowerCase();
+      const plan = dqMergePlan(keep, folds, choose);
+      const at = now();
+      const keepLabel = dqLeadName(keep) || keep.email;
+      for (const row of folds) {
+        const note = `Folded into ${keepLabel} (${keep.id}) on ${at.slice(0, 10)}.`;
+        const notes = row.notes ?? "";
+        Object.assign(row, {
+          stage: "disqualified",
+          disqualify_reason: "duplicate",
+          duplicate_of_id: keep.id,
+          duplicate_of_kind: "lead",
+          notes: (notes.trim() ? `${notes.trimEnd()}\n\n${note}` : note).slice(0, 4000),
+          updated_at: at,
+        });
+        for (const activity of activities)
+          if (activity.lead_id === row.id) activity.lead_id = keep.id;
+        for (const task of tasks) if (task.lead_id === row.id) task.lead_id = keep.id;
+        mailCrmEvent("lead_stage", { lead_id: row.id, stage: "disqualified" });
+        audit("lead.merged_into", found.member.id, "lead", row.id, "", { other: keep.id });
+      }
+      const before = { ...keep };
+      if (Object.keys(plan.fills).length) Object.assign(keep, plan.fills, { updated_at: at });
+      recordActivity({
+        kind: "system",
+        body: `Merged ${folds.length} duplicate${folds.length === 1 ? "" : "s"} into this lead: ${folds
+          .map((row) => row.email || dqLeadName(row))
+          .join(", ")}`,
+        lead_id: keep.id,
+        staff_id: found.member.id,
+        staff_name: found.member.display_name,
+      });
+      audit("lead.merged_from", found.member.id, "lead", keep.id, "", {
+        others: folds.map((row) => row.id),
+        filled: Object.keys(plan.fills)
+          .filter((name) => name !== "notes")
+          .sort(),
+        changes: changesBetween(before, keep),
+      });
+      if (typeof plan.fills.stage === "string")
+        mailCrmEvent("lead_stage", { lead_id: keep.id, stage: plan.fills.stage });
+      return ok({ lead: leadView(keep), folded: folds.map((row) => row.id), moved: {} });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/leads/duplicates/person",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const person = people.find((row) => row.id === String(body.person_id ?? "").trim());
+      if (!person || person.archived)
+        return refuse(400, "malformed_request", { person_id: "a CRM person who is not archived" });
+      const ids = Array.isArray(body.lead_ids)
+        ? [...new Set(body.lead_ids.map((value) => String(value).trim().toLowerCase()))]
+        : [];
+      if (!ids.length || ids.length > 10)
+        return refuse(400, "malformed_request", { lead_ids: "one to ten leads" });
+      const rows: LeadRow[] = [];
+      for (const id of ids) {
+        const row = leads.find((lead) => lead.id === id);
+        if (!row) return refuse(404, "not_found", { lead_ids: id });
+        const label = dqLeadName(row) || row.email;
+        if (!dqLive(row))
+          return refuse(400, "malformed_request", {
+            lead_ids: `${label} is ${row.anonymised_at ? "anonymised" : row.stage}: only a lead still being worked`,
+          });
+        if (dqOwed(row))
+          return refuse(400, "malformed_request", {
+            lead_ids: `${label} wrote in and has not been answered: convert the lead instead`,
+          });
+        rows.push(row);
+      }
+      const at = now();
+      const personLabel = person.full_name || person.email;
+      for (const row of rows) {
+        const note = `Already in the CRM as ${personLabel} (${person.id}); marked on ${at.slice(0, 10)}.`;
+        const notes = row.notes ?? "";
+        Object.assign(row, {
+          stage: "disqualified",
+          disqualify_reason: "duplicate",
+          duplicate_of_id: person.id,
+          duplicate_of_kind: "person",
+          notes: (notes.trim() ? `${notes.trimEnd()}\n\n${note}` : note).slice(0, 4000),
+          updated_at: at,
+        });
+        mailCrmEvent("lead_stage", { lead_id: row.id, stage: "disqualified" });
+        audit("lead.duplicate_of_person", found.member.id, "lead", row.id, "", {
+          person: person.id,
+        });
+      }
+      const filled: string[] = [];
+      for (const name of ["title", "phone"] as const) {
+        if ((person[name] ?? "").trim()) continue;
+        const value = rows.map((row) => (row[name] ?? "").trim()).find(Boolean);
+        if (value) {
+          person[name] = value;
+          filled.push(name);
+        }
+      }
+      if (filled.length)
+        audit("person.updated", found.member.id, "person", person.id, "", {
+          fields: filled,
+          from_leads: rows.map((row) => row.id),
+        });
+      return ok({ marked: rows.map((row) => row.id), person_id: person.id, filled });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/crm/duplicates/dismiss",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const kind = String(body.kind ?? "");
+      if (!["lead", "company", "person"].includes(kind))
+        return refuse(400, "malformed_request", { kind: "lead, company or person" });
+      const ids = Array.isArray(body.ids)
+        ? [...new Set(body.ids.map((value) => String(value).trim().toLowerCase()).filter(Boolean))]
+        : [];
+      const personIds = Array.isArray(body.person_ids)
+        ? [
+            ...new Set(
+              body.person_ids.map((value) => String(value).trim().toLowerCase()).filter(Boolean),
+            ),
+          ]
+        : [];
+      if (ids.length + personIds.length < 2 || ids.length + personIds.length > 20)
+        return refuse(400, "malformed_request", { ids: "the two to twenty records of one group" });
+      const exists = (id: string) =>
+        kind === "lead"
+          ? leads.some((row) => row.id === id)
+          : kind === "company"
+            ? companies.some((row) => row.id === id)
+            : people.some((row) => row.id === id);
+      for (const id of ids) if (!exists(id)) return refuse(404, "not_found", { ids: id });
+      if (personIds.length && kind !== "lead")
+        return refuse(400, "malformed_request", {
+          person_ids: "only a group of leads names CRM people",
+        });
+      for (const id of personIds)
+        if (!people.some((row) => row.id === id))
+          return refuse(404, "not_found", { person_ids: id });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 200);
+      const key = dqGroupKey(kind, [...ids, ...personIds]);
+      if (!duplicateDismissals.some((row) => row.group_key === key))
+        duplicateDismissals.unshift({
+          group_key: key,
+          kind,
+          record_ids: [...ids, ...personIds],
+          reason,
+          dismissed_by: found.member.id,
+          dismissed_at: now(),
+        });
+      audit("duplicates.dismissed", found.member.id, kind, ids[0] ?? personIds[0] ?? "", reason, {
+        records: [...ids, ...personIds],
+        key,
+      });
+      return ok({ key, dismissed: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/crm/duplicates/restore",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const key = String(body.key ?? "")
+        .trim()
+        .toLowerCase();
+      const index = duplicateDismissals.findIndex((row) => row.group_key === key);
+      if (index < 0) return refuse(404, "not_found");
+      const [row] = duplicateDismissals.splice(index, 1);
+      audit("duplicates.restored", found.member.id, row!.kind, row!.record_ids[0] ?? "", "", {
+        key,
+        records: row!.record_ids,
+      });
+      return ok({ key, restored: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/data/health",
+    auth: true,
+    capability: "crm:read",
+    handler: () => {
+      const checks = dqHealthChecks();
+      const counts = Object.fromEntries(checks.map((check) => [check.key, check.count]));
+      // A demo's history: a month and a week back, from the counts as they stand.
+      if (!dataHealthDays.size) {
+        dataHealthDays.set(
+          dqDaysAgoIso(31),
+          Object.fromEntries(checks.map((check) => [check.key, Math.round(check.count * 1.3) + 2])),
+        );
+        dataHealthDays.set(
+          dqDaysAgoIso(8),
+          Object.fromEntries(checks.map((check) => [check.key, Math.round(check.count * 1.1) + 1])),
+        );
+      }
+      dataHealthDays.set(dqDaysAgoIso(0), counts);
+      const asOf = (days: number) => {
+        const day = dqDaysAgoIso(days);
+        const kept = [...dataHealthDays.keys()].filter((key) => key <= day).sort();
+        return kept.length ? dataHealthDays.get(kept.at(-1)!)! : null;
+      };
+      const week = asOf(7);
+      const month = asOf(30);
+      return ok({
+        as_of: now(),
+        areas: ["Leads", "Prospects", "Companies", "People", "Fields"],
+        checks: checks.map((check) => ({
+          ...check,
+          week_ago: week ? (week[check.key] ?? null) : null,
+          month_ago: month ? (month[check.key] ?? null) : null,
+        })),
+        history_days: dataHealthDays.size,
+        quiet_days: DQ_QUIET_DAYS,
+        fixes: DQ_FIXES,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/data/standardise",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ query }) => {
+      const kind = String(query.kind ?? "");
+      if (!DQ_FIXES.includes(kind))
+        return refuse(400, "malformed_request", { kind: `one of ${DQ_FIXES.join(", ")}` });
+      const targets = leads
+        .filter((row) => !row.anonymised_at)
+        .map((row) => [row, dqFixes(row, kind)] as const)
+        .filter(([, fixes]) => Object.keys(fixes).length)
+        .sort((a, b) => b[0].created_at.localeCompare(a[0].created_at));
+      return ok({
+        kind,
+        count: targets.length,
+        changes: targets.slice(0, DQ_PREVIEW_ROWS).flatMap(([row, fixes]) =>
+          Object.entries(fixes).map(([field, value]) => ({
+            lead_id: row.id,
+            label: dqLeadName(row) || row.email,
+            field,
+            from: String((row as Record<string, unknown>)[field] ?? ""),
+            to: String(value),
+          })),
+        ),
+        inline_limit: LEAD_JOB_INLINE_LIMIT,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/data/standardise/apply",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const kind = String(body.kind ?? "");
+      if (!DQ_FIXES.includes(kind))
+        return refuse(400, "malformed_request", { kind: `one of ${DQ_FIXES.join(", ")}` });
+      const targets = leads.filter(
+        (row) => !row.anonymised_at && Object.keys(dqFixes(row, kind)).length,
+      );
+      const spec: LeadBulkSpec = {
+        stage: "",
+        dqReason: "",
+        setOwner: false,
+        owner: "",
+        tagsAdd: [],
+        tagsRemove: [],
+        verified: null,
+        touchTags: false,
+        standardise: kind,
+      };
+      const described = { standardise: kind, matched: targets.length };
+      if (targets.length > LEAD_JOB_INLINE_LIMIT) {
+        const job: LeadJobRow = {
+          id: randomUUID(),
+          state: "queued",
+          change: { standardise: kind },
+          spec,
+          described,
+          target_ids: targets.map((row) => row.id),
+          processed: 0,
+          changed: 0,
+          unchanged: 0,
+          skipped: 0,
+          created_by: found.member.id,
+          created_at: now(),
+          started_at: null,
+          finished_at: null,
+          last_error: "",
+        };
+        leadJobs.unshift(job);
+        audit("lead.bulk_queued", found.member.id, "lead_job", job.id, "", {
+          set: job.change,
+          ...described,
+        });
+        leadJobSlice(job);
+        const view = leadJobView(job);
+        return ok({
+          kind,
+          matched: targets.length,
+          changed: view.changed,
+          queued: view.state !== "done",
+          job: view,
+        });
+      }
+      const counts = { changed: 0, unchanged: 0, skipped: 0 };
+      for (const row of targets) counts[leadBulkApply(row, spec)] += 1;
+      audit("lead.standardised", found.member.id, "lead", "bulk", "", { ...described, ...counts });
+      return ok({ kind, matched: targets.length, ...counts, queued: false, job: null });
+    },
+  },
   {
     method: "GET",
     pattern: "hq/leads/suggestions",
@@ -12274,6 +13898,25 @@ routes.push(
           company: company ? companyView(company) : null,
         },
         activities: activityViews({ lead_id: row.id }),
+        duplicate_of: (() => {
+          if (!row.duplicate_of_id) return null;
+          if (row.duplicate_of_kind === "person") {
+            const other = people.find((person) => person.id === row.duplicate_of_id);
+            return {
+              kind: "person",
+              id: row.duplicate_of_id,
+              label: other?.full_name || other?.email || "",
+              exists: Boolean(other),
+            };
+          }
+          const other = leads.find((lead) => lead.id === row.duplicate_of_id);
+          return {
+            kind: "lead",
+            id: row.duplicate_of_id,
+            label: other ? dqLeadName(other) || other.email : "",
+            exists: Boolean(other),
+          };
+        })(),
         first_reply_target_minutes: 60,
         import: (() => {
           const run = row.import_id ? leadImports.find((item) => item.id === row.import_id) : null;
@@ -12298,7 +13941,12 @@ routes.push(
           return refuse(400, "malformed_request", { stage: "qualify by converting" });
         if (row.stage === "qualified")
           return refuse(400, "malformed_request", { stage: "already converted; work the deal" });
-        if (row.stage === "disqualified" && stage !== "disqualified") row.disqualify_reason = "";
+        if (row.stage === "disqualified" && stage !== "disqualified") {
+          // Revived: neither the reason nor what it was folded into describes it now.
+          row.disqualify_reason = "";
+          row.duplicate_of_id = "";
+          row.duplicate_of_kind = "";
+        }
         if (badId(body.owner_staff_id))
           return refuse(400, "malformed_request", { owner_staff_id: "not an id" });
         if (stage === "disqualified") {

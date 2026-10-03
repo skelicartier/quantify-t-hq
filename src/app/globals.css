@@ -4246,7 +4246,17 @@
 
   .dup-groups {
     display: grid;
-    gap: 14px;
+    gap: 0;
+  }
+
+  .dup-groups > .card {
+    padding: 20px 0 24px;
+    border-top: 1px solid var(--line-strong);
+  }
+
+  .dup-groups > .card:first-child {
+    padding-top: 4px;
+    border-top: 0;
   }
 
   .dup-records {
@@ -4279,6 +4289,189 @@
 
   .dup-record form {
     display: contents;
+  }
+
+  /* the lead the review would keep, said in words beside it */
+  .dup-record__keep {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .dup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .dup-actions form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* a merge: one choice per field that differs */
+  .merge-choice {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 12px;
+    padding: 0;
+    border: 0;
+  }
+
+  .merge-choice legend {
+    margin-bottom: 4px;
+    font-size: 13.5px;
+    color: var(--text);
+  }
+
+  .merge-choice__option {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    overflow-wrap: anywhere;
+  }
+
+  .merge-notes {
+    display: grid;
+    gap: 4px;
+    margin-top: 12px;
+  }
+
+  .merge-notes__text {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+  }
+
+  /* the data health list: a check and its records, then three figures — beside it on a
+     wide screen under one header, below it on a phone with each figure named */
+  .health-head,
+  .health-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 27rem);
+    gap: 4px 24px;
+  }
+
+  .health-head {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .health-head__figures,
+  .health-row__figures {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    text-align: right;
+  }
+
+  .health-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .health-row {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .health-row__check {
+    min-width: 0;
+  }
+
+  .health-row__figures {
+    margin: 0;
+  }
+
+  .health-row__figures > div {
+    position: relative;
+    min-width: 0;
+  }
+
+  /* named by the header on a wide screen; read aloud either way */
+  .health-row__figures dt {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .health-row__figures dd {
+    margin: 0;
+  }
+
+  @media (max-width: 720px) {
+    .health-head {
+      display: none;
+    }
+
+    .health-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    .health-row__figures {
+      text-align: left;
+    }
+
+    .health-row__figures dt {
+      position: static;
+      width: auto;
+      height: auto;
+      overflow: visible;
+      clip-path: none;
+      white-space: normal;
+      color: var(--quiet);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+  }
+
+  .health-figure {
+    display: block;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .health-count--danger {
+    color: var(--danger);
+  }
+
+  .health-check__records {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    margin-top: 4px;
+  }
+
+  .health-check__sample summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 12px;
+  }
+
+  .health-check__sample ul {
+    display: grid;
+    gap: 2px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12px;
+    overflow-wrap: anywhere;
   }
 
   .mentions {

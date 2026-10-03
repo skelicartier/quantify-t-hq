@@ -81,6 +81,7 @@ vi.mock("@/lib/api/core", async (importOriginal) => {
 
 import * as auth from "@/lib/api/auth";
 import * as crm from "@/lib/api/crm";
+import * as dataQuality from "@/lib/api/data-quality";
 import * as deals from "@/lib/api/deals";
 import * as home from "@/lib/api/home";
 import * as inboxApi from "@/lib/api/inbox";
@@ -285,6 +286,15 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/leads/imports", () => crm.readLeadImports(token)],
   ["hq/leads/jobs", () => crm.readLeadJobs(token)],
   ["hq/leads/jobs/{job_id}", () => crm.readLeadJob(token, ids.lead_job_id!)],
+  ["hq/leads/duplicates", () => dataQuality.readLeadDuplicates(token, {})],
+  ["hq/leads/{lead_id} (folded)", () => crm.readLead(token, ids.folded_lead_id!)],
+  [
+    "hq/leads/merge-preview",
+    () => dataQuality.readMergePreview(token, ids.merge_keep_id!, [ids.merge_fold_id!]),
+  ],
+  ["hq/crm/duplicates", () => crm.readDuplicates(token)],
+  ["hq/data/health", () => dataQuality.readDataHealth(token)],
+  ["hq/data/standardise", () => dataQuality.readStandardisePreview(token, "name_case")],
   ["hq/leads/suggestions", () => crm.readLeadSuggestions(token)],
   ["hq/settings/leads", () => crm.readLeadSettings(token)],
   ["hq/settings/cold", () => crm.readColdSettings(token)],

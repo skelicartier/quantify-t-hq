@@ -167,9 +167,35 @@ export async function checkDomain(
   return value;
 }
 
-/** Read and judge a domain's records. Each lookup has its own timeout and one retry. */
+/**
+ * The longest a page waits on DNS. Node's resolver tries every nameserver on every try,
+ * so its own timeout is no bound: a slow resolver held each render, and every action's
+ * answer with it, for fifteen seconds. Past this, what is not back reads "could not be
+ * looked up just now" and is asked again a minute later.
+ */
+const DEADLINE_MS = 3000;
+
+/** Read and judge a domain's records, everything back within the deadline. */
 async function lookUp(domain: string, hosts: readonly string[]): Promise<DomainRecords> {
-  const resolver = new Resolver({ timeout: 2500, tries: 2 });
+  const resolver = new Resolver({ timeout: 1500, tries: 1 });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<Lookup>((resolve) => {
+    timer = setTimeout(() => resolve({ code: "ETIMEOUT" }), DEADLINE_MS);
+  });
+  try {
+    return await judgeLookups(domain, hosts, resolver, (lookup) => Promise.race([lookup, late]));
+  } finally {
+    clearTimeout(timer);
+    resolver.cancel();
+  }
+}
+
+async function judgeLookups(
+  domain: string,
+  hosts: readonly string[],
+  resolver: Resolver,
+  inTime: (lookup: Promise<Lookup>) => Promise<Lookup>,
+): Promise<DomainRecords> {
   const txt = async (name: string): Promise<Lookup> => {
     try {
       return { records: flat(await resolver.resolveTxt(name)) };
@@ -180,14 +206,16 @@ async function lookUp(domain: string, hosts: readonly string[]): Promise<DomainR
   };
   const tried = selectorsFor(hosts);
   const [root, dmarc, mx, ...keys] = await Promise.all([
-    txt(domain),
-    txt(`_dmarc.${domain}`),
-    resolver.resolveMx(domain).then(
-      (records): Lookup => ({ records: records.map((record) => record.exchange) }),
-      (error: unknown): Lookup =>
-        codeOf(error) === "ENODATA" ? { records: [] } : { code: codeOf(error) },
+    inTime(txt(domain)),
+    inTime(txt(`_dmarc.${domain}`)),
+    inTime(
+      resolver.resolveMx(domain).then(
+        (records): Lookup => ({ records: records.map((record) => record.exchange) }),
+        (error: unknown): Lookup =>
+          codeOf(error) === "ENODATA" ? { records: [] } : { code: codeOf(error) },
+      ),
     ),
-    ...tried.map((selector) => txt(`${selector}._domainkey.${domain}`)),
+    ...tried.map((selector) => inTime(txt(`${selector}._domainkey.${domain}`))),
   ]);
   if ("code" in root && root.code === "ENOTFOUND" && "code" in mx && mx.code === "ENOTFOUND")
     return { spf: NO_DOMAIN, dkim: NO_DOMAIN, dmarc: NO_DOMAIN, mx: NO_DOMAIN };

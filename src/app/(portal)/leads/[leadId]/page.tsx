@@ -374,6 +374,27 @@ export default async function LeadPage({ params }: LeadPageProps) {
                 <p className="side-quiet">
                   {DISQUALIFY_LABELS[lead.disqualify_reason] ?? "No reason recorded"}.
                 </p>
+                {detail.duplicate_of && (
+                  <p className="side-quiet">
+                    {detail.duplicate_of.kind === "person"
+                      ? "Already in the CRM as "
+                      : "Folded into "}
+                    {detail.duplicate_of.exists ? (
+                      <Link
+                        href={
+                          detail.duplicate_of.kind === "person"
+                            ? `/people/${detail.duplicate_of.id}`
+                            : `/leads/${detail.duplicate_of.id}`
+                        }
+                      >
+                        {detail.duplicate_of.label || "the record"}
+                      </Link>
+                    ) : (
+                      "a record that is no longer here"
+                    )}
+                    . Moving it back to work makes it a lead of its own again.
+                  </p>
+                )}
               </Card>
             )}
             {!anonymised && (

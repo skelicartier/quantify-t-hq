@@ -30,6 +30,7 @@ export const DISQUALIFY_LABELS: Record<string, string> = {
   competitor: "A competitor",
   spam: "Spam",
   no_response: "Never responded",
+  duplicate: "A duplicate",
   other: "Other",
 };
 

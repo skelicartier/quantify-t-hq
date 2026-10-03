@@ -42,6 +42,7 @@ import {
   KeySquare,
   ShieldEllipsis,
   UserCheck,
+  Stethoscope,
   type LucideIcon,
 } from "lucide-react";
 
@@ -118,6 +119,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         activePrefix: "/success/",
         capability: "crm:read",
         key: "u",
+      },
+      {
+        href: "/data-health",
+        label: "Data health",
+        icon: Stethoscope,
+        activePrefix: "/data-health/",
+        capability: "crm:read",
+        key: "q",
       },
     ],
   },

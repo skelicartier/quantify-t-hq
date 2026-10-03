@@ -109,6 +109,16 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "lead-import", path: "/leads/import", ready: ".list-import" },
   { name: "lead-fit", path: "/leads/fit", ready: ".fit-rules" },
   { name: "lead-rules", path: "/leads/rules", ready: ".stat-grid" },
+  // Data quality: look-alike leads, a merge's choices, the records' health.
+  { name: "lead-duplicates", path: "/leads/duplicates", ready: ".dup-groups" },
+  { name: "lead-duplicates-crm", path: "/leads/duplicates?reason=crm", ready: ".stat-grid" },
+  {
+    name: "lead-merge",
+    path: "/leads/duplicates/merge?keep=1f000901-0000-4000-8000-000000000001&fold=1f000902-0000-4000-8000-000000000001",
+    ready: "#merge-keep",
+  },
+  { name: "data-health", path: "/data-health", ready: ".stat-grid" },
+  { name: "data-health-tidy", path: "/data-health/tidy?kind=name_case", ready: ".data-table" },
   {
     name: "lead-rules-country",
     path: "/leads/rules?country=Germany#country-rule",
@@ -678,6 +688,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureTrustFlows(page, folder);
   await captureFieldFlows(page, folder);
   await captureProspectFlows(page, folder);
+  await captureDataQualityFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -2135,6 +2146,99 @@ async function captureMailboxFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/mail-replies-recorded`);
 }
 
+/**
+ * Data quality: a look-alike group judged not the same and asked about again, a prospect
+ * marked as the CRM person it already is, a merge with one field taken from the other
+ * record, and a tidy-up after its preview. The flow works its own seeded records (Arjun
+ * Nair twice, Elena Marsh), so the screens keep theirs; a later pass finds them settled.
+ */
+async function captureDataQualityFlows(page: Page, folder: string) {
+  const lotus = "riyer@lotusalternatives.example";
+  await page.goto(`${BASE}/leads/duplicates?reason=same_mailbox`, { waitUntil: "networkidle" });
+  const lotusGroup = page.locator("article.card", { hasText: lotus });
+  if ((await lotusGroup.count()) === 0) {
+    report(`${folder}/lead-duplicates-dismissed`, "the same-mailbox group is not offered");
+  } else {
+    await lotusGroup.locator("button", { hasText: "Not the same" }).click();
+    // The card goes with its form; the list of judgements says what is true now.
+    await page
+      .locator("section[aria-labelledby='dismissed']", { hasText: "Judged not the same" })
+      .waitFor({ timeout: 15_000 });
+    if ((await page.locator("article.card", { hasText: lotus }).count()) > 0)
+      report(`${folder}/lead-duplicates-dismissed`, "the dismissed group is still offered");
+    await shoot(page, `${folder}/lead-duplicates-dismissed`);
+    await page
+      .locator("section[aria-labelledby='dismissed'] button", { hasText: "Ask again" })
+      .first()
+      .click();
+    await page.locator("article.card", { hasText: lotus }).waitFor({ timeout: 15_000 });
+  }
+
+  // A prospect the CRM already holds, marked as that person.
+  const elena = "elena.marsh@meridian-capital.example";
+  const elenaId = "1f000911-0000-4000-8000-000000000001";
+  await page.goto(`${BASE}/leads/duplicates?reason=crm`, { waitUntil: "networkidle" });
+  const elenaGroup = page.locator("article.card", { hasText: elena });
+  if ((await elenaGroup.count()) > 0) {
+    await elenaGroup.locator("button", { hasText: "This lead is Elena Marsh" }).click();
+    await page
+      .locator("article.card", { hasText: elena })
+      .waitFor({ state: "detached", timeout: 15_000 });
+  }
+  await page.goto(`${BASE}/leads/${elenaId}`, { waitUntil: "networkidle" });
+  if ((await page.locator(".side-quiet", { hasText: "Already in the CRM as" }).count()) === 0)
+    report(`${folder}/lead-duplicate-of-person`, "the marked lead does not name the person");
+  await shoot(page, `${folder}/lead-duplicate-of-person`);
+
+  // The merge: the other record's name chosen, then the kept lead's history says so.
+  const keep = "1f000909-0000-4000-8000-000000000001";
+  const fold = "1f000910-0000-4000-8000-000000000001";
+  await page.goto(`${BASE}/leads/duplicates/merge?keep=${keep}&fold=${fold}`, {
+    waitUntil: "networkidle",
+  });
+  if ((await page.locator("#merge-fields").count()) > 0) {
+    if ((await page.locator("#sudo-code").count()) > 0) {
+      await page.fill("#sudo-code", "000000");
+      await page.locator(".sudo-gate button[type=submit]").click();
+    }
+    await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+    await page.locator(`input[name="choose.name"][value="${fold}"]`).check();
+    await shoot(page, `${folder}/lead-merge-chosen`);
+    await page.locator("button", { hasText: /^Merge 1 lead into/ }).click();
+    await page.waitForURL(`**/leads/${keep}`, { timeout: 30_000 });
+    await page.waitForSelector(".record-layout", { timeout: 15_000 });
+    const record = (await page.locator("main").innerText()).replace(/\s+/g, " ");
+    if (!record.includes("Nair Arjun"))
+      report(`${folder}/lead-merged`, "the kept lead does not carry the chosen name");
+    if (!record.includes("Merged 1 duplicate into this lead"))
+      report(`${folder}/lead-merged`, "the kept lead's history does not record the merge");
+    await shoot(page, `${folder}/lead-merged`);
+  }
+  await page.goto(`${BASE}/leads/${fold}`, { waitUntil: "networkidle" });
+  if ((await page.locator(".side-quiet", { hasText: "Folded into" }).count()) === 0)
+    report(`${folder}/lead-folded`, "the folded lead does not say where it went");
+
+  // A tidy-up after its preview: the countries, so the names' preview stays for the screens.
+  await page.goto(`${BASE}/data-health/tidy?kind=country`, { waitUntil: "networkidle" });
+  const apply = page.locator("button", { hasText: /^Change [0-9,]+ leads?$/ });
+  if ((await apply.count()) > 0) {
+    await shoot(page, `${folder}/data-health-tidy-country`);
+    await apply.click();
+    // The preview empties once the change is made: the page then says there is nothing left.
+    await page
+      .locator(".callout", { hasText: "Nothing to put right" })
+      .waitFor({ timeout: 30_000 });
+  }
+  await page.goto(`${BASE}/data-health`, { waitUntil: "networkidle" });
+  const countries = (await page.locator("#check-countries_spelled_otherwise").innerText()).replace(
+    /\s+/g,
+    " ",
+  );
+  if (!countries.includes("None"))
+    report(`${folder}/data-health-after`, `countries still read "${countries.slice(0, 160)}"`);
+  await shoot(page, `${folder}/data-health-after`);
+}
+
 async function captureProspectFlows(page: Page, folder: string) {
   const stamp = Date.now().toString(36);
   const csv = [
@@ -3258,6 +3362,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   mail: captureMailFlows,
   mailboxes: captureMailboxFlows,
   fields: captureFieldFlows,
+  quality: captureDataQualityFlows,
 };
 
 async function runPart(browser: Browser) {

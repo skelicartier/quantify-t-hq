@@ -38,6 +38,8 @@ export function describeLeadChange(
     parts.push(
       set.verified_state ? `marking them ${set.verified_state}` : "marking them unchecked",
     );
+  if (set.standardise === "name_case") parts.push("writing names in capitals the ordinary way");
+  if (set.standardise === "country") parts.push("writing each country one way");
   return parts.join(" and ") || "a change";
 }
 
