@@ -19,7 +19,7 @@
 
 import { mkdirSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Download, type Page } from "playwright";
 
 const BASE = process.env.HQ_UI_BASE ?? "http://127.0.0.1:3000";
 const OUT = "test-results/hq";
@@ -726,6 +726,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureTargetFlows(page, folder);
   await captureSignalFlows(page, folder);
   await capturePushFlows(page, folder);
+  await captureExportFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -3697,6 +3698,101 @@ async function capturePushFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/me-push-tested`);
 }
 
+/** A downloaded file's text, read whole. */
+async function downloadText(download: Download): Promise<string> {
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Opens a list's Export menu with the confirm-it's-you window open. */
+async function openExportMenu(page: Page) {
+  const menu = page.locator("details.export-menu");
+  if ((await menu.getAttribute("open")) === null) await menu.locator("summary").click();
+  if ((await menu.locator("#sudo-code:visible").count()) > 0) {
+    await menu.locator("#sudo-code:visible").fill("000000");
+    await menu.locator(".sudo-gate:visible button[type=submit]").click();
+  }
+  await menu.locator(".sudo-gate--open").waitFor({ timeout: 10_000 });
+  return menu;
+}
+
+/**
+ * Exports of a view: Companies narrowed to customers and sorted by name, exported as "this
+ * view" with two columns chosen, is a CSV of exactly the rows on screen, in their order,
+ * with only those columns; the same menu with "Every record" holds every company; a deals
+ * view comes out as a spreadsheet.
+ */
+async function captureExportFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/companies?lifecycle=customer&sort=company`, {
+    waitUntil: "networkidle",
+  });
+  const onScreen = (await page.locator("tbody .table-title").allInnerTexts()).map((name) =>
+    name.trim(),
+  );
+  let menu = await openExportMenu(page);
+  await menu.locator("input[name=scope][value=view]").check();
+  await menu.locator("input[name=format][value=csv]").check();
+  await menu.locator("input[name=column_mode][value=chosen]").check();
+  await menu.locator(".export-columns__item").first().waitFor({ timeout: 15_000 });
+  await menu.getByRole("button", { name: "None", exact: true }).click();
+  await menu.locator("input[name=columns][value=name]").check();
+  await menu.locator("input[name=columns][value=country]").check();
+  await menu.locator("input[name=reason]").fill("Screenshot run: a view of customers");
+  await shoot(page, `${folder}/companies-export-view`);
+  const [viewed] = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    menu.locator("button[type=submit]").click(),
+  ]);
+  const lines = (await downloadText(viewed))
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .split("\r\n");
+  const names = lines.slice(1).map((line) => {
+    const first = line.startsWith('"') ? line.slice(1, line.indexOf('",')) : line.split(",")[0]!;
+    return first.replace(/""/g, '"');
+  });
+  if (lines[0] !== "name,country")
+    report(`${folder}/companies-export-view`, `the file's columns are ${lines[0]}`);
+  else if (names.join("|") !== onScreen.join("|"))
+    report(
+      `${folder}/companies-export-view`,
+      `the file holds ${names.length} companies, the screen ${onScreen.length}`,
+    );
+  else console.log(`  ✓ ${folder}/companies-export-view (${names.length} rows, in order)`);
+
+  await page.goto(`${BASE}/companies?lifecycle=customer`, { waitUntil: "networkidle" });
+  menu = await openExportMenu(page);
+  await menu.locator("input[name=scope][value=all]").check();
+  await menu.locator("input[name=format][value=csv]").check();
+  await menu.locator("input[name=reason]").fill("Screenshot run: every company");
+  const [everything] = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    menu.locator("button[type=submit]").click(),
+  ]);
+  const all = (await downloadText(everything)).trim().split("\r\n").length - 1;
+  if (all <= onScreen.length)
+    report(
+      `${folder}/companies-export-all`,
+      `every record gave ${all} rows, the view ${onScreen.length}`,
+    );
+  else console.log(`  ✓ ${folder}/companies-export-all (${all} rows)`);
+
+  await page.goto(`${BASE}/deals?status=won`, { waitUntil: "networkidle" });
+  menu = await openExportMenu(page);
+  await menu.locator("input[name=scope][value=view]").check();
+  await menu.locator("input[name=format][value=xlsx]").check();
+  await menu.locator("input[name=reason]").fill("Screenshot run: the won deals");
+  const [sheet] = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    menu.locator("button[type=submit]").click(),
+  ]);
+  if (!sheet.suggestedFilename().endsWith(".xlsx"))
+    report(`${folder}/deals-export-view`, `the download was ${sheet.suggestedFilename()}`);
+  else console.log(`  ✓ ${folder}/deals-export-view (${sheet.suggestedFilename()})`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -3710,6 +3806,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   signals: captureSignalFlows,
   push: capturePushFlows,
   inbox: captureInboxFlows,
+  exports: captureExportFlows,
 };
 
 async function runPart(browser: Browser) {

@@ -1,4 +1,5 @@
-import { leadFilterFields, readLeadField } from "@/lib/lists/definitions";
+import { leadFilterFields } from "@/lib/lists/definitions";
+import { LEAD_GROUPS, leadGroupLabel, leadsView } from "@/lib/lists/views";
 import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
 import Link from "next/link";
 import { AiFilterBox } from "@/components/ai/ai-assist";
@@ -25,18 +26,12 @@ import { Stat, StatGrid } from "@/components/ui/stat";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import {
-  readCrmSettings,
-  readLeads,
-  type CrmSettings,
-  type Lead,
-  type LeadsPage,
-} from "@/lib/api/crm";
+import { readCrmSettings, readLeads, type CrmSettings, type LeadsPage } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LEAD_STAGES, LEAD_STAGE_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { requestNow } from "@/lib/request-time";
-import { applyFilters, describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
-import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
+import { describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
+import { parseSort, serializeSort, sortHrefBuilder } from "@/lib/lists/sort";
 import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Leads" };
@@ -51,11 +46,7 @@ const COLUMNS = [
   { key: "received", sortable: true, label: "Received" },
 ];
 
-const GROUPS: Record<string, string> = {
-  stage: "Stage",
-  source: "Source",
-  owner: "Owner",
-};
+const GROUPS = LEAD_GROUPS;
 
 /** The reply target as prose: 60 → "an hour", 120 → "2 hours", 45 → "45 minutes". */
 function replyTarget(minutes: number): string {
@@ -124,43 +115,21 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
     ...(settings?.archived_sources ?? []),
   ]);
   const conditions = parseFilters(filterParams, filterFields);
-  const readField = (lead: LeadsPage["leads"][number], field: string) =>
-    readLeadField(lead, field, names);
   // A lead set aside is off the working list until its day; "Set aside" shows only those.
   const setAside = firstSearchValue(parameters.nurturing) === "1";
   const nurturingCount = (page?.leads ?? []).filter((lead) => lead.nurturing).length;
-  const filtered = applyFilters(
-    (page?.leads ?? []).filter((lead) => lead.nurturing === setAside),
-    conditions,
-    readField,
+  // The same rows, in the same order, as an export of this view writes.
+  const { rows: leads, ordered: grouped } = leadsView(
+    { leads: page?.leads ?? [], custom_fields: page?.custom_fields ?? [] },
+    parameters,
+    names,
+    [...(settings?.sources ?? []), ...(settings?.archived_sources ?? [])],
   );
-  const leads = sortRows(filtered, sort, {
-    lead: (lead) => lead.full_name || lead.email,
-    source: (lead) => sourceLabel(lead.source_key, sourceNames),
-    stage: (lead) => LEAD_STAGES.indexOf(lead.stage as (typeof LEAD_STAGES)[number]),
-    clock: (lead) => lead.waiting_minutes,
-    owner: (lead) => (lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : null),
-    received: (lead) => lead.created_at,
-  });
   const staffChoices = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ value: entry.staff_id, label: entry.display_name }));
-  const groupLabel = (lead: Lead): string => {
-    switch (group) {
-      case "stage":
-        return LEAD_STAGE_LABELS[lead.stage] ?? lead.stage;
-      case "source":
-        return sourceLabel(lead.source_key, sourceNames);
-      case "owner":
-        return lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : "Unowned";
-      default:
-        return "";
-    }
-  };
-  // Grouping is a category row before each run of the same label, in the current sort.
-  const grouped = group
-    ? [...leads].sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)))
-    : leads;
+  const groupLabel = (lead: (typeof leads)[number]): string =>
+    leadGroupLabel(lead, group, names, sourceNames);
   const columnCount = COLUMNS.length + (canWrite ? 1 : 0);
 
   const counts = page?.counts ?? {};
@@ -190,7 +159,27 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
                   />
                 </Popover>
               ) : undefined}
-              <DocumentTools context={context} kind="leads" returnPath="/leads" />
+              <DocumentTools
+                context={context}
+                kind="leads"
+                returnPath="/leads"
+                view={
+                  page !== null &&
+                  (filters.stage ||
+                    filters.source ||
+                    filters.q ||
+                    conditions.length > 0 ||
+                    setAside ||
+                    nurturingCount > 0)
+                    ? {
+                        query: setAside
+                          ? [currentQuery, "nurturing=1"].filter(Boolean).join("&")
+                          : currentQuery,
+                        count: leads.length,
+                      }
+                    : undefined
+                }
+              />
             </div>
           </>
         }

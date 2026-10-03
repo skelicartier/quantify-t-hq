@@ -11,12 +11,14 @@ import { buildWorkbook } from "@/lib/documents/xlsx";
 import {
   EXPORT_FORMATS,
   EXPORT_KINDS,
+  exportColumns,
   exportView,
   safeReturnPath,
   safeReturnQuery,
   type ExportFormat,
   type ExportKind,
 } from "@/lib/exports";
+import { isViewExportKind, viewRecordIds } from "@/lib/lists/views";
 import { SameOriginActionError, requireSameOriginServerAction } from "@/lib/security/action-origin";
 
 export const dynamic = "force-dynamic";
@@ -81,21 +83,40 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   // The prospects export is of a view: the list's own filters travel with the request.
   const view = kind === "prospects" ? exportView(String(form.get("view_json") ?? "")) : {};
   if (view === null) return back("failed");
+  // The columns, when the person chose them rather than taking every one.
+  const columns =
+    String(form.get("column_mode") ?? "") === "chosen"
+      ? exportColumns(form.getAll("columns"))
+      : undefined;
+  if (columns !== undefined && columns.length === 0) return back("columns");
 
   let exported: ExportFile;
   try {
+    // "This view": the records the page showed, in its order, read here as the person
+    // asking with the page's own code — so the file is what was on the screen.
+    const ids =
+      String(form.get("scope") ?? "") === "view" && isViewExportKind(kind)
+        ? await viewRecordIds(context.token, kind, returnQuery)
+        : undefined;
+    if (ids !== undefined && ids.length === 0) return back("empty");
     exported = await createExport(
       context.token,
       kind as ExportKind,
       reason,
       format as ExportFormat,
-      view,
+      {
+        view,
+        ...(ids ? { ids } : {}),
+        ...(columns ? { columns } : {}),
+      },
     );
   } catch (error) {
     if (error instanceof HqApiRequestError) {
       if (error.details["sudo_required"] === true) return back("sudo");
       if (error.details["reason"] === "export-quota") return back("quota");
       if (error.status === 403) return back("forbidden");
+      if (typeof error.details["columns"] === "string") return back("columns");
+      if (typeof error.details["ids"] === "string") return back("empty");
       return back("failed");
     }
     if (error instanceof HqApiUnavailableError) return back("failed");
@@ -128,6 +149,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       generatedAt: exported.generated_at,
       about: [
         ["Records", `${exported.title}: ${exported.rows.toLocaleString("en-GB")}`],
+        [
+          "Which records",
+          exported.scope === "view"
+            ? "The view on screen when it was exported, in its order"
+            : "Every record in the list",
+        ],
         ["Exported by", exportedBy],
         ["Exported", stampLabel(exported.generated_at)],
         ["What it is for", reason],

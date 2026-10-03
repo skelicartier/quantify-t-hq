@@ -1,4 +1,5 @@
-import { companyFilterFields, readCompanyField } from "@/lib/lists/definitions";
+import { companyFilterFields } from "@/lib/lists/definitions";
+import { COMPANY_GROUPS, companiesView, companyGroupLabel } from "@/lib/lists/views";
 import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
 import type { CustomField } from "@/lib/api/fields";
 import Link from "next/link";
@@ -29,8 +30,8 @@ import { readCompanies, type CompanyRow } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LIFECYCLES, LIFECYCLE_LABELS } from "@/lib/crm/vocabulary";
 import { formatMrrBy, sumMoneyByCurrency } from "@/lib/format";
-import { applyFilters, describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
-import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
+import { describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
+import { parseSort, serializeSort, sortHrefBuilder } from "@/lib/lists/sort";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -48,12 +49,7 @@ const COLUMNS = [
   { key: "updated", sortable: true, label: "Updated" },
 ];
 
-const GROUPS: Record<string, string> = {
-  lifecycle: "Lifecycle",
-  type: "Type",
-  owner: "Owner",
-  country: "Country",
-};
+const GROUPS = COMPANY_GROUPS;
 
 type CompaniesPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -105,23 +101,12 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
   const canWrite = hasCapability(context, "crm:write");
   const filterFields = companyFilterFields({ custom_fields: customFields });
   const conditions = parseFilters(filterParams, filterFields);
-  const readField = (row: CompanyRow, field: string) => readCompanyField(row, field, names);
-  const filtered = applyFilters(
-    (companies ?? []).filter((row) => !lifecycle || row.lifecycle === lifecycle),
-    conditions,
-    readField,
+  // The same rows, in the same order, as an export of this view writes.
+  const { rows: visible, ordered: grouped } = companiesView(
+    { companies: companies ?? [], custom_fields: customFields },
+    parameters,
+    names,
   );
-  const visible = sortRows(filtered, sort, {
-    company: (row) => row.name,
-    lifecycle: (row) => LIFECYCLE_LABELS[row.lifecycle] ?? row.lifecycle,
-    type: (row) => row.firm_type,
-    people: (row) => row.people_count,
-    deals: (row) => row.open_deals,
-    mrr: (row) =>
-      row.mrr ? Object.values(row.mrr).reduce((sum, amount) => sum + amount, 0) : null,
-    owner: (row) => (row.owner_staff_id ? nameFor(names, row.owner_staff_id) : null),
-    updated: (row) => row.updated_at,
-  });
   const staffChoices = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ value: entry.staff_id, label: entry.display_name }));
@@ -137,24 +122,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
   const openDeals = (companies ?? []).reduce((sum, row) => sum + row.open_deals, 0);
 
   const lifecycleLink = (value: string) => listHref({ lifecycle: value });
-  const groupLabel = (row: CompanyRow): string => {
-    switch (group) {
-      case "lifecycle":
-        return LIFECYCLE_LABELS[row.lifecycle] ?? row.lifecycle;
-      case "type":
-        return row.firm_type || "Type not known";
-      case "owner":
-        return row.owner_staff_id ? nameFor(names, row.owner_staff_id) : "Unowned";
-      case "country":
-        return row.country || "Country not known";
-      default:
-        return "";
-    }
-  };
-  // Grouping is a category row before each run of the same label, in the current sort.
-  const grouped = group
-    ? [...visible].sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)))
-    : visible;
+  const groupLabel = (row: CompanyRow): string => companyGroupLabel(row, group, names);
   const columnCount = COLUMNS.length + (canWrite ? 1 : 0);
 
   return (
@@ -186,7 +154,16 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
                 />
               </Popover>
             )}
-            <DocumentTools context={context} kind="companies" returnPath="/companies" />
+            <DocumentTools
+              context={context}
+              kind="companies"
+              returnPath="/companies"
+              view={
+                q || lifecycle || conditions.length > 0
+                  ? { query: currentQuery, count: visible.length }
+                  : undefined
+              }
+            />
           </>
         }
       />

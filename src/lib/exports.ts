@@ -86,6 +86,8 @@ export const EXPORT_OUTCOMES: Record<string, string> = {
   failed: "The export could not be made. Nothing left HQ.",
   quota:
     "That is more than you can export today. An owner can lift your limit for a day on Privileged access.",
+  empty: "This view holds no records, so there was nothing to export.",
+  columns: "Choose at least one column, from the export's own list.",
 };
 
 export function canExport(capabilities: readonly string[], kind: ExportKind): boolean {
@@ -101,12 +103,25 @@ export function safeReturnPath(value: string, fallback = "/reports"): string {
   return /^\/(?!\/)[A-Za-z0-9/_-]*$/.test(value) ? value : fallback;
 }
 
-const RETURN_QUERY_KEYS = new Set(["f", "stage", "q", "sort", "offset", "view"]);
+const RETURN_QUERY_KEYS = new Set([
+  "f",
+  "stage",
+  "q",
+  "sort",
+  "offset",
+  "view",
+  "lifecycle",
+  "group",
+  "status",
+  "source",
+  "nurturing",
+]);
 
 /**
  * The list's own query, carried so a refused export comes back to the same view and not
- * to the unfiltered list. Only a list's filter keys survive, each of bounded length: the
- * path is checked separately, so this can only ever choose a view of that page.
+ * to the unfiltered list — and so an export of "this view" reads the same rows the page
+ * showed. Only a list's filter keys survive, each of bounded length: the path is checked
+ * separately, so this can only ever choose a view of that page.
  */
 export function safeReturnQuery(value: string): URLSearchParams {
   const kept = new URLSearchParams();
@@ -114,6 +129,18 @@ export function safeReturnQuery(value: string): URLSearchParams {
   for (const [key, item] of new URLSearchParams(value))
     if (RETURN_QUERY_KEYS.has(key) && item.length <= 200) kept.append(key, item);
   return kept;
+}
+
+/** The columns a person ticked, by key; anything that is not a column key is dropped. */
+export function exportColumns(raw: readonly unknown[]): string[] {
+  return [
+    ...new Set(
+      raw
+        .map((value) => String(value))
+        .filter((value) => /^[a-z][a-z0-9_.]{0,79}$/.test(value))
+        .slice(0, 200),
+    ),
+  ];
 }
 
 /** A list view as an export's request carries it; anything else in the field is dropped. */

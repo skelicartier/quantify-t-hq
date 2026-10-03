@@ -23016,12 +23016,18 @@ function csvCell(value: unknown): string {
 
 // -- exports: the same kinds, columns and capability checks as the service's EXPORTS table.
 type ExportCell = string | number | boolean | null;
+/** One record's cells, keyed by its id so a view can choose it. */
+type ExportRecord = { id: string; cells: ExportCell[] };
 type ExportSpec = {
   title: string;
   needs: string | null;
   columns: Array<[string, string, string?]>;
-  rows: (headers: Record<string, string | string[] | undefined>) => ExportCell[][];
+  rows: (headers: Record<string, string | string[] | undefined>) => ExportRecord[];
 };
+const keyed = (id: unknown, cells: ExportCell[]): ExportRecord => ({
+  id: String(id ?? "").toLowerCase(),
+  cells,
+});
 
 /** A list route's own payload, so an export carries what the page shows. */
 function listedBy(
@@ -23063,18 +23069,21 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       companies
         .filter((row) => !(row as Record<string, unknown>).archived_at)
         .map((row) =>
-          pick(
-            row,
-            "id",
-            "name",
-            "domain",
-            "lifecycle",
-            "firm_type",
-            "team_size_band",
-            "country",
-            "source_key",
-            "customer_since",
-            "created_at",
+          keyed(
+            row.id,
+            pick(
+              row,
+              "id",
+              "name",
+              "domain",
+              "lifecycle",
+              "firm_type",
+              "team_size_band",
+              "country",
+              "source_key",
+              "customer_since",
+              "created_at",
+            ),
           ),
         ),
   },
@@ -23094,12 +23103,14 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
     rows: () =>
       people
         .filter((row) => !(row as Record<string, unknown>).archived_at)
-        .map((row) => [
-          ...pick(row, "id", "full_name", "email", "title"),
-          companyName(String(row.company_id ?? "")),
-          Boolean((row as Record<string, unknown>).do_not_contact),
-          ...pick(row, "last_contacted_at", "created_at"),
-        ]),
+        .map((row) =>
+          keyed(row.id, [
+            ...pick(row, "id", "full_name", "email", "title"),
+            companyName(String(row.company_id ?? "")),
+            Boolean((row as Record<string, unknown>).do_not_contact),
+            ...pick(row, "last_contacted_at", "created_at"),
+          ]),
+        ),
   },
   leads: {
     title: "Leads",
@@ -23121,18 +23132,21 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       leads
         .filter((row) => (row.origin ?? "inbound") === "inbound")
         .map((row) =>
-          pick(
-            row,
-            "id",
-            "created_at",
-            "source_key",
-            "full_name",
-            "email",
-            "company_name",
-            "stage",
-            "disqualify_reason",
-            "first_replied_at",
-            "message",
+          keyed(
+            row.id,
+            pick(
+              row,
+              "id",
+              "created_at",
+              "source_key",
+              "full_name",
+              "email",
+              "company_name",
+              "stage",
+              "disqualify_reason",
+              "first_replied_at",
+              "message",
+            ),
           ),
         ),
   },
@@ -23182,23 +23196,25 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       ["closed_at", "Closed", "datetime"],
     ],
     rows: () =>
-      deals.map((row) => [
-        ...pick(row, "id", "name"),
-        companyName(String(row.company_id ?? "")),
-        ...pick(row, "stage_key", "status"),
-        Number((row as Record<string, unknown>).mrr_amount ?? 0),
-        ...pick(
-          row,
-          "currency",
-          "seats",
-          "next_step",
-          "next_step_due",
-          "expected_close_date",
-          "loss_reason",
-          "created_at",
-          "closed_at",
-        ),
-      ]),
+      deals.map((row) =>
+        keyed(row.id, [
+          ...pick(row, "id", "name"),
+          companyName(String(row.company_id ?? "")),
+          ...pick(row, "stage_key", "status"),
+          Number((row as Record<string, unknown>).mrr_amount ?? 0),
+          ...pick(
+            row,
+            "currency",
+            "seats",
+            "next_step",
+            "next_step_due",
+            "expected_close_date",
+            "loss_reason",
+            "created_at",
+            "closed_at",
+          ),
+        ]),
+      ),
   },
   contracts: {
     title: "Contracts",
@@ -23218,22 +23234,24 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       ["cancel_reason", "Cancelled because"],
     ],
     rows: () =>
-      contracts.map((row) => [
-        cell(row.id),
-        companyName(String(row.company_id ?? "")),
-        ...pick(row, "plan_name", "seats"),
-        Number(money(row.mrr_cents)),
-        ...pick(
-          row,
-          "currency",
-          "billing_cadence",
-          "starts_on",
-          "renews_on",
-          "status",
-          "ends_on",
-          "cancel_reason",
-        ),
-      ]),
+      contracts.map((row) =>
+        keyed(row.id, [
+          cell(row.id),
+          companyName(String(row.company_id ?? "")),
+          ...pick(row, "plan_name", "seats"),
+          Number(money(row.mrr_cents)),
+          ...pick(
+            row,
+            "currency",
+            "billing_cadence",
+            "starts_on",
+            "renews_on",
+            "status",
+            "ends_on",
+            "cancel_reason",
+          ),
+        ]),
+      ),
   },
   quotes: {
     title: "Quotes",
@@ -23258,22 +23276,25 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       (listedBy("hq/quotes", headers, { view: "all" }).quotes as Array<Record<string, unknown>>)
         .sort((a, b) => String(a.number).localeCompare(String(b.number)))
         .map((view) =>
-          pick(
-            view,
-            "number",
-            "title",
-            "company_name",
-            "deal_name",
-            "state_label",
-            "currency",
-            "term_months",
-            "net_recurring",
-            "net_one_off",
-            "first_term_value",
-            "discount_pct",
-            "valid_until",
-            "created_by_name",
-            "created_at",
+          keyed(
+            view.quote_id,
+            pick(
+              view,
+              "number",
+              "title",
+              "company_name",
+              "deal_name",
+              "state_label",
+              "currency",
+              "term_months",
+              "net_recurring",
+              "net_one_off",
+              "first_term_value",
+              "discount_pct",
+              "valid_until",
+              "created_by_name",
+              "created_at",
+            ),
           ),
         ),
   },
@@ -23300,26 +23321,28 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
     rows: (headers) =>
       (listedBy("hq/invoices", headers).invoices as Array<Record<string, unknown>>)
         .sort((a, b) => String(a.issued_on).localeCompare(String(b.issued_on)))
-        .map((view) => [
-          cell(view.number),
-          cell((view.company as { name?: string } | undefined)?.name ?? ""),
-          ...pick(
-            view,
-            "issued_on",
-            "due_on",
-            "currency",
-            "net",
-            "tax",
-            "gross",
-            "paid",
-            "outstanding",
-            "status",
-            "collection_state",
-            "days_past_due",
-            "po_number",
-            "paid_on",
-          ),
-        ]),
+        .map((view) =>
+          keyed(view.invoice_id, [
+            cell(view.number),
+            cell((view.company as { name?: string } | undefined)?.name ?? ""),
+            ...pick(
+              view,
+              "issued_on",
+              "due_on",
+              "currency",
+              "net",
+              "tax",
+              "gross",
+              "paid",
+              "outstanding",
+              "status",
+              "collection_state",
+              "days_past_due",
+              "po_number",
+              "paid_on",
+            ),
+          ]),
+        ),
   },
   tasks: {
     title: "Tasks",
@@ -23339,11 +23362,13 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       tasks
         .map((row) => taskView(row, true) as Record<string, unknown>)
         .sort((a, b) => String(a.due_on ?? "9999").localeCompare(String(b.due_on ?? "9999")))
-        .map((view) => [
-          ...pick(view, "title", "status", "priority", "due_on"),
-          staff.find((member) => member.id === view.assignee_staff_id)?.display_name ?? "",
-          ...pick(view, "record_label", "origin", "created_at", "completed_at"),
-        ]),
+        .map((view) =>
+          keyed(view.task_id, [
+            ...pick(view, "title", "status", "priority", "due_on"),
+            staff.find((member) => member.id === view.assignee_staff_id)?.display_name ?? "",
+            ...pick(view, "record_label", "origin", "created_at", "completed_at"),
+          ]),
+        ),
   },
   meetings: {
     title: "Meetings",
@@ -23364,20 +23389,22 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       meetings
         .map((row) => meetingView(row) as Record<string, unknown>)
         .sort((a, b) => String(a.starts_at).localeCompare(String(b.starts_at)))
-        .map((view) => [
-          ...pick(
-            view,
-            "starts_at",
-            "ends_at",
-            "title",
-            "kind",
-            "status",
-            "company_name",
-            "deal_name",
-          ),
-          ((view.attendees as unknown[]) ?? []).length,
-          ...pick(view, "outcome", "needs_outcome"),
-        ]),
+        .map((view) =>
+          keyed(view.meeting_id, [
+            ...pick(
+              view,
+              "starts_at",
+              "ends_at",
+              "title",
+              "kind",
+              "status",
+              "company_name",
+              "deal_name",
+            ),
+            ((view.attendees as unknown[]) ?? []).length,
+            ...pick(view, "outcome", "needs_outcome"),
+          ]),
+        ),
   },
   tickets: {
     title: "Support tickets",
@@ -23400,14 +23427,16 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       tickets
         .map((row) => ticketSummary(row, caller(headers)!.member.id) as Record<string, unknown>)
         .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
-        .map((view) => [
-          ...pick(view, "id", "subject"),
-          view.snoozed ? "snoozed" : cell(view.status),
-          ...pick(view, "priority", "source", "assignee_name"),
-          ((view.tags as string[]) ?? []).join("; "),
-          cell((view.sla as { status?: string } | undefined)?.status ?? ""),
-          ...pick(view, "message_count", "reopened_count", "created_at", "updated_at"),
-        ]),
+        .map((view) =>
+          keyed(view.id, [
+            ...pick(view, "id", "subject"),
+            view.snoozed ? "snoozed" : cell(view.status),
+            ...pick(view, "priority", "source", "assignee_name"),
+            ((view.tags as string[]) ?? []).join("; "),
+            cell((view.sla as { status?: string } | undefined)?.status ?? ""),
+            ...pick(view, "message_count", "reopened_count", "created_at", "updated_at"),
+          ]),
+        ),
   },
   vendors: {
     title: "Vendors",
@@ -23431,21 +23460,24 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       (listedBy("hq/finance/vendors", headers).vendors as Array<Record<string, unknown>>)
         .sort((a, b) => String(a.name).toLowerCase().localeCompare(String(b.name).toLowerCase()))
         .map((view) =>
-          pick(
-            view,
-            "name",
-            "category_label",
-            "owner_name",
-            "amount",
-            "currency",
-            "billing_label",
-            "monthly_equivalent",
-            "renews_on",
-            "notice_days",
-            "cancel_by",
-            "auto_renews",
-            "status",
-            "contract_ref",
+          keyed(
+            view.vendor_id,
+            pick(
+              view,
+              "name",
+              "category_label",
+              "owner_name",
+              "amount",
+              "currency",
+              "billing_label",
+              "monthly_equivalent",
+              "renews_on",
+              "notice_days",
+              "cancel_by",
+              "auto_renews",
+              "status",
+              "contract_ref",
+            ),
           ),
         ),
   },
@@ -23469,19 +23501,22 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       (listedBy("hq/finance/expenses", headers).claims as Array<Record<string, unknown>>)
         .sort((a, b) => String(a.spent_on).localeCompare(String(b.spent_on)))
         .map((view) =>
-          pick(
-            view,
-            "spent_on",
-            "staff_name",
-            "category_label",
-            "description",
-            "amount",
-            "currency",
-            "status",
-            "receipt_ref",
-            "decided_by_name",
-            "decided_at",
-            "paid_on",
+          keyed(
+            view.claim_id,
+            pick(
+              view,
+              "spent_on",
+              "staff_name",
+              "category_label",
+              "description",
+              "amount",
+              "currency",
+              "status",
+              "receipt_ref",
+              "decided_by_name",
+              "decided_at",
+              "paid_on",
+            ),
           ),
         ),
   },
@@ -23502,19 +23537,21 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       ["evidence_due", "Due now", "bool"],
     ],
     rows: (headers) =>
-      (listedBy("hq/controls", headers).controls as Array<Record<string, unknown>>).map((view) => [
-        ...pick(
-          view,
-          "ref",
-          "title",
-          "domain_label",
-          "frequency_label",
-          "state_label",
-          "owner_name",
-        ),
-        ((view.frameworks as string[]) ?? []).join("; "),
-        ...pick(view, "evidence_count", "last_evidence_on", "evidence_due_on", "evidence_due"),
-      ]),
+      (listedBy("hq/controls", headers).controls as Array<Record<string, unknown>>).map((view) =>
+        keyed(view.control_id, [
+          ...pick(
+            view,
+            "ref",
+            "title",
+            "domain_label",
+            "frequency_label",
+            "state_label",
+            "owner_name",
+          ),
+          ((view.frameworks as string[]) ?? []).join("; "),
+          ...pick(view, "evidence_count", "last_evidence_on", "evidence_due_on", "evidence_due"),
+        ]),
+      ),
   },
 };
 
@@ -24493,6 +24530,38 @@ routes.push(
     },
   },
   {
+    method: "GET",
+    pattern: "hq/exports/{kind}/columns",
+    auth: true,
+    capability: "crm:export",
+    handler: ({ params, headers }) => {
+      const kind = String(params.kind);
+      const spec = EXPORT_SPECS[kind];
+      if (!spec) return refuse(404, "not_found");
+      if (spec.needs && !capsFor(caller(headers)!.role).includes(spec.needs))
+        return refuse(403, "forbidden", { required_capability: spec.needs });
+      const fields = exportCustomFields(kind, headers);
+      return ok({
+        kind,
+        title: spec.title,
+        columns: [
+          ...spec.columns.map(([key, label, type]) => ({
+            key,
+            label,
+            type: type ?? "text",
+            custom: false,
+          })),
+          ...fields.map((field) => ({
+            key: `custom.${field.field_key}`,
+            label: field.label,
+            type: EXPORT_CUSTOM_TYPES[field.kind] ?? "text",
+            custom: true,
+          })),
+        ],
+      });
+    },
+  },
+  {
     method: "POST",
     pattern: "hq/exports/{kind}",
     auth: true,
@@ -24534,35 +24603,96 @@ routes.push(
                   .includes(needle),
             ),
           parsed.conditions,
-        ).map((view) => [
-          view.lead_id,
-          view.email,
-          view.full_name,
-          view.title,
-          view.company_name,
-          view.firm_type,
-          view.country,
-          view.city,
-          view.email_kind,
-          view.verified_state,
-          view.verified_detail,
-          view.verified_at,
-          view.fit_band,
-          view.fit_score,
-          view.stage,
-          view.tags.join(", "),
-          view.firm_domain,
-          view.source_url,
-        ]);
+        ).map((view) =>
+          keyed(view.lead_id, [
+            view.lead_id,
+            view.email,
+            view.full_name,
+            view.title,
+            view.company_name,
+            view.firm_type,
+            view.country,
+            view.city,
+            view.email_kind,
+            view.verified_state,
+            view.verified_detail,
+            view.verified_at,
+            view.fit_band,
+            view.fit_score,
+            view.stage,
+            view.tags.join(", "),
+            view.firm_domain,
+            view.source_url,
+          ]),
+        );
+      }
+      // The custom fields this role may read, typed as the field is.
+      const fields = exportCustomFields(kind, headers);
+      const columns: Array<[string, string, string?]> = [
+        ...spec.columns,
+        ...fields.map(
+          (field) =>
+            [
+              `custom.${field.field_key}`,
+              field.label,
+              EXPORT_CUSTOM_TYPES[field.kind] ?? "text",
+            ] as [string, string, string],
+        ),
+      ];
+      if (fields.length)
+        records = records.map((record) => ({
+          id: record.id,
+          cells: [
+            ...record.cells,
+            ...fields.map((field) =>
+              exportCustomCell(field, customValues.get(cfKey(field.id, record.id)) ?? ""),
+            ),
+          ],
+        }));
+      // A view names its records, in the page's order: an id narrows the file, never widens it.
+      if (body.ids !== undefined && body.ids !== null) {
+        if (!Array.isArray(body.ids) || body.ids.length > 50_000)
+          return refuse(400, "malformed_request", {
+            ids: "the records of the view, at most 50,000",
+          });
+        const wanted: string[] = [];
+        for (const item of body.ids as unknown[]) {
+          const text = String(item ?? "")
+            .trim()
+            .toLowerCase();
+          if (!text || text.length > 64)
+            return refuse(400, "malformed_request", { ids: "each a record's id" });
+          wanted.push(text);
+        }
+        if (!wanted.length)
+          return refuse(400, "malformed_request", { ids: "the view holds no records" });
+        const held = new Map(records.map((record) => [record.id, record]));
+        records = [...new Set(wanted)].flatMap((id) => {
+          const record = held.get(id);
+          return record ? [record] : [];
+        });
+      }
+      let picked = columns.map((_, index) => index);
+      if (body.columns !== undefined && body.columns !== null) {
+        if (!Array.isArray(body.columns) || !body.columns.length)
+          return refuse(400, "malformed_request", { columns: "choose at least one column" });
+        const position = new Map(columns.map(([key], index) => [key, index]));
+        const unknown = (body.columns as unknown[]).map(String).filter((key) => !position.has(key));
+        if (unknown.length)
+          return refuse(400, "malformed_request", {
+            columns: `not in this export: ${unknown.slice(0, 5).join(", ")}`,
+          });
+        picked = [...new Set((body.columns as unknown[]).map((key) => position.get(String(key))!))];
       }
       const exporterId = exporter.member.id;
       const overQuota = exportQuotaRefusal(exporterId, records.length);
       if (overQuota) return overQuota;
       const mark = exportMarker(kind);
+      const blanks = fields.map((field) => exportCustomCell(field, ""));
+      const cells = records.map((record) => record.cells);
       const rows = mark
-        ? placeMarker(
-            records,
-            kind === "people"
+        ? placeMarker(cells, [
+            ...(kind === "people"
               ? [
                   mark.id,
                   mark.full_name,
@@ -24605,28 +24735,24 @@ routes.push(
                     "",
                     null,
                     "",
-                  ],
-          )
-        : records;
+                  ]),
+            ...blanks,
+          ])
+        : cells;
       const decoyType = ({ companies: "company", people: "person" } as Record<string, string>)[
         kind
       ];
       if (decoyType) {
-        for (const row of rows)
-          springDecoy(
-            exporter.member,
-            decoyType,
-            String(row[0]),
-            "exported",
-            clientAddress(headers),
-          );
+        for (const record of records)
+          springDecoy(exporter.member, decoyType, record.id, "exported", clientAddress(headers));
       }
-      const header = spec.columns.map(([key]) => key);
+      const shown = picked.map((index) => columns[index]!);
+      const table = rows.map((row) => picked.map((index) => row[index] ?? null));
       const csv =
         format === "csv"
           ? [
-              header.join(","),
-              ...rows.map((row) =>
+              shown.map(([key]) => key).join(","),
+              ...table.map((row) =>
                 row
                   .map((value) =>
                     csvCell(typeof value === "boolean" ? (value ? "yes" : "no") : value),
@@ -24635,7 +24761,15 @@ routes.push(
               ),
             ].join("\r\n") + "\r\n"
           : "";
-      audit("export.created", exporterId, "export", kind, reason);
+      const scope = body.ids !== undefined && body.ids !== null ? "view" : "all";
+      audit("export.created", exporterId, "export", kind, reason, {
+        rows: records.length,
+        marked: Boolean(mark),
+        format,
+        scope,
+        columns: shown.length,
+        of_columns: columns.length,
+      });
       recordExport(exporterId, kind, kind, records.length, reason, mark?.email ?? null);
       return ok({
         filename: `hq-${kind}-mock.${format}`,
@@ -24645,12 +24779,44 @@ routes.push(
         format,
         title: spec.title,
         generated_at: now(),
-        columns: spec.columns.map(([key, label, type]) => ({ key, label, type: type ?? "text" })),
-        table: rows.map((row) => row.map((value) => (value === undefined ? null : value))),
+        scope,
+        columns: shown.map(([key, label, type]) => ({ key, label, type: type ?? "text" })),
+        table: table.map((row) => row.map((value) => (value === undefined ? null : value))),
       });
     },
   },
 );
+
+/** The kinds whose records carry an admin's custom fields, as the service's CUSTOM_RECORDS. */
+const EXPORT_CUSTOM_RECORDS: Record<string, string> = {
+  companies: "company",
+  people: "person",
+  leads: "lead",
+  prospects: "lead",
+  deals: "deal",
+};
+const EXPORT_CUSTOM_TYPES: Record<string, string> = {
+  number: "number",
+  date: "date",
+  checkbox: "bool",
+};
+
+function exportCustomFields(kind: string, headers: Record<string, string | string[] | undefined>) {
+  const recordType = EXPORT_CUSTOM_RECORDS[kind];
+  return recordType ? cfLive(recordType).filter((row) => cfCanSee(headers, row)) : [];
+}
+
+/** A stored custom value as its column's type, as the service's `_typed`. */
+function exportCustomCell(field: CfFieldRow, value: string): ExportCell {
+  if (field.kind === "checkbox") return Boolean(value);
+  if (!value) return null;
+  if (field.kind === "number") {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : value;
+  }
+  if (field.kind === "date") return value.slice(0, 10);
+  return cfDisplay(field, value);
+}
 
 // =====================================================================================
 // The company's particulars, mirroring hq/company and hq/company/update: one record in
@@ -50058,6 +50224,7 @@ const BODY_ROW_ROUTES = new Set([
   "hq/mail/campaigns/{campaign_id}/update",
   "hq/mail/sequences/{sequence_id}/enrol/preview",
   "hq/mail/sequences/{sequence_id}/enrol",
+  "hq/exports/{kind}",
 ]);
 
 function matchRoute(method: string, route: string) {

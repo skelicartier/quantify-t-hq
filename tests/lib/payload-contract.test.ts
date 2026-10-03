@@ -314,6 +314,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/revenue/mrr", () => revenue.readMrrBridge(token)],
   ["hq/reports/weekly", () => reports.readWeeklyReport(token, ids.week!)],
   ["hq/reports/attribution", () => reports.readAttribution(token, 90)],
+  ["hq/exports/companies/columns", () => reports.readExportColumns(token, "companies")],
   ["hq/targets", () => targetsApi.readTargets(token)],
   ["hq/signals", () => signalsApi.readSignals(token)],
   ["hq/push", () => pushApi.readPush(token)],

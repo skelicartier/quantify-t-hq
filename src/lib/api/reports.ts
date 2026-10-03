@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   EXPORT_COLUMN_TYPES,
   EXPORT_FORMATS,
+  EXPORT_KINDS,
   type ExportFormat,
   type ExportKind,
 } from "@/lib/exports";
@@ -123,24 +124,53 @@ const exportSchema = okEnvelope.extend({
   format: z.enum(EXPORT_FORMATS),
   title: z.string(),
   generated_at: z.string(),
+  /** "view": the records a page showed, in its order; "all": every record of the kind. */
+  scope: z.enum(["view", "all"]),
   columns: z.array(exportColumnSchema),
   /** The same records, typed, for the spreadsheet and the PDF the portal lays out. */
   table: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))),
 });
 export type ExportFile = z.infer<typeof exportSchema>;
 
+export type ExportChoice = {
+  /** For the prospects list: the view's own filters, applied by the service. */
+  view?: Record<string, unknown>;
+  /** The records a page shows, in its order; the file holds those and no others. */
+  ids?: readonly string[];
+  /** The columns chosen, by key, in the order wanted; every column when absent. */
+  columns?: readonly string[];
+};
+
 export function createExport(
   token: string,
   kind: ExportKind,
   reason: string,
   format: ExportFormat = "csv",
-  /** For an export of a list view: the view's own filters. */
-  view: Record<string, unknown> = {},
+  choice: ExportChoice = {},
 ) {
   return postHqJson(`hq/exports/${kind}`, exportSchema, {
     token,
-    body: { ...view, reason, format },
+    body: {
+      ...(choice.view ?? {}),
+      ...(choice.ids ? { ids: choice.ids } : {}),
+      ...(choice.columns ? { columns: choice.columns } : {}),
+      reason,
+      format,
+    },
   });
+}
+
+const exportColumnsSchema = okEnvelope.extend({
+  kind: z.enum(EXPORT_KINDS),
+  title: z.string(),
+  /** The kind's own columns, then the custom fields this role may read. */
+  columns: z.array(exportColumnSchema.extend({ custom: z.boolean() })),
+});
+export type ExportColumns = z.infer<typeof exportColumnsSchema>;
+
+/** What a file of this kind can carry, for the export's column choice. */
+export function readExportColumns(token: string, kind: ExportKind) {
+  return fetchHqJson(`hq/exports/${kind}/columns`, exportColumnsSchema, { token });
 }
 
 const funnelSchema = okEnvelope.extend({

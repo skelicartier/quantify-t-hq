@@ -1,4 +1,5 @@
-import { dealFilterFields, readDealField } from "@/lib/lists/definitions";
+import { dealFilterFields } from "@/lib/lists/definitions";
+import { DEAL_GROUPS, dealGroupLabel, dealsView } from "@/lib/lists/views";
 import Link from "next/link";
 import { AiFilterBox } from "@/components/ai/ai-assist";
 import { filterAction } from "@/app/(portal)/_actions/ai";
@@ -28,8 +29,8 @@ import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
 import { formatMoney, formatMrr, formatMrrBy } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
-import { applyFilters, describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
-import { parseSort, serializeSort, sortHrefBuilder, sortRows } from "@/lib/lists/sort";
+import { describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
+import { parseSort, serializeSort, sortHrefBuilder } from "@/lib/lists/sort";
 import { firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Deals" };
@@ -52,7 +53,7 @@ const TABLE_COLUMNS = [
   { key: "age", sortable: true, label: "In stage", align: "end" as const },
 ];
 
-const GROUPS: Record<string, string> = { stage: "Stage", owner: "Owner" };
+const GROUPS = DEAL_GROUPS;
 
 type DealRow = BoardColumn["deals"][number];
 
@@ -115,40 +116,14 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
   const canMoveDeals = hasCapability(context, "deals:write");
   const filterFields = dealFilterFields(board);
   const conditions = parseFilters(filterParams, filterFields);
-  const readField = (deal: DealRow, field: string) => readDealField(deal, field, names);
-  const rows = sortRows(
-    applyFilters(
-      (board?.columns ?? []).flatMap((column) => column.deals),
-      conditions,
-      readField,
-    ),
-    sort,
-    {
-      deal: (deal) => deal.company_name || deal.name,
-      stage: (deal) => deal.stage_label,
-      value: (deal) => deal.mrr_amount,
-      weighted: (deal) => (deal.status === "open" ? deal.weighted_mrr : null),
-      next: (deal) => deal.next_step_due || null,
-      owner: (deal) => (deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : null),
-      age: (deal) => (deal.status === "open" ? deal.days_in_stage : null),
-    },
-  );
+  // The same rows, in the same order, as an export of this view writes.
+  const { rows, ordered: grouped } = board
+    ? dealsView(board, parameters, names)
+    : { rows: [] as DealRow[], ordered: [] as DealRow[] };
   const staffChoices = [...(names ?? new Map()).values()]
     .filter((entry) => entry.is_active)
     .map((entry) => ({ value: entry.staff_id, label: entry.display_name }));
-  const groupLabel = (deal: DealRow): string => {
-    switch (group) {
-      case "stage":
-        return deal.status === "won" ? "Won" : deal.status === "lost" ? "Lost" : deal.stage_label;
-      case "owner":
-        return deal.owner_staff_id ? nameFor(names, deal.owner_staff_id) : "Unowned";
-      default:
-        return "";
-    }
-  };
-  const grouped = group
-    ? [...rows].sort((a, b) => groupLabel(a).localeCompare(groupLabel(b)))
-    : rows;
+  const groupLabel = (deal: DealRow): string => dealGroupLabel(deal, group, names);
   const columnCount = TABLE_COLUMNS.length + (canMoveDeals ? 1 : 0);
 
   return (
@@ -160,7 +135,16 @@ export default async function DealsPage({ searchParams }: DealsPageProps) {
         actions={
           <>
             <PipelineTabs current="/deals" />
-            <DocumentTools context={context} kind="deals" returnPath="/deals" />
+            <DocumentTools
+              context={context}
+              kind="deals"
+              returnPath="/deals"
+              view={
+                board !== null && (status !== "all" || conditions.length > 0)
+                  ? { query: currentQuery, count: rows.length }
+                  : undefined
+              }
+            />
           </>
         }
       />

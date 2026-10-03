@@ -87,7 +87,16 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
                 />
               </Popover>
             ) : undefined}
-            <DocumentTools context={context} kind="people" returnPath="/people" />
+            <DocumentTools
+              context={context}
+              kind="people"
+              returnPath="/people"
+              view={
+                q && people !== null
+                  ? { query: new URLSearchParams({ q }).toString(), count: people.length }
+                  : undefined
+              }
+            />
           </>
         }
       />
