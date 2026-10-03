@@ -33,6 +33,12 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   poweredByHeader: false,
   reactStrictMode: true,
+  experimental: {
+    // A part of an imported file travels through a server action: a thousand rows of a
+    // dozen fields is past the 1 MB default. The service takes 4 MB on the routes that
+    // carry rows, so the portal lets the same through and no more.
+    serverActions: { bodySizeLimit: "4mb" },
+  },
   // The export route reads the PDF typefaces from disk; trace them into it.
   outputFileTracingIncludes: {
     "/exports": ["./assets/pdf-fonts/**/*"],

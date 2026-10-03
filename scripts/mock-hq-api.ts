@@ -2601,6 +2601,24 @@ type LeadRow = {
   /** Absent means never touched since creation. */
   updated_at?: string;
   anonymised_at?: string | null;
+  /** 0054: "inbound" (wrote to us; the reply clock runs) or "prospect" (we found them). */
+  origin?: string;
+  first_name?: string;
+  last_name?: string;
+  title?: string;
+  firm_type?: string;
+  website?: string;
+  country?: string;
+  city?: string;
+  phone?: string;
+  registration_no?: string;
+  source_url?: string;
+  email_kind?: string;
+  notes?: string;
+  tags?: string[];
+  verified_state?: string;
+  verified_at?: string | null;
+  import_id?: string;
 };
 type DealRow = {
   id: string;
@@ -7034,6 +7052,1154 @@ function daysFromNow(days: number): string {
   return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
+// -- prospects (0054): the lead table worked as a researched list ---------------------------
+// account_api/hq/prospects.py, the same rules: regions, kinds of address, fit, the filter
+// grammar over leads, facets, suggestions and the import that accounts for every row.
+const LEAD_REGIONS: Record<string, string[]> = {
+  India: ["India"],
+  Europe: [
+    "United Kingdom",
+    "Ireland",
+    "France",
+    "Germany",
+    "Switzerland",
+    "Sweden",
+    "Norway",
+    "Denmark",
+    "Finland",
+    "Iceland",
+    "Netherlands",
+    "Belgium",
+    "Luxembourg",
+    "Spain",
+    "Portugal",
+    "Italy",
+    "Austria",
+    "Poland",
+    "Czech Republic",
+    "Czechia",
+    "Greece",
+    "Malta",
+    "Cyprus",
+    "Liechtenstein",
+    "Monaco",
+    "Estonia",
+    "Latvia",
+    "Lithuania",
+    "Hungary",
+    "Romania",
+    "Slovenia",
+    "Slovakia",
+    "Croatia",
+    "Bulgaria",
+    "Guernsey",
+    "Jersey",
+    "Isle of Man",
+    "Gibraltar",
+  ],
+  "Middle East": [
+    "United Arab Emirates",
+    "Saudi Arabia",
+    "Kuwait",
+    "Oman",
+    "Bahrain",
+    "Qatar",
+    "Israel",
+    "Jordan",
+    "Lebanon",
+    "Egypt",
+    "Turkey",
+  ],
+  Americas: [
+    "United States",
+    "Canada",
+    "Brazil",
+    "Mexico",
+    "Chile",
+    "Argentina",
+    "Colombia",
+    "Peru",
+    "Cayman Islands",
+    "Bermuda",
+    "Bahamas",
+    "British Virgin Islands",
+    "Uruguay",
+    "Panama",
+  ],
+  Africa: [
+    "Mauritius",
+    "South Africa",
+    "Nigeria",
+    "Kenya",
+    "Morocco",
+    "Ghana",
+    "Botswana",
+    "Namibia",
+  ],
+  "Asia-Pacific": [
+    "Singapore",
+    "Hong Kong",
+    "Japan",
+    "Australia",
+    "New Zealand",
+    "Thailand",
+    "Malaysia",
+    "Indonesia",
+    "Vietnam",
+    "Philippines",
+    "Taiwan",
+    "South Korea",
+    "Nepal",
+    "Bangladesh",
+    "Sri Lanka",
+    "China",
+    "Pakistan",
+    "Cambodia",
+    "Kazakhstan",
+  ],
+};
+function leadRegionOf(country: string): string {
+  const wanted = country.trim().toLowerCase();
+  for (const [region, countries] of Object.entries(LEAD_REGIONS))
+    if (countries.some((name) => name.toLowerCase() === wanted)) return region;
+  return "Unknown";
+}
+const LEAD_EMAIL_KINDS = ["named", "role", "personal-domain"];
+const LEAD_VERIFIED_STATES = ["", "valid", "risky", "invalid"];
+const LEAD_ROLE_LOCALS = new Set([
+  "info",
+  "sales",
+  "admin",
+  "administrator",
+  "support",
+  "help",
+  "noreply",
+  "no-reply",
+  "postmaster",
+  "abuse",
+  "webmaster",
+  "contact",
+  "office",
+  "hello",
+  "team",
+  "billing",
+  "accounts",
+  "hr",
+  "jobs",
+  "careers",
+  "press",
+  "marketing",
+  "security",
+  "privacy",
+]);
+const LEAD_ROLE_WORDS = [
+  "info",
+  "contact",
+  "compliance",
+  "grievance",
+  "investor",
+  "relations",
+  "enquir",
+  "inquir",
+  "admin",
+  "office",
+  "support",
+  "sales",
+  "research",
+  "desk",
+  "team",
+  "hello",
+  "mail",
+  "ops",
+  "operations",
+  "secretar",
+  "pms",
+  "aif",
+  "fund",
+  "capital",
+  "wealth",
+  "advisory",
+  "advisor",
+  "clientservice",
+  "service",
+  "customer",
+  "care",
+  "help",
+  "marketing",
+  "media",
+  "press",
+  "hr",
+  "careers",
+  "jobs",
+  "accounts",
+  "billing",
+  "legal",
+  "ir",
+  "cs",
+  "crm",
+];
+const LEAD_FREE_MAIL = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "yahoo.com",
+  "icloud.com",
+  "me.com",
+  "proton.me",
+  "protonmail.com",
+  "gmx.com",
+  "aol.com",
+  "mail.com",
+  "yandex.com",
+  "zoho.com",
+  "hey.com",
+  "pm.me",
+]);
+function leadEmailKind(email: string, hasName: boolean, given = ""): string {
+  if (LEAD_EMAIL_KINDS.includes(given)) return given;
+  const norm = email.trim().toLowerCase();
+  if (!norm.includes("@")) return "";
+  const [local = "", domain = ""] = norm.split("@");
+  if (LEAD_FREE_MAIL.has(domain)) return "personal-domain";
+  if (LEAD_ROLE_LOCALS.has(local)) return "role";
+  const bare = local.replace(/[^a-z]/g, "");
+  if (
+    !hasName &&
+    (LEAD_ROLE_WORDS.includes(bare) ||
+      LEAD_ROLE_WORDS.some((word) => word.length > 3 && bare.includes(word)))
+  )
+    return "role";
+  return "named";
+}
+type LeadFitRules = {
+  firm_type: Record<string, number>;
+  email_kind: Record<string, number>;
+  title_words: Record<string, number>;
+  country: Record<string, number>;
+  named_person: number;
+  bands: { A: number; B: number };
+};
+const LEAD_FIT_DEFAULTS: LeadFitRules = {
+  firm_type: {
+    PMS: 30,
+    AIF: 30,
+    "Hedge fund": 30,
+    "Quant fund": 30,
+    "Asset manager": 25,
+    "Fund manager": 25,
+    "Family office": 25,
+    "Multi-family office": 25,
+    "Mutual fund boutique": 20,
+    "Brokerage research": 20,
+    "Sell-side analyst": 20,
+    "Research firm": 15,
+    "Research analyst": 15,
+    "Investment firm": 15,
+    "Wealth manager": 10,
+    "Investment adviser": 10,
+    "Stock broker": 0,
+    "Broker-dealer": 0,
+  },
+  email_kind: { named: 20, role: 0, "personal-domain": -10 },
+  title_words: {
+    "portfolio manager": 15,
+    "fund manager": 15,
+    cio: 15,
+    "chief investment": 15,
+    "head of research": 15,
+    analyst: 10,
+    research: 10,
+    founder: 10,
+    partner: 8,
+    ceo: 8,
+    "managing director": 8,
+    trader: 8,
+    strategist: 8,
+    compliance: -15,
+    grievance: -20,
+  },
+  country: {
+    India: 10,
+    "United States": 5,
+    "United Kingdom": 5,
+    Singapore: 5,
+    "United Arab Emirates": 5,
+    "Hong Kong": 5,
+  },
+  named_person: 10,
+  bands: { A: 60, B: 35 },
+};
+/** The rules an admin stored; null means the defaults stand. */
+let leadFitRules: LeadFitRules | null = null;
+function leadRules(): LeadFitRules {
+  return leadFitRules ?? LEAD_FIT_DEFAULTS;
+}
+const LEAD_KIND_WORDS: Record<string, string> = {
+  named: "a person's address",
+  role: "a shared mailbox",
+  "personal-domain": "free-mail address",
+};
+function signed(points: number): string {
+  return points >= 0 ? `+${points}` : String(points);
+}
+function leadFit(
+  row: {
+    firm_type?: string;
+    email_kind?: string;
+    title?: string;
+    country?: string;
+    first_name?: string;
+    full_name?: string;
+  },
+  rules: LeadFitRules,
+): { score: number; band: string; reasons: string[] } {
+  let score = 0;
+  const reasons: string[] = [];
+  const firmType = row.firm_type ?? "";
+  const typePoints = rules.firm_type[firmType];
+  if (firmType && typePoints !== undefined) {
+    score += typePoints;
+    reasons.push(`${firmType} ${signed(typePoints)}`);
+  }
+  const kind = row.email_kind ?? "";
+  const kindPoints = rules.email_kind[kind];
+  if (kind && kindPoints) {
+    score += kindPoints;
+    reasons.push(`${LEAD_KIND_WORDS[kind] ?? kind} ${signed(kindPoints)}`);
+  }
+  const title = (row.title ?? "").toLowerCase();
+  if (title)
+    for (const [word, points] of Object.entries(rules.title_words))
+      if (word && title.includes(word) && points) {
+        score += points;
+        reasons.push(`title has “${word}” ${signed(points)}`);
+      }
+  const country = row.country ?? "";
+  const countryPoints = rules.country[country];
+  if (country && countryPoints) {
+    score += countryPoints;
+    reasons.push(`${country} ${signed(countryPoints)}`);
+  }
+  if (rules.named_person && (row.first_name || row.full_name)) {
+    score += rules.named_person;
+    reasons.push(`a named person ${signed(rules.named_person)}`);
+  }
+  const band = score >= rules.bands.A ? "A" : score >= rules.bands.B ? "B" : "C";
+  return { score, band, reasons };
+}
+function leadValidateRules(raw: unknown): {
+  rules?: LeadFitRules;
+  errors: Record<string, string>;
+} {
+  const errors: Record<string, string> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    return { errors: { rules: "an object" } };
+  const body = raw as Record<string, unknown>;
+  const cleaned: Record<string, Record<string, number>> = {};
+  for (const table of ["firm_type", "email_kind", "title_words", "country"]) {
+    const value = body[table] ?? {};
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      errors[table] = "an object of name → points";
+      continue;
+    }
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length > 60) {
+      errors[table] = "at most 60 entries";
+      continue;
+    }
+    const out: Record<string, number> = {};
+    let bad = "";
+    for (const [key, points] of entries) {
+      let name = key.trim().slice(0, 60);
+      if (table === "title_words") name = name.toLowerCase();
+      if (!name) continue;
+      if (table === "email_kind" && !LEAD_EMAIL_KINDS.includes(name)) {
+        bad = `kinds are ${LEAD_EMAIL_KINDS.join(", ")}`;
+        break;
+      }
+      const number = Number(points);
+      if (!Number.isInteger(number)) {
+        bad = `${name}: whole points`;
+        break;
+      }
+      if (number < -100 || number > 100) {
+        bad = `${name}: between -100 and 100`;
+        break;
+      }
+      out[name] = number;
+    }
+    if (bad) errors[table] = bad;
+    else cleaned[table] = out;
+  }
+  const named = Number(body.named_person ?? 0);
+  if (!Number.isInteger(named) || named < -100 || named > 100)
+    errors.named_person = "whole points between -100 and 100";
+  const bands = (body.bands ?? {}) as Record<string, unknown>;
+  const a = Number(bands.A);
+  const b = Number(bands.B);
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a <= b || a > 400)
+    errors.bands = "A above B, both 0 or more";
+  if (Object.keys(errors).length) return { errors };
+  return {
+    errors,
+    rules: {
+      firm_type: cleaned.firm_type ?? {},
+      email_kind: cleaned.email_kind ?? {},
+      title_words: cleaned.title_words ?? {},
+      country: cleaned.country ?? {},
+      named_person: named,
+      bands: { A: a, B: b },
+    },
+  };
+}
+const LEAD_FIELDS: Record<string, string> = {
+  origin: "Origin",
+  stage: "Stage",
+  source: "Source",
+  owner: "Owner",
+  company: "Company",
+  email: "Email",
+  firm_type: "Firm type",
+  country: "Country",
+  region: "Region",
+  city: "City",
+  title: "Title",
+  email_kind: "Kind of address",
+  fit_band: "Fit",
+  fit_score: "Fit score",
+  tags: "Tags",
+  verified: "Verified",
+  named: "Has a name",
+  import: "Came in with",
+  created_days: "Days since received",
+  last_emailed_days: "Days since last email",
+};
+const LEAD_OPS = ["is", "not", "has", "in", "gt", "lt", "empty", "set"];
+type LeadCondition = { field: string; op: string; value: string };
+function leadParseConditions(raw: unknown): {
+  conditions: LeadCondition[];
+  errors: Record<string, string>;
+} {
+  const conditions: LeadCondition[] = [];
+  const errors: Record<string, string> = {};
+  (Array.isArray(raw) ? raw : []).slice(0, 8).forEach((item, index) => {
+    let field = "";
+    let op = "";
+    let value = "";
+    if (typeof item === "string") {
+      const [first = "", second = "", ...rest] = item.split(":");
+      field = first;
+      op = second;
+      value = rest.join(":");
+    } else if (item && typeof item === "object") {
+      const entry = item as Record<string, unknown>;
+      field = String(entry.field ?? "");
+      op = String(entry.op ?? "");
+      value = String(entry.value ?? "");
+    } else {
+      errors[`conditions[${index}]`] = "a string or an object";
+      return;
+    }
+    if (!(field in LEAD_FIELDS)) errors[`conditions[${index}]`] = `unknown field '${field}'`;
+    else if (!LEAD_OPS.includes(op)) errors[`conditions[${index}]`] = `unknown comparison '${op}'`;
+    else if (["is", "not", "has", "in", "gt", "lt"].includes(op) && value === "")
+      errors[`conditions[${index}]`] = "needs a value";
+    else conditions.push({ field, op, value: value.slice(0, 200) });
+  });
+  return { conditions, errors };
+}
+type LeadViewRow = ReturnType<typeof leadView>;
+function leadReadField(view: LeadViewRow, field: string): string | number | null {
+  switch (field) {
+    case "origin":
+      return view.origin;
+    case "stage":
+      return view.stage;
+    case "source":
+      return view.source_key;
+    case "owner":
+      return view.owner_staff_id ? mailStaffName(view.owner_staff_id) : "";
+    case "company":
+      return view.company_name;
+    case "email":
+      return view.email;
+    case "firm_type":
+      return view.firm_type;
+    case "country":
+      return view.country;
+    case "region":
+      return view.region;
+    case "city":
+      return view.city;
+    case "title":
+      return view.title;
+    case "email_kind":
+      return view.email_kind;
+    case "fit_band":
+      return view.fit_band;
+    case "fit_score":
+      return view.fit_score;
+    case "tags":
+      return view.tags.join(",");
+    case "verified":
+      return view.verified_state || "unchecked";
+    case "named":
+      return view.first_name || view.full_name ? "yes" : "no";
+    case "import":
+      return view.import_label;
+    case "created_days":
+      return view.created_at ? (Date.now() - Date.parse(view.created_at)) / 86_400_000 : null;
+    case "last_emailed_days": {
+      const last = mailLastEmailed(mailNorm(view.email));
+      return last === null ? null : (Date.now() - last) / 86_400_000;
+    }
+    default:
+      return null;
+  }
+}
+function leadMatches(
+  value: string | number | null,
+  op: string,
+  wanted: string,
+  field: string,
+): boolean {
+  const text = value === null ? "" : String(value);
+  if (op === "empty") return text === "";
+  if (op === "set") return text !== "";
+  if (field === "tags") {
+    const tags = new Set(text.toLowerCase().split(",").filter(Boolean));
+    const asked = wanted
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    if (op === "is") return asked.length > 0 && asked.every((tag) => tags.has(tag));
+    if (op === "not") return !asked.some((tag) => tags.has(tag));
+    if (op === "has" || op === "in") return asked.some((tag) => tags.has(tag));
+    return false;
+  }
+  if (op === "is") return text.toLowerCase() === wanted.toLowerCase();
+  if (op === "not") return text.toLowerCase() !== wanted.toLowerCase();
+  if (op === "has") return text.toLowerCase().includes(wanted.toLowerCase());
+  if (op === "in")
+    return wanted
+      .split(",")
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean)
+      .includes(text.toLowerCase());
+  const left = typeof value === "number" ? value : Number(text);
+  const right = Number(wanted);
+  if (Number.isNaN(left) || Number.isNaN(right) || text === "") return false;
+  return op === "gt" ? left > right : left < right;
+}
+function leadApply(views: LeadViewRow[], conditions: LeadCondition[]): LeadViewRow[] {
+  if (!conditions.length) return views;
+  return views.filter((view) =>
+    conditions.every((condition) =>
+      leadMatches(
+        leadReadField(view, condition.field),
+        condition.op,
+        condition.value,
+        condition.field,
+      ),
+    ),
+  );
+}
+const LEAD_FACET_FIELDS = [
+  "firm_type",
+  "country",
+  "region",
+  "email_kind",
+  "fit_band",
+  "stage",
+  "source",
+  "owner",
+  "verified",
+  "tags",
+];
+function leadFacets(views: LeadViewRow[]): Record<string, Array<{ value: string; count: number }>> {
+  const counters = new Map<string, Map<string, number>>(
+    LEAD_FACET_FIELDS.map((field) => [field, new Map<string, number>()]),
+  );
+  const bump = (field: string, value: string) => {
+    const counter = counters.get(field)!;
+    counter.set(value, (counter.get(value) ?? 0) + 1);
+  };
+  for (const view of views)
+    for (const field of LEAD_FACET_FIELDS) {
+      if (field === "tags") {
+        for (const tag of view.tags) bump(field, tag);
+        continue;
+      }
+      const value = leadReadField(view, field);
+      bump(field, value === null ? "" : String(value));
+    }
+  return Object.fromEntries(
+    [...counters.entries()].map(([field, counter]) => [
+      field,
+      [...counter.entries()]
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 40),
+    ]),
+  );
+}
+const LEAD_SUGGEST_MIN = 20;
+function leadSuggestions(views: LeadViewRow[]) {
+  const key = (conditions: string[]) =>
+    conditions
+      .map((item) => item.toLowerCase())
+      .sort()
+      .join("|");
+  const saved = new Map(
+    mailSegments
+      .filter((row) => row.kind === "leads" && !row.archived_at)
+      .map((row) => [key(row.conditions), row.id]),
+  );
+  const facets = leadFacets(views);
+  const out: Array<{ name: string; conditions: string[]; count: number; segment_id: string }> = [];
+  const offer = (name: string, conditions: string[], count: number) => {
+    if (count < LEAD_SUGGEST_MIN) return;
+    out.push({ name, conditions, count, segment_id: saved.get(key(conditions)) ?? "" });
+  };
+  const best = views.filter((view) => view.fit_band === "A" && view.email_kind === "named");
+  offer(
+    "Best fit, named people",
+    ["origin:is:prospect", "fit_band:is:A", "email_kind:is:named"],
+    best.length,
+  );
+  offer(
+    "Best fit, named people in India",
+    ["origin:is:prospect", "fit_band:is:A", "email_kind:is:named", "country:is:India"],
+    best.filter((view) => view.country === "India").length,
+  );
+  offer(
+    "Best fit, named people outside India",
+    ["origin:is:prospect", "fit_band:is:A", "email_kind:is:named", "country:not:India"],
+    best.filter((view) => view.country !== "India").length,
+  );
+  for (const entry of facets.firm_type ?? [])
+    if (entry.value)
+      offer(
+        `${entry.value} — everyone`,
+        ["origin:is:prospect", `firm_type:is:${entry.value}`],
+        entry.count,
+      );
+  for (const entry of facets.region ?? [])
+    if (entry.value && entry.value !== "Unknown")
+      offer(
+        `${entry.value} — everyone`,
+        ["origin:is:prospect", `region:is:${entry.value}`],
+        entry.count,
+      );
+  for (const entry of facets.country ?? [])
+    if (entry.value)
+      offer(
+        `${entry.value} — named people`,
+        ["origin:is:prospect", `country:is:${entry.value}`, "email_kind:is:named"],
+        views.filter((view) => view.country === entry.value && view.email_kind === "named").length,
+      );
+  offer(
+    "Shared mailboxes (send last)",
+    ["origin:is:prospect", "email_kind:is:role"],
+    views.filter((view) => view.email_kind === "role").length,
+  );
+  offer(
+    "Never emailed, best fit",
+    ["origin:is:prospect", "fit_band:is:A", "last_emailed_days:empty:"],
+    best.filter((view) => mailLastEmailed(mailNorm(view.email)) === null).length,
+  );
+  return out.slice(0, 60);
+}
+function leadCleanTags(raw: unknown): string[] {
+  const items = Array.isArray(raw) ? raw : String(raw ?? "").split(",");
+  const out: string[] = [];
+  for (const item of items) {
+    const tag = String(item ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .slice(0, 40)
+      .trim();
+    if (tag && !out.includes(tag)) out.push(tag);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+const LEAD_STANDARD_KEYS = new Set([
+  "email",
+  "first_name",
+  "last_name",
+  "full_name",
+  "title",
+  "company",
+  "company_name",
+  "firm_type",
+  "website",
+  "country",
+  "city",
+  "phone",
+  "registration_no",
+  "source_url",
+  "email_kind",
+  "notes",
+  "tags",
+  "verified_state",
+]);
+function leadColumnKey(raw: string): string {
+  let text = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40)
+    .replace(/_+$/g, "");
+  if (/^[0-9]/.test(text)) text = `c_${text}`;
+  return text;
+}
+function leadSplitName(full: string): [string, string] {
+  const parts = full.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return ["", ""];
+  if (parts.length === 1) return [parts[0]!, ""];
+  return [parts.slice(0, -1).join(" "), parts[parts.length - 1]!];
+}
+type LeadProspectFields = {
+  email: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  title: string;
+  company_name: string;
+  firm_type: string;
+  website: string;
+  country: string;
+  city: string;
+  phone: string;
+  registration_no: string;
+  source_url: string;
+  notes: string;
+  tags: string[];
+  verified_state: string;
+  email_kind: string;
+  payload: Record<string, string>;
+};
+function leadCleanRow(raw: Record<string, unknown>): LeadProspectFields | { reason: string } {
+  const text = (name: string, limit: number) =>
+    String(raw[name] ?? "")
+      .trim()
+      .slice(0, limit);
+  const email = text("email", 254).toLowerCase();
+  if (!email) return { reason: "NO_EMAIL" };
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { reason: "INVALID_EMAIL" };
+  let first = text("first_name", 200);
+  let last = text("last_name", 200);
+  let full = text("full_name", 200) || text("name", 200);
+  if (!first && !last && full) [first, last] = leadSplitName(full);
+  if (!full) full = [first, last].filter(Boolean).join(" ");
+  let sourceUrl = text("source_url", 400);
+  if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) sourceUrl = "";
+  const verified = text("verified_state", 12).toLowerCase();
+  const payload: Record<string, string> = {};
+  const more = raw.fields;
+  if (more && typeof more === "object" && !Array.isArray(more))
+    for (const [key, value] of Object.entries(more as Record<string, unknown>).slice(0, 20)) {
+      const clean = leadColumnKey(key);
+      const cell = String(value ?? "")
+        .trim()
+        .slice(0, 400);
+      if (clean && !LEAD_STANDARD_KEYS.has(clean) && cell) payload[clean] = cell;
+    }
+  return {
+    email,
+    first_name: first.slice(0, 80),
+    last_name: last.slice(0, 80),
+    full_name: full.slice(0, 160),
+    title: text("title", 120),
+    company_name: (text("company", 200) || text("company_name", 200)).slice(0, 200),
+    firm_type: text("firm_type", 40),
+    website: text("website", 255),
+    country: text("country", 60),
+    city: text("city", 80),
+    phone: text("phone", 40),
+    registration_no: text("registration_no", 60),
+    source_url: sourceUrl,
+    notes: text("notes", 4000),
+    tags: leadCleanTags(raw.tags),
+    verified_state: LEAD_VERIFIED_STATES.includes(verified) ? verified : "",
+    email_kind: leadEmailKind(email, Boolean(first || full), text("email_kind", 16).toLowerCase()),
+    payload,
+  };
+}
+type LeadImportRow = {
+  id: string;
+  label: string;
+  source_key: string;
+  reason: string;
+  rows: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  invalid: number;
+  staff_id: string;
+  started_at: string;
+  rolled_back_at: string | null;
+  rolled_back_count: number;
+};
+const leadImports: LeadImportRow[] = [];
+const LEAD_IMPORT_MAX = 1_000;
+const LEAD_MAX = 100_000;
+const LEAD_BULK_MAX = 25_000;
+
+/**
+ * A researched list for the demo: invented people at invented firms on reserved
+ * `.example` domains, so nothing here can be mistaken for — or mailed to — a real person.
+ * Deterministic: the same rows every reseed, so screenshots and counts are stable.
+ */
+function seedProspects() {
+  const firstNames = [
+    "Asha",
+    "Rohan",
+    "Meera",
+    "Vikram",
+    "Nisha",
+    "Arjun",
+    "Kavya",
+    "Dev",
+    "Priya",
+    "Sameer",
+    "Elena",
+    "Marcus",
+    "Sofia",
+    "Daniel",
+    "Hana",
+    "Lucas",
+    "Amara",
+    "Jonas",
+    "Mei",
+    "Tariq",
+  ];
+  const lastNames = [
+    "Rao",
+    "Mehta",
+    "Iyer",
+    "Shah",
+    "Kapoor",
+    "Nair",
+    "Bose",
+    "Reddy",
+    "Fernandes",
+    "Khan",
+    "Lindqvist",
+    "Okafor",
+    "Tanaka",
+    "Moreau",
+    "Silva",
+    "Weber",
+    "Haddad",
+    "Novak",
+    "Tan",
+    "Costa",
+  ];
+  const stems = [
+    "Aranya",
+    "Meru",
+    "Northgate",
+    "Saffron",
+    "Kestrel",
+    "Banyan",
+    "Harbour",
+    "Indus",
+    "Juniper",
+    "Larkspur",
+    "Monsoon",
+    "Orchard",
+    "Pinnacle",
+    "Quarry",
+    "Riverbend",
+    "Sandstone",
+    "Tamarind",
+    "Umber",
+    "Vetiver",
+    "Westmark",
+  ];
+  const plans: Array<{
+    firm_type: string;
+    suffix: string;
+    count: number;
+    countries: string[];
+    titles: string[];
+    source: string;
+    role_every: number;
+  }> = [
+    {
+      firm_type: "PMS",
+      suffix: "Portfolio Managers",
+      count: 64,
+      countries: ["India"],
+      titles: [
+        "Portfolio Manager",
+        "Principal Officer",
+        "Chief Investment Officer",
+        "Fund Manager",
+      ],
+      source: "https://regulator.example/registers/portfolio-managers",
+      role_every: 4,
+    },
+    {
+      firm_type: "AIF",
+      suffix: "Alternatives",
+      count: 52,
+      countries: ["India"],
+      titles: ["Partner", "Fund Manager", "Investment Director", "Compliance Officer"],
+      source: "https://regulator.example/registers/alternative-funds",
+      role_every: 3,
+    },
+    {
+      firm_type: "Hedge fund",
+      suffix: "Capital",
+      count: 48,
+      countries: ["United States", "United Kingdom", "Singapore", "Hong Kong"],
+      titles: ["Portfolio Manager", "Head of Research", "Analyst", "Chief Investment Officer"],
+      source: "https://regulator.example/adviser-filings",
+      role_every: 6,
+    },
+    {
+      firm_type: "Asset manager",
+      suffix: "Asset Management",
+      count: 44,
+      countries: ["United States", "Canada", "Brazil", "Japan", "Australia", "Germany"],
+      titles: ["Fund Manager", "Senior Analyst", "Head of Equities", ""],
+      source: "https://regulator.example/registers/asset-managers",
+      role_every: 3,
+    },
+    {
+      firm_type: "Sell-side analyst",
+      suffix: "Securities",
+      count: 36,
+      countries: ["", "India", "Thailand", "Hong Kong"],
+      titles: ["Equity Research Analyst", "Analyst", "Head of Research"],
+      source: "https://issuer.example/investors/analyst-coverage",
+      role_every: 0,
+    },
+    {
+      firm_type: "Family office",
+      suffix: "Family Office",
+      count: 24,
+      countries: ["United Arab Emirates", "Switzerland", "Singapore", "India"],
+      titles: ["Chief Investment Officer", "Principal", "Investment Manager", ""],
+      source: "https://firm.example/team",
+      role_every: 2,
+    },
+    {
+      firm_type: "Research analyst",
+      suffix: "Research",
+      count: 28,
+      countries: ["India"],
+      titles: ["Research Analyst", ""],
+      source: "https://regulator.example/registers/research-analysts",
+      role_every: 0,
+    },
+    {
+      firm_type: "Stock broker",
+      suffix: "Securities",
+      count: 24,
+      countries: ["Brazil", "Argentina", "Bangladesh", "India"],
+      titles: ["", "Managing Director", "Compliance Officer"],
+      source: "https://exchange.example/members",
+      role_every: 2,
+    },
+  ];
+  const roleLocals = ["info", "contact", "compliance", "investor.relations", "research"];
+  const importId = "1f000000-0000-4000-8000-000000000001";
+  let created = 0;
+  let serial = 0;
+  for (const plan of plans)
+    for (let index = 0; index < plan.count; index += 1) {
+      serial += 1;
+      const stem = stems[(serial * 7) % stems.length]!;
+      const firmNo = Math.floor(serial / stems.length) + 1;
+      const company = `${stem} ${plan.suffix}${firmNo > 1 ? ` ${firmNo}` : ""}`;
+      const domain = `${stem.toLowerCase()}${plan.suffix.toLowerCase().replace(/[^a-z]/g, "")}${firmNo > 1 ? firmNo : ""}.example`;
+      const country = plan.countries[index % plan.countries.length]!;
+      const isRole = plan.role_every > 0 && index % plan.role_every === plan.role_every - 1;
+      // Research analysts in the register often print a free-mail address.
+      const freeMail = plan.firm_type === "Research analyst" && index % 3 === 0;
+      const first = firstNames[(serial * 3) % firstNames.length]!;
+      const last = lastNames[(serial * 11) % lastNames.length]!;
+      const email = isRole
+        ? `${roleLocals[index % roleLocals.length]}@${domain}`
+        : freeMail
+          ? `${first}.${last}${serial}@gmail.com`.toLowerCase()
+          : `${first}.${last}@${domain}`.toLowerCase();
+      const title = isRole ? "" : plan.titles[index % plan.titles.length]!;
+      const stage =
+        serial % 23 === 0
+          ? "connected"
+          : serial % 11 === 0
+            ? "attempting"
+            : serial % 37 === 0
+              ? "disqualified"
+              : "new";
+      leads.push({
+        id: `1f${String(serial).padStart(6, "0")}-0000-4000-8000-000000000001`,
+        origin: "prospect",
+        source_key: "outbound",
+        email,
+        full_name: isRole ? "" : `${first} ${last}`,
+        first_name: isRole ? "" : first,
+        last_name: isRole ? "" : last,
+        title,
+        company_name: company,
+        firm_type: plan.firm_type,
+        website: domain,
+        country,
+        city: "",
+        phone: "",
+        registration_no: plan.firm_type === "PMS" ? `INP${String(100000 + serial).slice(1)}` : "",
+        source_url: plan.source,
+        email_kind: isRole ? "role" : freeMail ? "personal-domain" : "named",
+        notes: "",
+        tags: serial % 9 === 0 ? ["wave 1"] : [],
+        verified_state: serial % 5 === 0 ? "valid" : serial % 29 === 0 ? "risky" : "",
+        verified_at: serial % 5 === 0 || serial % 29 === 0 ? agoIso(24 * 3) : null,
+        import_id: importId,
+        message: "",
+        payload: {},
+        stage,
+        disqualify_reason: stage === "disqualified" ? "not_a_fit" : "",
+        owner_staff_id: stage === "new" ? "" : SALES_STAFF,
+        first_replied_at: null,
+        converted_company_id: "",
+        converted_person_id: "",
+        converted_deal_id: "",
+        created_at: agoIso(24 * 4),
+      });
+      created += 1;
+    }
+  leadImports.length = 0;
+  leadImports.push({
+    id: importId,
+    label: "prospects-october.csv",
+    source_key: "outbound",
+    reason: "Researched from public registers and firms' own pages",
+    rows: created + 14,
+    created,
+    updated: 0,
+    skipped: 14,
+    invalid: 3,
+    staff_id: OWNER_STAFF,
+    started_at: agoIso(24 * 4),
+    rolled_back_at: null,
+    rolled_back_count: 0,
+  });
+  leadFitRules = null;
+}
+/**
+ * The prospect columns from a request body, cleaned to their limits: crm_routes'
+ * `_prospect_fields_from`. With `presentOnly` an absent key is left alone (an update).
+ */
+function leadProspectFields(
+  body: Record<string, unknown>,
+  presentOnly: boolean,
+): { fields: Partial<LeadRow> } | { refusal: ReturnType<typeof refuse> } {
+  const limits: Record<string, number> = {
+    first_name: 80,
+    last_name: 80,
+    title: 120,
+    firm_type: 40,
+    website: 255,
+    country: 60,
+    city: 80,
+    phone: 40,
+    registration_no: 60,
+    source_url: 400,
+    notes: 4000,
+  };
+  const fields: Record<string, unknown> = {};
+  for (const [name, limit] of Object.entries(limits)) {
+    if (presentOnly && !(name in body)) continue;
+    let value = String(body[name] ?? "")
+      .trim()
+      .slice(0, limit);
+    if (name === "website" && value) value = normaliseDomain(value);
+    if (name === "source_url" && value && !/^https?:\/\//i.test(value))
+      return {
+        refusal: refuse(400, "malformed_request", {
+          source_url: "a web address starting http:// or https://",
+        }),
+      };
+    fields[name] = value;
+  }
+  if (!presentOnly || "tags" in body) fields.tags = leadCleanTags(body.tags);
+  if (!presentOnly || "email_kind" in body) {
+    const kind = String(body.email_kind ?? "")
+      .trim()
+      .toLowerCase();
+    if (kind && !LEAD_EMAIL_KINDS.includes(kind))
+      return {
+        refusal: refuse(400, "malformed_request", {
+          email_kind: `one of ${LEAD_EMAIL_KINDS.join(", ")}`,
+        }),
+      };
+    fields.email_kind = kind;
+  }
+  if (!presentOnly || "verified_state" in body) {
+    const state = String(body.verified_state ?? "")
+      .trim()
+      .toLowerCase();
+    if (!LEAD_VERIFIED_STATES.includes(state))
+      return {
+        refusal: refuse(400, "malformed_request", {
+          verified_state: "valid, risky, invalid, or empty for unchecked",
+        }),
+      };
+    fields.verified_state = state;
+  }
+  return { fields: fields as Partial<LeadRow> };
+}
+/** Keys in a stable order, so two rule sets compare by value. */
+function sortedJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortedJson);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, inner]) => [key, sortedJson(inner)]),
+    );
+  return value;
+}
+function leadSettingsView() {
+  const rules = leadRules();
+  const bands: Record<string, number> = { A: 0, B: 0, C: 0 };
+  const firmTypes = new Map<string, number>();
+  const countries = new Map<string, number>();
+  let total = 0;
+  for (const row of leads) {
+    if (row.origin !== "prospect" || row.anonymised_at) continue;
+    total += 1;
+    bands[leadFit(row, rules).band] = (bands[leadFit(row, rules).band] ?? 0) + 1;
+    if (row.firm_type) firmTypes.set(row.firm_type, (firmTypes.get(row.firm_type) ?? 0) + 1);
+    if (row.country) countries.set(row.country, (countries.get(row.country) ?? 0) + 1);
+  }
+  const top = (counter: Map<string, number>) =>
+    [...counter.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 60)
+      .map(([value, count]) => ({ value, count }));
+  return {
+    rules,
+    defaults: LEAD_FIT_DEFAULTS,
+    customised: leadFitRules !== null,
+    bands,
+    prospects: total,
+    firm_types: top(firmTypes),
+    countries: top(countries),
+    email_kinds: LEAD_EMAIL_KINDS,
+    read_at: new Date().toISOString(),
+  };
+}
+
 function seedCrm() {
   stages.length = 0;
   stages.push(
@@ -7632,6 +8798,7 @@ function seedCrm() {
       at: agoIso(5),
       seen_at: null,
     });
+  seedProspects();
 }
 seedCrm();
 
@@ -7955,14 +9122,45 @@ function personView(row: PersonRow) {
 }
 
 function leadView(row: LeadRow) {
-  const unanswered = !row.first_replied_at && (row.stage === "new" || row.stage === "attempting");
+  const origin = row.origin ?? "inbound";
+  // A researched prospect never starts the first-reply clock: nobody is waiting on us.
+  const unanswered =
+    origin === "inbound" &&
+    !row.first_replied_at &&
+    (row.stage === "new" || row.stage === "attempting");
   const waiting = unanswered ? minutesSince(row.created_at) : null;
+  const fit = leadFit(row, leadRules());
+  const country = row.country ?? "";
   return {
     lead_id: row.id,
+    origin,
     source_key: row.source_key,
     email: row.email,
     full_name: row.full_name,
+    first_name: row.first_name ?? "",
+    last_name: row.last_name ?? "",
+    title: row.title ?? "",
     company_name: row.company_name,
+    firm_type: row.firm_type ?? "",
+    website: row.website ?? "",
+    country,
+    region: country ? leadRegionOf(country) : "",
+    city: row.city ?? "",
+    phone: row.phone ?? "",
+    registration_no: row.registration_no ?? "",
+    source_url: row.source_url ?? "",
+    email_kind: row.email_kind ?? "",
+    notes: row.notes ?? "",
+    tags: row.tags ?? [],
+    verified_state: row.verified_state ?? "",
+    verified_at: row.verified_at ?? null,
+    import_id: row.import_id ?? "",
+    import_label: row.import_id
+      ? (leadImports.find((item) => item.id === row.import_id)?.label ?? "")
+      : "",
+    fit_score: fit.score,
+    fit_band: fit.band,
+    fit_reasons: fit.reasons,
     message: row.message,
     payload: row.payload,
     stage: row.stage,
@@ -8335,7 +9533,9 @@ routes.push(
         };
       }
       if (capabilities.includes("crm:read")) {
+        // Only inbound leads owe a reply; a researched prospect never starts the clock.
         const waiting = leads
+          .filter((row) => (row.origin ?? "inbound") === "inbound")
           .map(leadView)
           .filter(
             (view) =>
@@ -9394,13 +10594,558 @@ routes.push(
       return ok({ person: personView(row) });
     },
   },
+  // -- prospects (0054): static routes first, so `{lead_id}` never swallows them --------
+  {
+    method: "POST",
+    pattern: "hq/leads/import",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const rows = Array.isArray(body.rows) ? (body.rows as unknown[]) : [];
+      if (!rows.length) return refuse(400, "malformed_request", { rows: "a non-empty list" });
+      if (rows.length > LEAD_IMPORT_MAX)
+        return refuse(400, "malformed_request", {
+          rows: `at most ${LEAD_IMPORT_MAX} rows a request; send the file in parts`,
+        });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say where the file came from" });
+      const sourceKey = String(body.source_key ?? "").trim() || "outbound";
+      const importSourceRefusal = sourceRefusal(sourceKey);
+      if (importSourceRefusal) return importSourceRefusal;
+      const given = String(body.run_id ?? "").trim();
+      if (given && badId(given)) return refuse(400, "malformed_request", { run_id: "not an id" });
+      const runId = given.toLowerCase() || randomUUID();
+      const label = String(body.label ?? "")
+        .trim()
+        .slice(0, 120);
+      let run = leadImports.find((row) => row.id === runId);
+      if (run?.rolled_back_at)
+        return refuse(400, "malformed_request", {
+          run_id: "that import was taken back; start a new one",
+        });
+      if (!run) {
+        run = {
+          id: runId,
+          label,
+          source_key: sourceKey,
+          reason,
+          rows: 0,
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          invalid: 0,
+          staff_id: found.member.id,
+          started_at: now(),
+          rolled_back_at: null,
+          rolled_back_count: 0,
+        };
+        leadImports.push(run);
+      }
+      const existing = new Map(
+        leads.filter((row) => row.email).map((row) => [row.email.toLowerCase(), row]),
+      );
+      const known = new Set(
+        people.filter((row) => row.email && !row.archived).map((row) => row.email.toLowerCase()),
+      );
+      const stopped = new Set(
+        mailSuppressions.filter((row) => !row.released_at).map((row) => row.email_norm),
+      );
+      const updateExisting = Boolean(body.update_existing);
+      const seen = new Set<string>();
+      const skipped: Array<{ row: number; email: string; reason: string }> = [];
+      let skippedCount = 0;
+      let invalid = 0;
+      let created = 0;
+      let updated = 0;
+      let unchanged = 0;
+      let room = LEAD_MAX - existing.size;
+      const skip = (rowNo: number, email: string, why: string) => {
+        skippedCount += 1;
+        if (skipped.length < 200)
+          skipped.push({ row: rowNo, email: email.slice(0, 254), reason: why });
+      };
+      rows.forEach((raw, index) => {
+        const rowNo = index + 1;
+        const item = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+        const cleaned = leadCleanRow(item);
+        if ("reason" in cleaned) {
+          invalid += 1;
+          skip(rowNo, String(item.email ?? ""), cleaned.reason);
+          return;
+        }
+        const norm = cleaned.email;
+        if (seen.has(norm)) return skip(rowNo, norm, "DUPLICATE_IN_FILE");
+        seen.add(norm);
+        if (known.has(norm)) return skip(rowNo, norm, "ALREADY_A_PERSON");
+        if (stopped.has(norm)) return skip(rowNo, norm, "STOPPED");
+        const current = existing.get(norm);
+        if (current) {
+          if (!updateExisting || current.anonymised_at) {
+            unchanged += 1;
+            return;
+          }
+          // Fill what the record lacks; never overwrite what somebody typed.
+          let touched = false;
+          const fill = (name: keyof LeadRow, value: string) => {
+            if (value && !current[name]) {
+              (current as Record<string, unknown>)[name] = value;
+              touched = true;
+            }
+          };
+          fill("first_name", cleaned.first_name);
+          fill("last_name", cleaned.last_name);
+          fill("full_name", cleaned.full_name);
+          fill("title", cleaned.title);
+          fill("company_name", cleaned.company_name);
+          fill("firm_type", cleaned.firm_type);
+          fill("website", cleaned.website);
+          fill("country", cleaned.country);
+          fill("city", cleaned.city);
+          fill("phone", cleaned.phone);
+          fill("registration_no", cleaned.registration_no);
+          fill("source_url", cleaned.source_url);
+          fill("email_kind", cleaned.email_kind);
+          fill("notes", cleaned.notes);
+          fill("verified_state", cleaned.verified_state);
+          const merged = leadCleanTags([...(current.tags ?? []), ...cleaned.tags]);
+          if (merged.join(",") !== (current.tags ?? []).join(",")) {
+            current.tags = merged;
+            touched = true;
+          }
+          if (touched) {
+            current.updated_at = now();
+            updated += 1;
+          } else unchanged += 1;
+          return;
+        }
+        if (room <= 0) return skip(rowNo, norm, "FULL");
+        room -= 1;
+        const { payload, company_name: companyName, ...rest } = cleaned;
+        const row: LeadRow = {
+          id: randomUUID(),
+          origin: "prospect",
+          source_key: sourceKey,
+          company_name: companyName,
+          message: "",
+          payload,
+          stage: "new",
+          disqualify_reason: "",
+          owner_staff_id: "",
+          first_replied_at: null,
+          converted_company_id: "",
+          converted_person_id: "",
+          converted_deal_id: "",
+          created_at: now(),
+          verified_at: cleaned.verified_state ? now() : null,
+          import_id: runId,
+          ...rest,
+        };
+        leads.push(row);
+        existing.set(norm, row);
+        created += 1;
+      });
+      run.rows += rows.length;
+      run.created += created;
+      run.updated += updated;
+      run.skipped += skippedCount;
+      run.invalid += invalid;
+      audit("crm.imported", found.member.id, "import", "leads", reason, {
+        import_id: runId,
+        label,
+        source: sourceKey,
+        rows: rows.length,
+        created,
+        updated,
+        unchanged,
+        skipped: skippedCount,
+        invalid,
+      });
+      return ok({
+        import_id: runId,
+        rows: rows.length,
+        created,
+        updated,
+        unchanged,
+        skipped,
+        skipped_count: skippedCount,
+        invalid,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/leads/imports",
+    auth: true,
+    capability: "crm:read",
+    handler: () => {
+      const remaining = new Map<string, number>();
+      for (const row of leads)
+        if (row.import_id) remaining.set(row.import_id, (remaining.get(row.import_id) ?? 0) + 1);
+      return ok({
+        imports: [...leadImports]
+          .sort((a, b) => b.started_at.localeCompare(a.started_at))
+          .slice(0, 100)
+          .map((row) => ({
+            import_id: row.id,
+            label: row.label,
+            source_key: row.source_key,
+            reason: row.reason,
+            rows: row.rows,
+            created: row.created,
+            updated: row.updated,
+            skipped: row.skipped,
+            invalid: row.invalid,
+            by: row.staff_id ? { staff_id: row.staff_id, name: mailStaffName(row.staff_id) } : null,
+            started_at: row.started_at,
+            rolled_back_at: row.rolled_back_at,
+            rolled_back_count: row.rolled_back_count,
+            remaining: remaining.get(row.id) ?? 0,
+          })),
+        max_rows: LEAD_IMPORT_MAX,
+        max_leads: LEAD_MAX,
+        skip_reasons: [
+          "NO_EMAIL",
+          "INVALID_EMAIL",
+          "DUPLICATE_IN_FILE",
+          "ALREADY_A_PERSON",
+          "STOPPED",
+          "FULL",
+        ],
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/leads/imports/{import_id}/rollback",
+    auth: true,
+    capability: "crm:write",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const run = leadImports.find((row) => row.id === params.import_id);
+      if (!run) return refuse(404, "not_found");
+      if (run.rolled_back_at)
+        return refuse(400, "malformed_request", { import_id: "already taken back" });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", {
+          reason: "say why the file is being taken back",
+        });
+      const candidates = leads.filter((row) => row.import_id === run.id);
+      const worked = new Set(activities.filter((row) => row.lead_id).map((row) => row.lead_id));
+      const removable = new Set(
+        candidates
+          .filter(
+            (row) =>
+              row.stage === "new" &&
+              !row.owner_staff_id &&
+              !row.converted_company_id &&
+              !row.converted_person_id &&
+              !row.converted_deal_id &&
+              !row.anonymised_at &&
+              !worked.has(row.id) &&
+              mailLastEmailed(mailNorm(row.email)) === null,
+          )
+          .map((row) => row.id),
+      );
+      audit("crm.import_rolled_back", caller(headers)!.member.id, "import", run.id, reason, {
+        label: run.label,
+        candidates: candidates.length,
+        removing: removable.size,
+        kept: candidates.length - removable.size,
+      });
+      for (let index = leads.length - 1; index >= 0; index -= 1)
+        if (removable.has(leads[index]!.id)) leads.splice(index, 1);
+      run.rolled_back_at = now();
+      run.rolled_back_count = removable.size;
+      return ok({
+        removed: removable.size,
+        kept: candidates.length - removable.size,
+        import_id: run.id,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/leads/bulk",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const change = (body.set ?? {}) as Record<string, unknown>;
+      if (!body.set || typeof body.set !== "object" || !Object.keys(change).length)
+        return refuse(400, "malformed_request", { set: "what to change" });
+      const allowed = [
+        "owner_staff_id",
+        "stage",
+        "disqualify_reason",
+        "tags_add",
+        "tags_remove",
+        "verified_state",
+      ];
+      const unknown = Object.keys(change)
+        .filter((key) => !allowed.includes(key))
+        .sort();
+      if (unknown.length)
+        return refuse(400, "malformed_request", {
+          set: `cannot set ${unknown.join(", ")} across many leads`,
+        });
+      const setOwner = "owner_staff_id" in change;
+      const owner = String(change.owner_staff_id ?? "");
+      if (setOwner && owner) {
+        if (badId(owner)) return refuse(400, "malformed_request", { owner_staff_id: "not an id" });
+        const member = staff.find((row) => row.id === owner);
+        if (!member || !member.is_active)
+          return refuse(400, "malformed_request", {
+            owner_staff_id: "an active member of staff",
+          });
+      }
+      const stage = "stage" in change ? String(change.stage ?? "") : "";
+      if ("stage" in change && !["new", "attempting", "connected", "disqualified"].includes(stage))
+        return refuse(400, "malformed_request", {
+          stage: "new, attempting, connected or disqualified; qualify by converting",
+        });
+      const dqReason = String(change.disqualify_reason ?? "");
+      if (stage === "disqualified" && !DISQUALIFY_REASONS.includes(dqReason))
+        return refuse(400, "malformed_request", {
+          disqualify_reason: `one of ${DISQUALIFY_REASONS.join(", ")}`,
+        });
+      const tagsAdd = "tags_add" in change ? leadCleanTags(change.tags_add) : [];
+      const tagsRemove = "tags_remove" in change ? leadCleanTags(change.tags_remove) : [];
+      const verified =
+        "verified_state" in change ? String(change.verified_state ?? "").toLowerCase() : null;
+      if (verified !== null && !LEAD_VERIFIED_STATES.includes(verified))
+        return refuse(400, "malformed_request", {
+          verified_state: "valid, risky, invalid, or empty for unchecked",
+        });
+      let targets: LeadRow[];
+      let described: Record<string, unknown>;
+      const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+      if (ids.length) {
+        if (ids.length > 5_000)
+          return refuse(400, "malformed_request", {
+            ids: "at most 5000 at a time; use the filter instead",
+          });
+        if (ids.some(badId)) return refuse(400, "malformed_request", { ids: "not an id" });
+        const wanted = new Set(ids.map((id) => id.toLowerCase()));
+        targets = leads.filter((row) => wanted.has(row.id));
+        described = { by: "ids", ids: wanted.size };
+      } else {
+        const origin = String(body.origin ?? "");
+        if (origin && origin !== "inbound" && origin !== "prospect")
+          return refuse(400, "malformed_request", { origin: "inbound or prospect" });
+        const parsed = leadParseConditions(body.conditions);
+        if (Object.keys(parsed.errors).length)
+          return refuse(400, "malformed_request", parsed.errors);
+        const stageFilter = String(body.stage_filter ?? "");
+        const sourceFilter = String(body.source_filter ?? "");
+        const needle = String(body.q ?? "")
+          .trim()
+          .toLowerCase();
+        if (!parsed.conditions.length && !stageFilter && !sourceFilter && !needle && !origin)
+          return refuse(400, "malformed_request", {
+            conditions: "choose rows or give a filter; a change to every lead is not offered",
+          });
+        const views = leadApply(
+          leads
+            .filter((row) => !origin || (row.origin ?? "inbound") === origin)
+            .map(leadView)
+            .filter((view) => !stageFilter || view.stage === stageFilter)
+            .filter((view) => !sourceFilter || view.source_key === sourceFilter)
+            .filter(
+              (view) =>
+                !needle ||
+                `${view.full_name} ${view.email} ${view.company_name} ${view.title} ${view.country} ${view.city}`
+                  .toLowerCase()
+                  .includes(needle),
+            ),
+          parsed.conditions,
+        );
+        if (views.length > LEAD_BULK_MAX)
+          return refuse(400, "malformed_request", {
+            conditions: `that reaches ${views.length} leads; at most ${LEAD_BULK_MAX} in one change`,
+          });
+        const kept = new Set(views.map((view) => view.lead_id));
+        targets = leads.filter((row) => kept.has(row.id));
+        described = {
+          by: "filter",
+          origin,
+          stage: stageFilter,
+          source: sourceFilter,
+          q: needle,
+          conditions: parsed.conditions.map((c) => `${c.field}:${c.op}:${c.value}`),
+        };
+      }
+      let changed = 0;
+      let unchanged = 0;
+      let skipped = 0;
+      for (const row of targets) {
+        if (row.anonymised_at) {
+          skipped += 1;
+          continue;
+        }
+        let touched = false;
+        if (stage) {
+          if (row.stage === "qualified") {
+            // Converted: the deal exists, and the lead does not move again.
+            skipped += 1;
+            continue;
+          }
+          if (row.stage !== stage) {
+            row.stage = stage;
+            row.disqualify_reason = stage === "disqualified" ? dqReason : "";
+            touched = true;
+            mailCrmEvent("lead_stage", { lead_id: row.id, stage });
+          } else if (stage === "disqualified" && row.disqualify_reason !== dqReason) {
+            row.disqualify_reason = dqReason;
+            touched = true;
+          }
+        }
+        if (setOwner && owner !== row.owner_staff_id) {
+          row.owner_staff_id = owner;
+          touched = true;
+        }
+        if ("tags_add" in change || "tags_remove" in change) {
+          const next = leadCleanTags([
+            ...(row.tags ?? []).filter((tag) => !tagsRemove.includes(tag)),
+            ...tagsAdd,
+          ]);
+          if (next.join(",") !== (row.tags ?? []).join(",")) {
+            row.tags = next;
+            touched = true;
+          }
+        }
+        if (verified !== null && verified !== (row.verified_state ?? "")) {
+          row.verified_state = verified;
+          row.verified_at = verified ? now() : null;
+          touched = true;
+        }
+        if (touched) {
+          row.updated_at = now();
+          changed += 1;
+        } else unchanged += 1;
+      }
+      audit("lead.bulk_updated", found.member.id, "lead", "bulk", "", {
+        set: change,
+        ...described,
+        matched: targets.length,
+        changed,
+        unchanged,
+        skipped,
+      });
+      return ok({ matched: targets.length, changed, unchanged, skipped });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/leads/suggestions",
+    auth: true,
+    capability: "crm:read",
+    handler: () => {
+      const views = leads
+        .filter((row) => row.origin === "prospect" && !row.anonymised_at && row.email)
+        .map(leadView);
+      return ok({
+        suggestions: leadSuggestions(views),
+        prospects: views.length,
+        minimum: LEAD_SUGGEST_MIN,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/settings/leads",
+    auth: true,
+    capability: "crm:read",
+    handler: () => ok(leadSettingsView()),
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/leads/update",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ body, headers }) => {
+      const before = leadSettingsView();
+      if (body.reset) {
+        if (!before.customised)
+          return refuse(400, "malformed_request", { reason: "nothing to change" });
+        leadFitRules = null;
+      } else {
+        const checked = leadValidateRules(body.rules);
+        if (!checked.rules) return refuse(400, "malformed_request", checked.errors);
+        if (JSON.stringify(sortedJson(checked.rules)) === JSON.stringify(sortedJson(before.rules)))
+          return refuse(400, "malformed_request", { reason: "nothing to change" });
+        leadFitRules = checked.rules;
+      }
+      const after = leadSettingsView();
+      audit("settings.leads_updated", caller(headers)!.member.id, "settings", "leads", "", {
+        reset: Boolean(body.reset),
+        bands_before: before.bands,
+        bands_after: after.bands,
+        thresholds: after.rules.bands,
+      });
+      return ok({ updated: true, ...after });
+    },
+  },
   {
     method: "GET",
     pattern: "hq/leads",
     auth: true,
     capability: "crm:read",
     handler: ({ query }) => {
-      const views = leads.map(leadView);
+      const origin = query.origin ?? "";
+      if (origin && origin !== "inbound" && origin !== "prospect")
+        return refuse(400, "malformed_request", { origin: "inbound or prospect" });
+      let sort = query.sort || (origin === "prospect" ? "fit" : "triage");
+      let direction = "";
+      if (sort.endsWith(":asc") || sort.endsWith(":desc")) {
+        direction = sort.slice(sort.lastIndexOf(":") + 1);
+        sort = sort.slice(0, sort.lastIndexOf(":"));
+      }
+      const sorts = [
+        "triage",
+        "fit",
+        "name",
+        "company",
+        "country",
+        "firm_type",
+        "stage",
+        "received",
+        "owner",
+      ];
+      if (!sorts.includes(sort))
+        return refuse(400, "malformed_request", { sort: `one of ${sorts.join(", ")}` });
+      const whole = (raw: string | undefined, high: number, name: string) => {
+        if (!raw) return 0;
+        const value = Number(raw);
+        if (!Number.isInteger(value)) return { [name]: "a whole number" };
+        if (value < 0 || value > high) return { [name]: `between 0 and ${high}` };
+        return value;
+      };
+      const limit = whole(query.limit, 500, "limit");
+      if (typeof limit !== "number") return refuse(400, "malformed_request", limit);
+      const offset = whole(query.offset, 10_000_000, "offset");
+      if (typeof offset !== "number") return refuse(400, "malformed_request", offset);
+      let rawConditions: unknown[] = [];
+      if (query.conditions) {
+        try {
+          const parsedJson: unknown = JSON.parse(query.conditions);
+          if (Array.isArray(parsedJson)) rawConditions = parsedJson;
+        } catch {
+          return refuse(400, "malformed_request", { conditions: "a JSON list" });
+        }
+      }
+      if (query.f) rawConditions.push(query.f);
+      const parsed = leadParseConditions(rawConditions);
+      if (Object.keys(parsed.errors).length) return refuse(400, "malformed_request", parsed.errors);
+      const views = leads
+        .filter((row) => !origin || (row.origin ?? "inbound") === origin)
+        .map(leadView);
       const counts: Record<string, number> = {
         new: 0,
         attempting: 0,
@@ -9415,24 +11160,70 @@ routes.push(
           counts.first_reply_overdue = (counts.first_reply_overdue ?? 0) + 1;
       }
       const needle = (query.q ?? "").toLowerCase();
-      const visible = views
-        .filter((view) => !query.stage || view.stage === query.stage)
-        .filter((view) => !query.source || view.source_key === query.source)
-        .filter(
-          (view) =>
-            !needle ||
-            `${view.full_name} ${view.email} ${view.company_name}`.toLowerCase().includes(needle),
-        )
-        .sort((a, b) => {
-          if (a.first_reply_overdue !== b.first_reply_overdue)
-            return a.first_reply_overdue ? -1 : 1;
-          return (b.waiting_minutes ?? 0) - (a.waiting_minutes ?? 0);
-        });
+      const text = (value: string) => value.toLowerCase();
+      const keys: Record<string, (view: LeadViewRow) => Array<string | number>> = {
+        fit: (view) => [-view.fit_score, text(view.full_name || view.email)],
+        name: (view) => [text(view.full_name || view.email)],
+        company: (view) => [text(view.company_name), text(view.full_name || view.email)],
+        country: (view) => [text(view.country), text(view.company_name)],
+        firm_type: (view) => [text(view.firm_type), text(view.company_name)],
+        stage: (view) => [
+          ["new", "attempting", "connected", "qualified", "disqualified"].indexOf(view.stage),
+          view.created_at ?? "",
+        ],
+        owner: (view) => [
+          view.owner_staff_id ? mailStaffName(view.owner_staff_id) : "~",
+          view.created_at ?? "",
+        ],
+        received: (view) => [view.created_at ?? ""],
+        // The ones a reply is owed to first, longest wait first; then newest.
+        triage: (view) => [
+          view.first_reply_overdue ? 0 : 1,
+          -(view.waiting_minutes ?? 0),
+          view.created_at ?? "",
+        ],
+      };
+      const keyOf = keys[sort]!;
+      const compare = (a: LeadViewRow, b: LeadViewRow) => {
+        const left = keyOf(a);
+        const right = keyOf(b);
+        for (let index = 0; index < left.length; index += 1) {
+          const x = left[index]!;
+          const y = right[index]!;
+          if (x < y) return -1;
+          if (x > y) return 1;
+        }
+        return 0;
+      };
+      const visible = leadApply(
+        views
+          .filter((view) => !query.stage || view.stage === query.stage)
+          .filter((view) => !query.source || view.source_key === query.source)
+          .filter(
+            (view) =>
+              !needle ||
+              `${view.full_name} ${view.email} ${view.company_name} ${view.title} ${view.country} ${view.city}`
+                .toLowerCase()
+                .includes(needle),
+          ),
+        parsed.conditions,
+      ).sort((a, b) => (direction === "desc" ? compare(b, a) : compare(a, b)));
+      const total = visible.length;
       return ok({
-        leads: visible,
+        leads: limit ? visible.slice(offset, offset + limit) : visible.slice(offset),
         counts,
         stages: ["new", "attempting", "connected", "qualified", "disqualified"],
         first_reply_target_minutes: FIRST_REPLY_TARGET_MINUTES,
+        origin,
+        total,
+        offset,
+        limit,
+        has_more: Boolean(limit) && offset + limit < total,
+        sort: direction ? `${sort}:${direction}` : sort,
+        conditions: parsed.conditions,
+        facets: leadFacets(visible),
+        fields: Object.entries(LEAD_FIELDS).map(([key, label]) => ({ key, label })),
+        ops: LEAD_OPS,
       });
     },
   },
@@ -9452,11 +11243,25 @@ routes.push(
       const leadSourceRefusal = sourceRefusal(leadSource);
       if (leadSourceRefusal) return leadSourceRefusal;
       const found = caller(headers);
+      const origin = String(body.origin ?? "") || "inbound";
+      if (origin !== "inbound" && origin !== "prospect")
+        return refuse(400, "malformed_request", { origin: "inbound or prospect" });
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+        return refuse(400, "malformed_request", { email: "a well-formed address" });
+      const extra = leadProspectFields(body, false);
+      if ("refusal" in extra) return extra.refusal;
+      if (email && !extra.fields.email_kind)
+        extra.fields.email_kind = leadEmailKind(
+          email,
+          Boolean(fullName || extra.fields.first_name),
+        );
       const row: LeadRow = {
         id: randomUUID(),
+        origin,
         source_key: leadSource,
         email,
-        full_name: fullName,
+        full_name:
+          fullName || [extra.fields.first_name, extra.fields.last_name].filter(Boolean).join(" "),
         company_name: String(body.company_name ?? ""),
         message: String(body.message ?? ""),
         payload: {},
@@ -9468,6 +11273,8 @@ routes.push(
         converted_person_id: "",
         converted_deal_id: "",
         created_at: now(),
+        verified_at: extra.fields.verified_state ? now() : null,
+        ...extra.fields,
       };
       leads.push(row);
       audit("lead.created", found?.member.id ?? null, "lead", row.id);
@@ -9497,6 +11304,10 @@ routes.push(
         },
         activities: activityViews({ lead_id: row.id }),
         first_reply_target_minutes: 60,
+        import: (() => {
+          const run = row.import_id ? leadImports.find((item) => item.id === row.import_id) : null;
+          return run ? { import_id: run.id, label: run.label, started_at: run.started_at } : null;
+        })(),
       });
     },
   },
@@ -9540,6 +11351,56 @@ routes.push(
           );
         row.owner_staff_id = next;
       }
+      // The prospect fields: what the record says about the person and the firm.
+      const extra = leadProspectFields(body, true);
+      if ("refusal" in extra) return extra.refusal;
+      const patch: Partial<LeadRow> = { ...extra.fields };
+      if ("full_name" in body)
+        patch.full_name = String(body.full_name ?? "")
+          .trim()
+          .slice(0, 160);
+      if ("company_name" in body)
+        patch.company_name = String(body.company_name ?? "")
+          .trim()
+          .slice(0, 200);
+      if ("email" in body) {
+        const email = String(body.email ?? "")
+          .trim()
+          .toLowerCase();
+        if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+          return refuse(400, "malformed_request", { email: "a well-formed address" });
+        if (
+          email &&
+          email !== row.email.toLowerCase() &&
+          leads.some((other) => other.id !== row.id && other.email.toLowerCase() === email)
+        )
+          return refuse(400, "malformed_request", { email: "already another lead's address" });
+        patch.email = email;
+        if (email && !("email_kind" in body))
+          patch.email_kind = leadEmailKind(
+            email,
+            Boolean((patch.full_name ?? row.full_name) || (patch.first_name ?? row.first_name)),
+          );
+      }
+      if (("first_name" in patch || "last_name" in patch) && !("full_name" in body))
+        patch.full_name = [patch.first_name ?? row.first_name, patch.last_name ?? row.last_name]
+          .filter(Boolean)
+          .join(" ")
+          .slice(0, 160);
+      if ("verified_state" in patch && patch.verified_state !== (row.verified_state ?? ""))
+        patch.verified_at = patch.verified_state ? now() : null;
+      let touched = Boolean(stage) || "owner_staff_id" in body;
+      for (const [name, value] of Object.entries(patch)) {
+        const current = (row as Record<string, unknown>)[name];
+        const same = Array.isArray(value)
+          ? value.join(",") === (Array.isArray(current) ? current.join(",") : "")
+          : value === (current ?? (name === "verified_at" ? null : ""));
+        if (same) continue;
+        (row as Record<string, unknown>)[name] = value;
+        touched = true;
+      }
+      if (!touched && !("custom" in body))
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
       row.updated_at = now();
       if (stage) mailCrmEvent("lead_stage", { lead_id: row.id, stage });
       audit("lead.updated", caller(headers)?.member.id ?? null, "lead", row.id, "", {
@@ -9587,7 +11448,8 @@ routes.push(
         return refuse(400, "malformed_request", {
           domain: "a personal mail domain cannot anchor a company",
         });
-      const domain = typed || domainOf(row.email);
+      const site = normaliseDomain(row.website ?? "");
+      const domain = typed || domainOf(row.email) || (FREE_MAIL.has(site) ? "" : site);
       let company =
         companies.find((candidate) => candidate.id === String(companyInput.company_id ?? "")) ??
         (domain
@@ -9606,13 +11468,13 @@ routes.push(
           id: randomUUID(),
           name,
           domain,
-          firm_type: row.payload.where ?? "",
+          firm_type: row.payload.where || row.firm_type || "",
           team_size_band: row.payload.team_size ?? "",
-          country: "",
+          country: row.country ?? "",
           lifecycle: "prospect",
           owner_staff_id: found?.member.id ?? "",
           source_key: row.source_key,
-          notes: "",
+          notes: row.registration_no ? `Registration ${row.registration_no}` : "",
           customer_since: null,
           archived: false,
           created_at: now(),
@@ -9629,13 +11491,13 @@ routes.push(
           company_id: company.id,
           full_name: row.full_name,
           email: row.email,
-          title: row.payload.role ?? "",
+          title: row.payload.role || row.title || "",
           role_category: "",
-          phone: "",
+          phone: row.phone ?? "",
           account_user_id: "",
           do_not_contact: false,
           source_key: row.source_key,
-          notes: "",
+          notes: row.notes ?? "",
           last_contacted_at: row.first_replied_at,
           created_at: now(),
         };
@@ -20246,16 +22108,10 @@ const MAIL_PEOPLE_FIELDS: Record<string, string> = {
   last_emailed_days: "Days since last email",
   customer_days: "Days as a customer",
 };
-const MAIL_LEAD_FIELDS: Record<string, string> = {
-  stage: "Stage",
-  source: "Source",
-  owner: "Owner",
-  company: "Company",
-  email: "Email",
-  created_days: "Days since received",
-  last_emailed_days: "Days since last email",
-};
-const MAIL_OPS = ["is", "not", "has", "gt", "lt", "empty", "set"];
+/** The lead grammar lives with the prospects block: one list of fields for the Leads
+ *  page's filters, a saved segment and the suggestions. */
+const MAIL_LEAD_FIELDS: Record<string, string> = LEAD_FIELDS;
+const MAIL_OPS = LEAD_OPS;
 const MAIL_TOKEN = /\{\{\s*([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)?)\s*(?:\|\s*([^}]*?)\s*)?\}\}/g;
 /** mail_templates.CUSTOM_PREFIX: a list's own columns, {{custom.fund_size}}. */
 const MAIL_CUSTOM = "custom.";
@@ -20474,6 +22330,8 @@ type MailRecipient = {
   firm_type: string;
   customer_since: string | null;
   custom?: Record<string, string>;
+  /** What a verification said about a lead's address. */
+  verified_state?: string;
 };
 type MailVerdict = { allowed: boolean; reason: string; detail: string };
 
@@ -20719,19 +22577,24 @@ function mailLeadRecipient(row: LeadRow): MailRecipient {
     company_id: row.converted_company_id,
     email: row.email,
     full_name: row.full_name,
-    title: "",
+    title: row.title ?? "",
     company_name: row.company_name,
-    country: "",
+    country: row.country ?? "",
     lifecycle: "",
     do_not_contact: false,
     owner_staff_id: row.owner_staff_id,
     source: row.source_key,
     stage: row.stage,
     created_at: row.created_at,
-    domain: "",
+    domain: row.email.includes("@") ? row.email.split("@")[1]!.toLowerCase() : "",
     role_category: "",
-    firm_type: "",
+    firm_type: row.firm_type ?? "",
     customer_since: null,
+    verified_state: row.verified_state ?? "",
+    // A prospect's extra file columns reach templates as {{custom.<key>}}.
+    ...(row.origin === "prospect" && Object.keys(row.payload).length
+      ? { custom: { ...row.payload } }
+      : {}),
   };
 }
 function mailPeopleRecipients(): MailRecipient[] {
@@ -20852,7 +22715,8 @@ function mailParseConditions(
   conditions: Array<{ field: string; op: string; value: string }>;
   errors: Record<string, string>;
 } {
-  const fields = kind === "people" ? MAIL_PEOPLE_FIELDS : MAIL_LEAD_FIELDS;
+  if (kind === "leads") return leadParseConditions(raw);
+  const fields = MAIL_PEOPLE_FIELDS;
   const conditions: Array<{ field: string; op: string; value: string }> = [];
   const errors: Record<string, string> = {};
   (Array.isArray(raw) ? raw : []).slice(0, 8).forEach((item, index) => {
@@ -20860,7 +22724,7 @@ function mailParseConditions(
     const value = rest.join(":").slice(0, 120);
     if (!(field in fields)) errors[`conditions[${index}]`] = `unknown field '${field}'`;
     else if (!MAIL_OPS.includes(op)) errors[`conditions[${index}]`] = `unknown comparison '${op}'`;
-    else if (["is", "not", "has", "gt", "lt"].includes(op) && value === "")
+    else if (["is", "not", "has", "in", "gt", "lt"].includes(op) && value === "")
       errors[`conditions[${index}]`] = "needs a value";
     else conditions.push({ field, op, value });
   });
@@ -20920,6 +22784,12 @@ function mailMatches(value: string | number | null, op: string, wanted: string):
   if (op === "is") return text.toLowerCase() === wanted.toLowerCase();
   if (op === "not") return text.toLowerCase() !== wanted.toLowerCase();
   if (op === "has") return text.toLowerCase().includes(wanted.toLowerCase());
+  if (op === "in")
+    return wanted
+      .split(",")
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean)
+      .includes(text.toLowerCase());
   const left = typeof value === "number" ? value : Number(text);
   const right = Number(wanted);
   if (Number.isNaN(left) || Number.isNaN(right) || text === "") return false;
@@ -20929,7 +22799,13 @@ function mailEvaluateSegment(
   kind: string,
   conditions: Array<{ field: string; op: string; value: string }>,
 ): MailRecipient[] {
-  const pool = kind === "people" ? mailPeopleRecipients() : mailLeadRecipients();
+  if (kind === "leads") {
+    // Leads are judged as the Leads page shows them, so a segment and a list agree.
+    const live = leads.filter((row) => row.email && !row.anonymised_at);
+    const kept = new Set(leadApply(live.map(leadView), conditions).map((view) => view.lead_id));
+    return live.filter((row) => kept.has(row.id)).map(mailLeadRecipient);
+  }
+  const pool = mailPeopleRecipients();
   return pool.filter((recipient) =>
     conditions.every((condition) =>
       mailMatches(mailReadField(recipient, condition.field), condition.op, condition.value),
@@ -20997,6 +22873,7 @@ function mailDescribeAudience(audience: Record<string, unknown>): string {
   }
   return "nobody yet";
 }
+const MAIL_ADDRESS_INVALID = "a verification said this address does not exist";
 function mailDecide(
   recipients: MailRecipient[],
   topic: string,
@@ -21009,6 +22886,11 @@ function mailDecide(
     if (norm && seen.has(norm))
       return { recipient, verdict: { allowed: false, reason: "DUPLICATE", detail: "" } };
     if (norm) seen.add(norm);
+    if (recipient.verified_state === "invalid")
+      return {
+        recipient,
+        verdict: { allowed: false, reason: "ADDRESS_INVALID", detail: MAIL_ADDRESS_INVALID },
+      };
     let verdict = mailMarketingVerdict(recipient, topic, senderId);
     if (verdict.allowed && required.length) {
       const vars = mailVariables(recipient);
@@ -21560,6 +23442,15 @@ function mailActivity(row: MailMessageRow, subject: string) {
     deal_id: "",
     lead_id: row.contact_kind === "lead" ? row.contact_id : "",
   });
+  if (row.contact_kind === "lead") {
+    // A prospect the team wrote to first is being worked; an inbound lead keeps waiting
+    // for the reply it is owed.
+    const lead = leads.find((item) => item.id === row.contact_id);
+    if (lead && lead.origin === "prospect" && lead.stage === "new") {
+      lead.stage = "attempting";
+      lead.updated_at = now();
+    }
+  }
 }
 function mailStageStep(enrolment: MailEnrolmentRow, step: MailStepRow, afterIso: string) {
   const when = step.delay_days > 0 ? mailAddBusinessDays(afterIso, step.delay_days) : afterIso;
@@ -21783,7 +23674,7 @@ function mailRunWorker(): Record<string, number | boolean> {
         : {}),
       email: row.email,
     } as MailRecipient;
-    const verdict = row.is_seed
+    let verdict = row.is_seed
       ? { allowed: true, reason: "", detail: "" }
       : row.kind === "campaign"
         ? mailAddressVerdict(row.email, row.topic, row.sender_id)
@@ -21791,6 +23682,14 @@ function mailRunWorker(): Record<string, number | boolean> {
             { ...recipient, do_not_contact: Boolean(recipient.do_not_contact) },
             row.sender_id,
           );
+    // A verification that came back after the row was queued still counts.
+    if (
+      verdict.allowed &&
+      !row.is_seed &&
+      row.contact_kind === "lead" &&
+      leads.find((lead) => lead.id === row.contact_id)?.verified_state === "invalid"
+    )
+      verdict = { allowed: false, reason: "ADDRESS_INVALID", detail: MAIL_ADDRESS_INVALID };
     if (!verdict.allowed) {
       row.state = "skipped";
       row.skip_reason = verdict.reason;
@@ -22153,6 +24052,8 @@ function mailEnrolVerdicts(
     seen.add(norm);
     const verdict = mailSalesVerdict(recipient, sender.id);
     if (!verdict.allowed) return refuse(verdict.reason, verdict.detail);
+    if (recipient.verified_state === "invalid")
+      return refuse("ADDRESS_INVALID", MAIL_ADDRESS_INVALID);
     const live = mailEnrolments.find(
       (row) =>
         row.contact_id === recipient.contact_id &&
@@ -41291,6 +43192,24 @@ seedControlsAndCentre();
 seedPlanning();
 seedHiring();
 
+/** dispatch.STAFF_BODY_BYTES, prospects.IMPORT_BODY_BYTES and the configured default. */
+const BODY_FORM_BYTES = 16_384;
+const BODY_STAFF_BYTES = 262_144;
+const BODY_ROWS_BYTES = 4 * 1024 * 1024;
+/** The routes whose table entry declares `body_bytes`: the ones that take rows. */
+const BODY_ROW_ROUTES = new Set([
+  "hq/leads/import",
+  "hq/leads/bulk",
+  "hq/companies/import",
+  "hq/people/import",
+  "hq/mail/lists/{list_id}/import",
+  "hq/mail/lists/{list_id}/members/add",
+  "hq/mail/campaigns/create",
+  "hq/mail/campaigns/{campaign_id}/update",
+  "hq/mail/sequences/{sequence_id}/enrol/preview",
+  "hq/mail/sequences/{sequence_id}/enrol",
+]);
+
 function matchRoute(method: string, route: string) {
   for (const entry of routes) {
     if (entry.method !== method) continue;
@@ -41326,10 +43245,9 @@ const server = createServer((request, response) => {
   request.on("data", (chunk: Buffer) => chunks.push(chunk));
   request.on("end", () => {
     let body: Record<string, unknown> = {};
+    const rawBody = Buffer.concat(chunks);
     try {
-      body = chunks.length
-        ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>)
-        : {};
+      body = chunks.length ? (JSON.parse(rawBody.toString("utf8")) as Record<string, unknown>) : {};
     } catch {
       body = {};
     }
@@ -41346,7 +43264,14 @@ const server = createServer((request, response) => {
       console.log(`[mock-hq] GET /${route} -> 302 consent`);
       return;
     }
-    const answer = respond(request.method ?? "GET", route, query, body, request.headers);
+    const answer = respond(
+      request.method ?? "GET",
+      route,
+      query,
+      body,
+      request.headers,
+      rawBody.length,
+    );
     if (answer.status === FORWARD) {
       void forwardProduct(answer.body as Record<string, unknown>).then((forwarded) => {
         response
@@ -41425,6 +43350,7 @@ function respond(
   query: Record<string, string>,
   body: Record<string, unknown>,
   headers: Record<string, string | string[] | undefined>,
+  bodyBytes = 0,
 ) {
   // Test-only, deliberately OUTSIDE the hq/ and public/ namespaces the parity test
   // mirrors: the real service has no reset, and this must never look like it does.
@@ -41449,6 +43375,12 @@ function respond(
     if (method === "POST" && !headers["idempotency-key"]) {
       return refuse(400, "idempotency_key_required");
     }
+    // The service reads a staff route's body under 256 KB, and only the routes that
+    // carry rows under 4 MB. A mock that never counted bytes certified imports the
+    // service would have refused as too large.
+    const staffLimit = BODY_ROW_ROUTES.has(entry.pattern) ? BODY_ROWS_BYTES : BODY_STAFF_BYTES;
+    if (bodyBytes > staffLimit)
+      return refuse(413, "payload_too_large", { limit_bytes: staffLimit });
     const watched = method === "GET" ? WATCHED_READS[entry.pattern] : undefined;
     if (watched) {
       const refused = gateRead(found);
@@ -41458,6 +43390,9 @@ function respond(
         noteRead(found, watched[0], String(params[watched[1]] ?? ""), clientAddress(headers));
       return answer;
     }
+  } else if (bodyBytes > BODY_FORM_BYTES) {
+    // An anonymous route takes a form, not a file.
+    return refuse(413, "payload_too_large", { limit_bytes: BODY_FORM_BYTES });
   }
   return entry.handler({ method, route, params, query, body, headers });
 }

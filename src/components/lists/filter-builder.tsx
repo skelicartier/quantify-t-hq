@@ -39,7 +39,7 @@ export function FilterBuilder({
       ? ["is", "not", "gt", "lt", "empty", "set"].includes(candidate)
       : chosen?.kind === "choice"
         ? ["is", "not", "empty", "set"].includes(candidate)
-        : ["is", "not", "has", "empty", "set"].includes(candidate),
+        : ["is", "not", "has", "in", "empty", "set"].includes(candidate),
   );
   if (!open) {
     return (

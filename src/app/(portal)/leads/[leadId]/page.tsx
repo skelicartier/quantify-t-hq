@@ -16,6 +16,7 @@ import { ActivityTimeline } from "@/components/crm/activity-timeline";
 import { ConvertLeadForm, LeadStageForm } from "@/components/crm/lead-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
 import { FirstReplyClock, LeadStagePill, LifecyclePill } from "@/components/crm/pills";
+import { FitPill, TagList } from "@/components/crm/prospect-pills";
 import { Callout } from "@/components/ui/callout";
 import { Card } from "@/components/ui/card";
 import { InlineField } from "@/components/ui/inline-field";
@@ -34,6 +35,13 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLead, type CrmSettings, type LeadDetail } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDayPlus } from "@/lib/crm/dates";
+import {
+  EMAIL_KINDS,
+  EMAIL_KIND_LABELS,
+  FIT_LABELS,
+  VERIFIED_LABELS,
+  VERIFIED_STATES,
+} from "@/lib/crm/prospects";
 import { DISQUALIFY_LABELS, sourceLabel, sourceNamesFrom } from "@/lib/crm/vocabulary";
 import { formatDate, formatSentence } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -92,6 +100,8 @@ export default async function LeadPage({ params }: LeadPageProps) {
 
   const { lead, matches, activities } = detail;
   const anonymised = Boolean(lead.anonymised_at);
+  // A prospect is someone the team found; nobody is waiting on a reply, so no clock runs.
+  const prospect = lead.origin === "prospect";
   // An anonymised lead is kept for the counts only; the service refuses any write to it.
   const canWrite = hasCapability(context, "crm:write") && !anonymised;
   const closed = lead.stage === "qualified" || lead.stage === "disqualified";
@@ -107,12 +117,17 @@ export default async function LeadPage({ params }: LeadPageProps) {
   return (
     <>
       <RecordHeader
-        crumbs={[{ href: "/leads", label: "Leads" }]}
+        crumbs={[
+          prospect
+            ? { href: "/leads/prospects", label: "Prospects" }
+            : { href: "/leads", label: "Leads" },
+        ]}
         title={anonymised ? "Anonymised lead" : lead.full_name || lead.email || "Unnamed lead"}
         status={
           <>
             <LeadStagePill stage={lead.stage} />
-            {!closed && (
+            {prospect && !anonymised && <FitPill band={lead.fit_band} score={lead.fit_score} />}
+            {!closed && !prospect && (
               <FirstReplyClock
                 firstRepliedAt={lead.first_replied_at}
                 waitingMinutes={lead.waiting_minutes}
@@ -126,20 +141,22 @@ export default async function LeadPage({ params }: LeadPageProps) {
         readouts={[
           { label: "Source", value: sourceLabel(lead.source_key, sourceNames) },
           {
-            label: "Received",
+            label: prospect ? "Added" : "Received",
             value: <Timestamp value={lead.created_at} now={now} mode="relative" />,
           },
-          {
-            label: "First reply",
-            value: (
-              <Timestamp
-                value={lead.first_replied_at}
-                now={now}
-                mode="relative"
-                fallback="Not yet"
-              />
-            ),
-          },
+          prospect
+            ? { label: "Firm type", value: lead.firm_type || "Not given" }
+            : {
+                label: "First reply",
+                value: (
+                  <Timestamp
+                    value={lead.first_replied_at}
+                    now={now}
+                    mode="relative"
+                    fallback="Not yet"
+                  />
+                ),
+              },
         ]}
         actions={
           <>
@@ -216,14 +233,109 @@ export default async function LeadPage({ params }: LeadPageProps) {
                 display={lead.owner_staff_id ? nameFor(names, lead.owner_staff_id) : "Unowned"}
                 readOnly={!canWrite || names === null}
               />
-              <Property label="Email" mono>
-                {lead.email || "—"}
-              </Property>
-              <Property label="Firm">{lead.company_name || "—"}</Property>
-              <Property label="Received">
+              {(
+                [
+                  ["full_name", "Name", "text", lead.full_name],
+                  ["email", "Email", "email", lead.email],
+                  ["title", "Title", "text", lead.title],
+                  ["company_name", "Firm", "text", lead.company_name],
+                  ["firm_type", "Firm type", "text", lead.firm_type],
+                  ["country", "Country", "text", lead.country],
+                  ["city", "City", "text", lead.city],
+                  ["phone", "Phone", "text", lead.phone],
+                  ["website", "Website", "text", lead.website],
+                  ["registration_no", "Registration number", "text", lead.registration_no],
+                ] as const
+              ).map(([name, label, type, value]) => (
+                <InlineField
+                  key={name}
+                  action={updateLeadAction}
+                  idName="lead_id"
+                  id={lead.lead_id}
+                  name={name}
+                  label={label}
+                  type={type}
+                  value={value}
+                  readOnly={!canWrite}
+                />
+              ))}
+              <InlineField
+                action={updateLeadAction}
+                idName="lead_id"
+                id={lead.lead_id}
+                name="email_kind"
+                label="Kind of address"
+                type="select"
+                value={lead.email_kind}
+                options={[
+                  { value: "", label: "Not judged" },
+                  ...EMAIL_KINDS.map((kind) => ({ value: kind, label: EMAIL_KIND_LABELS[kind]! })),
+                ]}
+                display={EMAIL_KIND_LABELS[lead.email_kind] ?? lead.email_kind}
+                readOnly={!canWrite}
+              />
+              <InlineField
+                action={updateLeadAction}
+                idName="lead_id"
+                id={lead.lead_id}
+                name="verified_state"
+                label="Address verified"
+                type="select"
+                value={lead.verified_state}
+                options={VERIFIED_STATES.map((state) => ({
+                  value: state,
+                  label: VERIFIED_LABELS[state]!,
+                }))}
+                display={VERIFIED_LABELS[lead.verified_state] ?? lead.verified_state}
+                readOnly={!canWrite}
+              />
+              <InlineField
+                action={updateLeadAction}
+                idName="lead_id"
+                id={lead.lead_id}
+                name="tags"
+                label="Tags"
+                value={lead.tags.join(", ")}
+                display={<TagList tags={lead.tags} />}
+                placeholder="wave 1, met at event"
+                readOnly={!canWrite}
+              />
+              <InlineField
+                action={updateLeadAction}
+                idName="lead_id"
+                id={lead.lead_id}
+                name="notes"
+                label="Notes"
+                type="textarea"
+                value={lead.notes}
+                readOnly={!canWrite}
+              />
+              <Property label={prospect ? "Added" : "Received"}>
                 <Timestamp value={lead.created_at} mode="absolute" />
               </Property>
             </Properties>
+            {!anonymised && (prospect || lead.fit_reasons.length > 0) && (
+              <Card
+                title={`Fit: ${lead.fit_band} · ${FIT_LABELS[lead.fit_band] ?? ""}`}
+                titleAs="h3"
+                description={`${lead.fit_score} points under the fit rules.`}
+              >
+                {lead.fit_reasons.length > 0 ? (
+                  <ul className="fit-reasons">
+                    {lead.fit_reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="side-quiet">Nothing on this lead scores under the rules.</p>
+                )}
+                <p className="side-quiet">
+                  <Link className="text-link" href="/leads/fit">
+                    The fit rules
+                  </Link>
+                </p>
+              </Card>
+            )}
             <CustomFieldsSection
               recordType="lead"
               recordId={lead.lead_id}
@@ -326,15 +438,44 @@ export default async function LeadPage({ params }: LeadPageProps) {
         }
       >
         <>
-          <Card title="What they sent" titleAs="h2">
+          <Card title={prospect ? "Where this lead came from" : "What they sent"} titleAs="h2">
+            {prospect && !anonymised && (
+              <KeyValue columns={2}>
+                <KeyValueRow label="Published on">
+                  {lead.source_url ? (
+                    <a
+                      className="text-link"
+                      href={lead.source_url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    >
+                      {lead.source_url}
+                    </a>
+                  ) : (
+                    "Not recorded"
+                  )}
+                </KeyValueRow>
+                <KeyValueRow label="Came in with">
+                  {detail.import ? (
+                    <Link className="text-link" href="/leads/import">
+                      {detail.import.label || "An import"}
+                    </Link>
+                  ) : (
+                    "Typed in by hand"
+                  )}
+                </KeyValueRow>
+              </KeyValue>
+            )}
             {lead.message ? (
               <p className="prose-block">{lead.message}</p>
             ) : (
-              <p className="side-quiet">
-                {anonymised
-                  ? "Removed when the lead was anonymised."
-                  : "No message with this lead."}
-              </p>
+              !prospect && (
+                <p className="side-quiet">
+                  {anonymised
+                    ? "Removed when the lead was anonymised."
+                    : "No message with this lead."}
+                </p>
+              )
             )}
             {answers.length > 0 && (
               <KeyValue columns={2} className="answers">
@@ -361,7 +502,7 @@ export default async function LeadPage({ params }: LeadPageProps) {
                 action={logActivityAction}
                 links={{ lead_id: lead.lead_id }}
                 returnPath={`/leads/${lead.lead_id}`}
-                context="lead"
+                context={prospect ? "prospect" : "lead"}
               />
             )}
             <ActivityTimeline activities={activities} now={now} stageLabels={stageNames} />

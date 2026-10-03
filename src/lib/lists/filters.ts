@@ -3,12 +3,13 @@
  * parameters and applied to the rows a list already has. The lists are read whole (no
  * paging), so a filter applied here is complete, not a page's worth.
  *
- * Operators: `is`, `not`, `has` (contains, case-insensitive), `gt`, `lt`, `empty`,
- * `set`. A field the list does not know, or an operator it does not, is dropped rather
- * than refused: a stale link degrades to "no filter", never to an error.
+ * Operators: `is`, `not`, `has` (contains, case-insensitive), `in` (is any of a
+ * comma-separated list), `gt`, `lt`, `empty`, `set`. A field the list does not know, or an
+ * operator it does not, is dropped rather than refused: a stale link degrades to "no
+ * filter", never to an error.
  */
 
-export const FILTER_OPS = ["is", "not", "has", "gt", "lt", "empty", "set"] as const;
+export const FILTER_OPS = ["is", "not", "has", "in", "gt", "lt", "empty", "set"] as const;
 export type FilterOp = (typeof FILTER_OPS)[number];
 
 export type FilterCondition = { field: string; op: FilterOp; value: string };
@@ -25,13 +26,14 @@ export const OP_LABELS: Record<FilterOp, string> = {
   is: "is",
   not: "is not",
   has: "contains",
+  in: "is any of",
   gt: "is more than",
   lt: "is less than",
   empty: "is empty",
   set: "is set",
 };
 
-const NEEDS_VALUE: ReadonlySet<FilterOp> = new Set(["is", "not", "has", "gt", "lt"]);
+const NEEDS_VALUE: ReadonlySet<FilterOp> = new Set(["is", "not", "has", "in", "gt", "lt"]);
 
 export function parseFilters(
   raw: string | string[] | undefined,
@@ -77,6 +79,12 @@ export function applyFilters<Row>(
           return text.toLowerCase() !== condition.value.toLowerCase();
         case "has":
           return text.toLowerCase().includes(condition.value.toLowerCase());
+        case "in":
+          return condition.value
+            .split(",")
+            .map((part) => part.trim().toLowerCase())
+            .filter(Boolean)
+            .includes(text.toLowerCase());
         case "gt":
         case "lt": {
           const left = typeof value === "number" ? value : Number(text);

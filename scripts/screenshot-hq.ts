@@ -79,6 +79,22 @@ const SIGNED_IN_PAGES: Shot[] = [
     path: "/leads/1e000000-0000-4000-8000-000000000001",
     ready: ".record-layout",
   },
+  // Prospects: the lead table worked as a researched list.
+  { name: "prospects", path: "/leads/prospects", ready: ".data-table" },
+  {
+    name: "prospects-filtered",
+    path: "/leads/prospects?f=firm_type:is:PMS&f=email_kind:is:named&sort=-fit",
+    ready: ".data-table",
+  },
+  { name: "prospects-page-two", path: "/leads/prospects?offset=100", ready: ".data-table" },
+  {
+    name: "prospect",
+    path: "/leads/1f000001-0000-4000-8000-000000000001",
+    ready: ".record-layout",
+  },
+  { name: "lead-segments", path: "/leads/segments", ready: ".data-table" },
+  { name: "lead-import", path: "/leads/import", ready: ".list-import" },
+  { name: "lead-fit", path: "/leads/fit", ready: ".fit-rules" },
   { name: "companies", path: "/companies", ready: ".data-table" },
   {
     name: "company",
@@ -617,6 +633,7 @@ async function captureInteractions(page: Page, folder: string) {
   await capturePlatformFlows(page, folder);
   await captureTrustFlows(page, folder);
   await captureFieldFlows(page, folder);
+  await captureProspectFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -1866,6 +1883,105 @@ async function captureFieldFlows(page: Page, folder: string) {
 }
 
 /**
+ * Prospects, end to end: a small file brought in through the import page (one row left
+ * out and named), the view narrowed by a facet and tagged as a whole, the view saved as a
+ * segment that then shows under Segments, a prospect edited in place, and the file taken
+ * back out — which leaves the one somebody edited.
+ */
+async function captureProspectFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  const csv = [
+    "email,first_name,last_name,title,company,firm_type,country,Fund size",
+    ...Array.from(
+      { length: 24 },
+      (_, index) =>
+        `flow${index}@harness${stamp}${index}.example,Flow${index},Tester,Portfolio Manager,Harness ${stamp} ${index},Harness fund,India,${index + 1}00m`,
+    ),
+    "not an address,Bad,Row,,Nobody,Harness fund,India,",
+  ].join("\n");
+
+  await page.goto(`${BASE}/leads/import`, { waitUntil: "networkidle" });
+  await page.setInputFiles("#lead-csv", {
+    name: `harness-${stamp}.csv`,
+    mimeType: "text/csv",
+    buffer: Buffer.from(csv, "utf8"),
+  });
+  await page.waitForSelector("#lead-map-email", { timeout: 10_000 });
+  await page.fill("#lead-import-reason", "The harness's own invented rows");
+  await shoot(page, `${folder}/lead-import-mapped`);
+  await page.locator("button", { hasText: /Add [0-9,]+ rows as prospects/ }).click();
+  await page.waitForSelector("#lead-import-done", { timeout: 30_000 });
+  const counts = await page.locator(".list-import__counts dd").allInnerTexts();
+  if (counts[0] !== "24" || counts[3] !== "1")
+    report(
+      `${folder}/lead-import-done`,
+      `expected 24 added and 1 left out, saw ${counts.join("/")}`,
+    );
+  await shoot(page, `${folder}/lead-import-done`);
+
+  // The file's own leads, narrowed by a facet row, then one change to the whole view.
+  await page.goto(
+    `${BASE}/leads/prospects?f=${encodeURIComponent(`import:is:harness-${stamp}.csv`)}`,
+    { waitUntil: "networkidle" },
+  );
+  if ((await page.locator(".data-table tbody tr").count()) !== 24)
+    report(`${folder}/prospects-by-file`, "the file's 24 leads are not the view");
+  await page.locator(".facets__row", { hasText: "Harness fund" }).click();
+  await page.waitForURL(/firm_type/, { timeout: 10_000 });
+  await page.waitForLoadState("networkidle");
+  await page.locator("summary", { hasText: "Change the whole view" }).click();
+  await page.selectOption("#bulk-change", "tags_add");
+  await page.fill("#bulk-tags", `harness ${stamp}`);
+  await page.check("#bulk-confirm");
+  await page.locator("button", { hasText: "Apply to the whole view" }).click();
+  await page.waitForSelector("text=/Changed 24 leads of 24/", { timeout: 15_000 });
+  await shoot(page, `${folder}/prospects-bulk-done`);
+
+  await page.goto(`${BASE}/leads/prospects?f=${encodeURIComponent(`tags:has:harness ${stamp}`)}`, {
+    waitUntil: "networkidle",
+  });
+  await page.locator("summary", { hasText: "Save as a segment" }).click();
+  await page.fill("#segment-name", `Harness ${stamp}`);
+  await page.locator("button", { hasText: /^Save segment$/ }).click();
+  await page.waitForSelector("text=/Saved\\. 24 leads match today/", { timeout: 15_000 });
+  await shoot(page, `${folder}/prospects-segment-saved`);
+  await page.goto(`${BASE}/leads/segments`, { waitUntil: "networkidle" });
+  if ((await page.locator("tr", { hasText: `Harness ${stamp}` }).count()) < 1)
+    report(`${folder}/lead-segments-saved`, "the saved view is not listed as a segment");
+  await shoot(page, `${folder}/lead-segments-saved`);
+
+  // Edit one in place: it is no longer untouched, so taking the file back leaves it.
+  await page.goto(
+    `${BASE}/leads/prospects?f=${encodeURIComponent(`import:is:harness-${stamp}.csv`)}&sort=lead`,
+    { waitUntil: "networkidle" },
+  );
+  await page.locator(".data-table tbody tr a.table-title").first().click();
+  await page.waitForSelector(".record-layout", { timeout: 15_000 });
+  const owner = page.locator(".prop", { hasText: "Owner" }).first();
+  await owner.locator("button").first().click();
+  await owner.locator("select").selectOption({ index: 1 });
+  await owner.locator("select").press("Enter");
+  await page
+    .waitForSelector(".prop:has-text('Owner') :text('Saved')", { timeout: 10_000 })
+    .catch(() => {});
+  await shoot(page, `${folder}/prospect-owned`);
+
+  await page.goto(`${BASE}/leads/import`, { waitUntil: "networkidle" });
+  const row = page.locator("tr", { hasText: `harness-${stamp}.csv` });
+  await row.locator("summary", { hasText: "Take back" }).click();
+  await row.locator("input[name=reason]").fill("The harness's rows, taken back");
+  await row.locator("button", { hasText: "Take this file back" }).click();
+  // The act removes its own form: the row itself says what happened, and what stayed.
+  await page.waitForSelector(
+    `tr:has-text("harness-${stamp}.csv"):has-text("Taken back · 23 removed")`,
+    {
+      timeout: 15_000,
+    },
+  );
+  await shoot(page, `${folder}/lead-import-taken-back`);
+}
+
+/**
  * The trust registers: a risk recorded (opening on its own page) and reviewed; a finding
  * fixed with its evidence; a high-risk change another person recorded approved, then
  * done; a failed failover test that raises its finding; a supplier review with concerns;
@@ -2597,9 +2713,58 @@ await fetch("http://127.0.0.1:7071/api/v1/mock/reset", { method: "POST" }).catch
   process.exit(1);
 });
 
+/**
+ * One part of the walk, for the wave being worked on — the whole walk is still the gate:
+ *
+ *     HQ_HARNESS_PAGES='^(prospect|lead-)' HQ_HARNESS_FLOW=prospects npm run check:hq-ui
+ *
+ * Signs in as the owner and, at both widths and in both themes, captures the screens
+ * whose name matches the pattern and then runs the named flow.
+ */
+const ONLY_PAGES = process.env.HQ_HARNESS_PAGES ? new RegExp(process.env.HQ_HARNESS_PAGES) : null;
+const ONLY_FLOW = process.env.HQ_HARNESS_FLOW ?? "";
+const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
+  prospects: captureProspectFlows,
+  mail: captureMailFlows,
+  fields: captureFieldFlows,
+};
+
+async function runPart(browser: Browser) {
+  const flow = ONLY_FLOW ? FLOWS[ONLY_FLOW] : undefined;
+  if (ONLY_FLOW && !flow) {
+    console.error(`No flow named "${ONLY_FLOW}". Known: ${Object.keys(FLOWS).join(", ")}.`);
+    process.exit(1);
+  }
+  for (const viewport of WIDTHS) {
+    const context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+    });
+    const page = await context.newPage();
+    watchConsole(page);
+    await page.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
+    await page.fill("#email", "owner@hq.test");
+    await page.fill("#password", "password-123");
+    await page.click("button[type=submit]");
+    await page.waitForURL("**/login/verify**", { timeout: 30_000 });
+    await page.fill("#totp-code", "000000");
+    await page.click("button[type=submit]");
+    await page.waitForURL("**/home", { timeout: 30_000 });
+    for (const theme of ["dark", "light"] as const) {
+      mkdirSync(`${OUT}/${viewport.name}/${theme}`, { recursive: true });
+      await setTheme(page, theme);
+      for (const shot of SIGNED_IN_PAGES)
+        if (ONLY_PAGES?.test(shot.name)) await capture(page, `${viewport.name}/${theme}`, shot);
+      if (flow) await flow(page, `${viewport.name}/${theme}`);
+    }
+    await setTheme(page, "dark");
+    await context.close();
+  }
+}
+
 const browser = await chromium.launch();
 try {
-  await run(browser);
+  if (ONLY_PAGES || ONLY_FLOW) await runPart(browser);
+  else await run(browser);
 } finally {
   await browser.close();
 }

@@ -351,10 +351,39 @@ export function mergePerson(token: string, personId: string, into: string) {
 
 export const leadSchema = z.object({
   lead_id: z.string(),
+  /** "inbound": they wrote to us and a reply is owed. "prospect": we found them. */
+  origin: z.string(),
   source_key: z.string(),
   email: z.string(),
   full_name: z.string(),
+  first_name: z.string(),
+  last_name: z.string(),
+  title: z.string(),
   company_name: z.string(),
+  firm_type: z.string(),
+  website: z.string(),
+  country: z.string(),
+  /** The region the country sits in; empty when there is no country. */
+  region: z.string(),
+  city: z.string(),
+  phone: z.string(),
+  registration_no: z.string(),
+  /** The public page the address was read from. */
+  source_url: z.string(),
+  /** "named", "role" (a shared mailbox) or "personal-domain" (free mail); empty if unjudged. */
+  email_kind: z.string(),
+  notes: z.string(),
+  tags: z.array(z.string()),
+  /** "" (never checked), "valid", "risky" or "invalid". */
+  verified_state: z.string(),
+  verified_at: z.string().nullable(),
+  import_id: z.string(),
+  /** The name of the file the lead came in with; empty when it was typed in. */
+  import_label: z.string(),
+  /** Fit under the rules in settings, computed when the lead is read. */
+  fit_score: z.number(),
+  fit_band: z.string(),
+  fit_reasons: z.array(z.string()),
   message: z.string(),
   payload: z.record(z.string(), z.unknown()),
   stage: z.string(),
@@ -372,21 +401,52 @@ export const leadSchema = z.object({
 });
 export type Lead = z.infer<typeof leadSchema>;
 
+const facetSchema = z.array(z.object({ value: z.string(), count: z.number() }));
+export type Facet = z.infer<typeof facetSchema>;
+
 const leadsSchema = okEnvelope.extend({
   leads: z.array(leadSchema.extend({ custom: customMapSchema.default({}) })),
+  /** Per stage, over everything the origin has — not only the page or the filter. */
   counts: z.record(z.string(), z.number()),
   stages: z.array(z.string()),
   first_reply_target_minutes: z.number(),
   custom_fields: z.array(customFieldSchema).default([]),
+  origin: z.string(),
+  /** How many the filters kept; `leads` is one page of them. */
+  total: z.number(),
+  offset: z.number(),
+  limit: z.number(),
+  has_more: z.boolean(),
+  sort: z.string(),
+  conditions: z.array(z.object({ field: z.string(), op: z.string(), value: z.string() })),
+  /** How what the filters kept breaks down, field by field. */
+  facets: z.record(z.string(), facetSchema),
+  fields: z.array(z.object({ key: z.string(), label: z.string() })),
+  ops: z.array(z.string()),
 });
 export type LeadsPage = z.infer<typeof leadsSchema>;
 
-export function readLeads(
-  token: string,
-  filters: { stage?: string; source?: string; q?: string } = {},
-) {
+export type LeadFilters = {
+  stage?: string;
+  source?: string;
+  q?: string;
+  origin?: "inbound" | "prospect" | "";
+  sort?: string;
+  limit?: number;
+  offset?: number;
+  /** `field:op:value` conditions; all must hold. */
+  conditions?: readonly string[];
+};
+
+export function readLeads(token: string, filters: LeadFilters = {}) {
   const query: Record<string, string> = {};
-  for (const [name, value] of Object.entries(filters)) if (value) query[name] = value;
+  for (const name of ["stage", "source", "q", "origin", "sort"] as const) {
+    const value = filters[name];
+    if (value) query[name] = value;
+  }
+  if (filters.limit) query.limit = String(filters.limit);
+  if (filters.offset) query.offset = String(filters.offset);
+  if (filters.conditions?.length) query.conditions = JSON.stringify(filters.conditions);
   return fetchHqJson("hq/leads", leadsSchema, { token, query });
 }
 
@@ -399,6 +459,11 @@ const leadDetailSchema = okEnvelope.extend({
   activities: z.array(activitySchema),
   first_reply_target_minutes: z.number().optional(),
   custom_fields: z.array(customValueSchema).default([]),
+  /** The file the lead came in with, when it came in with one. */
+  import: z
+    .object({ import_id: z.string(), label: z.string(), started_at: z.string().nullable() })
+    .nullable()
+    .default(null),
 });
 export type LeadDetail = z.infer<typeof leadDetailSchema>;
 
@@ -424,6 +489,134 @@ const convertedSchema = okEnvelope.extend({
 
 export function convertLead(token: string, leadId: string, input: Record<string, unknown>) {
   return postHqJson(`hq/leads/${leadId}/convert`, convertedSchema, { token, body: input });
+}
+
+// -- prospects: a file in, its history, one change across a set, what the data suggests --
+
+const leadImportResultSchema = okEnvelope.extend({
+  import_id: z.string(),
+  rows: z.number(),
+  created: z.number(),
+  updated: z.number(),
+  unchanged: z.number(),
+  skipped: z.array(z.object({ row: z.number(), email: z.string(), reason: z.string() })),
+  skipped_count: z.number(),
+  invalid: z.number(),
+});
+export type LeadImportResult = z.infer<typeof leadImportResultSchema>;
+
+/** One part of a file: at most a thousand mapped rows. Every row comes back accounted for. */
+export function importLeads(token: string, input: Record<string, unknown>) {
+  return postHqJson("hq/leads/import", leadImportResultSchema, { token, body: input });
+}
+
+const leadImportSchema = z.object({
+  import_id: z.string(),
+  label: z.string(),
+  source_key: z.string(),
+  reason: z.string(),
+  rows: z.number(),
+  created: z.number(),
+  updated: z.number(),
+  skipped: z.number(),
+  invalid: z.number(),
+  by: z.object({ staff_id: z.string(), name: z.string() }).nullable(),
+  started_at: z.string().nullable(),
+  rolled_back_at: z.string().nullable(),
+  rolled_back_count: z.number(),
+  /** Leads still carrying this import: what taking it back would look at. */
+  remaining: z.number(),
+});
+export type LeadImport = z.infer<typeof leadImportSchema>;
+
+const leadImportsSchema = okEnvelope.extend({
+  imports: z.array(leadImportSchema),
+  max_rows: z.number(),
+  max_leads: z.number(),
+  skip_reasons: z.array(z.string()),
+});
+export type LeadImportsPage = z.infer<typeof leadImportsSchema>;
+
+export function readLeadImports(token: string) {
+  return fetchHqJson("hq/leads/imports", leadImportsSchema, { token });
+}
+
+export function rollbackLeadImport(token: string, importId: string, reason: string) {
+  return postHqJson(
+    `hq/leads/imports/${importId}/rollback`,
+    okEnvelope.extend({ removed: z.number(), kept: z.number(), import_id: z.string() }),
+    { token, body: { reason } },
+  );
+}
+
+const leadBulkSchema = okEnvelope.extend({
+  matched: z.number(),
+  changed: z.number(),
+  unchanged: z.number(),
+  skipped: z.number(),
+});
+export type LeadBulkResult = z.infer<typeof leadBulkSchema>;
+
+/** One change to chosen rows (`ids`) or to everything a filter matches. */
+export function bulkLeads(token: string, input: Record<string, unknown>) {
+  return postHqJson("hq/leads/bulk", leadBulkSchema, { token, body: input });
+}
+
+const leadSuggestionSchema = z.object({
+  name: z.string(),
+  conditions: z.array(z.string()),
+  count: z.number(),
+  /** The saved segment asking the same question, when there is one. */
+  segment_id: z.string(),
+});
+export type LeadSuggestion = z.infer<typeof leadSuggestionSchema>;
+
+const leadSuggestionsSchema = okEnvelope.extend({
+  suggestions: z.array(leadSuggestionSchema),
+  prospects: z.number(),
+  minimum: z.number(),
+});
+export type LeadSuggestionsPage = z.infer<typeof leadSuggestionsSchema>;
+
+export function readLeadSuggestions(token: string) {
+  return fetchHqJson("hq/leads/suggestions", leadSuggestionsSchema, { token });
+}
+
+const pointsSchema = z.record(z.string(), z.number());
+export const fitRulesSchema = z.object({
+  firm_type: pointsSchema,
+  email_kind: pointsSchema,
+  title_words: pointsSchema,
+  country: pointsSchema,
+  named_person: z.number(),
+  bands: z.object({ A: z.number(), B: z.number() }),
+});
+export type FitRules = z.infer<typeof fitRulesSchema>;
+
+const leadSettingsSchema = okEnvelope.extend({
+  rules: fitRulesSchema,
+  defaults: fitRulesSchema,
+  customised: z.boolean(),
+  /** How the prospects fall into A, B and C under the rules as they stand. */
+  bands: z.record(z.string(), z.number()),
+  prospects: z.number(),
+  firm_types: facetSchema,
+  countries: facetSchema,
+  email_kinds: z.array(z.string()),
+  read_at: z.string().nullable(),
+});
+export type LeadSettings = z.infer<typeof leadSettingsSchema>;
+
+export function readLeadSettings(token: string) {
+  return fetchHqJson("hq/settings/leads", leadSettingsSchema, { token });
+}
+
+export function updateLeadSettings(token: string, input: Record<string, unknown>) {
+  return postHqJson(
+    "hq/settings/leads/update",
+    leadSettingsSchema.extend({ updated: z.boolean() }),
+    { token, body: input },
+  );
 }
 
 // ---------------------------------------------------------------------------------------

@@ -18,7 +18,7 @@ type LogActivityFormProps = {
   /** The page to refresh after logging. */
   returnPath: string;
   /** Leads say what logging does to their clock and stage. */
-  context?: "lead" | "record";
+  context?: "lead" | "prospect" | "record";
 };
 
 const PLACEHOLDERS: Record<string, string> = {
@@ -76,7 +76,9 @@ export function LogActivityForm({
         <span className="log-form__hint">
           {context === "lead"
             ? "A call or a sent email stops the first-reply clock. A reply moves the lead to Connected."
-            : "Logged work resets a deal's quiet-days count."}
+            : context === "prospect"
+              ? "A call or a sent email moves a new prospect to Attempting. A reply moves it to Connected."
+              : "Logged work resets a deal's quiet-days count."}
         </span>
         <Button variant="primary" size="small" type="submit" disabled={isPending}>
           {isPending ? "Logging…" : `Log ${ACTIVITY_KIND_LABELS[kind]?.toLowerCase()}`}

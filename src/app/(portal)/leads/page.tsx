@@ -7,6 +7,7 @@ import { Fragment } from "react";
 
 import { createLeadAction } from "@/app/(portal)/leads/actions";
 import { LeadCreateForm } from "@/components/crm/lead-forms";
+import { LeadTabs } from "@/components/crm/lead-tabs";
 import { FirstReplyClock, LeadStagePill } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { DocumentTools } from "@/components/documents/document-tools";
@@ -83,7 +84,9 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
 
   let page: LeadsPage | null = null;
   try {
-    page = await readLeads(context.token, filters);
+    // The people who wrote to us. Prospects the team found have their own list: nobody
+    // there is waiting on a reply, and there are thousands of them.
+    page = await readLeads(context.token, { ...filters, origin: "inbound" });
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;
@@ -161,24 +164,27 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
       <PageHeader
         eyebrow="CRM"
         title="Leads"
-        description={`Everyone who asked. The first reply is owed within ${replyTarget(target)}; the longest wait sorts first.`}
+        description={`Everyone who wrote to us. The first reply is owed within ${replyTarget(target)}; the longest wait sorts first.`}
         actions={
           <>
-            {canWrite && settings ? (
-              <Popover label="Add lead" variant="primary">
-                <LeadCreateForm
-                  action={createLeadAction}
-                  sources={settings.sources}
-                  extra={
-                    <CustomFieldInputs
-                      idPrefix="new-lead"
-                      fields={(page?.custom_fields ?? []).filter((field) => field.required)}
-                    />
-                  }
-                />
-              </Popover>
-            ) : undefined}
-            <DocumentTools context={context} kind="leads" returnPath="/leads" />
+            <LeadTabs current="/leads" />
+            <div className="pagebar__group">
+              {canWrite && settings ? (
+                <Popover label="Add lead" variant="primary">
+                  <LeadCreateForm
+                    action={createLeadAction}
+                    sources={settings.sources}
+                    extra={
+                      <CustomFieldInputs
+                        idPrefix="new-lead"
+                        fields={(page?.custom_fields ?? []).filter((field) => field.required)}
+                      />
+                    }
+                  />
+                </Popover>
+              ) : undefined}
+              <DocumentTools context={context} kind="leads" returnPath="/leads" />
+            </div>
           </>
         }
       />

@@ -16,8 +16,8 @@ danger zone), with real TOTP sign-in. Two repositories:
 
 | Repo                                           | Path                                                                                                                        | What lives there                                                                                                                                                                                                                                            |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HQ portal** (Next.js 16, TypeScript)         | `~/Documents/Projects/HQ Quantify Terminal` — GitHub `aaryansaroha98/quantify-t-hq`, branch `main`, pushed                  | UI, server actions, zod API clients (`src/lib/api/*`), the mock service (`scripts/mock-hq-api.ts`), the screenshot harness, `docs/DESIGN.md` (the UI contract), `docs/RESEARCH-2026-09-30.md` (the research), this file                                     |
-| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0024`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
+| **HQ portal** (Next.js 16, TypeScript)         | `~/Documents/Projects/HQ Quantify Terminal` — GitHub `aaryansaroha98/quantify-t-hq`, branch `main`, pushed                  | UI, server actions, zod API clients (`src/lib/api/*`), the mock service (`scripts/mock-hq-api.ts`), the screenshot harness, `docs/DESIGN.md` (the UI contract), `docs/RESEARCH-*.md` (the research passes), this file                                       |
+| **Product / service** (Python Azure Functions) | `~/Documents/Projects/Quantify Terminal` → `cloud/azure/account_function/` — commits stay LOCAL (never pushed unless asked) | `account_api/hq/*` routes, `schema/migrations/0007–0055`, `tests/test_hq_api.py` (HQ suite) and `tests/test_hq_payload_samples.py` (writes the payload fixture the portal's contract test reads), `docs/HQ_GO_LIVE.md` (the production switch-on checklist) |
 
 ## 2. Ground rules (do not relearn these)
 
@@ -39,7 +39,19 @@ danger zone), with real TOTP sign-in. Two repositories:
   by hand first. No LTV (too little history), no health score presented as predictive, no
   NPS at this size, no annualised churn from a quiet month.
 - Demo data in the mock uses REAL firm names with INVENTED contacts and the mock's own
-  price list; never present it as customers.
+  price list; never present it as customers. The seeded prospects are invented people at
+  invented firms on reserved `.example` domains: nothing there can be mistaken for, or
+  mailed to, a real person. Real prospect files are imported at run time and never
+  committed.
+- **A route that takes rows says so.** Every signed-in POST is read under 256 KB
+  (`dispatch.STAFF_BODY_BYTES`); a route that carries a part of a file or a long list of
+  ids declares `body_bytes` in the route table (4 MB) and is in the mock's
+  `BODY_ROW_ROUTES`. Anonymous routes keep the 16 KB form limit. The portal's server
+  actions take 4 MB (`next.config.ts`). The mock counts bytes too: a mock that did not
+  once certified imports the service would have refused.
+- **A list that can run to thousands is read a page at a time** (`hq/leads` with
+  `origin=prospect`): filters, order, paging and the breakdown are the service's, and the
+  page never holds more than a hundred rows. The older lists are read whole.
 
 ## 3. Commands and gates
 
@@ -52,6 +64,8 @@ npx tsc --noEmit -p tsconfig.json && npx eslint <paths> && npx prettier --write 
 npx vitest run                               # unit + route-parity + payload-contract tests
 npm run check:hq-ui                          # the harness; output in test-results/hq/
 npm run check:passkeys                       # passkeys end to end with a virtual authenticator (dev + mock up; reaches localhost:3000)
+HQ_HARNESS_PAGES='^(prospect|lead-)' HQ_HARNESS_FLOW=prospects npm run check:hq-ui   # one part of the walk, both widths and themes (flows: prospects, mail, fields)
+npx tsx scripts/e2e-leads-import.ts [file.csv] [outDir]   # a file through the import page in a real browser; with no file it writes 1,200 invented rows
 npx tsx scripts/peek-hq.ts <outDir> owner@hq.test /path ...   # screenshots; HQ_PEEK_THEME=light HQ_PEEK_WIDTH=412 HQ_PEEK_AXE=1
 ```
 
@@ -229,7 +243,44 @@ and asked for gaps only. Section 8 of that file is the build order.
   `f79dfaf`; HQ: the commit adding this; the console: the commit removing its
   administration.
 
+### 2026-10-03 — Prospects (`docs/RESEARCH-2026-10-03-LEADS.md`)
+
+A lead was someone who wrote in. A prospect is someone the team found on a public page,
+and there are tens of thousands of them: both are leads and share the table (`origin`), a
+prospect never starts the first-reply clock, and the list of them is read a page at a time.
+Three researchers (lead databases and segmentation; cold outbound and deliverability; the
+company console) reported first; the file keeps all three with their sources.
+
+| Wave      | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Where                                                                                                                                                                      | Commits                                       |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Prospects | migration 0054: the columns a researched list carries (title, firm type, country, city, website, registration number, where the address was published, kind of address, tags, notes, what a verification said) and `hq_lead_imports`; import in parts, every row accounted for (added, filled in, already here, or left out with the reason — no address, malformed, repeated in the file, already a CRM person, on the stop list), the whole file de-duplicated in the browser first; an import taken back out with a fresh code (its untouched rows only); `hq/leads` filtered, ordered and paged on the server with a breakdown of whatever the filters kept (firm type, region, country, kind of address, fit, stage, verification, tag); fit as points from rules an admin owns, computed when a lead is read, with its reasons; one change across everything a view matches, audited once; segments ask a lead what the list asks it (one grammar, with "is any of"), and the service suggests segments from the data; a view saved as a segment and taken straight to a new campaign; the send path reads what a verification said, a send moves a new prospect to Attempting, conversion carries the prospect's columns and takes the firm's domain from its website. Found on the way: every signed-in POST was read under a 16 KB limit, so a real import or a long template was refused (see the ground rule) | Leads → Inbound · Prospects · Segments · Import · Fit rules; the lead record (details edited in place, the fit and its reasons, where the lead came from); Mail → Segments | service `54f10c5`; HQ: the commit adding this |
+
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
+
+**Prospects, in this order** (report sections in `docs/RESEARCH-2026-10-03-LEADS.md`):
+
+1. **Cold mail rules in the portal** — the service is built and committed (`1a9d17c`,
+   migration 0055: only verified addresses, one person per firm, a rule per country with
+   the cautious reading as the default, a verifier's file brought in as it is, a firm
+   stopped as a whole, "the first N, best fit first", the prospects export as the view on
+   screen, an import dry run and overwrite columns, send counts per lead, "is none of" and
+   "does not contain"). Left: the mock, the portal screens (Leads → Sending rules; the
+   verification importer on Import; the limit on the campaign form; the firm stop on the
+   stop list; Export on Prospects; the new reasons' words), the harness, the commit.
+2. **Learn from the send** (report A 7, 9, 10, 19): engagement fields beyond send counts
+   (was sent campaign X, bounced, replied), campaign results broken down by the facets a
+   segment was built from, each import's bounces and replies, "next slice" as one press.
+3. **The mailbox pool** (report B 1, 4–8, 13): the transactional provider's own policy
+   forbids a researched list, so cold mail goes from ordinary mailboxes on separate
+   domains — a pool with per-mailbox caps, a ramp and rotation, reply ingestion and
+   auto-stop, out-of-office pause, block detection. Needs the founder's domains and
+   mailboxes (§6); buildable offline against a memory provider first.
+4. **Data operations** (report C e, report A 23): near-duplicate review among prospects, a
+   data health page, bulk changes as a background job.
+5. **The operating cadence** (report C d): owners, goals and trends on the weekly pack,
+   three priorities with weekly health, the weekly note.
+
+The earlier passes, for the record:
 
 The third pass's order (`docs/RESEARCH-2026-09-30-SUITE.md` §8): Security 2 part two
 (read tripwires, decoys, key hygiene) → Inbox → Receivables → Privacy desk → Pipeline
@@ -265,18 +316,51 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0052 and publish → move the desk onto SQL → Vercel
+Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0055 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → link each staff
 member's Quantify Terminal account (Product) → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
 Actions on the account fails every run in seconds with no runner (billing) — only the
 founder can fix.
 
+**Before the first cold email** (report B; none of it is code): the researched list must
+not go through the transactional provider — its policy forbids third-party lists, and
+sign-in codes ride on the same reputation. It needs (a) one or two secondary domains that
+are clearly ours, with SPF, DKIM and DMARC, (b) two or three ordinary mailboxes on each,
+warmed for three to four weeks, each sending 25–50 a day, (c) the addresses verified by a
+verifier first (the whole file costs tens of dollars; export a view from Prospects, bring
+the result file back in under Import), and (d) a decision, with advice, on each country
+the list reaches that the research did not cover — Leads → Sending rules lists them with
+their counts, held until someone decides. At about 500 sends a day the list is a
+six-month programme, not a week's.
+
 ---
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of Product: the console's administration, moved here** (2026-10-01).
+**As of Prospects** (2026-10-03).
+
+- Prospects wave: service `54f10c5` (0054) and `1a9d17c` (0055, cold mail), both local.
+  HQ: the commit adding this holds the prospects wave; the cold-mail wave's mock, portal
+  and harness are the next step (§5, Prospects 1) and are not started.
+- The payload fixture (`tests/fixtures/hq_payload_samples.json` in the product repo) is
+  rewritten by every run of the service suite, so it is already at the cold-mail shape:
+  the portal's contract test names `hq/settings/cold` as sampled-but-never-parsed until
+  the portal has its client. That is the next wave's first failing test, not a regression.
+- The harness can run one part (`HQ_HARNESS_PAGES`, `HQ_HARNESS_FLOW`). Before a full
+  walk on a cold dev server, fetch every route once (a page compiling for over thirty
+  seconds fails the walk): the loop is in this wave's history — paths from
+  `scripts/screenshot-hq.ts`, fetched through `/dev/signin?as=owner@hq.test`. Quote URLs
+  in zsh: a bare `?` is a glob.
+- `scripts/e2e-leads-import.ts` with the real file
+  (`~/Documents/QT Leads/00_ALL_LEADS/all_leads.csv`) loads all 22,983 leads into the
+  running mock in about two seconds, for a demo with real data; a mock restart or a
+  harness run (it resets the mock) empties them again.
+- Restart the mock after any edit to it: a mock on old code answers without the new
+  fields and every page that needs them reads "could not be read just now" (the portal's
+  schema refuses the old shape, as it should).
+
+**Before that: Product: the console's administration, moved here** (2026-10-01).
 
 - Product wave: service `e8efead` + `f79dfaf` (local; 0052 unapplied), HQ and the console
   each one commit. Before anyone uses Product for real, an Owner links each staff member's

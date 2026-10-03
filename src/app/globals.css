@@ -1048,6 +1048,15 @@
     display: contents;
   }
 
+  /* Several actions beside section tabs: one box, so they stay together on the right
+     instead of being spread across the bar. */
+  .pagebar__group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
   .pagebar .segmented {
     order: 3;
     flex-basis: 100%;
@@ -11221,5 +11230,204 @@
     list-style: none;
     color: var(--muted);
     font-size: var(--fs-ui);
+  }
+}
+
+@layer pages {
+  /* --- Prospects: the breakdown above the list ---------------------------------------- */
+  .facets-panel {
+    margin: 0 0 12px;
+    padding: 10px 0 12px;
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .facets-panel__summary {
+    cursor: pointer;
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+
+  .facets-panel[open] > .facets-panel__summary {
+    margin-bottom: 10px;
+  }
+
+  .facets {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+    gap: 12px 22px;
+  }
+
+  .facets__group {
+    min-width: 0;
+  }
+
+  .facets__title {
+    margin: 0 0 4px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .facets__list {
+    display: grid;
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .facets__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 2px 8px;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    color: var(--text);
+    font-size: 12.5px;
+    text-decoration: none;
+  }
+
+  .facets__row:hover {
+    border-color: var(--line);
+  }
+
+  /* The value the view is narrowed to: a full thin border and its own words in the
+     title, never a strip down one side. */
+  .facets__row[aria-current="true"] {
+    border-color: var(--accent);
+    background: var(--panel);
+  }
+
+  .facets__label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .facets__count {
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .facets__bar {
+    grid-column: 1 / -1;
+    height: 2px;
+    background: var(--line-soft);
+  }
+
+  .facets__bar > span {
+    display: block;
+    height: 100%;
+    background: var(--chart-1);
+  }
+
+  .facets__more {
+    margin: 4px 6px 0;
+    color: var(--quiet);
+    font-size: 11.5px;
+  }
+
+  /* A long address breaks anywhere rather than pushing the other columns onto three lines. */
+  .prospect-email {
+    overflow-wrap: anywhere;
+  }
+
+  .tag-row {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* --- Fit rules: four tables of name → points ---------------------------------------- */
+  .fit-rules {
+    display: grid;
+    gap: 16px;
+  }
+
+  .fit-rules__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px 28px;
+    align-items: start;
+  }
+
+  .fit-rules__table {
+    min-inline-size: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .fit-rules__title {
+    padding: 0;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .fit-rules__table > .page-note {
+    margin: 4px 0 8px;
+  }
+
+  .fit-rules__rows {
+    display: grid;
+    gap: 4px;
+    margin: 0 0 8px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .fit-rules__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 72px 56px;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .fit-rules__row > label {
+    color: var(--text);
+    font-size: 13.5px;
+  }
+
+  .fit-rules__points {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .fit-rules__count {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- A lead's fit, with the points that made it ------------------------------------- */
+  .fit-reasons {
+    display: grid;
+    gap: 2px;
+    margin: 6px 0 0;
+    padding: 0;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    list-style: none;
+  }
+}
+
+@layer pages {
+  /* On a phone the list tools wrap to the left edge, so a panel hung from its trigger's
+     right edge would open off the screen. There it hangs from the left instead. */
+  @media (max-width: 720px) {
+    .list-tools .popover--end > .popover__panel {
+      right: auto;
+      left: 0;
+    }
   }
 }
