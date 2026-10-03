@@ -152,7 +152,10 @@ export default async function MailSettingsPage() {
   let senders: MailSender[] = [];
   try {
     settings = await readMailSettings(context.token);
-    senders = (await readSenders(context.token)).senders;
+    // A connected mailbox signs in by its own host and is paced under Mailboxes.
+    senders = (await readSenders(context.token)).senders.filter(
+      (sender) => sender.kind !== "mailbox",
+    );
   } catch (error) {
     if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
       throw error;

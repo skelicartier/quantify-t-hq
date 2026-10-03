@@ -162,6 +162,9 @@ export function EnrolPanel({
                     : "Takes them"
                   : (SKIP_REASON_LABELS[verdict.reason] ?? verdict.reason)}
               </span>
+              {verdict.allowed && verdict.mailbox && (
+                <span className="verdict__sub">From {verdict.mailbox}</span>
+              )}
             </li>
           ))}
         </ul>

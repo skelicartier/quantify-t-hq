@@ -15,9 +15,9 @@ type Action = (previous: ActionState, formData: FormData) => Promise<ActionState
 type CheckKey = (typeof COLD_CHECKS)[number]["key"];
 
 /**
- * The four checks and how long a verification counts, saved together under one reason.
- * Held in state rather than left to the browser: a saved form shows what was saved, not
- * what the page was first rendered with.
+ * The checks and how long a verification counts, saved together under one reason. Held
+ * in state rather than left to the browser: a saved form shows what was saved, not what
+ * the page was first rendered with.
  */
 export function ColdChecksForm({
   action,
@@ -30,12 +30,13 @@ export function ColdChecksForm({
   disabled: boolean;
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
-  const [checks, setChecks] = useState<Record<CheckKey, boolean>>({
-    require_verified: rules.require_verified,
-    allow_risky: rules.allow_risky,
-    skip_role_like: rules.skip_role_like,
-    one_per_firm: rules.one_per_firm,
-  });
+  const [checks, setChecks] = useState(
+    () =>
+      Object.fromEntries(COLD_CHECKS.map((check) => [check.key, rules[check.key]])) as Record<
+        CheckKey,
+        boolean
+      >,
+  );
   const [days, setDays] = useState(String(rules.verify_stale_days));
   const off = disabled || isPending;
   return (
@@ -48,6 +49,7 @@ export function ColdChecksForm({
           name={check.key}
           label={check.label}
           description={check.description}
+          tone={"tone" in check ? check.tone : "default"}
           checked={checks[check.key]}
           onChange={(event) => setChecks({ ...checks, [check.key]: event.target.checked })}
           disabled={off}

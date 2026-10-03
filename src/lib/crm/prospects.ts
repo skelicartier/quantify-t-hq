@@ -108,7 +108,10 @@ export const OVERWRITABLE_COLUMNS = [
   { field: "notes", column: "notes", label: "Notes" },
 ] as const;
 
-/** The four checks a first email passes, as the sending rules page words them. */
+/**
+ * The checks a first email passes, and the one switch that lets a campaign carry it, as
+ * the sending rules page words them. The form and its action are built from this list.
+ */
 export const COLD_CHECKS = [
   {
     key: "require_verified",
@@ -130,6 +133,13 @@ export const COLD_CHECKS = [
     key: "one_per_firm",
     label: "One person per firm in a send",
     description: "The best fit at each firm goes; colleagues are named and stay for later.",
+  },
+  {
+    key: "provider_campaigns",
+    label: "Let campaigns write to prospects",
+    description:
+      "Off unless there is a reason. A campaign goes through the mail provider, whose terms forbid a researched list and whose account also carries the product's sign-in mail. A prospect is written to from a connected mailbox, in a sequence.",
+    tone: "danger",
   },
 ] as const;
 

@@ -493,6 +493,13 @@ export default async function SequencePage({ params, searchParams }: SequencePag
                       ) : (
                         <span className="table-sub">Not yet: with the next sending pass</span>
                       )}
+                      {feed.state === "active" && feed.last_run_on && (
+                        <span className="table-sub">
+                          {feed.drain_days === null
+                            ? "No mailbox could send that day, so prospects waited."
+                            : `About ${feed.drain_days === 1 ? "a working day" : `${formatNumber(feed.drain_days)} working days`} to drain the segment at that pace.`}
+                        </span>
+                      )}
                     </td>
                     <td className="data-table__num">
                       {formatNumber(feed.enrolled_total)}

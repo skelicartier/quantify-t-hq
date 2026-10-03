@@ -13,7 +13,8 @@ export const senderSchema = z.object({
   from_email: z.string(),
   from_name: z.string(),
   reply_to: z.string(),
-  kind: z.enum(["marketing", "sales"]),
+  /** "mailbox" is a person's own connected mailbox, managed under Mailboxes. */
+  kind: z.enum(["marketing", "sales", "mailbox"]),
   staff_id: z.string().nullable(),
   staff_name: z.string(),
   daily_cap: z.number(),
@@ -295,6 +296,10 @@ export const feedSchema = z.object({
   end_reason: z.string(),
   end_reason_label: z.string(),
   note: z.string(),
+  /** The room its owner's mailboxes had for first emails at the last take. */
+  last_room: z.number().nullable(),
+  /** Working days the segment would take to drain at the steady pace; null when nothing can send. */
+  drain_days: z.number().nullable(),
 });
 export type MailFeed = z.infer<typeof feedSchema>;
 
@@ -306,6 +311,13 @@ export const feedJudgeSchema = z.object({
   already_had: z.number(),
   reasons: z.record(z.string(), z.number()),
   sample: z.array(z.object({ name: z.string(), email: z.string(), company: z.string() })),
+  /** First emails the owner's mailboxes can still send today; a take never exceeds it. */
+  room: z.number(),
+  limited_by_room: z.boolean(),
+  /** New people a day at the steady pace: the cap, or the mailboxes' room spread over the emails. */
+  per_day: z.number(),
+  remaining_estimate: z.number(),
+  drain_days: z.number().nullable(),
 });
 export type FeedJudge = z.infer<typeof feedJudgeSchema>;
 
@@ -353,6 +365,8 @@ export const verdictSchema = z.object({
   reason: z.string(),
   detail: z.string(),
   enrolment_id: z.string().optional(),
+  /** For a prospect: the connected mailbox the whole sequence will go from. */
+  mailbox: z.string().optional(),
 });
 export type EnrolVerdict = z.infer<typeof verdictSchema>;
 
@@ -474,6 +488,8 @@ export const SKIP_REASON_LABELS: Record<string, string> = {
   FIRM_COVERED: "A colleague at the firm is in this send",
   FIRM_STOPPED: "The firm asked not to be written to",
   HAD_EARLIER_SEND: "Reached by an earlier slice of this series",
+  PROSPECT_BY_PROVIDER: "Found by the team: written to from a mailbox, not a campaign",
+  NO_MAILBOX: "No connected mailbox can write first yet",
   DUPLICATE: "Same address twice",
   ALREADY_IN_SEQUENCE: "Already in a sequence",
   ALREADY_HAD_SEQUENCE: "Had this sequence recently",
@@ -571,3 +587,90 @@ export function describeCondition(
     ? `${label} ${op}`
     : `${label} ${op} ${condition.value}`;
 }
+
+// --- connected mailboxes ----------------------------------------------------------------
+
+/** A person's own mailbox, connected to write first to the people the team found. */
+export const mailboxSchema = z.object({
+  mailbox_id: z.string(),
+  address: z.string(),
+  display_name: z.string(),
+  domain: z.string(),
+  /** "google" and "microsoft" sign in by consent screen; "smtp" by server and app password. */
+  provider: z.string(),
+  owner: z.object({ staff_id: z.string(), name: z.string() }).nullable(),
+  /** What a person or a refusal set: "active", "paused", "resting" or "disconnected". */
+  state: z.string(),
+  /** What it does today: "warming" until `ready_on`, then "active" — or held. */
+  phase: z.string(),
+  phase_label: z.string(),
+  ready_on: z.string().nullable(),
+  /** Days since `ready_on`, counting it as day one; 0 while warming. */
+  ramp_day: z.number(),
+  ramp_from: z.number(),
+  ramp_step: z.number(),
+  daily_cap: z.number(),
+  cap_today: z.number(),
+  sent_today: z.number(),
+  live_enrolments: z.number(),
+  gap_minutes: z.number(),
+  gap_jitter_minutes: z.number(),
+  last_sent_at: z.string().nullable(),
+  next_send_after: z.string().nullable(),
+  rest_until: z.string().nullable(),
+  rest_reason: z.string(),
+  last_check_at: z.string().nullable(),
+  last_check_ok: z.boolean(),
+  last_error: z.string(),
+  connected_at: z.string().nullable(),
+  smtp_host: z.string(),
+});
+export type Mailbox = z.infer<typeof mailboxSchema>;
+
+export const mailboxPoolSettingsSchema = z.object({
+  pool_daily_cap: z.number(),
+  domain_daily_cap: z.number(),
+  warm_up_days: z.number(),
+  /** Fixed in the service: no mailbox above this a day, no pool above `pool_ceiling`. */
+  max_daily_cap: z.number(),
+  pool_ceiling: z.number(),
+});
+export type MailboxPoolSettings = z.infer<typeof mailboxPoolSettingsSchema>;
+
+export const mailboxBoardSchema = z.object({
+  mailboxes: z.array(mailboxSchema),
+  domains: z.array(
+    z.object({
+      domain: z.string(),
+      mailboxes: z.number(),
+      /** The domain's mailboxes' room today, never above the per-domain ceiling. */
+      cap_today: z.number(),
+      sent_today: z.number(),
+      sent_today_counted: z.number(),
+      phases: z.record(z.string(), z.number()),
+    }),
+  ),
+  totals: z.object({
+    mailboxes: z.number(),
+    sending: z.number(),
+    warming: z.number(),
+    held: z.number(),
+    capacity_today: z.number(),
+    sent_today: z.number(),
+  }),
+  settings: mailboxPoolSettingsSchema,
+  /** Which ways of connecting the service is set up for. */
+  providers: z.array(z.object({ key: z.string(), configured: z.boolean() })),
+  /** The caller may pace anyone's mailbox, declare one warm and set the ceilings. */
+  may_manage: z.boolean(),
+  /** The caller's staff id, to tell their own mailboxes apart. */
+  me: z.string(),
+});
+export type MailboxBoard = z.infer<typeof mailboxBoardSchema>;
+
+/** A sign-in check: proof the mailbox can send, without sending anything. */
+export const mailboxCheckSchema = z.object({
+  ok: z.boolean(),
+  kind: z.string(),
+  detail: z.string(),
+});

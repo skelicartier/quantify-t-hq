@@ -4,6 +4,7 @@ const TABS = [
   { href: "/mail", label: "Overview" },
   { href: "/mail/campaigns", label: "Campaigns" },
   { href: "/mail/sequences", label: "Sequences" },
+  { href: "/mail/mailboxes", label: "Mailboxes" },
   { href: "/mail/replies", label: "Replies" },
   { href: "/mail/templates", label: "Templates" },
   { href: "/mail/lists", label: "Lists" },

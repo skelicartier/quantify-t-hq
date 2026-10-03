@@ -4633,6 +4633,13 @@
     color: var(--muted);
   }
 
+  .sender__reason {
+    flex: 1 1 16rem;
+    min-width: 0;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
   .outcome-row {
     display: flex;
     flex-wrap: nowrap;

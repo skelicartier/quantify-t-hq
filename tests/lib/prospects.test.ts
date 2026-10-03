@@ -163,12 +163,13 @@ describe("the import's replaceable columns and the sending checks", () => {
     ]);
   });
 
-  it("are the four switches the service reads", () => {
+  it("are the five switches the service reads", () => {
     expect(COLD_CHECKS.map((check) => check.key)).toEqual([
       "require_verified",
       "allow_risky",
       "skip_role_like",
       "one_per_firm",
+      "provider_campaigns",
     ]);
   });
 });

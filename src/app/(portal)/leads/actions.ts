@@ -8,7 +8,7 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import * as crmApi from "@/lib/api/crm";
 import { saveSegment } from "@/lib/api/mail";
 import { fieldValue } from "@/lib/auth/forms";
-import { parseTags } from "@/lib/crm/prospects";
+import { COLD_CHECKS, parseTags } from "@/lib/crm/prospects";
 import { crmRefusal } from "@/lib/crm/refusal";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
@@ -268,10 +268,9 @@ export async function saveColdChecksAction(
   try {
     const view = await crmApi.updateColdSettings(context.token, {
       reason,
-      require_verified: formData.get("require_verified") === "on",
-      allow_risky: formData.get("allow_risky") === "on",
-      skip_role_like: formData.get("skip_role_like") === "on",
-      one_per_firm: formData.get("one_per_firm") === "on",
+      ...Object.fromEntries(
+        COLD_CHECKS.map((check) => [check.key, formData.get(check.key) === "on"]),
+      ),
       verify_stale_days: days,
     });
     revalidatePath("/leads/rules");

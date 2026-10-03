@@ -665,6 +665,8 @@ const coldRulesSchema = z.object({
   allow_risky: z.boolean(),
   skip_role_like: z.boolean(),
   one_per_firm: z.boolean(),
+  /** Off by default: a campaign through the provider leaves prospects out. */
+  provider_campaigns: z.boolean(),
   verify_stale_days: z.number(),
   max_stale_days: z.number(),
 });
@@ -686,6 +688,8 @@ const coldJurisdictionSchema = z.object({
 export type ColdJurisdiction = z.infer<typeof coldJurisdictionSchema>;
 
 const coldSettingsSchema = okEnvelope.extend({
+  /** The connected mailboxes a first email goes from, and their room together today. */
+  mailboxes: z.object({ sending: z.number(), warming: z.number(), capacity_today: z.number() }),
   rules: coldRulesSchema,
   jurisdictions: z.array(coldJurisdictionSchema),
   rule_labels: z.record(z.string(), z.string()),

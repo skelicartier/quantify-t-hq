@@ -154,6 +154,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/settings/mail", () => mail.readMailSettings(token)],
   ["hq/mail/lists", () => mail.readLists(token)],
   ["hq/mail/lists/{list_id}", () => mail.readList(token, ids.mail_list_id!)],
+  ["hq/mailboxes", () => mail.readMailboxes(token)],
   ["hq/security/events", () => security.readSecurityEvents(token)],
   ["hq/me/devices", () => security.readMyDevices(token)],
   ["hq/security/reads", () => security.readReadWatch(token)],

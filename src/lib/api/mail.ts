@@ -13,6 +13,10 @@ import {
   feedJudgeSchema,
   feedSchema,
   healthSchema,
+  mailboxBoardSchema,
+  mailboxCheckSchema,
+  mailboxPoolSettingsSchema,
+  mailboxSchema,
   messageSchema,
   previewSchema,
   segmentSchema,
@@ -844,5 +848,83 @@ export function unsubscribe(
       spooled: z.boolean().optional(),
     }),
     { body: { token, mode, topics_off: topicsOff } },
+  );
+}
+
+// --- connected mailboxes ----------------------------------------------------------------
+
+export function readMailboxes(token: string) {
+  return fetchHqJson("hq/mailboxes", okEnvelope.extend(mailboxBoardSchema.shape), { token });
+}
+
+/** The consent screen for the caller's own mailbox, at the host its address lives with. */
+export function startMailboxConnect(
+  token: string,
+  provider: "google" | "microsoft",
+  loginHint: string,
+) {
+  return postHqJson(
+    "hq/mailboxes/connect",
+    okEnvelope.extend({ authorization_url: z.string().url() }),
+    { token, body: { provider, login_hint: loginHint } },
+  );
+}
+
+const connectedSchema = okEnvelope.extend({ mailbox: mailboxSchema, check: mailboxCheckSchema });
+
+export function completeMailboxConnect(token: string, code: string, state: string) {
+  return postHqJson("hq/mailboxes/connect/complete", connectedSchema, {
+    token,
+    body: { code, state },
+  });
+}
+
+/** A mailbox on any other host, by its servers and an app password: kept only if it signs in. */
+export function addMailbox(token: string, input: Record<string, unknown>) {
+  return postHqJson("hq/mailboxes/add", connectedSchema, { token, body: input });
+}
+
+export function updateMailbox(token: string, mailboxId: string, input: Record<string, unknown>) {
+  return postHqJson(
+    `hq/mailboxes/${mailboxId}/update`,
+    okEnvelope.extend({ mailbox: mailboxSchema }),
+    { token, body: input },
+  );
+}
+
+/** An admin says a mailbox is already warm: it may send from today. */
+export function readyMailbox(token: string, mailboxId: string, reason: string) {
+  return postHqJson(
+    `hq/mailboxes/${mailboxId}/ready`,
+    okEnvelope.extend({ mailbox: mailboxSchema }),
+    { token, body: { reason } },
+  );
+}
+
+export function setMailboxState(token: string, mailboxId: string, state: "active" | "paused") {
+  return postHqJson(
+    `hq/mailboxes/${mailboxId}/state`,
+    okEnvelope.extend({ mailbox: mailboxSchema, released: z.number() }),
+    { token, body: { state } },
+  );
+}
+
+export function checkMailbox(token: string, mailboxId: string) {
+  return postHqJson(`hq/mailboxes/${mailboxId}/check`, connectedSchema, { token, body: {} });
+}
+
+export function disconnectMailbox(token: string, mailboxId: string, reason: string) {
+  return postHqJson(
+    `hq/mailboxes/${mailboxId}/disconnect`,
+    okEnvelope.extend({ mailbox: mailboxSchema, held: z.number() }),
+    { token, body: { reason } },
+  );
+}
+
+export function updateMailboxSettings(token: string, input: Record<string, unknown>) {
+  return postHqJson(
+    "hq/settings/mailboxes/update",
+    okEnvelope.extend({ settings: mailboxPoolSettingsSchema }),
+    { token, body: input },
   );
 }

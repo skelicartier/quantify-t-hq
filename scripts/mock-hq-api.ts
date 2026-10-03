@@ -7924,6 +7924,8 @@ type ColdSettings = {
   allow_risky: boolean;
   skip_role_like: boolean;
   one_per_firm: boolean;
+  /** Campaigns may take prospects through the provider: off unless an admin says so. */
+  provider_campaigns: boolean;
   verify_stale_days: number;
   overrides: Record<string, ColdJurisdiction>;
 };
@@ -7933,10 +7935,13 @@ function coldInitial(): ColdSettings {
     allow_risky: false,
     skip_role_like: true,
     one_per_firm: true,
+    provider_campaigns: false,
     verify_stale_days: 90,
     overrides: {},
   };
 }
+const COLD_PROVIDER_DETAIL =
+  "someone the team found is written to from a team mailbox, in a sequence";
 let coldSettings: ColdSettings = coldInitial();
 function coldCanonical(country: string): string {
   const text = country.trim().split(/\s+/).join(" ");
@@ -8009,6 +8014,7 @@ function coldRulesView() {
     allow_risky: coldSettings.allow_risky,
     skip_role_like: coldSettings.skip_role_like,
     one_per_firm: coldSettings.one_per_firm,
+    provider_campaigns: coldSettings.provider_campaigns,
     verify_stale_days: coldSettings.verify_stale_days,
     max_stale_days: 730,
   };
@@ -8098,7 +8104,23 @@ function coldView() {
       default_rule: "hold",
       prospects: countries.get("")!,
     });
+  let boxesSending = 0;
+  let boxesWarming = 0;
+  let boxCapacity = 0;
+  for (const { box, sender } of mailboxPairs()) {
+    const phase = mailboxPhase(box);
+    if (phase === "warming") boxesWarming += 1;
+    else if (phase === "active" && !sender.paused_at) {
+      boxesSending += 1;
+      boxCapacity += mailboxCapToday(box, sender);
+    }
+  }
   return {
+    mailboxes: {
+      sending: boxesSending,
+      warming: boxesWarming,
+      capacity_today: Math.min(boxCapacity, mailboxSettings.pool_daily_cap),
+    },
     rules: coldRulesView(),
     jurisdictions,
     rule_labels: COLD_RULE_LABELS,
@@ -11445,6 +11467,7 @@ routes.push(
         "allow_risky",
         "skip_role_like",
         "one_per_firm",
+        "provider_campaigns",
       ] as const)
         if (name in body) {
           if (typeof body[name] !== "boolean") errors[name] = "true or false";
@@ -22987,7 +23010,7 @@ type MailSenderRow = {
   from_email: string;
   from_name: string;
   reply_to: string;
-  kind: "marketing" | "sales";
+  kind: "marketing" | "sales" | "mailbox";
   staff_id: string;
   daily_cap: number;
   verified: boolean;
@@ -23190,6 +23213,8 @@ type MailFeedRow = {
   ended_at: string | null;
   end_reason: string;
   note: string;
+  last_room?: number | null;
+  drain_days?: number | null;
 };
 const mailFeeds: MailFeedRow[] = [];
 const MAIL_FEED_MAX_CAP = 1_000;
@@ -23839,6 +23864,7 @@ function mailDecide(
   senderId: string,
   required: string[],
   hadEarlier?: Map<string, string>,
+  throughProvider = true,
 ) {
   const seen = new Set<string>();
   const decided = recipients.map((recipient) => {
@@ -23858,6 +23884,12 @@ function mailDecide(
         verdict: { allowed: false, reason: "ADDRESS_INVALID", detail: MAIL_ADDRESS_INVALID },
       };
     if (recipient.origin === "prospect") {
+      // A campaign goes through the provider, whose policy forbids a researched list.
+      if (throughProvider && !coldSettings.provider_campaigns)
+        return {
+          recipient,
+          verdict: { allowed: false, reason: "PROSPECT_BY_PROVIDER", detail: COLD_PROVIDER_DETAIL },
+        };
       // Someone the team found, not someone who asked: the cold rules speak first.
       const cold = coldJudge(recipient);
       if (!cold.allowed) return { recipient, verdict: cold };
@@ -24041,6 +24073,386 @@ function mailSegmentView(row: MailSegmentRow) {
 function mailRate(part: number, whole: number): number | null {
   return whole > 0 ? Math.round((part * 10_000) / whole) / 100 : null;
 }
+/** A connected mailbox (0057): a sender of kind "mailbox" plus how it signs in and paces. */
+type MailboxRow = {
+  sender_id: string;
+  provider: "google" | "microsoft" | "smtp";
+  state: "active" | "paused" | "resting" | "disconnected";
+  ready_on: string | null;
+  ramp_from: number;
+  ramp_step: number;
+  gap_minutes: number;
+  gap_jitter_minutes: number;
+  smtp_host: string;
+  smtp_port: number;
+  imap_host: string;
+  imap_port: number;
+  username: string;
+  has_credential: boolean;
+  connected_by: string;
+  connected_at: string | null;
+  last_check_at: string | null;
+  last_check_ok: boolean;
+  last_error: string;
+  rest_until: string | null;
+  rest_reason: string;
+  last_sent_at: string | null;
+  next_send_after: string | null;
+  disconnected_at: string | null;
+  created_at: string;
+};
+const mailboxRows: MailboxRow[] = [];
+const MAILBOX_MAX_CAP = 50;
+const MAILBOX_POOL_CEILING = 1_000;
+const MAILBOX_DEFAULTS = { pool_daily_cap: 500, domain_daily_cap: 150, warm_up_days: 21 };
+const mailboxSettings = { ...MAILBOX_DEFAULTS };
+/** A consent screen's state, and the address it was asked to sign in as. */
+const mailboxStates = new Map<string, string>();
+const MAILBOX_SERVERS: Record<string, { smtp_host: string; imap_host: string }> = {
+  google: { smtp_host: "smtp.gmail.com", imap_host: "imap.gmail.com" },
+  microsoft: { smtp_host: "smtp.office365.com", imap_host: "outlook.office365.com" },
+};
+const MAILBOX_PHASE_LABELS: Record<string, string> = {
+  warming: "Warming",
+  active: "Sending",
+  paused: "Paused",
+  resting: "Resting",
+  disconnected: "Disconnected",
+};
+function mailboxPairs(): Array<{ box: MailboxRow; sender: MailSenderRow }> {
+  const out: Array<{ box: MailboxRow; sender: MailSenderRow }> = [];
+  for (const box of mailboxRows) {
+    const sender = mailSenders.find((row) => row.id === box.sender_id && row.kind === "mailbox");
+    if (sender) out.push({ box, sender });
+  }
+  return out.sort((a, b) => a.sender.created_at.localeCompare(b.sender.created_at));
+}
+/** What the mailbox is doing now: warming, active, paused, resting, disconnected. */
+function mailboxPhase(box: MailboxRow): string {
+  if (box.state === "resting")
+    return !box.rest_until || Date.parse(box.rest_until) > Date.now() ? "resting" : "active";
+  if (box.state !== "active") return box.state;
+  return box.ready_on && todayIso() < box.ready_on ? "warming" : "active";
+}
+function mailboxRampDay(box: MailboxRow): number {
+  const ready = box.ready_on ?? (box.connected_at ?? now()).slice(0, 10);
+  const today = todayIso();
+  if (today < ready) return 0;
+  return (
+    Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${ready}T00:00:00Z`)) / 86_400_000) +
+    1
+  );
+}
+/** mailboxes.cap_today: nothing unless active and warm, then the climb, never above 50. */
+function mailboxCapToday(box: MailboxRow, sender: MailSenderRow): number {
+  if (mailboxPhase(box) !== "active" || sender.paused_at || !sender.active) return 0;
+  const target = Math.max(0, Math.min(sender.daily_cap || 30, MAILBOX_MAX_CAP));
+  const day = mailboxRampDay(box);
+  if (day <= 0) return 0;
+  return Math.max(0, Math.min(target, box.ramp_from + box.ramp_step * (day - 1)));
+}
+function mailboxSentToday(senderId: string): number {
+  return mailSentTodayWhere((sent) => sent.sender_id === senderId);
+}
+function mailboxLive(senderId: string): number {
+  return mailEnrolments.filter(
+    (row) => row.sender_id === senderId && (row.state === "active" || row.state === "paused"),
+  ).length;
+}
+/** mailboxes.choose: the enroller's own warm mailbox with the fewest live enrolments for its cap. */
+function mailboxChoose(
+  staffId: string,
+  placed: Map<string, number>,
+): { sender: MailSenderRow | null; why: string } {
+  const mine = mailboxPairs().filter(({ sender }) => sender.staff_id === staffId);
+  if (!mine.length) return { sender: null, why: "no connected mailbox" };
+  const usable = mine.filter(
+    ({ box, sender }) => mailboxPhase(box) === "active" && !sender.paused_at && sender.active,
+  );
+  if (!usable.length) {
+    const warming = mine
+      .filter(({ box }) => mailboxPhase(box) === "warming" && box.ready_on)
+      .map(({ box }) => box.ready_on!)
+      .sort();
+    return {
+      sender: null,
+      why: warming.length
+        ? `warming until ${warming[0]}`
+        : "no mailbox is sending (paused, resting or disconnected)",
+    };
+  }
+  const load = ({ sender }: { sender: MailSenderRow }) =>
+    (mailboxLive(sender.id) + (placed.get(sender.id) ?? 0)) /
+    Math.max(1, Math.min(sender.daily_cap || 30, MAILBOX_MAX_CAP));
+  const best = [...usable].sort(
+    (a, b) => load(a) - load(b) || a.sender.from_email.localeCompare(b.sender.from_email),
+  )[0]!;
+  return { sender: best.sender, why: "" };
+}
+/** How many first emails this person's mailboxes could still send today. */
+function mailboxFirstTouchRoom(staffId: string): number {
+  const endOfDay = Date.parse(`${todayIso()}T00:00:00Z`) + 86_400_000;
+  let room = 0;
+  for (const { box, sender } of mailboxPairs()) {
+    if (sender.staff_id !== staffId) continue;
+    const cap = mailboxCapToday(box, sender);
+    if (cap <= 0) continue;
+    const queued = mailMessages.filter(
+      (row) =>
+        row.sender_id === sender.id &&
+        (row.state === "pending" || row.state === "retry") &&
+        Date.parse(row.scheduled_at) < endOfDay,
+    ).length;
+    room += Math.max(0, cap - mailboxSentToday(sender.id) - queued);
+  }
+  return room;
+}
+function mailboxSteadyCapacity(staffId: string): number {
+  return mailboxPairs()
+    .filter(
+      ({ box, sender }) =>
+        sender.staff_id === staffId && !["paused", "disconnected"].includes(mailboxPhase(box)),
+    )
+    .reduce((sum, { sender }) => sum + Math.min(sender.daily_cap || 30, MAILBOX_MAX_CAP), 0);
+}
+function mailboxWakeRested(): void {
+  for (const { box, sender } of mailboxPairs()) {
+    if (box.state === "resting" && box.rest_until && Date.parse(box.rest_until) <= Date.now())
+      mailboxResume(box, sender);
+  }
+}
+function mailboxHold(
+  box: MailboxRow,
+  sender: MailSenderRow,
+  state: MailboxRow["state"],
+  reason: string,
+) {
+  box.state = state;
+  box.last_error = reason;
+  sender.paused_at = now();
+  sender.paused_reason = reason.slice(0, 200);
+}
+function mailboxResume(box: MailboxRow, sender: MailSenderRow): number {
+  Object.assign(box, { state: "active", rest_until: null, rest_reason: "", last_error: "" });
+  sender.paused_at = null;
+  sender.paused_reason = "";
+  let released = 0;
+  for (const row of mailMessages)
+    if (row.sender_id === sender.id && row.state === "held" && row.last_error === "SENDER_PAUSED") {
+      row.state = "pending";
+      row.last_error = "";
+      released += 1;
+    }
+  return released;
+}
+function mailboxView(box: MailboxRow, sender: MailSenderRow) {
+  const phase = mailboxPhase(box);
+  return {
+    mailbox_id: sender.id,
+    address: sender.from_email,
+    display_name: sender.from_name,
+    domain: sender.from_email.split("@")[1] ?? "",
+    provider: box.provider,
+    owner: sender.staff_id
+      ? { staff_id: sender.staff_id, name: mailStaffName(sender.staff_id) }
+      : null,
+    state: box.state,
+    phase,
+    phase_label: MAILBOX_PHASE_LABELS[phase] ?? phase,
+    ready_on: box.ready_on,
+    ramp_day: mailboxRampDay(box),
+    ramp_from: box.ramp_from,
+    ramp_step: box.ramp_step,
+    daily_cap: Math.min(sender.daily_cap || 30, MAILBOX_MAX_CAP),
+    cap_today: mailboxCapToday(box, sender),
+    sent_today: mailboxSentToday(sender.id),
+    live_enrolments: mailboxLive(sender.id),
+    gap_minutes: box.gap_minutes,
+    gap_jitter_minutes: box.gap_jitter_minutes,
+    last_sent_at: box.last_sent_at,
+    next_send_after: box.next_send_after,
+    rest_until: box.rest_until,
+    rest_reason: box.rest_reason,
+    last_check_at: box.last_check_at,
+    last_check_ok: box.last_check_ok,
+    last_error: box.last_error,
+    connected_at: box.connected_at,
+    smtp_host: box.smtp_host,
+  };
+}
+function mailboxBoard(member: Staff) {
+  const views = mailboxPairs().map(({ box, sender }) => mailboxView(box, sender));
+  const domains = new Map<
+    string,
+    {
+      domain: string;
+      mailboxes: number;
+      cap_today: number;
+      sent_today: number;
+      phases: Record<string, number>;
+      sent_today_counted: number;
+    }
+  >();
+  for (const view of views) {
+    const entry = domains.get(view.domain) ?? {
+      domain: view.domain,
+      mailboxes: 0,
+      cap_today: 0,
+      sent_today: 0,
+      phases: {},
+      sent_today_counted: 0,
+    };
+    entry.mailboxes += 1;
+    entry.cap_today += view.cap_today;
+    entry.sent_today += view.sent_today;
+    entry.sent_today_counted += view.sent_today;
+    entry.phases[view.phase] = (entry.phases[view.phase] ?? 0) + 1;
+    domains.set(view.domain, entry);
+  }
+  for (const entry of domains.values())
+    entry.cap_today = Math.min(entry.cap_today, mailboxSettings.domain_daily_cap);
+  return {
+    mailboxes: views,
+    domains: [...domains.values()].sort((a, b) => a.domain.localeCompare(b.domain)),
+    totals: {
+      mailboxes: views.length,
+      sending: views.filter((view) => view.phase === "active").length,
+      warming: views.filter((view) => view.phase === "warming").length,
+      held: views.filter((view) => ["paused", "resting", "disconnected"].includes(view.phase))
+        .length,
+      capacity_today: Math.min(
+        views.reduce((sum, view) => sum + view.cap_today, 0),
+        mailboxSettings.pool_daily_cap,
+      ),
+      sent_today: views.reduce((sum, view) => sum + view.sent_today, 0),
+    },
+    settings: {
+      ...mailboxSettings,
+      max_daily_cap: MAILBOX_MAX_CAP,
+      pool_ceiling: MAILBOX_POOL_CEILING,
+    },
+    providers: [
+      { key: "google", configured: true },
+      { key: "microsoft", configured: true },
+      { key: "smtp", configured: true },
+    ],
+    may_manage: (CAPABILITIES[member.role] ?? []).includes("hq:admin"),
+    me: member.id,
+  };
+}
+/** A new mailbox for the person, or their own disconnected one signed in again. */
+function mailboxCreate(
+  member: Staff,
+  fields: {
+    provider: MailboxRow["provider"];
+    address: string;
+    display_name: string;
+    smtp_host: string;
+    smtp_port: number;
+    imap_host: string;
+    imap_port: number;
+    username: string;
+  },
+): { box: MailboxRow; sender: MailSenderRow } | { error: ReturnType<typeof refuse> } {
+  const existing = mailSenders.find((row) => row.from_email === fields.address);
+  if (existing && existing.kind !== "mailbox")
+    return {
+      error: refuse(400, "malformed_request", {
+        reason: "address-in-use",
+        address: "this address is already a sender under Settings → Mail",
+      }),
+    };
+  if (existing && existing.staff_id !== member.id)
+    return {
+      error: refuse(400, "malformed_request", {
+        reason: "someone-else's",
+        address: "this mailbox is connected by a colleague",
+      }),
+    };
+  if (existing) {
+    const box = mailboxRows.find((row) => row.sender_id === existing.id)!;
+    Object.assign(box, {
+      provider: fields.provider,
+      smtp_host: fields.smtp_host,
+      smtp_port: fields.smtp_port,
+      imap_host: fields.imap_host,
+      imap_port: fields.imap_port,
+      username: fields.username,
+      has_credential: true,
+      connected_by: member.id,
+      connected_at: now(),
+      disconnected_at: null,
+      last_check_at: now(),
+      last_check_ok: true,
+    });
+    existing.active = true;
+    mailboxResume(box, existing);
+    return { box, sender: existing };
+  }
+  const sender: MailSenderRow = {
+    id: randomUUID(),
+    from_email: fields.address,
+    from_name: fields.display_name.slice(0, 120),
+    reply_to: "",
+    kind: "mailbox",
+    staff_id: member.id,
+    daily_cap: 30,
+    verified: true,
+    verified_source: "provider",
+    verified_checked_at: now(),
+    verification_detail: "signed in by the mailbox's own provider",
+    active: true,
+    paused_at: null,
+    paused_reason: "",
+    created_at: now(),
+  };
+  mailSenders.push(sender);
+  const box: MailboxRow = {
+    sender_id: sender.id,
+    provider: fields.provider,
+    state: "active",
+    ready_on: addDaysIso(todayIso(), mailboxSettings.warm_up_days),
+    ramp_from: 10,
+    ramp_step: 2,
+    gap_minutes: 12,
+    gap_jitter_minutes: 6,
+    smtp_host: fields.smtp_host,
+    smtp_port: fields.smtp_port,
+    imap_host: fields.imap_host,
+    imap_port: fields.imap_port,
+    username: fields.username,
+    has_credential: true,
+    connected_by: member.id,
+    connected_at: now(),
+    last_check_at: now(),
+    last_check_ok: true,
+    last_error: "",
+    rest_until: null,
+    rest_reason: "",
+    last_sent_at: null,
+    next_send_after: null,
+    disconnected_at: null,
+    created_at: now(),
+  };
+  mailboxRows.push(box);
+  return { box, sender };
+}
+function mailboxPairOrRefuse(
+  member: Staff,
+  mailboxId: string,
+  ownOrAdmin = true,
+): { box: MailboxRow; sender: MailSenderRow } | { error: ReturnType<typeof refuse> } {
+  const sender = mailSenders.find((row) => row.id === mailboxId && row.kind === "mailbox");
+  const box = mailboxRows.find((row) => row.sender_id === mailboxId);
+  if (!sender || !box) return { error: refuse(404, "not_found") };
+  if (
+    ownOrAdmin &&
+    sender.staff_id !== member.id &&
+    !(CAPABILITIES[member.role] ?? []).includes("hq:admin")
+  )
+    return { error: refuse(403, "forbidden", { reason: "someone-else's mailbox" }) };
+  return { box, sender };
+}
 function mailFeedView(row: MailFeedRow) {
   const segment = mailSegments.find((candidate) => candidate.id === row.segment_id);
   return {
@@ -24065,6 +24477,8 @@ function mailFeedView(row: MailFeedRow) {
     end_reason: row.end_reason,
     end_reason_label: MAIL_FEED_END_REASONS[row.end_reason] ?? "",
     note: row.note,
+    last_room: row.last_room ?? null,
+    drain_days: row.drain_days ?? null,
   };
 }
 /** Who the segment holds today that the sequence never had, best fit first. */
@@ -24097,8 +24511,12 @@ function mailFeedJudge(
   const reasons: Record<string, number> = {};
   const sample: Array<{ name: string; email: string; company: string }> = [];
   let considered = 0;
+  // A prospect's first email needs room on one of the owner's mailboxes today.
+  const room = mailboxFirstTouchRoom(enroller.id);
+  let prospectsTaken = 0;
+  let limitedByRoom = false;
   for (let start = 0; start < pool.length; start += 100) {
-    if (chosen.length >= feed.daily_cap || considered >= ceiling) break;
+    if (chosen.length >= feed.daily_cap || considered >= ceiling || limitedByRoom) break;
     const batch = pool.slice(start, start + 100);
     const verdicts = mailEnrolVerdicts(
       sequence,
@@ -24107,10 +24525,15 @@ function mailFeedJudge(
       true,
     );
     verdicts.forEach((verdict, index) => {
-      if (chosen.length >= feed.daily_cap || considered >= ceiling) return;
+      if (chosen.length >= feed.daily_cap || considered >= ceiling || limitedByRoom) return;
       const recipient = batch[index]!;
+      if (verdict.allowed && recipient.origin === "prospect" && prospectsTaken >= room) {
+        limitedByRoom = true;
+        return;
+      }
       considered += 1;
       if (verdict.allowed) {
+        if (recipient.origin === "prospect") prospectsTaken += 1;
         chosen.push({ kind: recipient.contact_kind, id: recipient.contact_id });
         if (sample.length < 5)
           sample.push({
@@ -24121,6 +24544,19 @@ function mailFeedJudge(
       } else reasons[verdict.reason] = (reasons[verdict.reason] ?? 0) + 1;
     });
   }
+  // The working days to drain at the steady pace: new people a day is the cap, or — where
+  // the segment holds prospects, whose sequences go from mailboxes — what the owner's
+  // mailboxes send in a day spread over the sequence's emails.
+  const emails =
+    (mailSteps.get(sequence.id) ?? []).filter((step) => step.kind === "email").length || 1;
+  const perDay = !feed.daily_cap
+    ? 0
+    : pool.some((recipient) => recipient.origin === "prospect")
+      ? Math.min(feed.daily_cap, Math.floor(mailboxSteadyCapacity(enroller.id) / emails))
+      : feed.daily_cap;
+  const remaining = considered
+    ? Math.round((pool.length * chosen.length) / considered)
+    : pool.length;
   return {
     would_enrol: chosen.length,
     considered,
@@ -24128,6 +24564,11 @@ function mailFeedJudge(
     already_had: already,
     reasons: Object.fromEntries(Object.entries(reasons).sort((a, b) => b[1] - a[1])),
     sample,
+    room,
+    limited_by_room: limitedByRoom,
+    per_day: perDay,
+    remaining_estimate: remaining,
+    drain_days: remaining <= 0 ? 0 : perDay > 0 ? Math.ceil(remaining / perDay) : null,
     contacts: chosen,
   };
 }
@@ -24171,6 +24612,8 @@ function mailFeedTake(feed: MailFeedRow, sequence: MailSequenceRow) {
   }
   feed.last_run_on = todayIso();
   feed.last_considered = judged.considered;
+  feed.last_room = judged.room;
+  feed.drain_days = judged.drain_days;
   feed.last_enrolled = enrolled;
   feed.last_reasons = judged.reasons;
   feed.enrolled_total += enrolled;
@@ -24845,6 +25288,8 @@ function mailRunWorker(): Record<string, number | boolean> {
   const report = { claimed: 0, sent: 0, deferred: 0, skipped: 0, dry_run: 0, paused: false };
   mailSettings.last_worker_at = now();
   if (!mailSettings.sending_enabled) return { ...report, paused: true };
+  // Rested mailboxes whose rest is over go back to sending first.
+  mailboxWakeRested();
   // The feeds take their day's people once sending is known to be on.
   mailFeedTick();
   const due = mailMessages
@@ -24896,6 +25341,16 @@ function mailRunWorker(): Record<string, number | boolean> {
       leads.find((lead) => lead.id === row.contact_id)?.verified_state === "invalid"
     )
       verdict = { allowed: false, reason: "ADDRESS_INVALID", detail: MAIL_ADDRESS_INVALID };
+    // A campaign queued before the provider route was switched off stays off a prospect.
+    if (
+      verdict.allowed &&
+      !row.is_seed &&
+      row.kind === "campaign" &&
+      !coldSettings.provider_campaigns &&
+      row.contact_kind === "lead" &&
+      leads.find((lead) => lead.id === row.contact_id)?.origin === "prospect"
+    )
+      verdict = { allowed: false, reason: "PROSPECT_BY_PROVIDER", detail: COLD_PROVIDER_DETAIL };
     if (!verdict.allowed) {
       row.state = "skipped";
       row.skip_reason = verdict.reason;
@@ -24960,7 +25415,52 @@ function mailRunWorker(): Record<string, number | boolean> {
         continue;
       }
     }
-    if (!row.is_seed && !campaign?.dry_run) {
+    const boxSender = mailSenders.find(
+      (candidate) => candidate.id === row.sender_id && candidate.kind === "mailbox",
+    );
+    const box = boxSender ? mailboxRows.find((item) => item.sender_id === boxSender.id) : undefined;
+    if (boxSender && !row.is_seed) {
+      // mailboxes.py: warm first, then a person's pace — the gap, then the climb's cap,
+      // the sending domain's and the pool's.
+      const phase = box ? mailboxPhase(box) : "disconnected";
+      if (phase === "warming") {
+        defer(
+          mailNextSlotMs(Math.max(Date.parse(`${box!.ready_on}T00:00:00Z`), Date.now()), zone),
+          "the mailbox is still warming",
+        );
+        continue;
+      }
+      if (phase !== "active") {
+        Object.assign(row, { state: "held", last_error: "SENDER_PAUSED" });
+        continue;
+      }
+      if (box!.next_send_after && Date.parse(box!.next_send_after) > Date.now()) {
+        defer(Date.parse(box!.next_send_after), "the mailbox's gap between sends");
+        continue;
+      }
+      const boxDomain = boxSender.from_email.split("@")[1] ?? "";
+      if (mailboxSentToday(boxSender.id) >= mailboxCapToday(box!, boxSender)) {
+        defer(mailNextSlotMs(tomorrow, zone), "cap reached: mailbox");
+        continue;
+      }
+      if (
+        mailSentTodayWhere((sent) =>
+          mailSenders.some(
+            (other) =>
+              other.id === sent.sender_id &&
+              other.kind === "mailbox" &&
+              other.from_email.endsWith(`@${boxDomain}`),
+          ),
+        ) >= mailboxSettings.domain_daily_cap ||
+        mailSentTodayWhere((sent) =>
+          mailSenders.some((other) => other.id === sent.sender_id && other.kind === "mailbox"),
+        ) >= mailboxSettings.pool_daily_cap
+      ) {
+        defer(mailNextSlotMs(tomorrow, zone), "cap reached: mailbox pool");
+        continue;
+      }
+    }
+    if (!row.is_seed && !campaign?.dry_run && !boxSender) {
       const sender = mailSenders.find((candidate) => candidate.id === row.sender_id);
       if (mailSentToday() >= mailSettings.global_daily_cap) {
         defer(mailNextSlotMs(tomorrow, zone), "cap reached: global");
@@ -25017,6 +25517,13 @@ function mailRunWorker(): Record<string, number | boolean> {
     }
     mailProviderCounter += 1;
     const sentAt = now();
+    if (box) {
+      // A person's pace: the next send waits the gap plus a random part of the jitter.
+      box.last_sent_at = sentAt;
+      box.next_send_after = new Date(
+        Date.now() + (box.gap_minutes + Math.random() * box.gap_jitter_minutes) * 60_000,
+      ).toISOString();
+    }
     Object.assign(row, {
       state: "delivered",
       sent_at: sentAt,
@@ -25233,9 +25740,11 @@ function mailEnrolVerdicts(
     )
       perCompany.set(row.company_id, (perCompany.get(row.company_id) ?? 0) + 1);
   }
-  const sender =
+  const salesSender =
     mailSenders.find((row) => row.id === sequence.sender_id && row.active) ??
     mailSenders.find((row) => row.kind === "sales" && row.staff_id === enroller.id && row.active);
+  /** Prospects this call has placed on each mailbox, so one call spreads them evenly. */
+  const placed = new Map<string, number>();
   const required: string[] = [];
   for (const step of mailSteps.get(sequence.id) ?? []) {
     if (step.kind !== "email") continue;
@@ -25257,6 +25766,12 @@ function mailEnrolVerdicts(
       : leadRow
         ? mailLeadRecipient(leadRow)
         : null;
+    // Someone the team found is written to from a person's own connected mailbox.
+    const chosen =
+      recipient?.origin === "prospect"
+        ? mailboxChoose(enroller.id, placed)
+        : { sender: salesSender ?? null, why: "" };
+    const sender = chosen.sender ?? undefined;
     const entry = {
       contact_kind: contact.kind,
       contact_id: contact.id,
@@ -25266,6 +25781,7 @@ function mailEnrolVerdicts(
       allowed: true,
       reason: "",
       detail: "",
+      mailbox: "",
       recipient,
       sender,
     };
@@ -25273,6 +25789,7 @@ function mailEnrolVerdicts(
       Object.assign(entry, { allowed: false, reason, detail });
     let firmsPending = "";
     if (!recipient) return refuse("NOT_FOUND");
+    if (!sender && recipient.origin === "prospect") return refuse("NO_MAILBOX", chosen.why);
     if (!sender) return refuse("NO_SENDER", "no sales identity for the sender");
     const norm = mailNorm(recipient.email);
     if (seen.has(norm)) return refuse("DUPLICATE");
@@ -25323,6 +25840,10 @@ function mailEnrolVerdicts(
     if (recipient.company_id)
       perCompany.set(recipient.company_id, (perCompany.get(recipient.company_id) ?? 0) + 1);
     if (firmsPending) firmsTaken.add(firmsPending);
+    if (sender.kind === "mailbox") {
+      placed.set(sender.id, (placed.get(sender.id) ?? 0) + 1);
+      entry.mailbox = sender.from_email;
+    }
     return entry;
   });
 }
@@ -25585,6 +26106,8 @@ function seedMail() {
   mailSteps.clear();
   mailEnrolments.length = 0;
   mailFeeds.length = 0;
+  mailboxRows.length = 0;
+  Object.assign(mailboxSettings, MAILBOX_DEFAULTS);
   mailEvents.length = 0;
   Object.assign(mailSettings, {
     ...MAIL_SETTINGS_SEED,
@@ -26181,6 +26704,77 @@ function seedMail() {
       updated_at: mailHoursAgo(24 * 2),
     },
   );
+  // Connected mailboxes: the owner's main one sending since September, a second on
+  // another of the team's domains still warming, and the sales person's resting after a
+  // block — the three states a person meets most.
+  const seedBox = (
+    staffId: string,
+    name: string,
+    address: string,
+    provider: MailboxRow["provider"],
+    readyOffset: number,
+    extra: Partial<MailboxRow> = {},
+  ) => {
+    const sender: MailSenderRow = {
+      id: randomUUID(),
+      from_email: address,
+      from_name: name,
+      reply_to: "",
+      kind: "mailbox",
+      staff_id: staffId,
+      daily_cap: 30,
+      verified: true,
+      verified_source: "provider",
+      verified_checked_at: mailHoursAgo(24 * 30),
+      verification_detail: "signed in by the mailbox's own provider",
+      active: true,
+      paused_at: null,
+      paused_reason: "",
+      created_at: mailHoursAgo(24 * Math.max(1, 21 - readyOffset)),
+    };
+    mailSenders.push(sender);
+    mailboxRows.push({
+      sender_id: sender.id,
+      provider,
+      state: "active",
+      ready_on: addDaysIso(todayIso(), readyOffset),
+      ramp_from: 10,
+      ramp_step: 2,
+      gap_minutes: 12,
+      gap_jitter_minutes: 6,
+      smtp_host: provider === "smtp" ? "smtppro.zoho.in" : MAILBOX_SERVERS[provider]!.smtp_host,
+      smtp_port: provider === "smtp" ? 465 : 587,
+      imap_host: provider === "smtp" ? "imappro.zoho.in" : MAILBOX_SERVERS[provider]!.imap_host,
+      imap_port: 993,
+      username: address,
+      has_credential: true,
+      connected_by: staffId,
+      connected_at: mailHoursAgo(24 * Math.max(1, 21 - readyOffset)),
+      last_check_at: mailHoursAgo(3),
+      last_check_ok: true,
+      last_error: "",
+      rest_until: null,
+      rest_reason: "",
+      last_sent_at: null,
+      next_send_after: null,
+      disconnected_at: null,
+      created_at: mailHoursAgo(24 * Math.max(1, 21 - readyOffset)),
+      ...extra,
+    });
+    if (extra.state === "resting") {
+      sender.paused_at = mailHoursAgo(18);
+      sender.paused_reason = extra.rest_reason ?? "";
+    }
+    return sender;
+  };
+  seedBox(OWNER_STAFF, "The Owner", "owner@quantifyterminal.co", "google", -32);
+  seedBox(OWNER_STAFF, "The Owner", "owner@getquantifyterminal.com", "microsoft", 9);
+  seedBox(SALES_STAFF, "Sales Person", "sales.person@quantifyterminal.in", "smtp", -40, {
+    state: "resting",
+    rest_until: new Date(Date.now() + 30 * 3_600_000).toISOString(),
+    rest_reason: "refused as a block: 550 5.7.1 message rejected as spam by policy",
+    last_error: "refused as a block: 550 5.7.1 message rejected as spam by policy",
+  });
   // The programme: the intro sequence fed from the verified Indian PMS segment, paused
   // this week while the verifier's second file is awaited.
   mailFeeds.push({
@@ -27270,6 +27864,10 @@ routes.push(
       const fromEmail = mailNorm(body.from_email ?? existing?.from_email);
       if (!mailValidEmail(fromEmail))
         return refuse(400, "malformed_request", { from_email: "a valid address" });
+      if (existing?.kind === "mailbox")
+        return refuse(400, "malformed_request", {
+          kind: "a connected mailbox is managed under Mailboxes",
+        });
       const kind = String(body.kind ?? existing?.kind ?? "marketing");
       if (kind !== "marketing" && kind !== "sales")
         return refuse(400, "malformed_request", { kind: "marketing or sales" });
@@ -28094,6 +28692,8 @@ routes.push(
         String(body.topic ?? "updates"),
         "",
         [],
+        undefined,
+        false,
       );
       return ok({ conditions, ...mailSummarise(decided) });
     },
@@ -28796,6 +29396,319 @@ routes.push(
         feeds_ended: feedsEnded,
       });
       return ok({ state, ended, feeds_ended: feedsEnded });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/mailboxes",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers }) => {
+      mailboxWakeRested();
+      return ok(mailboxBoard(caller(headers)!.member));
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mailboxes/connect",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const provider = String(body.provider ?? "");
+      if (provider !== "google" && provider !== "microsoft")
+        return refuse(400, "malformed_request", { provider: "google or microsoft" });
+      const state = `mockmailbox-${provider}-${found.member.id}-${randomUUID().slice(0, 8)}`;
+      mailboxStates.set(state, mailNorm(String(body.login_hint ?? "").slice(0, 254)));
+      audit("mailbox.connect_started", found.member.id, "mailbox", provider);
+      // Like the real consent screen, on ANOTHER origin.
+      return ok({
+        authorization_url: `http://127.0.0.1:${PORT}/api/v1/mock/mailbox-consent?state=${encodeURIComponent(state)}`,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mailboxes/connect/complete",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const state = String(body.state ?? "");
+      const hint = mailboxStates.get(state);
+      if (hint === undefined || !state.includes(found.member.id))
+        return refuse(403, "forbidden", { reason: "state" });
+      mailboxStates.delete(state);
+      const provider = state.split("-")[1] === "microsoft" ? "microsoft" : "google";
+      const local = found.member.email.split("@")[0] ?? "team";
+      // The mock's consent screen signs in as the address it was asked for, as a person
+      // at a real one would; without one, a mailbox on one of the team's own domains.
+      const address = mailValidEmail(hint)
+        ? hint
+        : `${local}@${provider === "google" ? "quantifyterminal.co" : "getquantifyterminal.com"}`;
+      const created = mailboxCreate(found.member, {
+        provider,
+        address,
+        display_name: found.member.display_name || address,
+        smtp_host: MAILBOX_SERVERS[provider]!.smtp_host,
+        smtp_port: 587,
+        imap_host: MAILBOX_SERVERS[provider]!.imap_host,
+        imap_port: 993,
+        username: address,
+      });
+      if ("error" in created) return created.error;
+      audit("mailbox.connected", found.member.id, "mailbox", created.sender.id, "", {
+        address,
+        provider,
+      });
+      return ok({
+        mailbox: mailboxView(created.box, created.sender),
+        check: { ok: true, kind: "", detail: "" },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mailboxes/add",
+    auth: true,
+    capability: "crm:write",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const address = mailNorm(body.address);
+      const errors: Record<string, string> = {};
+      if (!mailValidEmail(address)) errors.address = "a valid address";
+      const smtpHost = String(body.smtp_host ?? "")
+        .trim()
+        .toLowerCase();
+      const imapHost = String(body.imap_host ?? "")
+        .trim()
+        .toLowerCase();
+      const host = /^(?=.{1,253}$)[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+      if (!host.test(smtpHost)) errors.smtp_host = "a server name such as smtp.example.com";
+      if (imapHost && !host.test(imapHost))
+        errors.imap_host = "a server name such as imap.example.com";
+      const smtpPort = Number(body.smtp_port ?? 587);
+      const imapPort = Number(body.imap_port ?? 993);
+      if (![25, 465, 587, 2525].includes(smtpPort))
+        errors.smtp_port = "465 or 587 (25 and 2525 where the host says so)";
+      if (![143, 993].includes(imapPort)) errors.imap_port = "993 (or 143)";
+      const password = String(body.password ?? "");
+      if (password.length < 1 || password.length > 256)
+        errors.password = "the app password the host gave you";
+      if (Object.keys(errors).length) return refuse(400, "malformed_request", errors);
+      // The mock's servers refuse any password that says so, to show the refusal.
+      if (password.toLowerCase().includes("wrong"))
+        return refuse(400, "malformed_request", {
+          reason: "sign-in-refused",
+          password: "535 5.7.8 Username and Password not accepted",
+        });
+      // ...and nothing answers at a host named "nowhere": a mailbox that never signed in
+      // has proved nothing, so nothing is kept.
+      if (smtpHost.startsWith("nowhere."))
+        return refuse(400, "malformed_request", {
+          reason: "server-unreachable",
+          smtp_host: `nothing answered at ${smtpHost} on port ${smtpPort}`,
+        });
+      const displayName = String(body.display_name ?? found.member.display_name ?? "")
+        .trim()
+        .slice(0, 120);
+      const created = mailboxCreate(found.member, {
+        provider: "smtp",
+        address,
+        display_name: displayName || address,
+        smtp_host: smtpHost,
+        smtp_port: smtpPort,
+        imap_host: imapHost,
+        imap_port: imapPort,
+        username: String(body.username ?? address)
+          .trim()
+          .slice(0, 254),
+      });
+      if ("error" in created) return created.error;
+      audit("mailbox.connected", found.member.id, "mailbox", created.sender.id, "", {
+        address,
+        provider: "smtp",
+      });
+      return ok({
+        mailbox: mailboxView(created.box, created.sender),
+        check: { ok: true, kind: "", detail: "" },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mailboxes/{mailbox_id}/update",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const pair = mailboxPairOrRefuse(found.member, params.mailbox_id ?? "");
+      if ("error" in pair) return pair.error;
+      const errors: Record<string, string> = {};
+      const whole = (name: string, low: number, high: number) => {
+        const value = body[name];
+        if (typeof value !== "number" || !Number.isInteger(value) || value < low || value > high) {
+          errors[name] = `a whole number from ${low} to ${high}`;
+          return null;
+        }
+        return value;
+      };
+      const changes: Record<string, number | string> = {};
+      if ("daily_cap" in body) {
+        const value = whole("daily_cap", 1, MAILBOX_MAX_CAP);
+        if (value !== null) changes.daily_cap = value;
+      }
+      for (const [name, low, high] of [
+        ["ramp_from", 1, MAILBOX_MAX_CAP],
+        ["ramp_step", 0, 20],
+        ["gap_minutes", 2, 240],
+        ["gap_jitter_minutes", 0, 120],
+      ] as const)
+        if (name in body) {
+          const value = whole(name, low, high);
+          if (value !== null) changes[name] = value;
+        }
+      if ("display_name" in body) {
+        const name = String(body.display_name ?? "")
+          .trim()
+          .split(/\s+/)
+          .join(" ")
+          .slice(0, 120);
+        if (!name) errors.display_name = "the name recipients see";
+        else changes.from_name = name;
+      }
+      if (Object.keys(errors).length) return refuse(400, "malformed_request", errors);
+      if (!Object.keys(changes).length)
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
+      for (const [name, value] of Object.entries(changes)) {
+        if (name === "daily_cap") pair.sender.daily_cap = Number(value);
+        else if (name === "from_name") pair.sender.from_name = String(value);
+        else (pair.box as unknown as Record<string, number>)[name] = Number(value);
+      }
+      audit("mailbox.updated", found.member.id, "mailbox", pair.sender.id, "", { changes });
+      return ok({ mailbox: mailboxView(pair.box, pair.sender) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mailboxes/{mailbox_id}/ready",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const pair = mailboxPairOrRefuse(found.member, params.mailbox_id ?? "", false);
+      if ("error" in pair) return pair.error;
+      const reason = String(body.reason ?? "").trim();
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say why it is already warm" });
+      const was = pair.box.ready_on;
+      pair.box.ready_on = todayIso();
+      audit("mailbox.ready", found.member.id, "mailbox", pair.sender.id, reason, { was });
+      return ok({ mailbox: mailboxView(pair.box, pair.sender) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mailboxes/{mailbox_id}/state",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const pair = mailboxPairOrRefuse(found.member, params.mailbox_id ?? "");
+      if ("error" in pair) return pair.error;
+      const state = String(body.state ?? "");
+      if (state !== "active" && state !== "paused")
+        return refuse(400, "malformed_request", { state: "active or paused" });
+      if (pair.box.state === "disconnected")
+        return refuse(400, "malformed_request", { state: "connect the mailbox again first" });
+      let released = 0;
+      if (state === "paused") mailboxHold(pair.box, pair.sender, "paused", "paused by hand");
+      else released = mailboxResume(pair.box, pair.sender);
+      audit("mailbox.state", found.member.id, "mailbox", pair.sender.id, "", { state, released });
+      return ok({ mailbox: mailboxView(pair.box, pair.sender), released });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mailboxes/{mailbox_id}/check",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const pair = mailboxPairOrRefuse(found.member, params.mailbox_id ?? "");
+      if ("error" in pair) return pair.error;
+      if (pair.box.state === "disconnected")
+        return refuse(400, "malformed_request", { state: "connect the mailbox again first" });
+      pair.box.last_check_at = now();
+      pair.box.last_check_ok = true;
+      if (pair.box.state === "active") pair.box.last_error = "";
+      audit("mailbox.checked", found.member.id, "mailbox", pair.sender.id, "", { ok: true });
+      return ok({
+        mailbox: mailboxView(pair.box, pair.sender),
+        check: { ok: true, kind: "", detail: "" },
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mailboxes/{mailbox_id}/disconnect",
+    auth: true,
+    capability: "crm:write",
+    sudo: true,
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const pair = mailboxPairOrRefuse(found.member, params.mailbox_id ?? "");
+      if ("error" in pair) return pair.error;
+      const reason = String(body.reason ?? "").trim();
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say why it is being disconnected" });
+      mailboxHold(pair.box, pair.sender, "disconnected", "disconnected");
+      pair.box.has_credential = false;
+      pair.box.disconnected_at = now();
+      const held = mailMessages.filter(
+        (row) => row.sender_id === pair.sender.id && row.state === "held",
+      ).length;
+      audit("mailbox.disconnected", found.member.id, "mailbox", pair.sender.id, reason, { held });
+      return ok({ mailbox: mailboxView(pair.box, pair.sender), held });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/mailboxes/update",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const reason = String(body.reason ?? "").trim();
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say why the ceilings are changing" });
+      const errors: Record<string, string> = {};
+      const next = { ...mailboxSettings };
+      for (const [name, low, high] of [
+        ["pool_daily_cap", 1, MAILBOX_POOL_CEILING],
+        ["domain_daily_cap", 1, MAILBOX_POOL_CEILING],
+        ["warm_up_days", 0, 60],
+      ] as const)
+        if (name in body) {
+          const value = body[name];
+          if (typeof value !== "number" || !Number.isInteger(value) || value < low || value > high)
+            errors[name] = `a whole number from ${low} to ${high.toLocaleString("en-US")}`;
+          else next[name] = value;
+        }
+      if (Object.keys(errors).length) return refuse(400, "malformed_request", errors);
+      if (JSON.stringify(next) === JSON.stringify(mailboxSettings))
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
+      Object.assign(mailboxSettings, next);
+      audit("settings.mailboxes_updated", found.member.id, "settings", "mailboxes", reason);
+      return ok({
+        settings: {
+          ...mailboxSettings,
+          max_daily_cap: MAILBOX_MAX_CAP,
+          pool_ceiling: MAILBOX_POOL_CEILING,
+        },
+      });
     },
   },
   {
@@ -44943,6 +45856,15 @@ const server = createServer((request, response) => {
     url.searchParams.forEach((value, name) => {
       query[name] = value;
     });
+    // The mailbox consent screen: approve at once and back to the portal's callback.
+    if (request.method === "GET" && route === "mock/mailbox-consent") {
+      const back = new URL(`${PORTAL_ORIGIN}/mail/mailboxes/callback`);
+      back.searchParams.set("code", "mock-code");
+      back.searchParams.set("state", query.state ?? "");
+      response.writeHead(302, { location: back.toString() }).end();
+      console.log(`[mock-hq] GET /${route} -> 302 consent`);
+      return;
+    }
     // The mock consent screen: approve at once and send the browser back to the portal.
     if (request.method === "GET" && route === "mock/consent") {
       const back = new URL(`${PORTAL_ORIGIN}/admin/integrations/calendar/callback`);

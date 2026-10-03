@@ -4,10 +4,13 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { HqApiRequestError } from "@/lib/api/core";
 import * as mailApi from "@/lib/api/mail";
 import { fieldValue } from "@/lib/auth/forms";
 import { crmRefusal } from "@/lib/crm/refusal";
+import { formatDate, pluralize } from "@/lib/format";
 import type { ActionState } from "@/lib/forms/action-state";
+import { domainOf, mailHostOf } from "@/lib/mail/mail-host";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
 
 const NOT_WRITER: ActionState = {
@@ -1113,4 +1116,301 @@ export async function enrolOneAction(
   } catch (error) {
     return crmRefusal(error);
   }
+}
+
+// --- connected mailboxes ----------------------------------------------------------------
+
+const MAILBOXES = "/mail/mailboxes";
+
+const NOT_MAILBOX_WRITER: ActionState = {
+  status: "error",
+  message: "Your role reads mail without connecting a mailbox.",
+};
+const NOT_POOL_ADMIN: ActionState = {
+  status: "error",
+  message: "Only an owner or admin declares a mailbox warm or sets the pool's ceilings.",
+};
+
+function sentence(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+/** A refused mailbox change, in the words of what went wrong. */
+function mailboxRefusal(error: unknown): ActionState {
+  if (error instanceof HqApiRequestError) {
+    const said = (name: string) => {
+      const value = error.details[name];
+      return typeof value === "string" ? value : "";
+    };
+    const reason = said("reason");
+    if (reason === "sign-in-refused")
+      return {
+        status: "error",
+        message: `The server refused that password${said("password") ? ` (${said("password")})` : ""}. Nothing was kept.`,
+      };
+    if (reason === "server-unreachable")
+      return {
+        status: "error",
+        message: `${sentence(said("smtp_host") || "nothing answered at that server")}. Check its name and port; nothing was kept.`,
+      };
+    if (reason === "check-failed")
+      return {
+        status: "error",
+        message: `The server did not accept the sign-in${said("password") ? ` (${said("password")})` : ""}. Nothing was kept.`,
+      };
+    if (reason === "address-in-use")
+      return {
+        status: "error",
+        message: "This address is already a sender under Settings, so it cannot be a mailbox too.",
+      };
+    if (reason === "someone-else's" || reason === "someone-else's mailbox")
+      return {
+        status: "error",
+        message: "A colleague connected this mailbox. Only they, or an admin, can change it.",
+      };
+    if (reason === "not-configured")
+      return {
+        status: "error",
+        message:
+          "The service is not set up to keep a mailbox's sign-in yet. An owner gives it its key first.",
+      };
+  }
+  return crmRefusal(error);
+}
+
+function connectedMessage(mailbox: mailApi.Mailbox): string {
+  return mailbox.phase === "warming" && mailbox.ready_on
+    ? `Connected ${mailbox.address}. It sends nothing before ${formatDate(mailbox.ready_on)}, then climbs from ${mailbox.ramp_from} a day.`
+    : `Connected ${mailbox.address}. It may send today, climbing from ${mailbox.ramp_from} a day.`;
+}
+
+/**
+ * Connect the caller's own mailbox, starting from its address. Where the address's mail
+ * lives decides the way in: a host with its own consent screen is sent there; any other
+ * comes back to the server form, filled in where its servers are known.
+ */
+export async function connectMailboxAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "crm:write")) return NOT_MAILBOX_WRITER;
+  const address = fieldValue(formData, "address", 254).trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address))
+    return { status: "error", message: "Type the mailbox's whole address." };
+  const domain = domainOf(address);
+  const host = await mailHostOf(address);
+  if (host.kind === "none")
+    return { status: "error", message: `Nothing receives mail for ${domain}. Check the address.` };
+  if (host.kind === "unknown")
+    return {
+      status: "error",
+      message: `Where ${domain}'s mail lives could not be looked up just now. Try again, or add the mailbox by its server below.`,
+    };
+  if (host.kind === "server") {
+    const query = new URLSearchParams({ add: address });
+    if (host.servers) {
+      query.set("smtp", host.servers.smtp_host);
+      query.set("port", String(host.servers.smtp_port));
+      query.set("imap", host.servers.imap_host);
+    }
+    redirect(`${MAILBOXES}?${query.toString()}#add-mailbox`);
+  }
+  let target: string;
+  try {
+    target = (await mailApi.startMailboxConnect(context.token, host.kind, address))
+      .authorization_url;
+  } catch (error) {
+    if (error instanceof HqApiRequestError && error.details["reason"] === "not-configured")
+      return {
+        status: "error",
+        message: `Mail for ${domain} signs in through its host's own consent screen, which the service is not set up for yet. Until it is, add the mailbox by its server and an app password below.`,
+      };
+    return mailboxRefusal(error);
+  }
+  redirect(target);
+}
+
+/** A mailbox on any other host, by its servers and an app password. */
+export async function addMailboxAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "crm:write")) return NOT_MAILBOX_WRITER;
+  const smtpPort = wholeNumber(formData, "smtp_port");
+  const imapPort = wholeNumber(formData, "imap_port");
+  if (smtpPort === null || imapPort === null)
+    return { status: "error", message: "Ports are whole numbers, such as 465 and 993." };
+  const input: Record<string, unknown> = {
+    address: fieldValue(formData, "address", 254).trim().toLowerCase(),
+    display_name: fieldValue(formData, "display_name", 120).trim(),
+    smtp_host: fieldValue(formData, "smtp_host", 253).trim().toLowerCase(),
+    smtp_port: smtpPort,
+    imap_host: fieldValue(formData, "imap_host", 253).trim().toLowerCase(),
+    imap_port: imapPort,
+    password: fieldValue(formData, "password", 256),
+  };
+  const username = fieldValue(formData, "username", 254).trim();
+  if (username) input.username = username;
+  try {
+    const result = await mailApi.addMailbox(context.token, input);
+    refresh(MAILBOXES, "/leads/rules");
+    return sent(connectedMessage(result.mailbox));
+  } catch (error) {
+    return mailboxRefusal(error);
+  }
+}
+
+/** A mailbox's pace and the name its recipients see. */
+export async function updateMailboxAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "crm:write")) return NOT_MAILBOX_WRITER;
+  const input: Record<string, unknown> = {};
+  for (const name of ["daily_cap", "ramp_from", "ramp_step", "gap_minutes", "gap_jitter_minutes"]) {
+    if (!formData.has(name)) continue;
+    const value = wholeNumber(formData, name);
+    if (value === null) return { status: "error", message: "A pace is in whole numbers." };
+    input[name] = value;
+  }
+  if (formData.has("display_name"))
+    input.display_name = fieldValue(formData, "display_name", 120).trim();
+  try {
+    await mailApi.updateMailbox(context.token, fieldValue(formData, "mailbox_id", 64), input);
+  } catch (error) {
+    return mailboxRefusal(error);
+  }
+  refresh(MAILBOXES, "/leads/rules");
+  return sent("Saved. The new pace applies from its next send.");
+}
+
+export async function readyMailboxAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "hq:admin")) return NOT_POOL_ADMIN;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (reason.length < 4) return { status: "error", message: "Say why it is already warm." };
+  try {
+    const result = await mailApi.readyMailbox(
+      context.token,
+      fieldValue(formData, "mailbox_id", 64),
+      reason,
+    );
+    refresh(MAILBOXES, "/leads/rules");
+    return sent(`It may send from today, climbing from ${result.mailbox.ramp_from} a day.`);
+  } catch (error) {
+    return mailboxRefusal(error);
+  }
+}
+
+/** Pause a mailbox (what is queued on it waits) or let it send again. */
+export async function mailboxStateAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "crm:write")) return NOT_MAILBOX_WRITER;
+  const state = fieldValue(formData, "state", 8) === "paused" ? "paused" : "active";
+  try {
+    const result = await mailApi.setMailboxState(
+      context.token,
+      fieldValue(formData, "mailbox_id", 64),
+      state,
+    );
+    refresh(MAILBOXES, "/leads/rules");
+    if (state === "paused") return sent("Paused. What is queued on it waits.");
+    return sent(
+      result.released > 0
+        ? `Sending again: ${pluralize(result.released, "held message")} released.`
+        : "Sending again.",
+    );
+  } catch (error) {
+    return mailboxRefusal(error);
+  }
+}
+
+/** Sign in and say nothing: proof it can send, without sending anything. */
+export async function checkMailboxAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "crm:write")) return NOT_MAILBOX_WRITER;
+  try {
+    const result = await mailApi.checkMailbox(
+      context.token,
+      fieldValue(formData, "mailbox_id", 64),
+    );
+    refresh(MAILBOXES);
+    return result.check.ok
+      ? sent("Signed in: it can send.")
+      : {
+          status: "error",
+          message: `It could not sign in: ${result.check.detail || result.check.kind}.`,
+        };
+  } catch (error) {
+    return mailboxRefusal(error);
+  }
+}
+
+export async function disconnectMailboxAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "crm:write")) return NOT_MAILBOX_WRITER;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (reason.length < 4) return { status: "error", message: "Say why it is being disconnected." };
+  try {
+    const result = await mailApi.disconnectMailbox(
+      context.token,
+      fieldValue(formData, "mailbox_id", 64),
+      reason,
+    );
+    refresh(MAILBOXES, "/leads/rules");
+    return sent(
+      result.held > 0
+        ? `Disconnected. ${pluralize(result.held, "queued message")} ${result.held === 1 ? "waits" : "wait"} for it to be connected again.`
+        : "Disconnected. Nothing was queued on it.",
+    );
+  } catch (error) {
+    return mailboxRefusal(error);
+  }
+}
+
+/** The pool's ceilings and the warm-up a new mailbox waits out. */
+export async function mailboxSettingsAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "hq:admin")) return NOT_POOL_ADMIN;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (reason.length < 4) return { status: "error", message: "Say why the ceilings are changing." };
+  const input: Record<string, unknown> = { reason };
+  for (const name of ["pool_daily_cap", "domain_daily_cap", "warm_up_days"]) {
+    const value = wholeNumber(formData, name);
+    if (value === null) return { status: "error", message: "Ceilings are whole numbers." };
+    input[name] = value;
+  }
+  try {
+    await mailApi.updateMailboxSettings(context.token, input);
+  } catch (error) {
+    return mailboxRefusal(error);
+  }
+  refresh(MAILBOXES, "/leads/rules");
+  return sent("Saved.");
 }

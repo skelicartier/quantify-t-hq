@@ -168,6 +168,17 @@ export function FeedPanel({
             {judged.considered > judged.would_enrol &&
               `${judged.considered.toLocaleString("en-GB")} judged to find them.`}
           </p>
+          {judged.limited_by_room && (
+            <p className="page-note">
+              Held to the room in your mailboxes: {judged.room.toLocaleString("en-GB")} more first
+              emails can go today. A feed never enrols more prospects than can be written to.
+            </p>
+          )}
+          <p className="page-note">
+            {judged.per_day > 0
+              ? `At about ${judged.per_day.toLocaleString("en-GB")} new a day, the ${judged.remaining_estimate.toLocaleString("en-GB")} likely to pass would take ${judged.drain_days === 1 ? "a working day" : `${(judged.drain_days ?? 0).toLocaleString("en-GB")} working days`}.`
+              : "No connected mailbox of yours can send yet, so prospects wait. Connect one under Mailboxes."}
+          </p>
           {Object.keys(judged.reasons).length > 0 && (
             <ul className="reason-list">
               {Object.entries(judged.reasons).map(([reason, count]) => (

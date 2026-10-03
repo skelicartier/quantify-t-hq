@@ -504,6 +504,14 @@ const SIGNED_IN_PAGES: Shot[] = [
     path: `/mail/sequences/${MAIL.fundIntro}?tab=feeds`,
     ready: ".enrol-panel",
   },
+  // The pool: one sending, one warming, one resting after a block; and an address on a
+  // host without a consent screen, sent back to the server form with its servers filled in.
+  { name: "mail-mailboxes", path: "/mail/mailboxes", ready: ".record-layout" },
+  {
+    name: "mail-mailboxes-add",
+    path: "/mail/mailboxes?add=zoya%40quantifyterminal.in&smtp=smtppro.zoho.in&port=465&imap=imappro.zoho.in",
+    ready: "#add-address",
+  },
   // The programme's first slice, sent, with its results by country; and the drafted second.
   {
     name: "mail-campaign-series",
@@ -656,6 +664,7 @@ async function captureInteractions(page: Page, folder: string) {
   console.log(`  ✓ ${folder}/admin-key-minted`);
 
   await captureMailFlows(page, folder);
+  await captureMailboxFlows(page, folder);
   await captureSecurityFlows(page, folder);
   await captureInboxFlows(page, folder);
   await captureReceivableFlows(page, folder);
@@ -1925,6 +1934,165 @@ async function captureFieldFlows(page: Page, folder: string) {
  * country's rule set and put back, the checks flipped and restored, the view exported as
  * a file, and the file taken back out — which leaves the one somebody edited.
  */
+/**
+ * Let campaigns write to prospects, or not: the one switch on the sending rules that a
+ * campaign through the provider waits on. Changed only when it differs, so a pass that
+ * died half-way leaves nothing for the next one to trip on.
+ */
+async function setProviderCampaigns(page: Page, on: boolean, name: string) {
+  await page.goto(`${BASE}/leads/rules`, { waitUntil: "networkidle" });
+  if ((await page.locator("#sudo-code").count()) > 0) {
+    await page.fill("#sudo-code", "000000");
+    await page.locator(".sudo-gate button[type=submit]").click();
+  }
+  await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  const box = page.locator("#cold-provider_campaigns");
+  if ((await box.isChecked()) === on) return;
+  await box.setChecked(on);
+  await page.fill(
+    "#cold-checks-reason",
+    on ? "The harness sends its own invented rows by campaign" : "Back to the default",
+  );
+  await page.locator("button", { hasText: "Save the checks" }).click();
+  await page.waitForSelector("form:has(#cold-checks-reason) .form-sent", { timeout: 15_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  if ((await page.locator("#cold-provider_campaigns").isChecked()) !== on)
+    report(name, `campaigns may ${on ? "still not" : "still"} write to prospects`);
+  await shoot(page, name);
+}
+
+/**
+ * Connected mailboxes, end to end. An address whose mail lives with a host that has its
+ * own consent screen goes there and comes back connected (the mock approves at once and
+ * signs in as the address asked for); an address on the team's own host comes back to
+ * the server form with its servers filled in, where a refused password and a server that
+ * answers nothing both keep nothing, and the right one connects. The new mailbox is
+ * paced, declared warm, paused, resumed and checked; the server one is disconnected so
+ * the next pass can add it again; the pool's warm-up is changed and put back.
+ */
+async function captureMailboxFlows(page: Page, folder: string) {
+  const consent = "harness.desk@gmail.com";
+  const server = "harness.desk@quantifyterminal.com";
+  await page.goto(`${BASE}/mail/mailboxes`, { waitUntil: "networkidle" });
+  await page.fill("#connect-address", consent);
+  await page.locator("button", { hasText: /^Connect$/ }).click();
+  await page.waitForURL("**/mail/mailboxes?connected=*", { timeout: 30_000 });
+  if (!page.url().includes("connected=connected"))
+    report(`${folder}/mail-mailbox-connected`, `the consent round trip came back as ${page.url()}`);
+  const consentRow = page.locator("tr", { hasText: consent });
+  if ((await consentRow.count()) === 0)
+    report(`${folder}/mail-mailbox-connected`, "the connected mailbox is not in the table");
+  await shoot(page, `${folder}/mail-mailbox-connected`);
+
+  // The team's own host has no consent screen: the address comes back to the server form.
+  await page.fill("#connect-address", server);
+  await page.locator("button", { hasText: /^Connect$/ }).click();
+  await page.waitForURL("**/mail/mailboxes?add=*", { timeout: 30_000 });
+  await page.waitForSelector("#add-address", { timeout: 15_000 });
+  if ((await page.inputValue("#add-smtp")) !== "smtppro.zoho.in")
+    report(
+      `${folder}/mail-mailbox-add`,
+      `the outgoing server reads "${await page.inputValue("#add-smtp")}"`,
+    );
+  if ((await page.locator("#sudo-code").count()) > 0) {
+    await page.fill("#sudo-code", "000000");
+    await page.locator(".sudo-gate button[type=submit]").click();
+  }
+  await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  const addForm = page.locator("form:has(#add-password)");
+  await page.fill("#add-password", "a-wrong-password");
+  await addForm.locator("button[type=submit]").click();
+  await addForm.locator("[role=alert]", { hasText: "refused that password" }).waitFor({
+    timeout: 15_000,
+  });
+  await page.fill("#add-smtp", "nowhere.example");
+  await page.fill("#add-password", "app-password");
+  await addForm.locator("button[type=submit]").click();
+  await addForm
+    .locator("[role=alert]", { hasText: "Nothing answered at nowhere.example" })
+    .waitFor({
+      timeout: 15_000,
+    });
+  await shoot(page, `${folder}/mail-mailbox-refused`);
+  await page.fill("#add-smtp", "smtppro.zoho.in");
+  await page.fill("#add-password", "app-password");
+  await addForm.locator("button[type=submit]").click();
+  await addForm.locator(".form-sent", { hasText: `Connected ${server}` }).waitFor({
+    timeout: 15_000,
+  });
+
+  // Pace the consent-connected one, then declare it warm when it is still warming.
+  await page.goto(`${BASE}/mail/mailboxes`, { waitUntil: "networkidle" });
+  await page.locator(`a[aria-label="Change ${consent}"]`).click();
+  await page.waitForSelector(`#mailbox-change:has-text("Change ${consent}")`, { timeout: 15_000 });
+  const change = page.locator("section[aria-labelledby='mailbox-change']");
+  await change.locator("input[name=daily_cap]").fill("40");
+  await change.locator("input[name=gap_minutes]").fill("15");
+  await change.locator("button", { hasText: "Save the pace" }).click();
+  await change.locator(".form-sent", { hasText: "Saved" }).waitFor({ timeout: 15_000 });
+  if ((await change.locator("button", { hasText: "Send from today" }).count()) > 0) {
+    await page.fill("#warm-reason", "In daily use for a year before it was connected");
+    await change.locator("button", { hasText: "Send from today" }).click();
+    // The form goes once it has done its work; the card then says what is true now.
+    await change
+      .locator(".card__desc", { hasText: "It has sent since" })
+      .waitFor({ timeout: 15_000 });
+  }
+  await page.reload({ waitUntil: "networkidle" });
+  const paced = (await page.locator("tr", { hasText: consent }).innerText()).replace(/\s+/g, " ");
+  if (!/15–21 min apart/.test(paced) || !/Sending/.test(paced))
+    report(`${folder}/mail-mailbox-change`, `the paced mailbox reads "${paced.slice(0, 200)}"`);
+  await shoot(page, `${folder}/mail-mailbox-change`);
+
+  // Paused and resumed from its row; then a check that it signs in.
+  await page.locator(`button[aria-label="Pause ${consent}"]`).click();
+  await page.locator(`button[aria-label="Resume ${consent}"]`).waitFor({ timeout: 15_000 });
+  if (
+    (await page
+      .locator("tr", { hasText: consent })
+      .locator(".pill", { hasText: "Paused" })
+      .count()) === 0
+  )
+    report(`${folder}/mail-mailbox-paused`, "the paused mailbox does not say so");
+  await page.locator(`button[aria-label="Resume ${consent}"]`).click();
+  await page.locator(`button[aria-label="Pause ${consent}"]`).waitFor({ timeout: 15_000 });
+  await page.locator(`button[aria-label="Check that ${consent} signs in"]`).click();
+  await page
+    .locator("tr", { hasText: consent })
+    .locator(".form-sent", { hasText: "Signed in" })
+    .waitFor({ timeout: 15_000 });
+
+  // The server one disconnected, so the next pass can add it again.
+  // The panel below the table is the one for the mailbox just chosen only once the page
+  // has moved: its heading names it. (The previous one's form is still there until then.)
+  await page.locator(`a[aria-label="Change ${server}"]`).click();
+  await page.waitForSelector(`#mailbox-change:has-text("Change ${server}")`, { timeout: 15_000 });
+  await page.fill("#disconnect-reason", "The harness takes its mailbox away again");
+  await page.locator("button", { hasText: /^Disconnect$/ }).click();
+  // The panel then says what is true now, in place of the form that did it.
+  await page
+    .locator("section[aria-labelledby='mailbox-change']", { hasText: "its sign-in was wiped" })
+    .waitFor({ timeout: 15_000 });
+  await page.goto(`${BASE}/mail/mailboxes`, { waitUntil: "networkidle" });
+  const gone = page.locator("tr", { hasText: server });
+  if ((await gone.locator(".pill", { hasText: "Disconnected" }).count()) === 0)
+    report(`${folder}/mail-mailbox-disconnected`, "the disconnected mailbox does not say so");
+  await shoot(page, `${folder}/mail-mailbox-disconnected`);
+
+  // The pool's warm-up changed with a reason, and put back.
+  const warmUp = await page.inputValue("#warm-up");
+  await page.fill("#warm-up", warmUp === "28" ? "21" : "28");
+  await page.fill("#ceilings-reason", "The harness tries a longer warm-up");
+  await page.locator("button", { hasText: "Save the ceilings" }).click();
+  await page.locator("form:has(#ceilings-reason) .form-sent").waitFor({ timeout: 15_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.fill("#warm-up", warmUp);
+  await page.fill("#ceilings-reason", "The harness puts the warm-up back");
+  await page.locator("button", { hasText: "Save the ceilings" }).click();
+  await page.locator("form:has(#ceilings-reason) .form-sent").waitFor({ timeout: 15_000 });
+  console.log(`  ✓ ${folder}/mail-mailbox-ceilings`);
+}
+
 async function captureProspectFlows(page: Page, folder: string) {
   const stamp = Date.now().toString(36);
   const csv = [
@@ -2035,6 +2203,10 @@ async function captureProspectFlows(page: Page, folder: string) {
   if ((await page.locator("tr", { hasText: `Harness ${stamp}` }).count()) < 1)
     report(`${folder}/lead-segments-saved`, "the saved view is not listed as a segment");
   await shoot(page, `${folder}/lead-segments-saved`);
+
+  // A campaign leaves prospects out unless an admin says otherwise: say so, with a reason,
+  // for the capped send below; the rules part further down puts the default back.
+  await setProviderCampaigns(page, true, `${folder}/lead-rules-provider-on`);
 
   // The same view straight into a campaign, capped: the first five, best fit first. Of
   // the twenty-four, twenty are verified good, so fifteen stay for the next send.
@@ -2182,6 +2354,8 @@ async function captureProspectFlows(page: Page, folder: string) {
   await page.fill("#cold-checks-reason", "The harness puts the check back");
   await page.locator("button", { hasText: "Save the checks" }).click();
   await page.waitForSelector("form:has(#cold-checks-reason) .form-sent", { timeout: 15_000 });
+  // Back to the default: a campaign leaves prospects to the mailboxes again.
+  await setProviderCampaigns(page, false, `${folder}/lead-rules-provider-off`);
 
   // The view as a file, through the export door (the sudo window is still open).
   await page.goto(
@@ -3005,6 +3179,7 @@ const ONLY_FLOW = process.env.HQ_HARNESS_FLOW ?? "";
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
+  mailboxes: captureMailboxFlows,
   fields: captureFieldFlows,
 };
 

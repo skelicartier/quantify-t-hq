@@ -263,7 +263,9 @@ export default async function MailOverviewPage() {
                     <span className="sender__kind">
                       {sender.kind === "sales"
                         ? `Sales · ${sender.staff_name || "a person"}`
-                        : "Marketing"}
+                        : sender.kind === "mailbox"
+                          ? `Mailbox · ${sender.staff_name || "a person"}`
+                          : "Marketing"}
                     </span>
                     <span className="sender__cap">{sender.daily_cap} a day</span>
                     <StatusPill
@@ -271,11 +273,11 @@ export default async function MailOverviewPage() {
                       label={sender.verified ? "Verified" : "Not verified"}
                     />
                     {sender.paused_at && (
-                      <StatusPill
-                        value="paused"
-                        label={`Paused: ${sender.paused_reason}`}
-                        tone="danger"
-                      />
+                      <>
+                        <StatusPill value="paused" label="Paused" tone="danger" />
+                        {/* A pill never wraps: a block's whole reply beside it would run off a phone. */}
+                        <span className="sender__reason">{sender.paused_reason}</span>
+                      </>
                     )}
                   </li>
                 ))}
@@ -289,7 +291,8 @@ export default async function MailOverviewPage() {
                 mode="relative"
                 fallback="never"
               />
-              . Marketing sends from the company; each sequence sends from one person.
+              . Marketing sends from the company; each sequence sends from one person, and a first
+              email to a prospect only from a connected mailbox.
             </p>
           </section>
         </div>

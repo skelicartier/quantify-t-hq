@@ -273,9 +273,34 @@ export default async function LeadRulesPage({ searchParams }: RulesPageProps) {
                   />
                 )}
                 <Card
+                  title="Where first emails go from"
+                  titleAs="h3"
+                  description="A prospect is written to from a person's own connected mailbox, a few dozen a day, never from the shared mail provider."
+                >
+                  <KeyValue>
+                    <KeyValueRow label="Mailboxes sending">
+                      {formatNumber(view.mailboxes.sending)}
+                    </KeyValueRow>
+                    <KeyValueRow label="Warming up">
+                      {formatNumber(view.mailboxes.warming)}
+                    </KeyValueRow>
+                    <KeyValueRow label="Room today, every step">
+                      {formatNumber(view.mailboxes.capacity_today)}
+                    </KeyValueRow>
+                  </KeyValue>
+                  <p className="page-note">
+                    {view.mailboxes.sending === 0
+                      ? "None can send yet, so no prospect is written to today. "
+                      : ""}
+                    <Link className="text-link" href="/mail/mailboxes">
+                      Mailboxes
+                    </Link>
+                  </p>
+                </Card>
+                <Card
                   title="The checks"
                   titleAs="h3"
-                  description="Applied to every prospect before a campaign or a sequence takes them."
+                  description="Applied to every prospect before a sequence takes them, and before a campaign does when campaigns may."
                 >
                   {canEdit ? (
                     <ColdChecksForm
