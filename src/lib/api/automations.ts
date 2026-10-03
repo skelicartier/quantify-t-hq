@@ -101,6 +101,10 @@ const optionsSchema = z.object({
   lifecycles: z.array(z.string()),
   priorities: z.array(z.string()),
   staff: z.array(z.object({ staff_id: z.string(), name: z.string() })),
+  /** What an "enrol" action may name: for a person or a lead, the sequences not archived. */
+  sequences: z
+    .array(z.object({ sequence_id: z.string(), name: z.string(), state: z.string() }))
+    .default([]),
 });
 export type AutomationOptions = z.infer<typeof optionsSchema>;
 

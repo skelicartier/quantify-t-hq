@@ -990,15 +990,40 @@ export async function outcomeAction(
   if (note) input.note = note;
   const until = fieldValue(formData, "pause_until", 10).trim();
   if (until) input.pause_until = until;
+  let branched = "";
   try {
-    await mailApi.recordOutcome(context.token, enrolmentId, input);
+    const result = await mailApi.recordOutcome(context.token, enrolmentId, input);
+    branched = result.branched?.words ?? "";
   } catch (error) {
     return crmRefusal(error);
   }
   refresh("/mail/replies", "/mail/sequences", "/home");
-  return sent(
-    outcome === "out_of_office" ? "Paused until they are back." : "Recorded; the sequence ended.",
-  );
+  if (outcome === "out_of_office") return sent("Paused until they are back.");
+  return sent(`Recorded; the sequence ended.${branched ? ` ${branched}.` : ""}`);
+}
+
+/** The sequence this one leads on to when a reply is recorded as an answer. */
+export async function sequenceBranchAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/sequences");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const sequenceId = fieldValue(formData, "sequence_id", 64);
+  const target = fieldValue(formData, "target_sequence_id", 64);
+  try {
+    await mailApi.setSequenceBranch(
+      context.token,
+      sequenceId,
+      fieldValue(formData, "outcome", 30),
+      target,
+    );
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refresh("/mail/sequences", `/mail/sequences/${sequenceId}`);
+  return sent(target ? "Saved." : "Cleared: nothing more after this answer.");
 }
 
 /** A person says what a reply read back from a mailbox was. */
@@ -1010,13 +1035,18 @@ export async function handleReplyAction(
   const context = await requireStaff("/mail/replies");
   if (!hasCapability(context, "crm:write")) return NOT_WRITER;
   const outcome = fieldValue(formData, "outcome", 30);
+  let branched = "";
   try {
-    await mailApi.handleReply(context.token, fieldValue(formData, "reply_id", 64), { outcome });
+    const result = await mailApi.handleReply(context.token, fieldValue(formData, "reply_id", 64), {
+      outcome,
+    });
+    branched = result.branched?.words ?? "";
   } catch (error) {
     return crmRefusal(error);
   }
   refresh("/mail/replies", "/mail/sequences", "/mail/mailboxes", "/home");
-  return sent(outcome === "dismissed" ? "Nothing recorded." : "Recorded.");
+  if (outcome === "dismissed") return sent("Nothing recorded.");
+  return sent(`Recorded.${branched ? ` ${branched}.` : ""}`);
 }
 
 /** Whoever a reply named instead, added as a prospect; the cold rules then judge them. */

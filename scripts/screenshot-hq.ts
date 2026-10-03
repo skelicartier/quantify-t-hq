@@ -58,6 +58,7 @@ const MAIL = {
   berlinList: "ea800000-0000-4000-8000-000000000002",
   followUp: "ea400000-0000-4000-8000-000000000006",
   fundIntro: "ea500000-0000-4000-8000-000000000001",
+  beforeMeeting: "ea500000-0000-4000-8000-000000000003",
   pmsIntroOne: "ea400000-0000-4000-8000-000000000007",
   pmsIntroTwo: "ea400000-0000-4000-8000-000000000008",
   leadsThisMonth: "ea300000-0000-4000-8000-000000000003",
@@ -553,6 +554,12 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: "main#main-content",
   },
   { name: "mail-sequence-new", path: "/mail/sequences/new", ready: ".sequence-editor" },
+  // A sequence a branch leads into, with the person it took on and where they came from.
+  {
+    name: "mail-sequence-branched",
+    path: `/mail/sequences/${MAIL.beforeMeeting}`,
+    ready: ".data-table",
+  },
   { name: "mail-replies", path: "/mail/replies", ready: "main#main-content" },
   { name: "mail-suppressions", path: "/mail/suppressions", ready: ".data-table" },
   { name: "mail-reports", path: "/mail/reports", ready: ".data-table" },
@@ -705,6 +712,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureDataQualityFlows(page, folder);
   await captureReviewFlows(page, folder);
   await captureTriageFlows(page, folder);
+  await captureBranchFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -3507,6 +3515,57 @@ await fetch("http://127.0.0.1:7071/api/v1/mock/reset", { method: "POST" }).catch
  */
 const ONLY_PAGES = process.env.HQ_HARNESS_PAGES ? new RegExp(process.env.HQ_HARNESS_PAGES) : null;
 const ONLY_FLOW = process.env.HQ_HARNESS_FLOW ?? "";
+/**
+ * A sequence leads on: on the fund intro's Steps tab, "Replied, interested" is pointed at
+ * "Before the meeting" and saved, then cleared again so the next pass starts as this one
+ * did; a meeting recorded on a live row says where the branch took them; the sequence it
+ * leads into names where its people came from.
+ */
+async function captureBranchFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/mail/sequences/${MAIL.fundIntro}?tab=steps`, {
+    waitUntil: "networkidle",
+  });
+  const replied = page.locator("form.branch-form:has(#branch-replied_positive)");
+  await replied.locator("#branch-replied_positive").selectOption(MAIL.beforeMeeting);
+  await replied.getByRole("button", { name: "Save" }).click();
+  await replied.locator(".form-sent").waitFor({ timeout: 10_000 });
+  await page.waitForTimeout(300);
+  if ((await replied.locator("#branch-replied_positive").inputValue()) !== MAIL.beforeMeeting)
+    report(`${folder}/sequence-branches`, "the saved branch shows another choice after saving");
+  await shoot(page, `${folder}/sequence-branches`);
+  await page.goto(`${BASE}/mail/sequences/${MAIL.fundIntro}?tab=steps`, {
+    waitUntil: "networkidle",
+  });
+  await replied.locator("#branch-replied_positive").selectOption("");
+  await replied.getByRole("button", { name: "Save" }).click();
+  await replied.locator(".form-sent").waitFor({ timeout: 10_000 });
+
+  await page.goto(`${BASE}/mail/sequences/${MAIL.fundIntro}`, { waitUntil: "networkidle" });
+  // The answer ends the row it was recorded on; the ended list says where they went.
+  const meeting = page.locator(".outcome-row button", { hasText: "Meeting" }).first();
+  if ((await meeting.count()) > 0) {
+    const name = await meeting.evaluate(
+      (button) => button.closest("tr")?.querySelector(".table-title")?.textContent?.trim() ?? "",
+    );
+    await meeting.click();
+    await page
+      .locator(".ended-list li", { hasText: name })
+      .filter({ hasText: "went on to Before the meeting" })
+      .waitFor({ timeout: 15_000 })
+      .catch(() =>
+        report(
+          `${folder}/sequence-meeting-branched`,
+          `${name} is not shown going on to the next sequence`,
+        ),
+      );
+    await shoot(page, `${folder}/sequence-meeting-branched`);
+  }
+  await page.goto(`${BASE}/mail/sequences/${MAIL.beforeMeeting}`, { waitUntil: "networkidle" });
+  if ((await page.locator(".table-sub", { hasText: "From Fund intro" }).count()) === 0)
+    report(`${folder}/sequence-branched`, "no one there says they came from the fund intro");
+  await shoot(page, `${folder}/sequence-branched`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -3515,6 +3574,8 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   quality: captureDataQualityFlows,
   review: captureReviewFlows,
   triage: captureTriageFlows,
+  branches: captureBranchFlows,
+  inbox: captureInboxFlows,
 };
 
 async function runPart(browser: Browser) {

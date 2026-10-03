@@ -30,6 +30,7 @@ type Step = {
   field?: string | undefined;
   value?: string | undefined;
   label?: string | undefined;
+  sequence_id?: string | undefined;
 };
 export type BuilderDefinition = { trigger: Trigger; conditions: Condition[]; actions: Step[] };
 
@@ -44,6 +45,7 @@ export type BuilderOptions = {
   lifecycles: readonly string[];
   priorities: readonly string[];
   staff: readonly { staff_id: string; name: string }[];
+  sequences: readonly { sequence_id: string; name: string; state: string }[];
 };
 
 const VALUE_OPS = new Set(["is", "not", "has", "gt", "lt"]);
@@ -56,6 +58,8 @@ function newStep(kind: string): Step {
       return { kind, to: "owner", message: "" };
     case "set_field":
       return { kind, field: "", value: "" };
+    case "enrol":
+      return { kind, sequence_id: "" };
     default:
       return { kind, label: "" };
   }
@@ -490,6 +494,28 @@ export function AutomationBuilder({
                     </Field>
                   )}
                 </div>
+              )}
+              {step.kind === "enrol" && (
+                <Field
+                  id={`auto-step-sequence-${index}`}
+                  label="Sequence"
+                  hint="As you, under every rule an enrolment by hand is judged by; a refusal is written on the run."
+                >
+                  <Select
+                    id={`auto-step-sequence-${index}`}
+                    value={step.sequence_id ?? ""}
+                    onChange={(event) => setStep(index, { sequence_id: event.target.value })}
+                    disabled={off}
+                  >
+                    <option value="">Choose</option>
+                    {options.sequences.map((item) => (
+                      <option key={item.sequence_id} value={item.sequence_id}>
+                        {item.name}
+                        {item.state === "active" ? "" : ` (${item.state})`}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
               )}
               {step.kind === "webhook" && (
                 <Field

@@ -352,8 +352,25 @@ export const enrolmentSchema = z.object({
   exited_at: z.string().nullable(),
   awaiting_reply: z.boolean(),
   sequence_name: z.string().optional(),
+  /** Enrolled by a branch: the enrolment it came from, the answer, and that sequence's name. */
+  from_enrolment_id: z.string().nullable().default(null),
+  from_outcome: z.string().default(""),
+  from_outcome_label: z.string().default(""),
+  from_sequence_name: z.string().default(""),
+  /** The sequence a branch enrolled them in when an answer ended this one. */
+  went_on_to: z.object({ sequence_id: z.string(), name: z.string() }).nullable().default(null),
 });
 export type MailEnrolment = z.infer<typeof enrolmentSchema>;
+
+/** What a branch did when an answer was recorded: enrolled, or why not, in words. */
+export const branchedSchema = z.object({
+  sequence_id: z.string(),
+  name: z.string(),
+  enrolled: z.boolean(),
+  reason: z.string(),
+  enrolment_id: z.string().nullable(),
+  words: z.string().default(""),
+});
 
 export const verdictSchema = z.object({
   contact_kind: z.string(),

@@ -10,6 +10,7 @@ import {
   outcomeAction,
   resumeEnrolmentAction,
   saveSequenceAction,
+  sequenceBranchAction,
   sequenceStateAction,
 } from "@/app/(portal)/mail/actions";
 import { EnrolPanel } from "@/components/mail/enrol-panel";
@@ -20,7 +21,7 @@ import { SequenceEditor } from "@/components/mail/sequence-editor";
 import { Callout } from "@/components/ui/callout";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Field, Input } from "@/components/ui/field";
+import { Field, Input, Select } from "@/components/ui/field";
 import { Popover } from "@/components/ui/popover";
 import {
   Properties,
@@ -251,6 +252,21 @@ export default async function SequencePage({ params, searchParams }: SequencePag
             <Property label="Ends on">
               A reply you record, a meeting, a deal, a lead moving on, a bounce, a stop
             </Property>
+            <Property label="Leads on to">
+              {detail.branches.some((branch) => branch.target) ? (
+                <ul className="step-lines">
+                  {detail.branches
+                    .filter((branch) => branch.target)
+                    .map((branch) => (
+                      <li key={branch.outcome}>
+                        {branch.label} → {branch.target!.name}
+                      </li>
+                    ))}
+                </ul>
+              ) : (
+                <Link href={`${base}?tab=steps#sequence-branches`}>Nothing yet · set it</Link>
+              )}
+            </Property>
             <Property label="Fed from">
               {sequence.feeds.active > 0 ? (
                 <Link href={`${base}?tab=feeds`}>
@@ -316,6 +332,12 @@ export default async function SequencePage({ params, searchParams }: SequencePag
                     <span className="table-sub">
                       {[row.company_name, row.email].filter(Boolean).join(" · ")}
                     </span>
+                    {row.from_outcome && (
+                      <span className="table-sub">
+                        From {row.from_sequence_name || "another sequence"} after &ldquo;
+                        {row.from_outcome_label || row.from_outcome}&rdquo;
+                      </span>
+                    )}
                   </td>
                   <td>
                     <EnrolmentStatePill state={row.state} />
@@ -397,6 +419,14 @@ export default async function SequencePage({ params, searchParams }: SequencePag
                           EXIT_REASON_LABELS[row.exit_reason] ||
                           row.exit_reason ||
                           "Finished"}
+                        {row.went_on_to && (
+                          <>
+                            {" · went on to "}
+                            <Link href={`/mail/sequences/${row.went_on_to.sequence_id}`}>
+                              {row.went_on_to.name}
+                            </Link>
+                          </>
+                        )}
                       </span>
                       <Timestamp
                         value={row.exited_at ?? row.last_sent_at}
@@ -575,6 +605,65 @@ export default async function SequencePage({ params, searchParams }: SequencePag
               />
             </RecordSection>
           </>
+        )}
+        {tab === "steps" && (
+          <RecordSection id="sequence-branches" title="When they answer, lead on to">
+            <p className="page-note">
+              When a reply is recorded as one of these answers, the person is enrolled in the
+              sequence chosen for it — judged by every rule an enrolment is, except &ldquo;emailed
+              in the last two weeks&rdquo;, which the conversation itself would trip. A
+              &ldquo;no&rdquo;, a stop or a bounce never enrols anyone.
+            </p>
+            <ul className="branch-list">
+              {detail.branches.map((branch) => {
+                const targets =
+                  branch.target &&
+                  !detail.branch_targets.some(
+                    (target) => target.sequence_id === branch.target!.sequence_id,
+                  )
+                    ? [...detail.branch_targets, branch.target]
+                    : detail.branch_targets;
+                return (
+                  <li key={branch.outcome} className="branch-list__row">
+                    <MailForm
+                      action={sequenceBranchAction}
+                      fields={{ sequence_id: sequence.sequence_id, outcome: branch.outcome }}
+                      submitLabel="Save"
+                      pendingLabel="Saving…"
+                      className="branch-form"
+                      disabled={!canWrite}
+                    >
+                      <Field id={`branch-${branch.outcome}`} label={branch.label}>
+                        {/* Keyed by what is saved: the form resets after a save, and a
+                            select resets to the value it was first drawn with. */}
+                        <Select
+                          key={branch.target?.sequence_id ?? "none"}
+                          id={`branch-${branch.outcome}`}
+                          name="target_sequence_id"
+                          defaultValue={branch.target?.sequence_id ?? ""}
+                          disabled={!canWrite}
+                        >
+                          <option value="">Nothing more</option>
+                          {targets.map((target) => (
+                            <option key={target.sequence_id} value={target.sequence_id}>
+                              {target.name}
+                              {target.state === "active" ? "" : ` (${target.state})`}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    </MailForm>
+                    {branch.target && branch.target.state !== "active" && (
+                      <span className="table-sub">
+                        &ldquo;{branch.target.name}&rdquo; is not live: nobody is enrolled there
+                        until it is.
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </RecordSection>
         )}
         {tab === "steps" && senders && templates && (
           <SequenceEditor

@@ -5477,6 +5477,38 @@
     display: contents;
   }
 
+  /* A sequence's branches: one short form per answer. */
+  .branch-list {
+    display: grid;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .branch-list__row {
+    display: grid;
+    gap: 4px;
+  }
+
+  .branch-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px 12px;
+  }
+
+  .branch-form .field {
+    flex: 1 1 260px;
+    min-width: 0;
+  }
+
+  .branch-form .form-sent,
+  .branch-form .form-error {
+    flex-basis: 100%;
+    margin: 0;
+  }
+
   /* The inbox's two sides: what needs the person now, then what can wait. */
   .inbox-side {
     display: grid;

@@ -9,6 +9,7 @@ import {
   checklistItemSchema,
   conditionSchema,
   consentSchema,
+  branchedSchema,
   enrolmentSchema,
   feedJudgeSchema,
   feedSchema,
@@ -526,9 +527,26 @@ const perStepSchema = z.object({
   skipped: z.number(),
 });
 
+const branchTargetSchema = z.object({
+  sequence_id: z.string(),
+  name: z.string(),
+  state: z.string(),
+});
+
+/** One answer a sequence may lead on from, and the sequence it leads to (or none). */
+export const sequenceBranchSchema = z.object({
+  outcome: z.string(),
+  label: z.string(),
+  target: branchTargetSchema.nullable(),
+});
+export type SequenceBranch = z.infer<typeof sequenceBranchSchema>;
+
 const sequenceDetailSchema = okEnvelope.extend({
   sequence: sequenceSchema,
   enrolments: z.array(enrolmentSchema),
+  branches: z.array(sequenceBranchSchema).default([]),
+  /** The sequences this one may lead on to: every other one not archived. */
+  branch_targets: z.array(branchTargetSchema).default([]),
   per_step: z.array(perStepSchema),
   feeds: z.array(feedSchema),
   /** The segments a feed may take from, for the form. */
@@ -623,8 +641,24 @@ export function recordOutcome(
 ) {
   return postHqJson(
     `hq/mail/enrolments/${enrolmentId}/outcome`,
-    okEnvelope.extend({ outcome: z.string(), state: z.string() }).passthrough(),
+    okEnvelope
+      .extend({ outcome: z.string(), state: z.string(), branched: branchedSchema.optional() })
+      .passthrough(),
     { token, body: input },
+  );
+}
+
+/** The sequence this one leads on to for an answer; an empty target clears it. */
+export function setSequenceBranch(
+  token: string,
+  sequenceId: string,
+  outcome: string,
+  targetSequenceId: string,
+) {
+  return postHqJson(
+    `hq/mail/sequences/${sequenceId}/branches/set`,
+    okEnvelope.extend({ branches: z.array(sequenceBranchSchema) }),
+    { token, body: { outcome, target_sequence_id: targetSequenceId } },
   );
 }
 
@@ -656,7 +690,7 @@ export function handleReply(
 ) {
   return postHqJson(
     `hq/mail/replies/${replyId}/handle`,
-    okEnvelope.extend({ outcome: z.string() }),
+    okEnvelope.extend({ outcome: z.string(), branched: branchedSchema.optional() }),
     { token, body: input },
   );
 }

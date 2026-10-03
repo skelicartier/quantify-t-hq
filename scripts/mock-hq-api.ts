@@ -25576,6 +25576,9 @@ type MailEnrolmentRow = {
   enrolled_by: string;
   last_sent_at: string | null;
   exited_at: string | null;
+  /** 0065: enrolled by a branch — the enrolment it came from and the answer. */
+  from_enrolment_id?: string | null;
+  from_outcome?: string;
 };
 /** A sequence fed from a segment (0056): a standing take, a little a day. */
 type MailFeedRow = {
@@ -27351,6 +27354,9 @@ function mailEnrolmentView(row: MailEnrolmentRow) {
       Boolean(row.last_sent_at) &&
       mailBusinessDaysSince(row.last_sent_at) >= 1 &&
       !row.outcome,
+    from_enrolment_id: row.from_enrolment_id ?? null,
+    from_outcome: row.from_outcome ?? "",
+    from_outcome_label: MAIL_OUTCOMES[row.from_outcome ?? ""] ?? "",
   };
 }
 
@@ -28018,7 +28024,12 @@ function mailRecordSalesStop(email: string, source: string) {
       mailExit(row, "UNSUBSCRIBED", "unsubscribe", "", source);
 }
 /** mail_sequences.outcome_effects: a stop, a suppression, the firm paused, the lead moved. */
-function mailOutcomeEffects(row: MailEnrolmentRow, outcome: string, actor: string, note: string) {
+function mailOutcomeEffects(
+  row: MailEnrolmentRow,
+  outcome: string,
+  actor: string,
+  note: string,
+): Record<string, unknown> | null {
   if (outcome === "unsubscribe") mailRecordSalesStop(row.email_norm, `outcome:${actor}`);
   if (outcome === "bounced")
     mailSuppress(row.email_norm, "hard_bounce", `outcome:${actor}`, note, actor);
@@ -28040,6 +28051,7 @@ function mailOutcomeEffects(row: MailEnrolmentRow, outcome: string, actor: strin
       lead.disqualify_reason = outcome === "not_interested" ? "not_a_fit" : "other";
     }
   }
+  return mailFollowBranch(row, outcome, actor);
 }
 function mailRepliesHandleOpen(
   enrolmentId: string,
@@ -28788,11 +28800,163 @@ function mailEnqueue(campaign: MailCampaignRow, startIso: string) {
   });
   return { eligible, skipped, state: campaign.state, starts_at: startIso };
 }
+/** mail_sequences.enrol: every contact the verdicts allow, each one's first step staged. */
+function mailEnrolInto(
+  row: MailSequenceRow,
+  contacts: Array<{ kind: string; id: string }>,
+  enroller: Staff,
+  origin?: { from_enrolment_id: string; from_outcome: string },
+) {
+  const verdicts = mailEnrolVerdicts(
+    row,
+    contacts,
+    enroller,
+    (CAPABILITIES[enroller.role] ?? []).includes("mail:send"),
+    Boolean(origin),
+  );
+  const first = (mailSteps.get(row.id) ?? [])[0];
+  const enrolled: string[] = [];
+  const shown = verdicts.map((entry) => {
+    const view: Record<string, unknown> = mailPublicVerdict(entry);
+    if (entry.allowed && entry.recipient && entry.sender && first) {
+      const enrolment: MailEnrolmentRow = {
+        id: randomUUID(),
+        sequence_id: row.id,
+        contact_kind: entry.recipient.contact_kind as "person" | "lead",
+        contact_id: entry.recipient.contact_id,
+        company_id: entry.recipient.company_id,
+        email_norm: mailNorm(entry.recipient.email),
+        owner_staff_id: enroller.id,
+        sender_id: entry.sender.id,
+        state: "active",
+        current_step: 0,
+        waiting_task_id: "",
+        exit_reason: "",
+        outcome: "",
+        paused_until: null,
+        pause_reason: "",
+        thread_subject: "",
+        thread_message_id: "",
+        enrolled_at: now(),
+        enrolled_by: enroller.id,
+        last_sent_at: null,
+        exited_at: null,
+        from_enrolment_id: origin?.from_enrolment_id ?? null,
+        from_outcome: origin?.from_outcome ?? "",
+      };
+      mailEnrolments.push(enrolment);
+      mailStageStep(enrolment, first, mailTomorrowNine());
+      enrolled.push(enrolment.id);
+      view.enrolment_id = enrolment.id;
+    }
+    return view;
+  });
+  audit("mail.enrolled", enroller.id, "mail_sequence", row.id, "", { enrolled: enrolled.length });
+  return { enrolled: enrolled.length, enrolment_ids: enrolled, verdicts: shown };
+}
+
+// -- where a sequence leads on (0065) ---------------------------------------------------------
+const MAIL_BRANCH_OUTCOMES = ["replied_positive", "not_now", "meeting_booked"];
+/** mail_sequences.VERDICT_WORDS: a refusal in words, for a line not the enrol screen's own. */
+const MAIL_VERDICT_WORDS: Record<string, string> = {
+  NOT_FOUND: "the record is gone",
+  NO_MAILBOX: "no connected mailbox can write first yet",
+  NO_SENDER: "no sending identity",
+  DUPLICATE: "the same address twice",
+  ALREADY_IN_SEQUENCE: "already in a sequence",
+  ALREADY_HAD_SEQUENCE: "had this sequence recently",
+  CONTACTED_RECENTLY: "emailed in the last two weeks",
+  OWNED_BY_COLLEAGUE: "a colleague's account",
+  IS_CUSTOMER: "already a customer",
+  COMPANY_LIMIT: "enough of the firm in this sequence already",
+  MISSING_TOKEN: "missing a name the copy needs",
+  ADDRESS_INVALID: "the address does not exist",
+  FIRM_COVERED: "a colleague at the firm is being written to",
+  DO_NOT_CONTACT: "do not contact",
+  SALES_STOP: "asked sales to stop",
+  SUPPRESSED: "on the stop list",
+  UNSUBSCRIBED: "unsubscribed",
+  BOUNCED: "the address bounced",
+  NO_EMAIL: "no address",
+  INVALID_EMAIL: "not a valid address",
+};
+const mailBranches: Array<{
+  sequence_id: string;
+  outcome: string;
+  target_sequence_id: string;
+  created_by: string;
+  created_at: string;
+}> = [];
+
+function mailVerdictWords(reason: string): string {
+  return MAIL_VERDICT_WORDS[reason] ?? reason.replace(/_/g, " ").toLowerCase();
+}
+
+function mailBranchViews(sequence: MailSequenceRow) {
+  return MAIL_BRANCH_OUTCOMES.map((outcome) => {
+    const branch = mailBranches.find(
+      (row) => row.sequence_id === sequence.id && row.outcome === outcome,
+    );
+    const target = branch
+      ? mailSequences.find((row) => row.id === branch.target_sequence_id)
+      : undefined;
+    return {
+      outcome,
+      label: MAIL_OUTCOMES[outcome] ?? outcome,
+      target: target ? { sequence_id: target.id, name: target.name, state: target.state } : null,
+    };
+  });
+}
+
+/** mail_sequences.follow_branch: the sequence this answer leads to, as the conversation's owner. */
+function mailFollowBranch(row: MailEnrolmentRow, outcome: string, actorId: string) {
+  if (!MAIL_BRANCH_OUTCOMES.includes(outcome)) return null;
+  const branch = mailBranches.find(
+    (item) => item.sequence_id === row.sequence_id && item.outcome === outcome,
+  );
+  const target = branch
+    ? mailSequences.find((item) => item.id === branch.target_sequence_id)
+    : undefined;
+  if (!target) return null;
+  const result: Record<string, unknown> = {
+    sequence_id: target.id,
+    name: target.name,
+    enrolled: false,
+    reason: "",
+    enrolment_id: null,
+  };
+  if (target.state !== "active")
+    return {
+      ...result,
+      reason: "NOT_ACTIVE",
+      words: `“${target.name}” is ${target.state}, so nobody was enrolled`,
+    };
+  const enroller =
+    staff.find((member) => member.id === row.owner_staff_id && member.is_active) ??
+    staff.find((member) => member.id === actorId);
+  if (!enroller) return null;
+  const done = mailEnrolInto(target, [{ kind: row.contact_kind, id: row.contact_id }], enroller, {
+    from_enrolment_id: row.id,
+    from_outcome: outcome,
+  });
+  const reason = done.enrolled ? "" : String(done.verdicts[0]?.reason ?? "");
+  return {
+    ...result,
+    enrolled: done.enrolled > 0,
+    reason,
+    enrolment_id: done.enrolment_ids[0] ?? null,
+    words: done.enrolled
+      ? `Enrolled in “${target.name}”`
+      : `Not enrolled in “${target.name}”: ${mailVerdictWords(reason)}`,
+  };
+}
+
 function mailEnrolVerdicts(
   sequence: MailSequenceRow,
   contacts: Array<{ kind: string; id: string }>,
   enroller: Staff,
   mayEnrolOthers: boolean,
+  waiveRecent = false,
 ) {
   const seen = new Set<string>();
   /** Firms this call has already taken a prospect from: one person per firm. */
@@ -28891,7 +29055,11 @@ function mailEnrolVerdicts(
     if (MAIL_CUSTOMER_LIFECYCLES.includes(recipient.lifecycle) && sequence.kind !== "customer")
       return refuse("IS_CUSTOMER");
     const last = mailLastEmailed(norm);
-    if (last !== null && Date.now() - last < sequence.recent_contact_days * 86_400_000)
+    if (
+      !waiveRecent &&
+      last !== null &&
+      Date.now() - last < sequence.recent_contact_days * 86_400_000
+    )
       return refuse("CONTACTED_RECENTLY", new Date(last).toISOString().slice(0, 10));
     if (recipient.owner_staff_id && recipient.owner_staff_id !== enroller.id && !mayEnrolOthers)
       return refuse("OWNED_BY_COLLEAGUE", recipient.owner_staff_id);
@@ -29014,6 +29182,8 @@ const MAIL_IDS = {
   prospectNewsletter: "ea400000-0000-4000-8000-000000000005",
   fundIntro: "ea500000-0000-4000-8000-000000000001",
   renewal: "ea500000-0000-4000-8000-000000000002",
+  // Where the fund intro leads on when a meeting is booked (0065).
+  beforeMeeting: "ea500000-0000-4000-8000-000000000003",
   stopMessage: "ea600000-0000-4000-8000-000000000001",
   stopMessage2: "ea600000-0000-4000-8000-000000000002",
   stopMessage3: "ea600000-0000-4000-8000-000000000003",
@@ -29171,6 +29341,7 @@ function seedMail() {
   mailSequences.length = 0;
   mailSteps.clear();
   mailEnrolments.length = 0;
+  mailBranches.length = 0;
   mailFeeds.length = 0;
   mailboxRows.length = 0;
   mailReplies.length = 0;
@@ -29772,7 +29943,28 @@ function seedMail() {
       created_at: mailHoursAgo(24 * 2),
       updated_at: mailHoursAgo(24 * 2),
     },
+    {
+      id: MAIL_IDS.beforeMeeting,
+      name: "Before the meeting",
+      kind: "prospect",
+      sender_id: "",
+      state: "active",
+      cooling_days: 90,
+      recent_contact_days: 14,
+      company_limit: 2,
+      created_by: OWNER_STAFF,
+      created_at: mailHoursAgo(24 * 30),
+      updated_at: mailHoursAgo(24 * 30),
+    },
   );
+  // A meeting booked on the fund intro leads on to "Before the meeting".
+  mailBranches.push({
+    sequence_id: MAIL_IDS.fundIntro,
+    outcome: "meeting_booked",
+    target_sequence_id: MAIL_IDS.beforeMeeting,
+    created_by: OWNER_STAFF,
+    created_at: mailHoursAgo(24 * 30),
+  });
   // Connected mailboxes: the owner's main one sending since September, a second on
   // another of the team's domains still warming, and the sales person's resting after a
   // block — the three states a person meets most.
@@ -29921,6 +30113,17 @@ function seedMail() {
       task_title: "",
     },
   ]);
+  mailSteps.set(MAIL_IDS.beforeMeeting, [
+    {
+      step_no: 1,
+      kind: "email",
+      delay_days: 1,
+      template_id: MAIL_IDS.bump,
+      template_version: 1,
+      thread: "new",
+      task_title: "",
+    },
+  ]);
   mailSteps.set(MAIL_IDS.renewal, [
     {
       step_no: 1,
@@ -29998,6 +30201,23 @@ function seedMail() {
       exited_at: entry.exit ? mailHoursAgo((entry.sentHoursAgo ?? 0) - 20) : null,
     };
     mailEnrolments.push(enrolment);
+    if (entry.outcome === "meeting_booked")
+      // The branch took them on: in "Before the meeting" since the day they booked.
+      mailEnrolments.push({
+        ...enrolment,
+        id: "ea700000-0000-4000-8000-000000000099",
+        sequence_id: MAIL_IDS.beforeMeeting,
+        state: "active",
+        current_step: 1,
+        exit_reason: "",
+        outcome: "",
+        thread_subject: "",
+        enrolled_at: enrolment.exited_at ?? enrolment.enrolled_at,
+        last_sent_at: null,
+        exited_at: null,
+        from_enrolment_id: enrolment.id,
+        from_outcome: "meeting_booked",
+      });
     for (let step = 1; step <= entry.step; step += 1) {
       const definition = mailSteps.get(MAIL_IDS.fundIntro)![step - 1]!;
       if (definition.kind !== "email") continue;
@@ -32585,7 +32805,30 @@ routes.push(
         sequence: mailSequenceView(row),
         enrolments: [...enrolments]
           .sort((a, b) => b.enrolled_at.localeCompare(a.enrolled_at))
-          .map(mailEnrolmentView),
+          .map((enrolment) => {
+            const source = enrolment.from_enrolment_id
+              ? mailEnrolments.find((other) => other.id === enrolment.from_enrolment_id)
+              : undefined;
+            const onward = mailEnrolments.find((other) => other.from_enrolment_id === enrolment.id);
+            return {
+              ...mailEnrolmentView(enrolment),
+              from_sequence_name: source
+                ? (mailSequences.find((other) => other.id === source.sequence_id)?.name ?? "")
+                : "",
+              went_on_to: onward
+                ? {
+                    sequence_id: onward.sequence_id,
+                    name:
+                      mailSequences.find((other) => other.id === onward.sequence_id)?.name ?? "",
+                  }
+                : null,
+            };
+          }),
+        branches: mailBranchViews(row),
+        branch_targets: mailSequences
+          .filter((other) => other.id !== row.id && other.state !== "archived")
+          .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+          .map((other) => ({ sequence_id: other.id, name: other.name, state: other.state })),
         per_step: perStep,
         feeds: mailFeeds.filter((feed) => feed.sequence_id === row.id).map(mailFeedView),
         segments: mailSegments
@@ -32599,6 +32842,66 @@ routes.push(
         max_daily_cap: MAIL_FEED_MAX_CAP,
         may_send: (CAPABILITIES[caller(headers)!.member.role] ?? []).includes("mail:send"),
       });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/sequences/{sequence_id}/branches/set",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = mailSequences.find((candidate) => candidate.id === params.sequence_id);
+      if (!row) return refuse(404, "not_found");
+      const outcome = String(body.outcome ?? "");
+      if (!MAIL_BRANCH_OUTCOMES.includes(outcome))
+        return refuse(400, "malformed_request", {
+          outcome: `one of ${MAIL_BRANCH_OUTCOMES.join(", ")}`,
+        });
+      const before = mailBranches.find(
+        (item) => item.sequence_id === row.id && item.outcome === outcome,
+      );
+      const targetId = String(body.target_sequence_id ?? "").trim();
+      if (!targetId) {
+        if (before) mailBranches.splice(mailBranches.indexOf(before), 1);
+      } else {
+        const target = mailSequences.find((candidate) => candidate.id === targetId);
+        if (!target)
+          return refuse(400, "malformed_request", { target_sequence_id: "no such sequence" });
+        if (target.id === row.id)
+          return refuse(400, "malformed_request", {
+            target_sequence_id: "a sequence cannot lead on to itself",
+          });
+        if (target.state === "archived")
+          return refuse(400, "malformed_request", {
+            target_sequence_id: "that sequence is archived",
+          });
+        if (
+          mailBranches.some(
+            (item) =>
+              item.sequence_id === target.id &&
+              item.outcome === outcome &&
+              item.target_sequence_id === row.id,
+          )
+        )
+          return refuse(400, "malformed_request", {
+            target_sequence_id: "that sequence already leads back here on the same answer",
+          });
+        if (before) mailBranches.splice(mailBranches.indexOf(before), 1);
+        mailBranches.push({
+          sequence_id: row.id,
+          outcome,
+          target_sequence_id: target.id,
+          created_by: found.member.id,
+          created_at: now(),
+        });
+      }
+      audit("mail.sequence_branch_set", found.member.id, "mail_sequence", row.id, "", {
+        outcome,
+        from: before?.target_sequence_id ?? "",
+        to: targetId,
+      });
+      return ok({ branches: mailBranchViews(row) });
     },
   },
   {
@@ -33124,51 +33427,7 @@ routes.push(
         : [];
       if (!contacts.length)
         return refuse(400, "malformed_request", { contacts: "choose at least one person or lead" });
-      const verdicts = mailEnrolVerdicts(
-        row,
-        contacts,
-        found.member,
-        (CAPABILITIES[found.member.role] ?? []).includes("mail:send"),
-      );
-      const first = (mailSteps.get(row.id) ?? [])[0];
-      const enrolled: string[] = [];
-      const shown = verdicts.map((entry) => {
-        const view: Record<string, unknown> = mailPublicVerdict(entry);
-        if (entry.allowed && entry.recipient && entry.sender && first) {
-          const enrolment: MailEnrolmentRow = {
-            id: randomUUID(),
-            sequence_id: row.id,
-            contact_kind: entry.recipient.contact_kind as "person" | "lead",
-            contact_id: entry.recipient.contact_id,
-            company_id: entry.recipient.company_id,
-            email_norm: mailNorm(entry.recipient.email),
-            owner_staff_id: found.member.id,
-            sender_id: entry.sender.id,
-            state: "active",
-            current_step: 0,
-            waiting_task_id: "",
-            exit_reason: "",
-            outcome: "",
-            paused_until: null,
-            pause_reason: "",
-            thread_subject: "",
-            thread_message_id: "",
-            enrolled_at: now(),
-            enrolled_by: found.member.id,
-            last_sent_at: null,
-            exited_at: null,
-          };
-          mailEnrolments.push(enrolment);
-          mailStageStep(enrolment, first, mailTomorrowNine());
-          enrolled.push(enrolment.id);
-          view.enrolment_id = enrolment.id;
-        }
-        return view;
-      });
-      audit("mail.enrolled", found.member.id, "mail_sequence", row.id, "", {
-        enrolled: enrolled.length,
-      });
-      return ok({ enrolled: enrolled.length, enrolment_ids: enrolled, verdicts: shown });
+      return ok(mailEnrolInto(row, contacts, found.member));
     },
   },
   {
@@ -33207,10 +33466,15 @@ routes.push(
         return ok({ outcome, state: "paused", until });
       }
       mailExit(row, MAIL_OUTCOME_REASONS[outcome]!, outcome, found.member.id, note);
-      mailOutcomeEffects(row, outcome, found.member.id, note);
+      const branched = mailOutcomeEffects(row, outcome, found.member.id, note);
       mailRepliesHandleOpen(row.id, outcome, found.member.id);
       audit("mail.enrolment_outcome", found.member.id, "mail_enrolment", row.id, note, { outcome });
-      return ok({ outcome, state: "exited", reason: MAIL_OUTCOME_REASONS[outcome] });
+      return ok({
+        outcome,
+        state: "exited",
+        reason: MAIL_OUTCOME_REASONS[outcome],
+        ...(branched ? { branched } : {}),
+      });
     },
   },
   {
@@ -33341,8 +33605,12 @@ routes.push(
           result = { state: "paused", until };
         } else {
           mailExit(enrolment, MAIL_OUTCOME_REASONS[outcome]!, outcome, found.member.id, note);
-          mailOutcomeEffects(enrolment, outcome, found.member.id, note);
-          result = { state: "exited", reason: MAIL_OUTCOME_REASONS[outcome] };
+          const branched = mailOutcomeEffects(enrolment, outcome, found.member.id, note);
+          result = {
+            state: "exited",
+            reason: MAIL_OUTCOME_REASONS[outcome],
+            ...(branched ? { branched } : {}),
+          };
         }
       } else if (enrolment) {
         if (outcome === "out_of_office")
@@ -33350,8 +33618,8 @@ routes.push(
             outcome: "the sequence has ended; there is nothing to pause",
           });
         enrolment.outcome = outcome;
-        mailOutcomeEffects(enrolment, outcome, found.member.id, note);
-        result = { state: enrolment.state, late: true };
+        const branched = mailOutcomeEffects(enrolment, outcome, found.member.id, note);
+        result = { state: enrolment.state, late: true, ...(branched ? { branched } : {}) };
       }
       if (enrolment && outcome !== "dismissed")
         mailRepliesHandleOpen(enrolment.id, outcome, found.member.id);
@@ -41786,7 +42054,10 @@ const AUTO_ACTIONS: Record<string, string> = {
   set_field: "Set a field",
   notify: "Notify someone",
   webhook: "Send a webhook",
+  enrol: "Enrol in a sequence",
 };
+/** The records an enrolment can take: the ones with an address of their own. */
+const AUTO_ENROLLABLE = ["person", "lead"];
 const AUTO_PRIORITIES = ["low", "medium", "high", "urgent"];
 const AUTO_LIFECYCLES = ["prospect", "early_access", "customer", "former_customer", "disqualified"];
 const AUTO_FIELDS: Record<string, Record<string, [string, string]>> = {
@@ -41932,6 +42203,8 @@ function autoDescribe(action: Record<string, unknown>, recordType: string): stri
     }
     case "webhook":
       return `Send the automation.fired webhook${action.label ? ` (${String(action.label)})` : ""}`;
+    case "enrol":
+      return `Enrol in the sequence “${mailSequences.find((row) => row.id === action.sequence_id)?.name ?? "a sequence"}”`;
     default:
       return String(action.kind);
   }
@@ -42052,6 +42325,13 @@ function autoValidate(
         value = normal;
       }
       Object.assign(action, { field, value });
+    } else if (actionKind === "enrol") {
+      if (!AUTO_ENROLLABLE.includes(recordType))
+        return bad("actions", "only a person or a lead is enrolled in a sequence");
+      const sequence = mailSequences.find((row) => row.id === String(item.sequence_id ?? ""));
+      if (!sequence || sequence.state === "archived")
+        return bad("actions", "choose a sequence that is not archived");
+      action.sequence_id = sequence.id;
     } else {
       action.label = String(item.label ?? "")
         .trim()
@@ -42198,6 +42478,22 @@ function autoRunOne(
         mockEmit("automation.fired");
         const queued = webhookDeliveries.length - before;
         lines.push(`Webhook queued for ${queued} receiver${queued === 1 ? "" : "s"}`);
+      } else if (action.kind === "enrol") {
+        // As automations._enrol: a rule's refusal is an answer; a sequence gone is a failure.
+        if (!(CAPABILITIES[acting.role] ?? []).includes("crm:write"))
+          throw new Error("the person it acts as cannot enrol anyone");
+        const sequence = mailSequences.find((row) => row.id === action.sequence_id);
+        if (!sequence) throw new Error("the sequence is gone");
+        if (sequence.state !== "active") {
+          lines.push(`Not enrolled in “${sequence.name}”: the sequence is ${sequence.state}`);
+        } else {
+          const done = mailEnrolInto(sequence, [{ kind: recordType, id: record.id }], acting);
+          lines.push(
+            done.enrolled
+              ? `Enrolled in “${sequence.name}”`
+              : `Not enrolled in “${sequence.name}”: ${mailVerdictWords(String(done.verdicts[0]?.reason ?? ""))}`,
+          );
+        }
       }
     }
     if (Object.keys(changes).length)
@@ -42557,7 +42853,9 @@ routes.push(
             .filter(([key]) => key !== "stage_entered" || row.record_type === "deal")
             .map(([value, label]) => ({ value, label })),
           ops: Object.entries(AUTO_OPS).map(([value, label]) => ({ value, label })),
-          action_kinds: Object.entries(AUTO_ACTIONS).map(([value, label]) => ({ value, label })),
+          action_kinds: Object.entries(AUTO_ACTIONS)
+            .filter(([value]) => value !== "enrol" || AUTO_ENROLLABLE.includes(row.record_type))
+            .map(([value, label]) => ({ value, label })),
           fields: kinds(fields),
           settable: kinds(settable),
           date_fields: kinds(fields)
@@ -42576,6 +42874,16 @@ routes.push(
             .filter((member) => member.is_active)
             .map((member) => ({ staff_id: member.id, name: member.display_name || member.email }))
             .sort((a, b) => a.name.localeCompare(b.name)),
+          sequences: AUTO_ENROLLABLE.includes(row.record_type)
+            ? mailSequences
+                .filter((sequence) => sequence.state !== "archived")
+                .map((sequence) => ({
+                  sequence_id: sequence.id,
+                  name: sequence.name,
+                  state: sequence.state,
+                }))
+                .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+            : [],
         },
         limits: { conditions: 10, actions: 5, depth: 3, pause_after: 5, dry_run: 50 },
       });
