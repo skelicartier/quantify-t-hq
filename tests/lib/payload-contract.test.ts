@@ -310,6 +310,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/contracts/{contract_id}", () => revenue.readContract(token, ids.contract_id!)],
   ["hq/revenue/mrr", () => revenue.readMrrBridge(token)],
   ["hq/reports/weekly", () => reports.readWeeklyReport(token, ids.week!)],
+  ["hq/reports/attribution", () => reports.readAttribution(token, 90)],
   ["hq/settings/crm", () => crm.readCrmSettings(token)],
   ["hq/settings/support", () => settings.readSupportSettings(token)],
   ["hq/webhooks", () => settings.readWebhooks(token)],

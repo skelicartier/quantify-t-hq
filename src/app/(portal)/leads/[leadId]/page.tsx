@@ -39,6 +39,7 @@ import { RecordFollow } from "@/components/inbox/record-follow";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLead, type CrmSettings, type LeadDetail } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
+import { channelLabel, referrerHost, visitTags } from "@/lib/crm/attribution";
 import { isoDayPlus } from "@/lib/crm/dates";
 import {
   EMAIL_KINDS,
@@ -115,9 +116,12 @@ export default async function LeadPage({ params }: LeadPageProps) {
   const openStages = (settings?.pipeline ?? [])
     .filter((stage) => !stage.outcome)
     .map((stage) => ({ key: stage.key, label: stage.label }));
+  // "How did you hear about us?" is shown with the visit beside it, not among the answers.
   const answers = Object.entries(lead.payload).filter(
-    ([, value]) => typeof value === "string" && value.trim(),
+    ([field, value]) => field !== "heard_from" && typeof value === "string" && value.trim(),
   );
+  const tags = visitTags(lead);
+  const sentBy = referrerHost(lead.referrer);
 
   return (
     <>
@@ -611,6 +615,28 @@ export default async function LeadPage({ params }: LeadPageProps) {
                     : "No message with this lead."}
                 </p>
               )
+            )}
+            {!prospect && !anonymised && (
+              <KeyValue columns={2} className="answers">
+                <KeyValueRow label="How they heard of us">
+                  {lead.heard_from ? (
+                    <>
+                      &ldquo;{lead.heard_from}&rdquo;
+                      <span className="table-sub">{channelLabel(lead.heard_channel)}</span>
+                    </>
+                  ) : (
+                    "They did not say"
+                  )}
+                </KeyValueRow>
+                <KeyValueRow label="What their visit showed">
+                  {channelLabel(lead.visit_channel || "direct")}
+                  {(tags || sentBy) && (
+                    <span className="table-sub">
+                      {[tags, sentBy && `from ${sentBy}`].filter(Boolean).join(" · ")}
+                    </span>
+                  )}
+                </KeyValueRow>
+              </KeyValue>
             )}
             {answers.length > 0 && (
               <KeyValue columns={2} className="answers">

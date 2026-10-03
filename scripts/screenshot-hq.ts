@@ -120,6 +120,13 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "data-health", path: "/data-health", ready: ".stat-grid" },
   // The weekly review: the scorecard, the quarter's priorities, the note.
   { name: "reports-review", path: "/reports/review", ready: ".score-list" },
+  // Where leads come from: what they said against what their visit showed, on to won.
+  { name: "reports-attribution", path: "/reports/attribution", ready: ".barlist" },
+  {
+    name: "lead-went-on",
+    path: "/leads/1e000000-0000-4000-8000-000000000006",
+    ready: ".record-layout",
+  },
   // Triage and the leads set aside.
   { name: "leads-triage", path: "/leads/triage", ready: "main#main-content" },
   { name: "leads-set-aside", path: "/leads?nurturing=1", ready: ".data-table" },

@@ -2630,6 +2630,11 @@ type LeadRow = {
   nurture_note?: string;
   nurtured_by?: string;
   nurture_returned_at?: string | null;
+  /** The visit's campaign tags and the page that sent it, as the intake keeps them. */
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  referrer?: string;
 };
 type DealRow = {
   id: string;
@@ -10355,7 +10360,13 @@ function seedCrm() {
       full_name: "Marc Delaney",
       company_name: "Arkstone Partners",
       message: "We run a four-person macro book and want the morning brief workflow.",
-      payload: { role: "Portfolio manager", team_size: "2-10", where: "Hedge fund" },
+      payload: {
+        role: "Portfolio manager",
+        team_size: "2-10",
+        where: "Hedge fund",
+        heard_from: "A colleague at another macro fund",
+      },
+      referrer: "https://www.google.com/",
       stage: "new",
       disqualify_reason: "",
       owner_staff_id: "",
@@ -10373,6 +10384,9 @@ function seedCrm() {
       company_name: "Granite Row",
       message: "Which brokers does the terminal support for live accounts?",
       payload: {},
+      utm_source: "linkedin",
+      utm_medium: "social",
+      utm_campaign: "october_brief",
       stage: "attempting",
       disqualify_reason: "",
       owner_staff_id: SALES_STAFF,
@@ -10389,7 +10403,7 @@ function seedCrm() {
       full_name: "Tom Holloway",
       company_name: "Holloway Capital",
       message: "Booked the Thursday slot.",
-      payload: { where: "Prop desk" },
+      payload: { where: "Prop desk", heard_from: "Your podcast episode on earnings season" },
       stage: "connected",
       disqualify_reason: "",
       owner_staff_id: OWNER_STAFF,
@@ -10406,7 +10420,8 @@ function seedCrm() {
       full_name: "Alex Kim",
       company_name: "",
       message: "Can I get free access for my thesis?",
-      payload: { role: "Student" },
+      payload: { role: "Student", heard_from: "A thread on reddit" },
+      referrer: "https://www.reddit.com/r/quant/",
       stage: "disqualified",
       disqualify_reason: "student_or_personal",
       owner_staff_id: OWNER_STAFF,
@@ -10415,6 +10430,45 @@ function seedCrm() {
       converted_person_id: "",
       converted_deal_id: "",
       created_at: agoIso(100),
+    },
+    // Two that went on: one to a pilot, one to a customer.
+    {
+      id: "1e000000-0000-4000-8000-000000000005",
+      source_key: "website_early_access",
+      email: "jonas@northwall.ch",
+      full_name: "Jonas Keller",
+      company_name: "Northwall Advisors",
+      message: "Two of us cover European small caps; we want the overnight brief.",
+      payload: { role: "Portfolio manager", heard_from: "Asked ChatGPT for research terminals" },
+      referrer: "https://chatgpt.com/",
+      stage: "qualified",
+      disqualify_reason: "",
+      owner_staff_id: SALES_STAFF,
+      first_replied_at: agoIso(24 * 30 - 1),
+      converted_company_id: "c0000000-0000-4000-8000-000000000002",
+      converted_person_id: "p0000000-0000-4000-8000-000000000002",
+      converted_deal_id: "d0000000-0000-4000-8000-000000000001",
+      created_at: agoIso(24 * 30),
+    },
+    {
+      id: "1e000000-0000-4000-8000-000000000006",
+      source_key: "website_early_access",
+      email: "elena@meridiancap.com",
+      full_name: "Elena Marsh",
+      company_name: "Meridian Capital",
+      message: "Our CIO wants to see the risk view before the quarter.",
+      payload: { role: "CIO", heard_from: "Recommended by a client" },
+      utm_source: "google",
+      utm_medium: "cpc",
+      utm_campaign: "brand",
+      stage: "qualified",
+      disqualify_reason: "",
+      owner_staff_id: OWNER_STAFF,
+      first_replied_at: agoIso(24 * 70 - 2),
+      converted_company_id: "c0000000-0000-4000-8000-000000000001",
+      converted_person_id: "p0000000-0000-4000-8000-000000000001",
+      converted_deal_id: "d0000000-0000-4000-8000-000000000004",
+      created_at: agoIso(24 * 70),
     },
   );
   deals.length = 0;
@@ -11068,6 +11122,159 @@ function personView(row: PersonRow) {
   };
 }
 
+// Where leads come from, as account_api/hq/attribution.py reads it: the person's answer to
+// "how did you hear about us?" and the visit's tags or referring page, each into a channel.
+const ATTRIBUTION_CHANNELS: Record<string, string> = {
+  search: "Search",
+  paid: "Paid advertising",
+  ai_assistant: "An AI assistant",
+  linkedin: "LinkedIn",
+  x: "X",
+  youtube: "YouTube",
+  reddit: "Reddit",
+  podcast: "A podcast",
+  newsletter: "A newsletter or email",
+  event: "An event or webinar",
+  referral: "Someone who knows us",
+  community: "A community",
+  press: "An article or the press",
+  direct: "Came straight to the site",
+  other: "Something else",
+};
+const ATTRIBUTION_WORDS: [string, string[]][] = [
+  [
+    "ai_assistant",
+    [
+      "chatgpt",
+      "chat gpt",
+      "openai",
+      "claude",
+      "perplexity",
+      "gemini",
+      "copilot",
+      "an ai",
+      "ai search",
+      "ai assistant",
+      "llm",
+    ],
+  ],
+  ["linkedin", ["linkedin", "linked in"]],
+  ["x", ["twitter", "tweet", "x.com", "on x", "from x"]],
+  ["youtube", ["youtube", "you tube"]],
+  ["reddit", ["reddit", "subreddit"]],
+  ["podcast", ["podcast", "episode", "spotify"]],
+  ["newsletter", ["newsletter", "substack", "mailing list", "an email", "email from"]],
+  ["event", ["conference", "webinar", "meetup", "event", "summit", "talk", "panel"]],
+  ["community", ["slack", "discord", "community", "forum", "telegram", "whatsapp group"]],
+  ["press", ["article", "press", "news", "blog", "magazine", "journal"]],
+  ["paid", ["advert", "an ad", "ads", "sponsored"]],
+  ["search", ["google", "bing", "duckduckgo", "search", "searched"]],
+  [
+    "referral",
+    [
+      "friend",
+      "colleague",
+      "recommend",
+      "referred",
+      "referral",
+      "word of mouth",
+      "a client",
+      "my boss",
+      "told me",
+    ],
+  ],
+];
+const ATTRIBUTION_REFERRERS: [string, string[]][] = [
+  [
+    "ai_assistant",
+    [
+      "chatgpt.com",
+      "chat.openai.com",
+      "perplexity.ai",
+      "claude.ai",
+      "gemini.google.com",
+      "copilot.microsoft.com",
+    ],
+  ],
+  [
+    "search",
+    ["google.", "bing.com", "duckduckgo.com", "search.yahoo.com", "ecosia.org", "yandex."],
+  ],
+  ["linkedin", ["linkedin.com", "lnkd.in"]],
+  ["x", ["t.co", "twitter.com", "x.com"]],
+  ["youtube", ["youtube.com", "youtu.be"]],
+  ["reddit", ["reddit.com"]],
+  ["newsletter", ["substack.com", "mail.google.com", "outlook.live.com"]],
+];
+const PAID_MEDIUMS = new Set([
+  "cpc",
+  "ppc",
+  "paid",
+  "paidsearch",
+  "paid_search",
+  "paid-social",
+  "paid_social",
+  "display",
+  "ads",
+]);
+
+function attributionChannelIn(text: string): string {
+  const padded = ` ${text.toLowerCase().replace(/[^a-z0-9.]+/g, " ")} `;
+  const tokens = padded.split(" ").filter(Boolean);
+  // A phrase as a phrase; a word whole, or as the start of one when it is its own stem.
+  const says = (word: string) =>
+    word.includes(" ")
+      ? padded.includes(` ${word} `)
+      : word.length >= 5
+        ? tokens.some((token) => token.startsWith(word))
+        : tokens.includes(word);
+  return ATTRIBUTION_WORDS.find(([, words]) => words.some(says))?.[0] ?? "";
+}
+
+function channelOfAnswer(answer: string): string {
+  return answer.trim() ? attributionChannelIn(answer) || "other" : "";
+}
+
+function channelOfVisit(utmSource: string, utmMedium: string, referrer: string): string {
+  const medium = utmMedium.trim().toLowerCase();
+  const source = utmSource.trim().toLowerCase();
+  if (PAID_MEDIUMS.has(medium)) return "paid";
+  if (source)
+    return (
+      attributionChannelIn(source.replace(/[_-]/g, " ")) ||
+      (medium === "email" || medium === "newsletter" ? "newsletter" : "other")
+    );
+  let host = "";
+  try {
+    host = referrer.trim() ? new URL(referrer.trim()).hostname.toLowerCase() : "";
+  } catch {
+    host = "";
+  }
+  if (!host) return "direct";
+  const matched = ATTRIBUTION_REFERRERS.find(([, hosts]) =>
+    hosts.some(
+      (name) =>
+        host === name ||
+        host.endsWith(`.${name}`) ||
+        (name.endsWith(".") && (host.startsWith(name) || host.includes(`.${name}`))),
+    ),
+  );
+  return matched?.[0] ?? "other";
+}
+
+function leadAttribution(row: LeadRow) {
+  const answer = String(row.payload.heard_from ?? "").trim();
+  return {
+    heard_from: answer,
+    heard_channel: channelOfAnswer(answer),
+    visit_channel: channelOfVisit(row.utm_source ?? "", row.utm_medium ?? "", row.referrer ?? ""),
+    utm_source: row.utm_source ?? "",
+    utm_medium: row.utm_medium ?? "",
+    utm_campaign: row.utm_campaign ?? "",
+    referrer: row.referrer ?? "",
+  };
+}
+
 function leadView(row: LeadRow) {
   const origin = row.origin ?? "inbound";
   // A researched prospect never starts the first-reply clock: nobody is waiting on us.
@@ -11114,6 +11321,7 @@ function leadView(row: LeadRow) {
     fit_reasons: fit.reasons,
     message: row.message,
     payload: row.payload,
+    ...leadAttribution(row),
     stage: row.stage,
     disqualify_reason: row.disqualify_reason,
     duplicate_of_kind: row.duplicate_of_kind ?? "",
@@ -19382,10 +19590,32 @@ routes.push(
         company_name: String(body.company_name ?? ""),
         message: String(body.message ?? ""),
         payload: Object.fromEntries(
-          ["role", "where", "team_size", "markets", "heard_from", "phone", "firm", "use_case"]
+          [
+            "role",
+            "where",
+            "team_size",
+            "current_tools",
+            "markets",
+            "heard_from",
+            "phone",
+            "firm",
+            "use_case",
+          ]
             .filter((name) => String(body[name] ?? "").trim())
-            .map((name) => [name, String(body[name])]),
+            .map((name) => [name, String(body[name]).trim().slice(0, 400)]),
         ),
+        utm_source: String(body.utm_source ?? "")
+          .trim()
+          .slice(0, 120),
+        utm_medium: String(body.utm_medium ?? "")
+          .trim()
+          .slice(0, 120),
+        utm_campaign: String(body.utm_campaign ?? "")
+          .trim()
+          .slice(0, 120),
+        referrer: String(body.referrer ?? "")
+          .trim()
+          .slice(0, 400),
         stage: "new",
         disqualify_reason: "",
         owner_staff_id: "",
@@ -23191,6 +23421,159 @@ routes.push(
               .length,
           };
         })(),
+        generated_at: now(),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/reports/attribution",
+    auth: true,
+    capability: "revenue:read",
+    handler: ({ query }) => {
+      const raw = String(query.days ?? "").trim();
+      const days = raw ? Number(raw) : 90;
+      if (!Number.isInteger(days))
+        return refuse(400, "malformed_request", { days: "a whole number of days" });
+      if (days < 1 || days > 730) return refuse(400, "malformed_request", { days: "1 to 730" });
+      const start = Date.now() - days * 86_400_000;
+      const inWindow = leads.filter(
+        (row) => (row.origin ?? "inbound") === "inbound" && Date.parse(row.created_at) >= start,
+      );
+      const completed = meetings.filter((row) => row.status === "completed");
+      const metCompanies = new Set(completed.map((row) => row.company_id).filter(Boolean));
+      const metDeals = new Set(completed.map((row) => row.deal_id).filter(Boolean));
+      const matrix = new Map<string, Map<string, number>>();
+      type Link = {
+        channel: string;
+        leads: number;
+        qualified: number;
+        met: number;
+        deals: number;
+        won: number;
+        money: Map<string, number>;
+      };
+      const chain = new Map<string, Link>();
+      const bySource = new Map<string, Link & { said: Map<string, number> }>();
+      const tally = (
+        link: Link,
+        qualified: boolean,
+        met: boolean,
+        deal: DealRow | undefined,
+        won: boolean,
+      ) => {
+        link.leads += 1;
+        if (qualified) link.qualified += 1;
+        if (met) link.met += 1;
+        if (deal) link.deals += 1;
+        if (won && deal) {
+          link.won += 1;
+          const currency = deal.currency || "USD";
+          link.money.set(currency, (link.money.get(currency) ?? 0) + Number(deal.mrr_amount || 0));
+        }
+      };
+      const months = new Map<
+        string,
+        { leads: number; answered: number; qualified: number; met: number; won: number }
+      >();
+      let answered = 0;
+      for (const row of inWindow) {
+        const reading = leadAttribution(row);
+        const said = reading.heard_channel;
+        const seen = reading.visit_channel;
+        if (said) answered += 1;
+        const cell = matrix.get(said || "not_said") ?? new Map<string, number>();
+        cell.set(seen, (cell.get(seen) ?? 0) + 1);
+        matrix.set(said || "not_said", cell);
+        const channel = said || seen;
+        const link = chain.get(channel) ?? {
+          channel,
+          leads: 0,
+          qualified: 0,
+          met: 0,
+          deals: 0,
+          won: 0,
+          money: new Map(),
+        };
+        chain.set(channel, link);
+        const deal = deals.find((item) => item.id === row.converted_deal_id);
+        const company = row.converted_company_id || deal?.company_id || "";
+        const qualified =
+          row.stage === "qualified" || Boolean(row.converted_company_id) || Boolean(deal);
+        const met = Boolean(
+          (company && metCompanies.has(company)) || (deal && metDeals.has(deal.id)),
+        );
+        const won = deal?.status === "won";
+        tally(link, qualified, met, deal, won);
+        const form = bySource.get(row.source_key) ?? {
+          channel: row.source_key,
+          leads: 0,
+          qualified: 0,
+          met: 0,
+          deals: 0,
+          won: 0,
+          money: new Map<string, number>(),
+          said: new Map<string, number>(),
+        };
+        bySource.set(row.source_key, form);
+        tally(form, qualified, met, deal, won);
+        form.said.set(said || "not_said", (form.said.get(said || "not_said") ?? 0) + 1);
+        const month = row.created_at.slice(0, 7);
+        const counts = months.get(month) ?? { leads: 0, answered: 0, qualified: 0, met: 0, won: 0 };
+        months.set(month, counts);
+        counts.leads += 1;
+        if (said) counts.answered += 1;
+        if (qualified) counts.qualified += 1;
+        if (met) counts.met += 1;
+        if (won) counts.won += 1;
+      }
+      const counted = (cells: Map<string, number>) =>
+        [...cells.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .map(([channel, count]) => ({ channel, count }));
+      const money = (cells: Map<string, number>) =>
+        Object.fromEntries(
+          [...cells.entries()]
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([currency, amount]) => [currency, Math.round(amount * 100) / 100]),
+        );
+      const total = (cell: Map<string, number>) =>
+        [...cell.values()].reduce((sum, count) => sum + count, 0);
+      return ok({
+        days,
+        leads: inWindow.length,
+        answered,
+        channels: ATTRIBUTION_CHANNELS,
+        matrix: [...matrix.entries()]
+          .sort((a, b) => total(b[1]) - total(a[1]) || a[0].localeCompare(b[0]))
+          .map(([said, cell]) => ({
+            said,
+            seen: [...cell.entries()]
+              .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+              .map(([channel, count]) => ({ channel, count })),
+          })),
+        chain: [...chain.values()]
+          .sort((a, b) => b.leads - a.leads || a.channel.localeCompare(b.channel))
+          .map(({ money, ...link }) => ({
+            ...link,
+            won_mrr: Object.fromEntries(
+              [...money.entries()]
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([currency, amount]) => [currency, Math.round(amount * 100) / 100]),
+            ),
+          })),
+        by_source: [...bySource.values()]
+          .sort((a, b) => b.leads - a.leads || a.channel.localeCompare(b.channel))
+          .map(({ channel, money: won, said, ...link }) => ({
+            source_key: channel,
+            label: sources.find((source) => source.key === channel)?.label ?? "",
+            ...link,
+            won_mrr: money(won),
+            said: counted(said),
+          })),
+        months: [...months.entries()]
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([month, counts]) => ({ month, ...counts })),
         generated_at: now(),
       });
     },

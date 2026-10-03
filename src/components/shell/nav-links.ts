@@ -30,6 +30,7 @@ import {
   UsersRound,
   UserPlus,
   Wallet,
+  Waypoints,
   Gauge,
   Users,
   CreditCard,
@@ -239,6 +240,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: ListChecks,
         capability: "revenue:read",
         key: "y",
+      },
+      {
+        href: "/reports/attribution",
+        label: "Lead sources",
+        icon: Waypoints,
+        capability: "revenue:read",
       },
       {
         href: "/finance",

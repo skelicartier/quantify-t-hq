@@ -539,14 +539,14 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
                   {funnel.stages.map((stage) => (
                     <tr key={stage.key}>
                       <td>{stage.label}</td>
-                      <td className="num">{stage.entered}</td>
-                      <td className="num">{stage.advanced + stage.won_from_here}</td>
-                      <td className="num">{stage.lost_from_here}</td>
-                      <td className="num">{stage.still_here}</td>
-                      <td className="num">
+                      <td className="data-table__num">{stage.entered}</td>
+                      <td className="data-table__num">{stage.advanced + stage.won_from_here}</td>
+                      <td className="data-table__num">{stage.lost_from_here}</td>
+                      <td className="data-table__num">{stage.still_here}</td>
+                      <td className="data-table__num">
                         {stage.conversion === null ? "—" : formatPercent(stage.conversion)}
                       </td>
-                      <td className="num">
+                      <td className="data-table__num">
                         {stage.median_days === null ? "—" : formatNumber(stage.median_days)}
                       </td>
                     </tr>

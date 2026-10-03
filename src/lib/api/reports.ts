@@ -202,3 +202,66 @@ export function readPipelineHistory(token: string, days = 90) {
     query: { days: String(days) },
   });
 }
+
+const attributionSchema = okEnvelope.extend({
+  days: z.number(),
+  /** Leads who wrote in during the window; prospects found by the team are not counted. */
+  leads: z.number(),
+  /** Of those, how many said how they heard of us. */
+  answered: z.number(),
+  /** The service's own names for its channels, by key. */
+  channels: z.record(z.string(), z.string()),
+  /** What they said ("not_said" when nothing), each against what their visits showed. */
+  matrix: z.array(
+    z.object({
+      said: z.string(),
+      seen: z.array(z.object({ channel: z.string(), count: z.number() })),
+    }),
+  ),
+  /** Each channel — what a lead said, else what its visit showed — followed on to won. */
+  chain: z.array(
+    z.object({
+      channel: z.string(),
+      leads: z.number(),
+      qualified: z.number(),
+      met: z.number(),
+      deals: z.number(),
+      won: z.number(),
+      won_mrr: moneyByCurrencySchema,
+    }),
+  ),
+  /** The same chain per form — the lead's own source — with what its people said. */
+  by_source: z.array(
+    z.object({
+      source_key: z.string(),
+      label: z.string(),
+      leads: z.number(),
+      qualified: z.number(),
+      met: z.number(),
+      deals: z.number(),
+      won: z.number(),
+      won_mrr: moneyByCurrencySchema,
+      said: z.array(z.object({ channel: z.string(), count: z.number() })),
+    }),
+  ),
+  months: z.array(
+    z.object({
+      month: z.string(),
+      leads: z.number(),
+      answered: z.number(),
+      qualified: z.number(),
+      met: z.number(),
+      won: z.number(),
+    }),
+  ),
+  generated_at: z.string(),
+});
+export type AttributionReport = z.infer<typeof attributionSchema>;
+
+/** Where the leads of a window came from, what they said and what their visit showed. */
+export function readAttribution(token: string, days = 90) {
+  return fetchHqJson("hq/reports/attribution", attributionSchema, {
+    token,
+    query: { days: String(days) },
+  });
+}

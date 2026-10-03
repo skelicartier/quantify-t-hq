@@ -410,6 +410,15 @@ export const leadSchema = z.object({
   fit_reasons: z.array(z.string()),
   message: z.string(),
   payload: z.record(z.string(), z.unknown()),
+  /** Their own answer to "how did you hear about us?", and the channel it names ("" unanswered). */
+  heard_from: z.string().default(""),
+  heard_channel: z.string().default(""),
+  /** The channel the visit's tags or referring page show; "direct" when it had neither. */
+  visit_channel: z.string().default(""),
+  utm_source: z.string().default(""),
+  utm_medium: z.string().default(""),
+  utm_campaign: z.string().default(""),
+  referrer: z.string().default(""),
   stage: z.string(),
   disqualify_reason: z.string(),
   /** Set aside until this day (it is off the working lists and the sends till then). */
