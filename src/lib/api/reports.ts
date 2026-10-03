@@ -134,8 +134,13 @@ export function createExport(
   kind: ExportKind,
   reason: string,
   format: ExportFormat = "csv",
+  /** For an export of a list view: the view's own filters. */
+  view: Record<string, unknown> = {},
 ) {
-  return postHqJson(`hq/exports/${kind}`, exportSchema, { token, body: { reason, format } });
+  return postHqJson(`hq/exports/${kind}`, exportSchema, {
+    token,
+    body: { ...view, reason, format },
+  });
 }
 
 const funnelSchema = okEnvelope.extend({

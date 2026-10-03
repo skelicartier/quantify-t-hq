@@ -376,7 +376,14 @@ export const leadSchema = z.object({
   tags: z.array(z.string()),
   /** "" (never checked), "valid", "risky" or "invalid". */
   verified_state: z.string(),
+  /** The verifier's own word ("catch_all", "unknown"), kept beside the state. */
+  verified_detail: z.string(),
   verified_at: z.string().nullable(),
+  /** The firm as a web domain: what "one person per firm" and a firm's stop go by. */
+  firm_domain: z.string(),
+  /** How often, and when last, the address was written to. */
+  emails_sent: z.number(),
+  last_emailed_at: z.string().nullable(),
   import_id: z.string(),
   /** The name of the file the lead came in with; empty when it was typed in. */
   import_label: z.string(),
@@ -495,6 +502,8 @@ export function convertLead(token: string, leadId: string, input: Record<string,
 
 const leadImportResultSchema = okEnvelope.extend({
   import_id: z.string(),
+  /** True when nothing was written: the same accounting, as a rehearsal. */
+  dry_run: z.boolean(),
   rows: z.number(),
   created: z.number(),
   updated: z.number(),
@@ -534,6 +543,9 @@ const leadImportsSchema = okEnvelope.extend({
   max_rows: z.number(),
   max_leads: z.number(),
   skip_reasons: z.array(z.string()),
+  /** What a verifier's file may say, by the state each word is read as. */
+  verification_words: z.record(z.string(), z.array(z.string())),
+  max_verification_rows: z.number(),
 });
 export type LeadImportsPage = z.infer<typeof leadImportsSchema>;
 
@@ -615,6 +627,83 @@ export function updateLeadSettings(token: string, input: Record<string, unknown>
   return postHqJson(
     "hq/settings/leads/update",
     leadSettingsSchema.extend({ updated: z.boolean() }),
+    { token, body: input },
+  );
+}
+
+// -- cold mail: a verifier's answer onto the leads, and who may be written to first --
+
+const leadVerificationResultSchema = okEnvelope.extend({
+  rows: z.number(),
+  updated: z.number(),
+  /** The same result again: only the date moved. */
+  unchanged: z.number(),
+  not_found: z.number(),
+  unknown_result: z.number(),
+  counts: z.object({ valid: z.number(), risky: z.number(), invalid: z.number() }),
+  problems: z.array(z.object({ row: z.number(), email: z.string(), reason: z.string() })),
+});
+export type LeadVerificationResult = z.infer<typeof leadVerificationResultSchema>;
+
+/** One part of a verifier's file: `{email, result}` per row. A result never creates a lead. */
+export function importLeadVerification(token: string, input: Record<string, unknown>) {
+  return postHqJson("hq/leads/verification/import", leadVerificationResultSchema, {
+    token,
+    body: input,
+  });
+}
+
+const coldRulesSchema = z.object({
+  require_verified: z.boolean(),
+  allow_risky: z.boolean(),
+  skip_role_like: z.boolean(),
+  one_per_firm: z.boolean(),
+  verify_stale_days: z.number(),
+  max_stale_days: z.number(),
+});
+export type ColdRules = z.infer<typeof coldRulesSchema>;
+
+const coldJurisdictionSchema = z.object({
+  /** Empty for the row that counts leads with no country. */
+  country: z.string(),
+  /** "opt_out", "consent" or "hold". */
+  rule: z.string(),
+  rule_label: z.string(),
+  note: z.string(),
+  subject_prefix: z.string(),
+  /** "admin", "default" or "nobody". */
+  set_by: z.string(),
+  default_rule: z.string(),
+  prospects: z.number(),
+});
+export type ColdJurisdiction = z.infer<typeof coldJurisdictionSchema>;
+
+const coldSettingsSchema = okEnvelope.extend({
+  rules: coldRulesSchema,
+  jurisdictions: z.array(coldJurisdictionSchema),
+  rule_labels: z.record(z.string(), z.string()),
+  /** Each refusal's code and the sentence a person reads beside its count. */
+  reasons: z.record(z.string(), z.string()),
+  prospects: z.number(),
+  /** Judged one by one: how many a first email could reach today. */
+  mailable: z.number(),
+  mailable_firms: z.number(),
+  /** What one send would take: everyone allowed, or one person per firm. */
+  first_send: z.number(),
+  held_by_reason: z.record(z.string(), z.number()),
+  verified: z.record(z.string(), z.number()),
+});
+export type ColdSettings = z.infer<typeof coldSettingsSchema>;
+
+export function readColdSettings(token: string) {
+  return fetchHqJson("hq/settings/cold", coldSettingsSchema, { token });
+}
+
+/** A switch, the stale window or one country's rule; always with a reason. */
+export function updateColdSettings(token: string, input: Record<string, unknown>) {
+  return postHqJson(
+    "hq/settings/cold/update",
+    coldSettingsSchema.extend({ updated: z.boolean() }),
     { token, body: input },
   );
 }

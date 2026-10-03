@@ -69,7 +69,8 @@ export async function searchRecordsAction(rawQuery: string): Promise<SearchHit[]
         }),
       ),
       settle(
-        crmApi.readLeads(context.token, { q: query }).then((page) => {
+        // One page of matches: the lead table holds a researched list as well as the inbox.
+        crmApi.readLeads(context.token, { q: query, limit: PER_KIND }).then((page) => {
           for (const row of page.leads.slice(0, PER_KIND)) {
             hits.push({
               kind: "lead",

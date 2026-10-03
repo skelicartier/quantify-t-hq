@@ -1,10 +1,15 @@
 import Link from "next/link";
 
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
-import { importLeadsAction, rollbackLeadImportAction } from "@/app/(portal)/leads/actions";
+import {
+  importLeadVerificationAction,
+  importLeadsAction,
+  rollbackLeadImportAction,
+} from "@/app/(portal)/leads/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
 import { LeadImport } from "@/components/crm/lead-import";
 import { LeadTabs } from "@/components/crm/lead-tabs";
+import { VerificationImport } from "@/components/crm/verification-import";
 import { MailForm } from "@/components/mail/mail-form";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
@@ -67,7 +72,7 @@ export default async function LeadImportPage() {
       <PageHeader
         eyebrow="CRM"
         title="Import"
-        description="Bring a researched list in as prospects. Every row is accounted for: added, filled in, already here, or left out with the reason. A file can be taken back out while nobody has started on its leads."
+        description="Bring a researched list in as prospects, then bring back what a verifier said about its addresses. Every row is accounted for: added, filled in, already here, or left out with the reason. A file can be taken back out while nobody has started on its leads."
         actions={<LeadTabs current={BASE} />}
       />
       <div className="page-content">
@@ -81,6 +86,23 @@ export default async function LeadImportPage() {
           )
         ) : (
           <Callout tone="neutral">Your role reads leads without importing them.</Callout>
+        )}
+
+        {canWrite && history !== null && (
+          <RecordSection
+            id="lead-verification"
+            title="What a verifier said"
+            actions={
+              <Link className="text-link" href="/leads/rules">
+                The sending rules
+              </Link>
+            }
+          >
+            <VerificationImport
+              action={importLeadVerificationAction}
+              words={history.verification_words}
+            />
+          </RecordSection>
         )}
 
         <RecordSection id="lead-imports" title="Files brought in">

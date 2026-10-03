@@ -15,7 +15,11 @@ async function orEmpty<T>(read: () => Promise<T>, fallback: T): Promise<T> {
   }
 }
 
-/** Every company, person and lead as a pick-list row: the audience picker's choices. */
+/**
+ * Every company, every person and every lead who wrote in, as pick-list rows: the audience
+ * picker's choices. Prospects the team found are not offered one by one — a researched
+ * list runs to tens of thousands — they are reached through a saved segment.
+ */
 export async function audienceOptions(token: string): Promise<{
   companies: PickOption[];
   people: PickOption[];
@@ -24,7 +28,7 @@ export async function audienceOptions(token: string): Promise<{
   const [companies, people, leads] = await Promise.all([
     orEmpty(async () => (await readCompanies(token)).companies, []),
     orEmpty(async () => (await readPeople(token)).people, []),
-    orEmpty(async () => (await readLeads(token)).leads, []),
+    orEmpty(async () => (await readLeads(token, { origin: "inbound" })).leads, []),
   ]);
   return {
     companies: companies.map((row) => ({

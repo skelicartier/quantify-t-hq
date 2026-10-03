@@ -60,7 +60,9 @@ export async function renderDigest(
     };
   }
   if (listKey === "leads") {
+    // The Leads list is the people who wrote in; prospects are their own list.
     const page = await readLeads(token, {
+      origin: "inbound",
       stage: params.get("stage") ?? "",
       source: params.get("source") ?? "",
       q: params.get("q") ?? "",

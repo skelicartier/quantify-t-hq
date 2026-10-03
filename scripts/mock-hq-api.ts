@@ -2617,6 +2617,8 @@ type LeadRow = {
   notes?: string;
   tags?: string[];
   verified_state?: string;
+  /** 0055: the verifier's own word ("catch_all", "unknown"), kept beside the state. */
+  verified_detail?: string;
   verified_at?: string | null;
   import_id?: string;
 };
@@ -7473,10 +7475,14 @@ const LEAD_FIELDS: Record<string, string> = {
   verified: "Verified",
   named: "Has a name",
   import: "Came in with",
+  firm_domain: "Firm's web domain",
+  verified_days: "Days since verified",
   created_days: "Days since received",
+  emails_sent: "Emails sent",
   last_emailed_days: "Days since last email",
 };
-const LEAD_OPS = ["is", "not", "has", "in", "gt", "lt", "empty", "set"];
+const LEAD_OPS = ["is", "not", "has", "nhas", "in", "nin", "gt", "lt", "empty", "set"];
+const LEAD_ENGAGEMENT_FIELDS = ["emails_sent", "last_emailed_days"];
 type LeadCondition = { field: string; op: string; value: string };
 function leadParseConditions(raw: unknown): {
   conditions: LeadCondition[];
@@ -7504,14 +7510,41 @@ function leadParseConditions(raw: unknown): {
     }
     if (!(field in LEAD_FIELDS)) errors[`conditions[${index}]`] = `unknown field '${field}'`;
     else if (!LEAD_OPS.includes(op)) errors[`conditions[${index}]`] = `unknown comparison '${op}'`;
-    else if (["is", "not", "has", "in", "gt", "lt"].includes(op) && value === "")
+    else if (["is", "not", "has", "nhas", "in", "nin", "gt", "lt"].includes(op) && value === "")
       errors[`conditions[${index}]`] = "needs a value";
     else conditions.push({ field, op, value: value.slice(0, 200) });
   });
   return { conditions, errors };
 }
 type LeadViewRow = ReturnType<typeof leadView>;
-function leadReadField(view: LeadViewRow, field: string): string | number | null {
+type MailStats = Map<string, { sent: number; last_sent_at: string | null }>;
+/** One row per address, never one per message: who has been written to, and when last. */
+function mailSendStats(): MailStats {
+  const out: MailStats = new Map();
+  for (const row of mailMessages) {
+    if (!MAIL_SENT_STATES.includes(row.state)) continue;
+    const entry = out.get(row.email_norm) ?? { sent: 0, last_sent_at: null };
+    entry.sent += 1;
+    if (row.sent_at && (!entry.last_sent_at || row.sent_at > entry.last_sent_at))
+      entry.last_sent_at = row.sent_at;
+    out.set(row.email_norm, entry);
+  }
+  return out;
+}
+const MAIL_SENT_STATES = [
+  "sent",
+  "delivered",
+  "soft_bounced",
+  "hard_bounced",
+  "complained",
+  "unsubscribed",
+  "unknown",
+];
+function leadReadField(
+  view: LeadViewRow,
+  field: string,
+  stats?: MailStats,
+): string | number | null {
   switch (field) {
     case "origin":
       return view.origin;
@@ -7549,11 +7582,17 @@ function leadReadField(view: LeadViewRow, field: string): string | number | null
       return view.first_name || view.full_name ? "yes" : "no";
     case "import":
       return view.import_label;
+    case "firm_domain":
+      return view.firm_domain;
+    case "verified_days":
+      return view.verified_at ? (Date.now() - Date.parse(view.verified_at)) / 86_400_000 : null;
     case "created_days":
       return view.created_at ? (Date.now() - Date.parse(view.created_at)) / 86_400_000 : null;
+    case "emails_sent":
+      return stats?.get(mailNorm(view.email))?.sent ?? 0;
     case "last_emailed_days": {
-      const last = mailLastEmailed(mailNorm(view.email));
-      return last === null ? null : (Date.now() - last) / 86_400_000;
+      const last = stats?.get(mailNorm(view.email))?.last_sent_at ?? null;
+      return last === null ? null : (Date.now() - Date.parse(last)) / 86_400_000;
     }
     default:
       return null;
@@ -7575,19 +7614,27 @@ function leadMatches(
       .map((tag) => tag.trim().toLowerCase())
       .filter(Boolean);
     if (op === "is") return asked.length > 0 && asked.every((tag) => tags.has(tag));
-    if (op === "not") return !asked.some((tag) => tags.has(tag));
+    if (op === "not" || op === "nhas" || op === "nin") return !asked.some((tag) => tags.has(tag));
     if (op === "has" || op === "in") return asked.some((tag) => tags.has(tag));
     return false;
+  }
+  if ((op === "is" || op === "not") && typeof value === "number") {
+    // A number is the number it is, however it was typed.
+    const same = wanted.trim() !== "" && value === Number(wanted);
+    return op === "is" ? same : !same;
   }
   if (op === "is") return text.toLowerCase() === wanted.toLowerCase();
   if (op === "not") return text.toLowerCase() !== wanted.toLowerCase();
   if (op === "has") return text.toLowerCase().includes(wanted.toLowerCase());
-  if (op === "in")
-    return wanted
+  if (op === "nhas") return !text.toLowerCase().includes(wanted.toLowerCase());
+  if (op === "in" || op === "nin") {
+    const found = wanted
       .split(",")
       .map((part) => part.trim().toLowerCase())
       .filter(Boolean)
       .includes(text.toLowerCase());
+    return op === "in" ? found : !found;
+  }
   const left = typeof value === "number" ? value : Number(text);
   const right = Number(wanted);
   if (Number.isNaN(left) || Number.isNaN(right) || text === "") return false;
@@ -7595,16 +7642,408 @@ function leadMatches(
 }
 function leadApply(views: LeadViewRow[], conditions: LeadCondition[]): LeadViewRow[] {
   if (!conditions.length) return views;
+  // Asked of the mail ledger once, and only when a condition is about it.
+  const stats = conditions.some((condition) => LEAD_ENGAGEMENT_FIELDS.includes(condition.field))
+    ? mailSendStats()
+    : undefined;
   return views.filter((view) =>
     conditions.every((condition) =>
       leadMatches(
-        leadReadField(view, condition.field),
+        leadReadField(view, condition.field, stats),
         condition.op,
         condition.value,
         condition.field,
       ),
     ),
   );
+}
+/** The firm a lead belongs to, as a web domain: its website's, else its address's. */
+function leadFirmDomain(row: { website?: string; email: string }): string {
+  const site = normaliseDomain(row.website ?? "");
+  if (site && !LEAD_FREE_MAIL.has(site)) return site;
+  const domain = row.email.includes("@") ? row.email.split("@")[1]!.toLowerCase() : "";
+  return !domain || LEAD_FREE_MAIL.has(domain) ? "" : domain;
+}
+/** What verifiers call their results, sorted into the three states the send path reads. */
+const LEAD_VERIFIED_WORDS: Record<string, string[]> = {
+  valid: ["valid", "deliverable", "ok", "safe", "good", "verified", "valid_email", "passed"],
+  invalid: [
+    "invalid",
+    "undeliverable",
+    "bad",
+    "bounce",
+    "bounced",
+    "disabled",
+    "disposable",
+    "spamtrap",
+    "spam_trap",
+    "abuse",
+    "do_not_mail",
+    "toxic",
+    "invalid_email",
+    "failed",
+    "dead",
+    "mailbox_not_found",
+  ],
+  risky: [
+    "catch-all",
+    "catch_all",
+    "catchall",
+    "accept_all",
+    "accept-all",
+    "acceptall",
+    "risky",
+    "unknown",
+    "unverifiable",
+    "inbox_full",
+    "mailbox_full",
+    "role_account",
+    "role",
+    "role_based",
+    "error",
+    "timeout",
+    "greylisted",
+    "temporarily_unavailable",
+    "inconclusive",
+  ],
+};
+function leadVerificationState(word: unknown): { state: string; kept: string } {
+  const kept = String(word ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .slice(0, 40);
+  for (const [state, words] of Object.entries(LEAD_VERIFIED_WORDS))
+    if (words.includes(kept)) return { state, kept };
+  return { state: "", kept };
+}
+const LEAD_OVERWRITABLE = [
+  "title",
+  "company_name",
+  "firm_type",
+  "website",
+  "country",
+  "city",
+  "phone",
+  "registration_no",
+  "source_url",
+  "notes",
+];
+
+// -- cold mail (0055): who the team may write to first ---------------------------------------
+// account_api/hq/cold_rules.py, the same rules and the same defaults.
+type ColdJurisdiction = { rule: string; note: string; subject_prefix: string };
+const COLD_STRICT = "A first email needs a recorded yes.";
+const COLD_EU = "Not checked country by country yet: treated as needing a yes until it is.";
+const COLD_LATAM = "Say who is writing and honour an opt-out promptly.";
+const coldPlace = (rule: string, note: string, prefix = ""): ColdJurisdiction => ({
+  rule,
+  note,
+  subject_prefix: prefix,
+});
+const COLD_DEFAULTS: Record<string, ColdJurisdiction> = {
+  "United States": coldPlace(
+    "opt_out",
+    "A postal address in the footer; an opt-out honoured within ten business days.",
+  ),
+  Canada: coldPlace(
+    "opt_out",
+    "Implied consent: the address was published without a no-marketing note and the message is about the person's role. Keep the page it was published on.",
+  ),
+  "United Kingdom": coldPlace(
+    "opt_out",
+    "Companies and LLPs only. A sole trader or a partnership needs a yes.",
+  ),
+  France: coldPlace("opt_out", "The first message says where the address came from."),
+  India: coldPlace(
+    "opt_out",
+    "Allowed today. Consent for named individuals is expected from about May 2027.",
+  ),
+  Singapore: coldPlace(
+    "opt_out",
+    "The subject carries <ADV> when sent in bulk; the unsubscribe contact stays valid thirty days.",
+    "<ADV>",
+  ),
+  "Hong Kong": coldPlace("opt_out", "Sender and unsubscribe statements in Chinese and English."),
+  Japan: coldPlace(
+    "opt_out",
+    "Only an address published without a refusal note, marked as advertising.",
+  ),
+  Australia: coldPlace(
+    "opt_out",
+    "Inferred consent from a conspicuously published address; the message must relate to the person's role.",
+  ),
+  Brazil: coldPlace("opt_out", "Legitimate interest, with the assessment kept on file."),
+  Mexico: coldPlace("opt_out", COLD_LATAM),
+  Argentina: coldPlace("opt_out", COLD_LATAM),
+  Chile: coldPlace("opt_out", COLD_LATAM),
+  Colombia: coldPlace("opt_out", COLD_LATAM),
+  Peru: coldPlace("opt_out", COLD_LATAM),
+  Germany: coldPlace("consent", COLD_STRICT),
+  Austria: coldPlace("consent", COLD_STRICT),
+  Italy: coldPlace("consent", COLD_STRICT),
+  Netherlands: coldPlace("consent", `${COLD_STRICT} The record is kept five years.`),
+  Switzerland: coldPlace("consent", COLD_STRICT),
+  "United Arab Emirates": coldPlace(
+    "hold",
+    "Consent is the safe reading; held until someone decides.",
+  ),
+  ...Object.fromEntries(
+    [
+      "Belgium",
+      "Bulgaria",
+      "Croatia",
+      "Cyprus",
+      "Czech Republic",
+      "Czechia",
+      "Denmark",
+      "Estonia",
+      "Finland",
+      "Greece",
+      "Hungary",
+      "Iceland",
+      "Ireland",
+      "Latvia",
+      "Liechtenstein",
+      "Lithuania",
+      "Luxembourg",
+      "Malta",
+      "Norway",
+      "Poland",
+      "Portugal",
+      "Romania",
+      "Slovakia",
+      "Slovenia",
+      "Spain",
+      "Sweden",
+    ].map((country) => [country, coldPlace("consent", COLD_EU)]),
+  ),
+};
+const COLD_ALIASES: Record<string, string> = {
+  us: "United States",
+  usa: "United States",
+  "u.s.": "United States",
+  "u.s.a.": "United States",
+  "united states of america": "United States",
+  uk: "United Kingdom",
+  "u.k.": "United Kingdom",
+  "great britain": "United Kingdom",
+  england: "United Kingdom",
+  scotland: "United Kingdom",
+  uae: "United Arab Emirates",
+  deutschland: "Germany",
+  österreich: "Austria",
+  "the netherlands": "Netherlands",
+  holland: "Netherlands",
+  "hong kong sar": "Hong Kong",
+};
+const COLD_RULE_LABELS: Record<string, string> = {
+  opt_out: "May be written to first",
+  consent: "Needs a yes first",
+  hold: "Held until a rule is set",
+};
+const COLD_REASONS: Record<string, string> = {
+  ADDRESS_INVALID: "A verification said the address does not exist",
+  ADDRESS_RISKY: "A verification could not vouch for the address",
+  NOT_VERIFIED: "The address has not been verified",
+  ROLE_LIKE_ADDRESS: "The mailbox reads as shared, not a person's",
+  NO_RULE_FOR_COUNTRY: "No rule has been set for the country",
+  NO_CONSENT: "The country needs a yes before a first email",
+  FIRM_COVERED: "Someone else at the firm is in this send",
+  FIRM_STOPPED: "The firm asked not to be written to",
+};
+type ColdSettings = {
+  require_verified: boolean;
+  allow_risky: boolean;
+  skip_role_like: boolean;
+  one_per_firm: boolean;
+  verify_stale_days: number;
+  overrides: Record<string, ColdJurisdiction>;
+};
+function coldInitial(): ColdSettings {
+  return {
+    require_verified: true,
+    allow_risky: false,
+    skip_role_like: true,
+    one_per_firm: true,
+    verify_stale_days: 90,
+    overrides: {},
+  };
+}
+let coldSettings: ColdSettings = coldInitial();
+function coldCanonical(country: string): string {
+  const text = country.trim().split(/\s+/).join(" ");
+  if (!text) return "";
+  const lowered = text.toLowerCase();
+  const known =
+    COLD_ALIASES[lowered] ??
+    Object.keys(COLD_DEFAULTS).find((name) => name.toLowerCase() === lowered);
+  if (known) return known;
+  // A country the table does not name, typed all in one case, reads as a name should.
+  return text === lowered || text === text.toUpperCase()
+    ? lowered.replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
+    : text;
+}
+function coldJurisdiction(country: string): ColdJurisdiction {
+  const name = coldCanonical(country);
+  if (!name) return coldPlace("hold", "The lead has no country, so no rule can be chosen for it.");
+  for (const table of [coldSettings.overrides, COLD_DEFAULTS])
+    for (const [key, value] of Object.entries(table))
+      if (key.toLowerCase() === name.toLowerCase()) return value;
+  return coldPlace("hold", "No rule has been set for this country.");
+}
+/** May the team write first to this prospect? The first rule that says no answers. */
+function coldJudge(recipient: MailRecipient): MailVerdict {
+  const no = (reason: string, detail = "") => ({ allowed: false, reason, detail });
+  const state = recipient.verified_state ?? "";
+  if (state === "invalid") return no("ADDRESS_INVALID", MAIL_ADDRESS_INVALID);
+  const place = coldJurisdiction(recipient.country);
+  if (place.rule === "hold")
+    return no("NO_RULE_FOR_COUNTRY", coldCanonical(recipient.country) || "no country on the lead");
+  if (
+    place.rule === "consent" &&
+    mailConsent.get(mailNorm(recipient.email))?.marketing_state !== "subscribed"
+  )
+    return no("NO_CONSENT", coldCanonical(recipient.country));
+  if (coldSettings.skip_role_like && recipient.email_kind === "role")
+    return no("ROLE_LIKE_ADDRESS");
+  if (state === "risky" && !coldSettings.allow_risky)
+    return no("ADDRESS_RISKY", recipient.verified_detail ?? "");
+  if (coldSettings.require_verified) {
+    if (!state) return no("NOT_VERIFIED", "never checked");
+    const age = recipient.verified_at
+      ? Math.floor((Date.now() - Date.parse(recipient.verified_at)) / 86_400_000)
+      : null;
+    if (age === null || age >= coldSettings.verify_stale_days)
+      return no("NOT_VERIFIED", age === null ? "never checked" : `last checked ${age} days ago`);
+  }
+  return { allowed: true, reason: "", detail: "" };
+}
+/** Among recipients a send would take, the ones a colleague at the same firm displaces. */
+function coldCoverFirms(allowed: MailRecipient[]): Map<number, string> {
+  const best = new Map<string, { score: number; index: number }>();
+  allowed.forEach((recipient, index) => {
+    const firm = recipient.firm_domain ?? "";
+    if (!firm) return;
+    const held = best.get(firm);
+    if (!held || (recipient.fit_score ?? 0) > held.score)
+      best.set(firm, { score: recipient.fit_score ?? 0, index });
+  });
+  const displaced = new Map<number, string>();
+  allowed.forEach((recipient, index) => {
+    const firm = recipient.firm_domain ?? "";
+    if (firm && best.get(firm)!.index !== index) displaced.set(index, firm);
+  });
+  return displaced;
+}
+function coldRulesView() {
+  return {
+    require_verified: coldSettings.require_verified,
+    allow_risky: coldSettings.allow_risky,
+    skip_role_like: coldSettings.skip_role_like,
+    one_per_firm: coldSettings.one_per_firm,
+    verify_stale_days: coldSettings.verify_stale_days,
+    max_stale_days: 730,
+  };
+}
+function coldView() {
+  const countries = new Map<string, number>();
+  const held: Record<string, number> = {};
+  const verified: Record<string, number> = {
+    valid: 0,
+    risky: 0,
+    invalid: 0,
+    unchecked: 0,
+    stale: 0,
+  };
+  const stoppedFirms = new Set(
+    mailSuppressions
+      .filter((row) => !row.released_at && row.email_norm.startsWith("*@"))
+      .map((row) => row.email_norm),
+  );
+  const firms = new Set<string>();
+  let mailable = 0;
+  // Allowed people with no firm to share: a free-mail address is nobody's colleague.
+  let alone = 0;
+  let total = 0;
+  for (const row of leads) {
+    if (row.origin !== "prospect" || row.anonymised_at || !row.email) continue;
+    total += 1;
+    const recipient = mailLeadRecipient(row);
+    const name = coldCanonical(recipient.country);
+    countries.set(name, (countries.get(name) ?? 0) + 1);
+    const state = recipient.verified_state || "unchecked";
+    verified[state] = (verified[state] ?? 0) + 1;
+    if (
+      recipient.verified_state === "valid" &&
+      !(
+        recipient.verified_at &&
+        Math.floor((Date.now() - Date.parse(recipient.verified_at)) / 86_400_000) <
+          coldSettings.verify_stale_days
+      )
+    )
+      verified.stale = (verified.stale ?? 0) + 1;
+    if (stoppedFirms.has(`*@${mailNorm(recipient.email).split("@")[1] ?? ""}`)) {
+      held.FIRM_STOPPED = (held.FIRM_STOPPED ?? 0) + 1;
+      continue;
+    }
+    const verdict = coldJudge(recipient);
+    if (verdict.allowed) {
+      mailable += 1;
+      if (recipient.firm_domain) firms.add(recipient.firm_domain);
+      else alone += 1;
+    } else held[verdict.reason] = (held[verdict.reason] ?? 0) + 1;
+  }
+  const names = new Set([
+    ...Object.keys(COLD_DEFAULTS),
+    ...Object.keys(coldSettings.overrides),
+    ...[...countries.keys()].filter(Boolean),
+  ]);
+  const jurisdictions = [...names]
+    .map((name) => {
+      const place = coldJurisdiction(name);
+      const overridden = Object.keys(coldSettings.overrides).some(
+        (key) => key.toLowerCase() === name.toLowerCase(),
+      );
+      const fallback = Object.entries(COLD_DEFAULTS).find(
+        ([key]) => key.toLowerCase() === name.toLowerCase(),
+      )?.[1];
+      return {
+        country: name,
+        rule: place.rule,
+        rule_label: COLD_RULE_LABELS[place.rule] ?? place.rule,
+        note: place.note,
+        subject_prefix: place.subject_prefix,
+        set_by: overridden ? "admin" : fallback ? "default" : "nobody",
+        default_rule: fallback?.rule ?? "hold",
+        prospects: countries.get(name) ?? 0,
+      };
+    })
+    .sort((a, b) => b.prospects - a.prospects || a.country.localeCompare(b.country));
+  if (countries.get(""))
+    jurisdictions.push({
+      country: "",
+      rule: "hold",
+      rule_label: COLD_RULE_LABELS.hold!,
+      note: "The lead has no country, so no rule can be chosen for it.",
+      subject_prefix: "",
+      set_by: "nobody",
+      default_rule: "hold",
+      prospects: countries.get("")!,
+    });
+  return {
+    rules: coldRulesView(),
+    jurisdictions,
+    rule_labels: COLD_RULE_LABELS,
+    reasons: COLD_REASONS,
+    prospects: total,
+    mailable,
+    mailable_firms: firms.size,
+    // What one send would actually take: everyone allowed, or one person per firm.
+    first_send: coldSettings.one_per_firm ? firms.size + alone : mailable,
+    held_by_reason: Object.fromEntries(Object.entries(held).sort((a, b) => b[1] - a[1])),
+    verified,
+  };
 }
 const LEAD_FACET_FIELDS = [
   "firm_type",
@@ -8061,8 +8500,24 @@ function seedProspects() {
         email_kind: isRole ? "role" : freeMail ? "personal-domain" : "named",
         notes: "",
         tags: serial % 9 === 0 ? ["wave 1"] : [],
-        verified_state: serial % 5 === 0 ? "valid" : serial % 29 === 0 ? "risky" : "",
-        verified_at: serial % 5 === 0 || serial % 29 === 0 ? agoIso(24 * 3) : null,
+        verified_state:
+          serial % 3 === 0
+            ? "valid"
+            : serial % 29 === 0
+              ? "risky"
+              : serial % 31 === 0
+                ? "invalid"
+                : "",
+        verified_detail:
+          serial % 3 === 0
+            ? "deliverable"
+            : serial % 29 === 0
+              ? "catch_all"
+              : serial % 31 === 0
+                ? "undeliverable"
+                : "",
+        verified_at:
+          serial % 3 === 0 || serial % 29 === 0 || serial % 31 === 0 ? agoIso(24 * 3) : null,
         import_id: importId,
         message: "",
         payload: {},
@@ -8094,6 +8549,7 @@ function seedProspects() {
     rolled_back_count: 0,
   });
   leadFitRules = null;
+  coldSettings = coldInitial();
 }
 /**
  * The prospect columns from a request body, cleaned to their limits: crm_routes'
@@ -9153,7 +9609,11 @@ function leadView(row: LeadRow) {
     notes: row.notes ?? "",
     tags: row.tags ?? [],
     verified_state: row.verified_state ?? "",
+    verified_detail: row.verified_detail ?? "",
     verified_at: row.verified_at ?? null,
+    firm_domain: leadFirmDomain(row),
+    emails_sent: 0,
+    last_emailed_at: null as string | null,
     import_id: row.import_id ?? "",
     import_label: row.import_id
       ? (leadImports.find((item) => item.id === row.import_id)?.label ?? "")
@@ -10622,12 +11082,21 @@ routes.push(
       const label = String(body.label ?? "")
         .trim()
         .slice(0, 120);
-      let run = leadImports.find((row) => row.id === runId);
+      const overwrite = body.overwrite ?? [];
+      if (
+        !Array.isArray(overwrite) ||
+        overwrite.some((name) => !LEAD_OVERWRITABLE.includes(String(name)))
+      )
+        return refuse(400, "malformed_request", {
+          overwrite: `columns among ${LEAD_OVERWRITABLE.join(", ")}`,
+        });
+      const dryRun = Boolean(body.dry_run);
+      let run = dryRun ? undefined : leadImports.find((row) => row.id === runId);
       if (run?.rolled_back_at)
         return refuse(400, "malformed_request", {
           run_id: "that import was taken back; start a new one",
         });
-      if (!run) {
+      if (!run && !dryRun) {
         run = {
           id: runId,
           label,
@@ -10665,7 +11134,7 @@ routes.push(
       let room = LEAD_MAX - existing.size;
       const skip = (rowNo: number, email: string, why: string) => {
         skippedCount += 1;
-        if (skipped.length < 200)
+        if (skipped.length < LEAD_IMPORT_MAX)
           skipped.push({ row: rowNo, email: email.slice(0, 254), reason: why });
       };
       rows.forEach((raw, index) => {
@@ -10688,11 +11157,14 @@ routes.push(
             unchanged += 1;
             return;
           }
-          // Fill what the record lacks; never overwrite what somebody typed.
+          // Fill what the record lacks; never overwrite what somebody typed — except the
+          // columns the person importing named, where the file is the newer truth.
           let touched = false;
+          const target = (dryRun ? { ...current } : current) as Record<string, unknown>;
           const fill = (name: keyof LeadRow, value: string) => {
-            if (value && !current[name]) {
-              (current as Record<string, unknown>)[name] = value;
+            if (!value) return;
+            if (!target[name] || (overwrite.includes(name) && target[name] !== value)) {
+              target[name] = value;
               touched = true;
             }
           };
@@ -10713,11 +11185,11 @@ routes.push(
           fill("verified_state", cleaned.verified_state);
           const merged = leadCleanTags([...(current.tags ?? []), ...cleaned.tags]);
           if (merged.join(",") !== (current.tags ?? []).join(",")) {
-            current.tags = merged;
+            target.tags = merged;
             touched = true;
           }
           if (touched) {
-            current.updated_at = now();
+            target.updated_at = now();
             updated += 1;
           } else unchanged += 1;
           return;
@@ -10744,10 +11216,23 @@ routes.push(
           import_id: runId,
           ...rest,
         };
-        leads.push(row);
+        if (!dryRun) leads.push(row);
         existing.set(norm, row);
         created += 1;
       });
+      if (dryRun || !run)
+        // The same accounting with nothing written: what the file would do, before it does.
+        return ok({
+          import_id: "",
+          dry_run: true,
+          rows: rows.length,
+          created,
+          updated,
+          unchanged,
+          skipped,
+          skipped_count: skippedCount,
+          invalid,
+        });
       run.rows += rows.length;
       run.created += created;
       run.updated += updated;
@@ -10766,6 +11251,7 @@ routes.push(
       });
       return ok({
         import_id: runId,
+        dry_run: false,
         rows: rows.length,
         created,
         updated,
@@ -10774,6 +11260,181 @@ routes.push(
         skipped_count: skippedCount,
         invalid,
       });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/leads/verification/import",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ body, headers }) => {
+      const rows = Array.isArray(body.rows) ? (body.rows as unknown[]) : [];
+      if (!rows.length) return refuse(400, "malformed_request", { rows: "a non-empty list" });
+      if (rows.length > 2_000)
+        return refuse(400, "malformed_request", {
+          rows: "at most 2000 rows a request; send the file in parts",
+        });
+      const label = String(body.label ?? "")
+        .trim()
+        .slice(0, 120);
+      if (label.length < 2)
+        return refuse(400, "malformed_request", {
+          label: "name the file or the verifier it came from",
+        });
+      const byEmail = new Map(
+        leads
+          .filter((row) => row.email && !row.anonymised_at)
+          .map((row) => [row.email.toLowerCase(), row]),
+      );
+      const seen = new Set<string>();
+      const counts: Record<string, number> = { valid: 0, risky: 0, invalid: 0 };
+      const problems: Array<{ row: number; email: string; reason: string }> = [];
+      let updated = 0;
+      let unchanged = 0;
+      let notFound = 0;
+      let unknown = 0;
+      rows.forEach((raw, index) => {
+        const item = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+        const email = String(item.email ?? "")
+          .trim()
+          .toLowerCase();
+        if (!email || seen.has(email)) return;
+        seen.add(email);
+        const { state, kept } = leadVerificationState(item.result);
+        if (!state) {
+          unknown += 1;
+          if (problems.length < LEAD_IMPORT_MAX)
+            problems.push({ row: index + 1, email, reason: "UNKNOWN_RESULT" });
+          return;
+        }
+        const lead = byEmail.get(email);
+        if (!lead) {
+          notFound += 1;
+          if (problems.length < LEAD_IMPORT_MAX)
+            problems.push({ row: index + 1, email, reason: "NOT_A_LEAD" });
+          return;
+        }
+        counts[state] = (counts[state] ?? 0) + 1;
+        const same = (lead.verified_state ?? "") === state && (lead.verified_detail ?? "") === kept;
+        Object.assign(lead, {
+          verified_state: state,
+          verified_detail: kept,
+          verified_at: now(),
+          updated_at: now(),
+        });
+        if (same) unchanged += 1;
+        else updated += 1;
+      });
+      audit(
+        "lead.verification_imported",
+        caller(headers)!.member.id,
+        "import",
+        "lead_verification",
+        "",
+        {
+          label,
+          rows: rows.length,
+          updated,
+          unchanged,
+          not_found: notFound,
+          unknown_result: unknown,
+          counts,
+        },
+      );
+      return ok({
+        rows: rows.length,
+        updated,
+        unchanged,
+        not_found: notFound,
+        unknown_result: unknown,
+        counts,
+        problems,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/settings/cold",
+    auth: true,
+    capability: "crm:read",
+    handler: () => ok(coldView()),
+  },
+  {
+    method: "POST",
+    pattern: "hq/settings/cold/update",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ body, headers }) => {
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say why the rule is changing" });
+      const errors: Record<string, string> = {};
+      const next: ColdSettings = { ...coldSettings, overrides: { ...coldSettings.overrides } };
+      for (const name of [
+        "require_verified",
+        "allow_risky",
+        "skip_role_like",
+        "one_per_firm",
+      ] as const)
+        if (name in body) {
+          if (typeof body[name] !== "boolean") errors[name] = "true or false";
+          else next[name] = body[name] as boolean;
+        }
+      if ("verify_stale_days" in body) {
+        const days = body.verify_stale_days;
+        if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 730)
+          errors.verify_stale_days = "a whole number of days from 1 to 730";
+        else next.verify_stale_days = days;
+      }
+      let changedCountry: { country: string; from: string; reset: boolean } | null = null;
+      if ("jurisdiction" in body) {
+        const entry = (body.jurisdiction ?? {}) as Record<string, unknown>;
+        const country = coldCanonical(String(entry.country ?? "")).slice(0, 60);
+        const held = Object.keys(next.overrides).find(
+          (key) => key.toLowerCase() === country.toLowerCase(),
+        );
+        const before = coldJurisdiction(country).rule;
+        if (!country) errors.jurisdiction = "name the country";
+        else if (entry.reset) {
+          if (!held) errors.jurisdiction = "that country is already on its default";
+          else delete next.overrides[held];
+        } else if (!["opt_out", "consent", "hold"].includes(String(entry.rule ?? "")))
+          errors.jurisdiction = "the rule is one of opt_out, consent, hold";
+        else {
+          if (held) delete next.overrides[held];
+          next.overrides[country] = {
+            rule: String(entry.rule),
+            note: String(entry.note ?? "")
+              .trim()
+              .slice(0, 300),
+            subject_prefix: String(entry.subject_prefix ?? "")
+              .split(/\s+/)
+              .filter(Boolean)
+              .join(" ")
+              .slice(0, 12)
+              .trim(),
+          };
+        }
+        changedCountry = { country, from: before, reset: Boolean(entry.reset) };
+      }
+      if (Object.keys(errors).length) return refuse(400, "malformed_request", errors);
+      if (JSON.stringify(sortedJson(next)) === JSON.stringify(sortedJson(coldSettings)))
+        return refuse(400, "malformed_request", { reason: "nothing to change" });
+      coldSettings = next;
+      audit("settings.cold_updated", caller(headers)!.member.id, "settings", "cold", reason, {
+        ...(changedCountry
+          ? {
+              jurisdiction: {
+                ...changedCountry,
+                to: coldJurisdiction(changedCountry.country).rule,
+              },
+            }
+          : {}),
+      });
+      return ok({ updated: true, ...coldView() });
     },
   },
   {
@@ -10815,6 +11476,8 @@ routes.push(
           "STOPPED",
           "FULL",
         ],
+        verification_words: LEAD_VERIFIED_WORDS,
+        max_verification_rows: 2_000,
       });
     },
   },
@@ -11209,8 +11872,18 @@ routes.push(
         parsed.conditions,
       ).sort((a, b) => (direction === "desc" ? compare(b, a) : compare(a, b)));
       const total = visible.length;
+      const page = limit ? visible.slice(offset, offset + limit) : visible.slice(offset);
+      if (origin === "prospect" || limit) {
+        // How often and when each lead on the page was last written to.
+        const stats = mailSendStats();
+        for (const view of page) {
+          const mine = stats.get(mailNorm(view.email));
+          view.emails_sent = mine?.sent ?? 0;
+          view.last_emailed_at = mine?.last_sent_at ?? null;
+        }
+      }
       return ok({
-        leads: limit ? visible.slice(offset, offset + limit) : visible.slice(offset),
+        leads: page,
         counts,
         stages: ["new", "attempting", "connected", "qualified", "disqualified"],
         first_reply_target_minutes: FIRST_REPLY_TARGET_MINUTES,
@@ -11296,8 +11969,13 @@ routes.push(
       const company = domain
         ? companies.find((candidate) => candidate.domain === domain)
         : undefined;
+      const sent = mailSendStats().get(mailNorm(row.email));
       return ok({
-        lead: leadView(row),
+        lead: {
+          ...leadView(row),
+          emails_sent: sent?.sent ?? 0,
+          last_emailed_at: sent?.last_sent_at ?? null,
+        },
         matches: {
           person: person ? personView(person) : null,
           company: company ? companyView(company) : null,
@@ -11387,8 +12065,11 @@ routes.push(
           .filter(Boolean)
           .join(" ")
           .slice(0, 160);
-      if ("verified_state" in patch && patch.verified_state !== (row.verified_state ?? ""))
+      if ("verified_state" in patch && patch.verified_state !== (row.verified_state ?? "")) {
         patch.verified_at = patch.verified_state ? now() : null;
+        // Set by a person, not a verifier: the verifier's word no longer describes it.
+        patch.verified_detail = patch.verified_state ? "by hand" : "";
+      }
       let touched = Boolean(stage) || "owner_staff_id" in body;
       for (const [name, value] of Object.entries(patch)) {
         const current = (row as Record<string, unknown>)[name];
@@ -19457,22 +20138,51 @@ const EXPORT_SPECS: Record<string, ExportSpec> = {
       ["first_replied_at", "First reply", "datetime"],
       ["message", "Message"],
     ],
+    // The people who wrote in. Prospects are their own file, a view at a time.
     rows: () =>
-      leads.map((row) =>
-        pick(
-          row,
-          "id",
-          "created_at",
-          "source_key",
-          "full_name",
-          "email",
-          "company_name",
-          "stage",
-          "disqualify_reason",
-          "first_replied_at",
-          "message",
+      leads
+        .filter((row) => (row.origin ?? "inbound") === "inbound")
+        .map((row) =>
+          pick(
+            row,
+            "id",
+            "created_at",
+            "source_key",
+            "full_name",
+            "email",
+            "company_name",
+            "stage",
+            "disqualify_reason",
+            "first_replied_at",
+            "message",
+          ),
         ),
-      ),
+  },
+  prospects: {
+    title: "Prospects",
+    needs: null,
+    columns: [
+      ["id", "ID"],
+      ["email", "Email"],
+      ["full_name", "Name"],
+      ["title", "Title"],
+      ["company_name", "Firm"],
+      ["firm_type", "Firm type"],
+      ["country", "Country"],
+      ["city", "City"],
+      ["email_kind", "Kind of address"],
+      ["verified_state", "Verified"],
+      ["verified_detail", "Verifier's word"],
+      ["verified_at", "Verified at", "datetime"],
+      ["fit_band", "Fit"],
+      ["fit_score", "Fit score", "number"],
+      ["stage", "Stage"],
+      ["tags", "Tags"],
+      ["firm_domain", "Firm's domain"],
+      ["source_url", "Published on"],
+    ],
+    // The view on screen, not the table: the handler reads the list's own filters.
+    rows: () => [],
   },
   deals: {
     title: "Deals",
@@ -20671,7 +21381,49 @@ routes.push(
       // Beyond crm:export, what the records themselves need — as the service checks.
       if (spec.needs && !capsFor(exporter.role).includes(spec.needs))
         return refuse(403, "forbidden", { required_capability: spec.needs });
-      const records = spec.rows(headers);
+      let records = spec.rows(headers);
+      if (kind === "prospects") {
+        const parsed = leadParseConditions(body.conditions);
+        if (Object.keys(parsed.errors).length)
+          return refuse(400, "malformed_request", parsed.errors);
+        const stageFilter = String(body.stage_filter ?? "");
+        const needle = String(body.q ?? "")
+          .trim()
+          .toLowerCase();
+        records = leadApply(
+          leads
+            .filter((row) => row.origin === "prospect")
+            .map(leadView)
+            .filter((view) => !stageFilter || view.stage === stageFilter)
+            .filter(
+              (view) =>
+                !needle ||
+                `${view.full_name} ${view.email} ${view.company_name} ${view.title} ${view.country} ${view.city}`
+                  .toLowerCase()
+                  .includes(needle),
+            ),
+          parsed.conditions,
+        ).map((view) => [
+          view.lead_id,
+          view.email,
+          view.full_name,
+          view.title,
+          view.company_name,
+          view.firm_type,
+          view.country,
+          view.city,
+          view.email_kind,
+          view.verified_state,
+          view.verified_detail,
+          view.verified_at,
+          view.fit_band,
+          view.fit_score,
+          view.stage,
+          view.tags.join(", "),
+          view.firm_domain,
+          view.source_url,
+        ]);
+      }
       const exporterId = exporter.member.id;
       const overQuota = exportQuotaRefusal(exporterId, records.length);
       if (overQuota) return overQuota;
@@ -20690,18 +21442,39 @@ routes.push(
                   null,
                   now(),
                 ]
-              : [
-                  mark.id,
-                  now(),
-                  "website",
-                  mark.full_name,
-                  mark.email,
-                  "Northbridge Partners",
-                  "new",
-                  "",
-                  null,
-                  "",
-                ],
+              : kind === "prospects"
+                ? [
+                    mark.id,
+                    mark.email,
+                    mark.full_name,
+                    mark.title,
+                    "Northbridge Partners",
+                    "Asset manager",
+                    "United Kingdom",
+                    "",
+                    "named",
+                    "",
+                    "",
+                    null,
+                    "B",
+                    45,
+                    "new",
+                    "",
+                    mark.email.split("@")[1] ?? "",
+                    "",
+                  ]
+                : [
+                    mark.id,
+                    now(),
+                    "website",
+                    mark.full_name,
+                    mark.email,
+                    "Northbridge Partners",
+                    "new",
+                    "",
+                    null,
+                    "",
+                  ],
           )
         : records;
       const decoyType = ({ companies: "company", people: "person" } as Record<string, string>)[
@@ -22332,6 +23105,13 @@ type MailRecipient = {
   custom?: Record<string, string>;
   /** What a verification said about a lead's address. */
   verified_state?: string;
+  verified_detail?: string;
+  verified_at?: string | null;
+  /** A lead's origin; empty for everyone who is not a lead. */
+  origin?: string;
+  email_kind?: string;
+  fit_score?: number;
+  firm_domain?: string;
 };
 type MailVerdict = { allowed: boolean; reason: string; detail: string };
 
@@ -22591,6 +23371,12 @@ function mailLeadRecipient(row: LeadRow): MailRecipient {
     firm_type: row.firm_type ?? "",
     customer_since: null,
     verified_state: row.verified_state ?? "",
+    verified_detail: row.verified_detail ?? "",
+    verified_at: row.verified_at ?? null,
+    origin: row.origin ?? "inbound",
+    email_kind: row.email_kind ?? "",
+    fit_score: leadFit(row, leadRules()).score,
+    firm_domain: leadFirmDomain(row),
     // A prospect's extra file columns reach templates as {{custom.<key>}}.
     ...(row.origin === "prospect" && Object.keys(row.payload).length
       ? { custom: { ...row.payload } }
@@ -22626,9 +23412,10 @@ function mailVariables(recipient: MailRecipient): Record<string, string> {
 // -- verdicts -------------------------------------------------------------------------------
 function mailSuppressionsFor(email: string, topic: string, senderId: string): MailSuppressionRow[] {
   const norm = mailNorm(email);
+  const firmKey = norm.includes("@") ? `*@${norm.split("@")[1]}` : "";
   return mailSuppressions.filter(
     (row) =>
-      row.email_norm === norm &&
+      (row.email_norm === norm || (firmKey !== "" && row.email_norm === firmKey)) &&
       !row.released_at &&
       (row.scope === "global" ||
         (row.scope === "topic" && row.scope_key === topic) ||
@@ -22653,7 +23440,12 @@ function mailAddressVerdict(email: string, topic: string, senderId: string): Mai
       return { allowed: false, reason: "UNSUBSCRIBED", detail: row.scope };
     }
     if (row.reason === "manual")
-      return { allowed: false, reason: "SUPPRESSED", detail: row.detail };
+      return {
+        allowed: false,
+        // A stop written for a whole firm reads as the firm's, not the person's.
+        reason: row.email_norm.startsWith("*@") ? "FIRM_STOPPED" : "SUPPRESSED",
+        detail: row.detail,
+      };
   }
   return { allowed: true, reason: "", detail: "" };
 }
@@ -22863,7 +23655,9 @@ function mailDescribeAudience(audience: Record<string, unknown>): string {
   if (kind === "companies") return `everyone at ${count} ${count === 1 ? "company" : "companies"}`;
   if (kind === "segment") {
     const segment = mailSegments.find((row) => row.id === String(audience.segment_id ?? ""));
-    return segment ? `segment “${segment.name}”` : "a saved segment";
+    const limit = Number(audience.limit ?? 0) || 0;
+    const first = limit ? `the first ${limit.toLocaleString("en-US")} of ` : "";
+    return segment ? `${first}segment “${segment.name}”` : `${first}a saved segment`;
   }
   if (kind === "csv")
     return `${Array.isArray(audience.rows) ? audience.rows.length : 0} rows from ${String(audience.label ?? "") || "a CSV"}`;
@@ -22881,7 +23675,7 @@ function mailDecide(
   required: string[],
 ) {
   const seen = new Set<string>();
-  return recipients.map((recipient) => {
+  const decided = recipients.map((recipient) => {
     const norm = mailNorm(recipient.email);
     if (norm && seen.has(norm))
       return { recipient, verdict: { allowed: false, reason: "DUPLICATE", detail: "" } };
@@ -22891,6 +23685,11 @@ function mailDecide(
         recipient,
         verdict: { allowed: false, reason: "ADDRESS_INVALID", detail: MAIL_ADDRESS_INVALID },
       };
+    if (recipient.origin === "prospect") {
+      // Someone the team found, not someone who asked: the cold rules speak first.
+      const cold = coldJudge(recipient);
+      if (!cold.allowed) return { recipient, verdict: cold };
+    }
     let verdict = mailMarketingVerdict(recipient, topic, senderId);
     if (verdict.allowed && required.length) {
       const vars = mailVariables(recipient);
@@ -22904,6 +23703,45 @@ function mailDecide(
     }
     return { recipient, verdict };
   });
+  if (coldSettings.one_per_firm) {
+    // One send, one person per firm: the best fit stays, the colleagues are named.
+    const taken = decided
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => item.verdict.allowed && item.recipient.origin === "prospect");
+    for (const [position, firm] of coldCoverFirms(taken.map(({ item }) => item.recipient)))
+      decided[taken[position]!.index] = {
+        recipient: taken[position]!.item.recipient,
+        verdict: { allowed: false, reason: "FIRM_COVERED", detail: firm },
+      };
+  }
+  return decided;
+}
+type MailDecided = { recipient: MailRecipient; verdict: MailVerdict };
+/** "The first N, best fit first": who a limited send takes, and what it leaves for later. */
+function mailApplyLimit(
+  decided: MailDecided[],
+  limit: number,
+): { kept: MailDecided[]; left: number } {
+  if (limit <= 0) return { kept: decided, left: 0 };
+  const ordered = decided
+    .map((item, index) => ({ item, index }))
+    .sort(
+      (a, b) =>
+        (b.item.recipient.fit_score ?? 0) - (a.item.recipient.fit_score ?? 0) || a.index - b.index,
+    )
+    .map(({ item }) => item);
+  const kept: MailDecided[] = [];
+  let taken = 0;
+  let left = 0;
+  for (const item of ordered) {
+    if (taken >= limit) {
+      if (item.verdict.allowed) left += 1;
+      continue;
+    }
+    kept.push(item);
+    if (item.verdict.allowed) taken += 1;
+  }
+  return { kept, left };
 }
 function mailSummarise(decided: Array<{ recipient: MailRecipient; verdict: MailVerdict }>) {
   const byReason: Record<string, number> = {};
@@ -23124,6 +23962,7 @@ function mailSuppressionView(row: MailSuppressionRow) {
     released_by: mailPerson(row.released_by),
     release_note: row.release_note,
     active: !row.released_at,
+    kind: row.email_norm.startsWith("*@") ? "firm" : "address",
   };
 }
 function mailConsentView(norm: string) {
@@ -23789,6 +24628,16 @@ function mailRunWorker(): Record<string, number | boolean> {
       report.skipped += 1;
       continue;
     }
+    if (row.contact_kind === "lead") {
+      // Some countries want a cold email labelled in its subject (Singapore's <ADV>).
+      const lead = leads.find((item) => item.id === row.contact_id);
+      const prefix =
+        lead?.origin === "prospect" ? coldJurisdiction(lead.country ?? "").subject_prefix : "";
+      // Once, with one space between: `cold_rules.with_prefix`.
+      const label = prefix.trim();
+      if (label && !rendered.subject.includes(label))
+        rendered.subject = `${label} ${rendered.subject}`;
+    }
     if (campaign?.dry_run) {
       Object.assign(row, {
         state: "dry_run",
@@ -23909,17 +24758,23 @@ function mailCampaignPreview(campaign: MailCampaignRow) {
     campaign.sender_id,
     version?.required_vars ?? [],
   );
-  return mailSummarise(decided);
+  const limit = Number(campaign.audience.limit ?? 0) || 0;
+  const { kept, left } = mailApplyLimit(decided, limit);
+  // What this send takes, and what stays for the next.
+  return { ...mailSummarise(kept), limit, left_for_later: left, matched: decided.length };
 }
 function mailEnqueue(campaign: MailCampaignRow, startIso: string) {
   const version = mailVersionOf(campaign.template_id, campaign.template_version);
   const sender = mailSenders.find((row) => row.id === campaign.sender_id);
-  const decided = mailDecide(
-    mailResolveAudience(campaign.audience),
-    campaign.topic,
-    campaign.sender_id,
-    version?.required_vars ?? [],
-  );
+  const decided = mailApplyLimit(
+    mailDecide(
+      mailResolveAudience(campaign.audience),
+      campaign.topic,
+      campaign.sender_id,
+      version?.required_vars ?? [],
+    ),
+    Number(campaign.audience.limit ?? 0) || 0,
+  ).kept;
   let eligible = 0;
   let skipped = 0;
   const base = { sender_name: sender?.from_name ?? "", sender_email: sender?.from_email ?? "" };
@@ -23998,6 +24853,8 @@ function mailEnrolVerdicts(
   mayEnrolOthers: boolean,
 ) {
   const seen = new Set<string>();
+  /** Firms this call has already taken a prospect from: one person per firm. */
+  const firmsTaken = new Set<string>();
   const perCompany = new Map<string, number>();
   for (const row of mailEnrolments) {
     if (
@@ -24045,6 +24902,7 @@ function mailEnrolVerdicts(
     };
     const refuse = (reason: string, detail = "") =>
       Object.assign(entry, { allowed: false, reason, detail });
+    let firmsPending = "";
     if (!recipient) return refuse("NOT_FOUND");
     if (!sender) return refuse("NO_SENDER", "no sales identity for the sender");
     const norm = mailNorm(recipient.email);
@@ -24054,6 +24912,15 @@ function mailEnrolVerdicts(
     if (!verdict.allowed) return refuse(verdict.reason, verdict.detail);
     if (recipient.verified_state === "invalid")
       return refuse("ADDRESS_INVALID", MAIL_ADDRESS_INVALID);
+    if (recipient.origin === "prospect") {
+      const cold = coldJudge(recipient);
+      if (!cold.allowed) return refuse(cold.reason, cold.detail);
+      if (coldSettings.one_per_firm && recipient.firm_domain) {
+        if (firmsTaken.has(recipient.firm_domain))
+          return refuse("FIRM_COVERED", recipient.firm_domain);
+        firmsPending = recipient.firm_domain;
+      }
+    }
     const live = mailEnrolments.find(
       (row) =>
         row.contact_id === recipient.contact_id &&
@@ -24086,6 +24953,7 @@ function mailEnrolVerdicts(
     if (missing.length) return refuse("MISSING_TOKEN", missing.join(", "));
     if (recipient.company_id)
       perCompany.set(recipient.company_id, (perCompany.get(recipient.company_id) ?? 0) + 1);
+    if (firmsPending) firmsTaken.add(firmsPending);
     return entry;
   });
 }
@@ -25666,9 +26534,20 @@ function mailCampaignFields(
       audience = { kind, ids: ids.slice(0, 5000) };
     } else if (kind === "segment") {
       const segmentId = String(raw.segment_id ?? "");
+      const limit = raw.limit;
+      const noLimit = limit === undefined || limit === null || limit === "" || limit === 0;
+      if (
+        !noLimit &&
+        (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 25_000)
+      )
+        return {
+          error: refuse(400, "malformed_request", {
+            audience: "the limit is a whole number from 1 to 25000",
+          }),
+        };
       if (!mailSegments.some((row) => row.id === segmentId))
         return { error: refuse(400, "malformed_request", { audience: "unknown segment" }) };
-      audience = { kind, segment_id: segmentId };
+      audience = noLimit ? { kind, segment_id: segmentId } : { kind, segment_id: segmentId, limit };
     } else if (kind === "csv") {
       const rows = Array.isArray(raw.rows) ? raw.rows : [];
       if (!rows.length)
@@ -27510,13 +28389,31 @@ routes.push(
     capability: "crm:write",
     handler: ({ headers, body }) => {
       const found = caller(headers)!;
-      const norm = mailNorm(body.email);
-      if (!mailValidEmail(norm))
-        return refuse(400, "malformed_request", { email: "a valid address" });
+      // A whole firm is stopped by its domain ("fund.com" or "*@fund.com").
+      let firm = String(body.domain ?? "").trim();
+      const typed = String(body.email ?? "")
+        .trim()
+        .toLowerCase();
+      if (!firm && typed.startsWith("*@")) firm = typed.slice(2);
+      if (firm) {
+        firm = normaliseDomain(firm);
+        if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(firm))
+          return refuse(400, "malformed_request", { domain: "a web domain such as fund.com" });
+        if (LEAD_FREE_MAIL.has(firm))
+          return refuse(400, "malformed_request", {
+            domain: "a free-mail domain is not a firm; stop the address instead",
+          });
+        if (mailSuppressions.some((row) => row.email_norm === `*@${firm}` && !row.released_at))
+          return refuse(400, "malformed_request", { domain: "that firm is already stopped" });
+      }
+      const norm = firm ? `*@${firm}` : mailNorm(body.email);
+      if (!firm && !mailValidEmail(norm))
+        return refuse(400, "malformed_request", { email: "a valid address, or a firm's domain" });
       const detail = String(body.detail ?? "")
         .trim()
         .slice(0, 400);
       if (!detail) return refuse(400, "malformed_request", { detail: "say why" });
+      const covers = (email: string) => (firm ? email.endsWith(`@${firm}`) : email === norm);
       const row: MailSuppressionRow = {
         id: randomUUID(),
         email_norm: norm,
@@ -27534,13 +28431,13 @@ routes.push(
       mailSuppressions.unshift(row);
       let cancelled = 0;
       for (const message of mailMessages)
-        if (message.email_norm === norm && ["pending", "retry", "held"].includes(message.state)) {
+        if (covers(message.email_norm) && ["pending", "retry", "held"].includes(message.state)) {
           message.state = "cancelled";
-          message.skip_reason = "SUPPRESSED";
+          message.skip_reason = firm ? "FIRM_STOPPED" : "SUPPRESSED";
           cancelled += 1;
         }
       for (const enrolment of mailEnrolments)
-        if (enrolment.email_norm === norm && ["active", "paused"].includes(enrolment.state))
+        if (covers(enrolment.email_norm) && ["active", "paused"].includes(enrolment.state))
           mailExit(enrolment, "MANUAL", "stop", found.member.id, detail);
       audit("mail.suppression_added", found.member.id, "mail_suppression", row.id, detail, {
         cancelled,
@@ -28927,7 +29824,7 @@ const EXPORT_WINDOW_MS = 24 * 3_600_000;
 const BREAK_GLASS_TEST_DAYS = 90;
 /** The mock runs with a marker domain set, as production would once it is configured. */
 const MOCK_MARKER_DOMAIN = process.env.MOCK_MARKER_DOMAIN ?? "mark.quantifyterminal.test";
-const MARKER_KINDS = ["people", "leads", "mail_list"];
+const MARKER_KINDS = ["people", "leads", "prospects", "mail_list"];
 const EXPORT_KIND_LABELS: Record<string, string> = {
   companies: "companies",
   people: "people",
@@ -43199,6 +44096,7 @@ const BODY_ROWS_BYTES = 4 * 1024 * 1024;
 /** The routes whose table entry declares `body_bytes`: the ones that take rows. */
 const BODY_ROW_ROUTES = new Set([
   "hq/leads/import",
+  "hq/leads/verification/import",
   "hq/leads/bulk",
   "hq/companies/import",
   "hq/people/import",

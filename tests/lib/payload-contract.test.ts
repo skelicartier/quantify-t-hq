@@ -280,6 +280,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/leads/imports", () => crm.readLeadImports(token)],
   ["hq/leads/suggestions", () => crm.readLeadSuggestions(token)],
   ["hq/settings/leads", () => crm.readLeadSettings(token)],
+  ["hq/settings/cold", () => crm.readColdSettings(token)],
   ["hq/deals", () => deals.readDealsBoard(token)],
   ["hq/deals/{deal_id}", () => deals.readDeal(token, ids.deal_id!)],
   ["hq/activities", () => crm.readActivities(token, { company_id: ids.company_id! })],

@@ -32,6 +32,7 @@ const COLUMNS = [
 ];
 
 function scopeText(row: MailSuppression): string {
+  if (row.kind === "firm") return "Everything, to anyone there";
   if (row.scope === "topic")
     return row.scope_key === "sales" ? "Sales emails" : `The ${row.scope_key} topic`;
   if (row.scope === "sender") return "One sender";
@@ -63,6 +64,8 @@ export default async function StopListPage({ searchParams }: StopListProps) {
   const parameters = await searchParams;
   const q = firstSearchValue(parameters.q) ?? "";
   const released = firstSearchValue(parameters.released) === "1";
+  // A lead's page links here with its firm's domain already filled in.
+  const firm = (firstSearchValue(parameters.firm) ?? "").slice(0, 255);
   const now = requestNow();
   let page: Awaited<ReturnType<typeof readSuppressions>> | null = null;
   try {
@@ -82,7 +85,7 @@ export default async function StopListPage({ searchParams }: StopListProps) {
       <PageHeader
         eyebrow="Mail"
         title="Stop list"
-        description="Addresses nothing is sent to. Bounces, spam complaints and unsubscribes land here by themselves, at once; rows are never deleted, only released with a reason."
+        description="Addresses nothing is sent to. Bounces, spam complaints and unsubscribes land here by themselves, at once; a whole firm can be stopped by its web domain. Rows are never deleted, only released with a reason."
         actions={<MailTabs current="/mail/suppressions" />}
       />
       <div className="page-content">
@@ -148,7 +151,12 @@ export default async function StopListPage({ searchParams }: StopListProps) {
                   {page.suppressions.map((row) => (
                     <tr key={row.suppression_id} className={row.active ? undefined : "row--muted"}>
                       <td>
-                        <span className="table-title mono">{row.email}</span>
+                        <span className="table-title mono">
+                          {row.kind === "firm" ? row.email.slice(2) : row.email}
+                        </span>
+                        {row.kind === "firm" && (
+                          <span className="table-sub">Every address at this firm</span>
+                        )}
                         {row.detail && (
                           <span className="table-sub">{DETAIL_TEXT[row.detail] ?? row.detail}</span>
                         )}
@@ -208,6 +216,34 @@ export default async function StopListPage({ searchParams }: StopListProps) {
                       </Field>
                       <Field id="stop-detail" label="Why">
                         <Input id="stop-detail" name="detail" maxLength={400} required />
+                      </Field>
+                    </MailForm>
+                  </Card>
+                )}
+                {canWrite && (
+                  <Card
+                    title="Stop a whole firm"
+                    titleAs="h3"
+                    titleId="stop-firm"
+                    description="A firm that says take us off means all of them. Nothing goes to any address at its domain, and everything queued for one is cancelled."
+                  >
+                    <MailForm action={addSuppressionAction} submitLabel="Stop the firm">
+                      <Field
+                        id="stop-domain"
+                        label="The firm's web domain"
+                        hint="What follows the @ in its addresses."
+                      >
+                        <Input
+                          id="stop-domain"
+                          name="domain"
+                          maxLength={255}
+                          defaultValue={firm}
+                          placeholder="fund.com"
+                          required
+                        />
+                      </Field>
+                      <Field id="stop-domain-detail" label="Why">
+                        <Input id="stop-domain-detail" name="detail" maxLength={400} required />
                       </Field>
                     </MailForm>
                   </Card>

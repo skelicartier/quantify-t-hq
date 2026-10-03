@@ -161,6 +161,10 @@ export const previewSchema = z.object({
     z.object({ name: z.string(), email: z.string(), reason: z.string(), detail: z.string() }),
   ),
   has_customers: z.boolean(),
+  /** "The first N, best fit first": the cap, how many matched before it, how many stay. */
+  limit: z.number().default(0),
+  matched: z.number().default(0),
+  left_for_later: z.number().default(0),
 });
 export type MailPreview = z.infer<typeof previewSchema>;
 
@@ -186,6 +190,8 @@ export const suppressionSchema = z.object({
   released_by: personRefSchema.nullable(),
   release_note: z.string(),
   active: z.boolean(),
+  /** "firm": every address at a domain, written "*@domain". Otherwise "address". */
+  kind: z.string(),
 });
 export type MailSuppression = z.infer<typeof suppressionSchema>;
 
@@ -388,10 +394,16 @@ export const SKIP_REASON_LABELS: Record<string, string> = {
   DO_NOT_CONTACT: "Do not contact",
   ROLE_ADDRESS: "Shared inbox (info@, sales@)",
   TOPIC_OFF: "Turned this topic off",
-  NO_CONSENT: "Needs a yes first (DE/AT)",
+  NO_CONSENT: "The country needs a yes first",
   FREQUENCY_CAP: "Mailed twice this week",
   MISSING_TOKEN: "Missing a name the copy needs",
   ADDRESS_INVALID: "A verification said the address does not exist",
+  ADDRESS_RISKY: "A verification could not vouch for the address",
+  NOT_VERIFIED: "The address has not been verified",
+  ROLE_LIKE_ADDRESS: "A shared mailbox, not a person's",
+  NO_RULE_FOR_COUNTRY: "No rule is set for the country",
+  FIRM_COVERED: "A colleague at the firm is in this send",
+  FIRM_STOPPED: "The firm asked not to be written to",
   DUPLICATE: "Same address twice",
   ALREADY_IN_SEQUENCE: "Already in a sequence",
   ALREADY_HAD_SEQUENCE: "Had this sequence recently",
@@ -470,7 +482,9 @@ export const CONDITION_OPS: Record<string, string> = {
   is: "is",
   not: "is not",
   has: "contains",
+  nhas: "does not contain",
   in: "is any of",
+  nin: "is none of",
   gt: "is more than",
   lt: "is less than",
   empty: "is empty",

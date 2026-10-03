@@ -11,7 +11,9 @@ import { buildWorkbook } from "@/lib/documents/xlsx";
 import {
   EXPORT_FORMATS,
   EXPORT_KINDS,
+  exportView,
   safeReturnPath,
+  safeReturnQuery,
   type ExportFormat,
   type ExportKind,
 } from "@/lib/exports";
@@ -58,8 +60,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const returnPath = safeReturnPath(String(form.get("back") ?? ""));
   const context = await requireStaff(returnPath);
   const base = process.env.NEXT_PUBLIC_SITE_URL || request.nextUrl.origin;
-  const back = (outcome: string) =>
-    NextResponse.redirect(new URL(`${returnPath}?export=${outcome}`, base), 303);
+  // Back to the same view of the list, not the unfiltered one.
+  const returnQuery = safeReturnQuery(String(form.get("back_query") ?? ""));
+  const back = (outcome: string) => {
+    const target = new URL(returnPath, base);
+    for (const [key, value] of returnQuery) target.searchParams.append(key, value);
+    target.searchParams.set("export", outcome);
+    return NextResponse.redirect(target, 303);
+  };
   if (!hasCapability(context, "crm:export")) return back("forbidden");
 
   const kind = String(form.get("kind") ?? "");
@@ -70,6 +78,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!(EXPORT_KINDS as readonly string[]).includes(kind)) return back("failed");
   if (!(EXPORT_FORMATS as readonly string[]).includes(format)) return back("failed");
   if (reason.length < 8) return back("reason");
+  // The prospects export is of a view: the list's own filters travel with the request.
+  const view = kind === "prospects" ? exportView(String(form.get("view_json") ?? "")) : {};
+  if (view === null) return back("failed");
 
   let exported: ExportFile;
   try {
@@ -78,6 +89,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       kind as ExportKind,
       reason,
       format as ExportFormat,
+      view,
     );
   } catch (error) {
     if (error instanceof HqApiRequestError) {

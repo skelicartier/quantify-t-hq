@@ -29,10 +29,20 @@ const NEXT_QUARTER = (() => {
   const index = now.getUTCFullYear() * 4 + Math.floor(now.getUTCMonth() / 3) + 1;
   return `${Math.floor(index / 4)}-Q${(index % 4) + 1}`;
 })();
-const WIDTHS = [
+const ALL_WIDTHS = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "phone", width: 412, height: 915 },
 ] as const;
+/**
+ * One width at a time when asked (HQ_HARNESS_WIDTHS=desktop or phone): a full walk at
+ * both takes about two hours, which is as long as a background task — or the servers
+ * under it — may live.
+ */
+const WIDTHS = ALL_WIDTHS.filter(
+  (viewport) =>
+    !process.env.HQ_HARNESS_WIDTHS ||
+    process.env.HQ_HARNESS_WIDTHS.split(",").includes(viewport.name),
+);
 
 type Shot = { name: string; path: string; ready?: string };
 
@@ -95,6 +105,12 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "lead-segments", path: "/leads/segments", ready: ".data-table" },
   { name: "lead-import", path: "/leads/import", ready: ".list-import" },
   { name: "lead-fit", path: "/leads/fit", ready: ".fit-rules" },
+  { name: "lead-rules", path: "/leads/rules", ready: ".stat-grid" },
+  {
+    name: "lead-rules-country",
+    path: "/leads/rules?country=Germany#country-rule",
+    ready: "#cold-country",
+  },
   { name: "companies", path: "/companies", ready: ".data-table" },
   {
     name: "company",
@@ -1883,10 +1899,12 @@ async function captureFieldFlows(page: Page, folder: string) {
 }
 
 /**
- * Prospects, end to end: a small file brought in through the import page (one row left
- * out and named), the view narrowed by a facet and tagged as a whole, the view saved as a
- * segment that then shows under Segments, a prospect edited in place, and the file taken
- * back out — which leaves the one somebody edited.
+ * Prospects, end to end: a small file rehearsed and then brought in through the import
+ * page (one row left out and named), a verifier's answer applied to it, the view narrowed
+ * by a facet and tagged as a whole, the view saved as a segment and written to with a cap
+ * (the first five, best fit first), a prospect edited in place and its firm stopped, a
+ * country's rule set and put back, the checks flipped and restored, the view exported as
+ * a file, and the file taken back out — which leaves the one somebody edited.
  */
 async function captureProspectFlows(page: Page, folder: string) {
   const stamp = Date.now().toString(36);
@@ -1909,8 +1927,22 @@ async function captureProspectFlows(page: Page, folder: string) {
   await page.waitForSelector("#lead-map-email", { timeout: 10_000 });
   await page.fill("#lead-import-reason", "The harness's own invented rows");
   await shoot(page, `${folder}/lead-import-mapped`);
+  // First as a rehearsal: the same accounting, nothing written.
+  await page.locator("button", { hasText: "Try it first" }).click();
+  await page.waitForSelector("#lead-import-done:has-text('What this file would do')", {
+    timeout: 30_000,
+  });
+  const rehearsed = await page.locator(".list-import__counts dd").allInnerTexts();
+  if (rehearsed[0] !== "24" || rehearsed[3] !== "1")
+    report(
+      `${folder}/lead-import-rehearsed`,
+      `expected 24 would be added and 1 left out, saw ${rehearsed.join("/")}`,
+    );
+  await shoot(page, `${folder}/lead-import-rehearsed`);
   await page.locator("button", { hasText: /Add [0-9,]+ rows as prospects/ }).click();
-  await page.waitForSelector("#lead-import-done", { timeout: 30_000 });
+  await page.waitForSelector("#lead-import-done:has-text('What happened')", {
+    timeout: 30_000,
+  });
   const counts = await page.locator(".list-import__counts dd").allInnerTexts();
   if (counts[0] !== "24" || counts[3] !== "1")
     report(
@@ -1918,6 +1950,41 @@ async function captureProspectFlows(page: Page, folder: string) {
       `expected 24 added and 1 left out, saw ${counts.join("/")}`,
     );
   await shoot(page, `${folder}/lead-import-done`);
+
+  // A verifier's answer: twenty good, two the verifier could not vouch for, one dead, one
+  // word nobody knows, and an address that is not a lead here.
+  const verdicts = [
+    "Email,Status",
+    ...Array.from({ length: 24 }, (_, index) => {
+      const word =
+        index < 20 ? "valid" : index < 22 ? "Catch-All" : index < 23 ? "invalid" : "maybe";
+      return `flow${index}@harness${stamp}${index}.example,${word}`;
+    }),
+    `stranger@harness${stamp}.example,valid`,
+  ].join("\n");
+  await page.setInputFiles("#verification-csv", {
+    name: `verified-${stamp}.csv`,
+    mimeType: "text/csv",
+    buffer: Buffer.from(verdicts, "utf8"),
+  });
+  await page.waitForSelector("#verification-map-result", { timeout: 10_000 });
+  const reads = await page
+    .locator("[aria-label='What the file says and how it is read'] tbody tr")
+    .allInnerTexts();
+  if (reads.length !== 4 || !reads.some((row) => /catch-all.*Risky/.test(row)))
+    report(`${folder}/lead-verification-mapped`, `the file's words read ${reads.join(" | ")}`);
+  await page.locator("button", { hasText: /^Apply 25 results$/ }).click();
+  await page.waitForSelector("#verification-import-done", { timeout: 30_000 });
+  const applied = await page
+    .locator(".list-import__result:has(#verification-import-done) .list-import__counts dd")
+    .allInnerTexts();
+  if (applied.join("/") !== "23/0/1/1")
+    report(
+      `${folder}/lead-verification-done`,
+      `expected 23 updated, 0 unchanged, 1 not a lead, 1 unknown; saw ${applied.join("/")}`,
+    );
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shoot(page, `${folder}/lead-verification-done`);
 
   // The file's own leads, narrowed by a facet row, then one change to the whole view.
   await page.goto(
@@ -1950,6 +2017,31 @@ async function captureProspectFlows(page: Page, folder: string) {
     report(`${folder}/lead-segments-saved`, "the saved view is not listed as a segment");
   await shoot(page, `${folder}/lead-segments-saved`);
 
+  // The same view straight into a campaign, capped: the first five, best fit first. Of
+  // the twenty-four, twenty are verified good, so fifteen stay for the next send.
+  await page.goto(`${BASE}/leads/prospects?f=${encodeURIComponent(`tags:has:harness ${stamp}`)}`, {
+    waitUntil: "networkidle",
+  });
+  await page.locator("summary", { hasText: "Save as a segment" }).click();
+  await page.fill("#segment-name", `Harness ${stamp} first five`);
+  await page.locator("button", { hasText: "Save and write a campaign" }).click();
+  await page.waitForURL("**/mail/campaigns/new?segment=*", { timeout: 15_000 });
+  await page.fill("#campaign-name", `Harness ${stamp}: the first five`);
+  await page.fill("#campaign-limit", "5");
+  await page.locator("button", { hasText: "Save draft" }).click();
+  await page.waitForURL(/\/mail\/campaigns\/[0-9a-f-]{36}$/, { timeout: 15_000 });
+  await page.waitForSelector("#campaign-audience", { timeout: 15_000 });
+  const reach = (
+    await page.locator("section[aria-labelledby='campaign-audience']").innerText()
+  ).replace(/\s+/g, " ");
+  if (
+    !/5 will get it/.test(reach) ||
+    !/Capped at 5/.test(reach) ||
+    !/15 more could be written to/.test(reach)
+  )
+    report(`${folder}/mail-campaign-capped`, `the capped campaign reads "${reach.slice(0, 200)}"`);
+  await shoot(page, `${folder}/mail-campaign-capped`);
+
   // Edit one in place: it is no longer untouched, so taking the file back leaves it.
   await page.goto(
     `${BASE}/leads/prospects?f=${encodeURIComponent(`import:is:harness-${stamp}.csv`)}&sort=lead`,
@@ -1964,7 +2056,101 @@ async function captureProspectFlows(page: Page, folder: string) {
   await page
     .waitForSelector(".prop:has-text('Owner') :text('Saved')", { timeout: 10_000 })
     .catch(() => {});
+  if ((await page.locator(".kv__row", { hasText: "The firm's domain" }).count()) === 0)
+    report(`${folder}/prospect-owned`, "the record does not say the firm's domain");
   await shoot(page, `${folder}/prospect-owned`);
+
+  // The whole firm stopped from the record: the stop list opens with its domain filled in.
+  await page.locator("a", { hasText: "Stop the whole firm" }).click();
+  await page.waitForURL("**/mail/suppressions?firm=*", { timeout: 15_000 });
+  await page.waitForSelector("#stop-domain", { timeout: 15_000 });
+  const stoppedFirm = await page.inputValue("#stop-domain");
+  if (!stoppedFirm.endsWith(".example"))
+    report(`${folder}/stop-list-firm`, `the firm's domain was not carried: "${stoppedFirm}"`);
+  await page.fill("#stop-domain-detail", "The firm asked not to be written to");
+  await page.locator("button", { hasText: "Stop the firm" }).click();
+  await page.waitForSelector("text=/The firm is stopped/", { timeout: 15_000 });
+  if (
+    (await page
+      .locator("tr", { hasText: stoppedFirm })
+      .locator(".table-sub", { hasText: "Every address at this firm" })
+      .count()) === 0
+  )
+    report(`${folder}/stop-list-firm`, "the firm's row does not read as a whole-firm stop");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shoot(page, `${folder}/stop-list-firm`);
+
+  // The sending rules: a country nobody decided, decided and put back; a check flipped
+  // and restored. Both need the fresh code, both are audited with their reason.
+  await page.goto(`${BASE}/leads/rules`, { waitUntil: "networkidle" });
+  if ((await page.locator("#sudo-code").count()) > 0) {
+    await page.fill("#sudo-code", "000000");
+    await page.locator(".sudo-gate button[type=submit]").click();
+  }
+  await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  const heldFirm = page.locator(".reason-list li", {
+    hasText: "The firm asked not to be written to",
+  });
+  if ((await heldFirm.count()) === 0)
+    report(`${folder}/lead-rules`, "the stopped firm is not among what holds the rest");
+  await page.fill("#cold-country", `Harnessland ${stamp}`);
+  await page.selectOption("#cold-rule", "opt_out");
+  await page.fill("#cold-note", "Decided for the harness");
+  await page.fill("#cold-country-reason", "The harness decides a country");
+  await page.locator("button", { hasText: "Save the rule" }).click();
+  await page.waitForSelector("form:has(#cold-country) .form-sent", { timeout: 15_000 });
+  await page.waitForSelector(`tr:has-text("Harnessland ${stamp}"):has-text("An admin")`, {
+    timeout: 15_000,
+  });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shoot(page, `${folder}/lead-rules-country-set`);
+  // A second change is a second decision: the reason field emptied with the first save.
+  await page.fill("#cold-country-reason", "The harness puts the country back");
+  await page.locator("button", { hasText: "Put back to the default" }).click();
+  await page.waitForSelector("text=/Back to the default/", { timeout: 15_000 });
+  await page.waitForSelector(`tr:has-text("Harnessland ${stamp}")`, {
+    state: "detached",
+    timeout: 15_000,
+  });
+  const onePerFirm = page.locator("#cold-one_per_firm");
+  const wasOn = await onePerFirm.isChecked();
+  await onePerFirm.setChecked(!wasOn);
+  await page.fill("#cold-checks-reason", "The harness flips a check");
+  await page.locator("button", { hasText: "Save the checks" }).click();
+  await page.waitForSelector("form:has(#cold-checks-reason) .form-sent", { timeout: 15_000 });
+  await shoot(page, `${folder}/lead-rules-checks-saved`);
+  await onePerFirm.setChecked(wasOn);
+  await page.fill("#cold-checks-reason", "The harness puts the check back");
+  await page.locator("button", { hasText: "Save the checks" }).click();
+  await page.waitForSelector("form:has(#cold-checks-reason) .form-sent", { timeout: 15_000 });
+
+  // The view as a file, through the export door (the sudo window is still open).
+  await page.goto(
+    `${BASE}/leads/prospects?f=${encodeURIComponent(`import:is:harness-${stamp}.csv`)}`,
+    { waitUntil: "networkidle" },
+  );
+  await page.locator("summary", { hasText: "Export this view" }).click();
+  await page.waitForSelector(".export-menu .sudo-gate--open", { timeout: 10_000 });
+  await page.locator(".export-menu input[value=csv]").check();
+  await page.fill("#export-prospects-reason", "The harness takes the view to a verifier");
+  const [exported] = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    page.locator(".export-menu form[action='/exports'] button[type=submit]").click(),
+  ]);
+  const exportedName = exported.suggestedFilename();
+  const exportedStream = await exported.createReadStream();
+  const exportedChunks: Buffer[] = [];
+  for await (const chunk of exportedStream) exportedChunks.push(chunk as Buffer);
+  const exportedCsv = Buffer.concat(exportedChunks).toString("utf8");
+  const exportedRows = exportedCsv.trim().split(/\r?\n/).length - 1;
+  if (!exportedName.startsWith("hq-prospects-") || !exportedCsv.startsWith("\uFEFFid,email"))
+    report(
+      `${folder}/prospects-exported`,
+      `unexpected download ${exportedName}: ${exportedCsv.slice(0, 40)}`,
+    );
+  else if (exportedRows < 24)
+    report(`${folder}/prospects-exported`, `the view has 24 rows; the file has ${exportedRows}`);
+  else console.log(`  ✓ ${folder}/prospects-exported (${exportedName}, ${exportedRows} rows)`);
 
   await page.goto(`${BASE}/leads/import`, { waitUntil: "networkidle" });
   const row = page.locator("tr", { hasText: `harness-${stamp}.csv` });

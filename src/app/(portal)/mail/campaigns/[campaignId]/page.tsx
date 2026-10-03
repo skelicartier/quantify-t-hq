@@ -143,6 +143,7 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
     ids?: string[];
     segment_id?: string;
     list_id?: string;
+    limit?: number;
   };
 
   const actions = (
@@ -362,6 +363,27 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
                   <strong>{detail.preview.eligible}</strong> will get it;{" "}
                   <strong>{detail.preview.skipped}</strong> are skipped.
                 </p>
+                {detail.preview.limit > 0 && (
+                  <p className="page-note">
+                    Capped at {detail.preview.limit.toLocaleString("en-GB")}, best fit first.{" "}
+                    {detail.preview.matched > 0 &&
+                      `Of the ${detail.preview.matched.toLocaleString("en-GB")} who match, `}
+                    {detail.preview.left_for_later > 0
+                      ? `${detail.preview.left_for_later.toLocaleString("en-GB")} more could be written to and stay for the next send`
+                      : "nobody who could be written to is left over"}
+                    {(() => {
+                      // Refusals past the cap are not in this send's count: say how many.
+                      const beyond =
+                        detail.preview.matched -
+                        detail.preview.eligible -
+                        detail.preview.skipped -
+                        detail.preview.left_for_later;
+                      return beyond > 0
+                        ? `, and ${beyond.toLocaleString("en-GB")} could not be written to today.`
+                        : ".";
+                    })()}
+                  </p>
+                )}
                 {Object.keys(detail.preview.skipped_by_reason).length > 0 && (
                   <ul className="reason-list">
                     {Object.entries(detail.preview.skipped_by_reason).map(([reason, count]) => (
@@ -594,6 +616,7 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
               ...(audience.segment_id ? { segment_id: audience.segment_id } : {}),
               ...(audience.list_id ? { list_id: audience.list_id } : {}),
               ...(audience.ids ? { ids: audience.ids } : {}),
+              ...(audience.limit ? { limit: audience.limit } : {}),
               send_anytime: campaign.send_anytime,
               dry_run: campaign.dry_run,
             }}

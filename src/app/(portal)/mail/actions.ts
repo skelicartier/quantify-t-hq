@@ -536,6 +536,17 @@ function campaignInput(formData: FormData): Record<string, unknown> | ActionStat
   let audience: Record<string, unknown>;
   if (kind === "segment") {
     audience = { kind, segment_id: fieldValue(formData, "segment_id", 64) };
+    // "The first N, best fit first": empty means everyone who matches.
+    const cap = fieldValue(formData, "audience_limit", 8).trim();
+    if (cap) {
+      const limit = Number(cap);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 25_000)
+        return {
+          status: "error",
+          message: "Send to at most: a whole number from 1 to 25,000, or empty for everyone.",
+        };
+      audience.limit = limit;
+    }
   } else if (kind === "people" || kind === "leads" || kind === "companies") {
     const ids = jsonField<string[]>(formData, "audience_ids", 200_000) ?? [];
     audience = { kind, ids };
@@ -897,15 +908,17 @@ export async function addSuppressionAction(
   await requireSameOriginServerAction(formData);
   const context = await requireStaff("/mail/suppressions");
   if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  // One address, or every address at a firm's web domain.
+  const domain = fieldValue(formData, "domain", 255).trim().toLowerCase();
   try {
     const result = await mailApi.addSuppression(
       context.token,
-      fieldValue(formData, "email", 254).trim(),
+      domain ? { domain } : { email: fieldValue(formData, "email", 254).trim() },
       fieldValue(formData, "detail", 400).trim(),
     );
-    refresh("/mail/suppressions");
+    refresh("/mail/suppressions", "/leads/rules");
     return sent(
-      `Stopped. ${result.cancelled ? `${result.cancelled} queued ${result.cancelled === 1 ? "message" : "messages"} cancelled.` : "Nothing was queued."}`,
+      `${domain ? "The firm is stopped" : "Stopped"}. ${result.cancelled ? `${result.cancelled} queued ${result.cancelled === 1 ? "message" : "messages"} cancelled.` : "Nothing was queued."}`,
     );
   } catch (error) {
     return crmRefusal(error);

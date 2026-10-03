@@ -21,6 +21,14 @@ type ExportMenuProps = {
   kind: ExportKind;
   /** The page the menu sits on; a refused export comes back here with the reason. */
   returnPath: string;
+  /** The list's current query, so a refused export comes back to the same view. */
+  returnQuery?: string | undefined;
+  /** The trigger's words when "Export" alone would not say what leaves. */
+  label?: string | undefined;
+  /** What the file holds, when it is a view of the list and not every record. */
+  scope?: string | undefined;
+  /** The view's filters, sent with the request for the kinds that export a view. */
+  view?: Record<string, unknown> | undefined;
   sudoFresh: boolean;
   sudoUntilLabel: string | null;
   sudoAction: (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -35,6 +43,10 @@ type ExportMenuProps = {
 export function ExportMenu({
   kind,
   returnPath,
+  returnQuery,
+  label,
+  scope,
+  view,
   sudoFresh,
   sudoUntilLabel,
   sudoAction,
@@ -47,13 +59,13 @@ export function ExportMenu({
     <details className="popover popover--end export-menu" open={Boolean(outcome) || undefined}>
       <summary className={buttonClass({ size: "small", className: "popover__trigger" })}>
         <Download size={14} aria-hidden="true" />
-        Export
+        {label ?? "Export"}
       </summary>
       <div className="popover__panel popover__panel--wide">
         <p className="export-menu__title">Export {EXPORT_LABELS[kind].toLowerCase()}</p>
         <p className="field__hint">
-          Every record in the list, not only the page shown. It needs a reason and is kept in the
-          audit log.
+          {scope ?? "Every record in the list, not only the page shown."} It needs a reason and is
+          kept in the audit log.
         </p>
         {outcome && (
           <Callout tone="danger" role="alert" compact>
@@ -70,6 +82,8 @@ export function ExportMenu({
         <form className="stack-form stack-form--tight" method="post" action="/exports">
           <input type="hidden" name="kind" value={kind} />
           <input type="hidden" name="back" value={returnPath} />
+          {returnQuery && <input type="hidden" name="back_query" value={returnQuery} />}
+          {view && <input type="hidden" name="view_json" value={JSON.stringify(view)} />}
           <fieldset className="format-choice" disabled={!sudoFresh}>
             <legend className="format-choice__legend">Format</legend>
             {EXPORT_FORMATS.map((option) => (

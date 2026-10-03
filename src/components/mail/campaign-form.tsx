@@ -46,6 +46,8 @@ export type CampaignInitial = {
   segment_id?: string;
   list_id?: string;
   ids?: string[];
+  /** A segment's cap: the first N, best fit first. */
+  limit?: number;
   send_anytime?: boolean;
   dry_run?: boolean;
 };
@@ -253,23 +255,41 @@ export function CampaignForm({
 
         {kind === "segment" &&
           (segments.length ? (
-            <Field
-              id="campaign-segment"
-              label="Segment"
-              hint="Evaluated when the campaign is scheduled, so it reaches whoever matches then."
-            >
-              <Select
+            <div className="form-row">
+              <Field
                 id="campaign-segment"
-                name="segment_id"
-                defaultValue={initial.segment_id ?? segments[0]?.id ?? ""}
+                label="Segment"
+                hint="Evaluated when the campaign is scheduled, so it reaches whoever matches then."
               >
-                {segments.map((segment) => (
-                  <option key={segment.id} value={segment.id}>
-                    {segment.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+                <Select
+                  id="campaign-segment"
+                  name="segment_id"
+                  defaultValue={initial.segment_id ?? segments[0]?.id ?? ""}
+                >
+                  {segments.map((segment) => (
+                    <option key={segment.id} value={segment.id}>
+                      {segment.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field
+                id="campaign-limit"
+                label="Send to at most"
+                hint="Leave empty for everyone who matches. With a number, the best fit go first and the rest stay for the next send."
+              >
+                <Input
+                  id="campaign-limit"
+                  name="audience_limit"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={25000}
+                  defaultValue={initial.limit ?? ""}
+                  placeholder="Everyone"
+                />
+              </Field>
+            </div>
           ) : (
             <p className="page-note">
               No segments yet. Build one under Segments, or choose people here.
@@ -353,6 +373,12 @@ export function CampaignForm({
               ))}
               {shown.length === 0 && <li className="audience-pick__none">Nothing matches.</li>}
             </ul>
+            {kind === "leads" && (
+              <p className="page-note">
+                Leads who wrote in. People the team found are reached through a saved segment of
+                prospects, so the sending rules judge the whole group at once.
+              </p>
+            )}
           </div>
         )}
 

@@ -599,11 +599,16 @@ export function readSuppressions(token: string, query: { q?: string; released?: 
   );
 }
 
-export function addSuppression(token: string, email: string, detail: string) {
+/** Stop one address, or every address at a firm's web domain. */
+export function addSuppression(
+  token: string,
+  target: { email: string } | { domain: string },
+  detail: string,
+) {
   return postHqJson(
     "hq/mail/suppressions/add",
     okEnvelope.extend({ suppression: suppressionSchema, cancelled: z.number() }),
-    { token, body: { email, detail } },
+    { token, body: { ...target, detail } },
   );
 }
 

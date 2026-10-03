@@ -30,6 +30,9 @@ const VALUE_HINTS: Record<string, string> = {
   named: "yes or no",
   tags: "a tag, or several with commas",
   last_emailed_days: "a number of days",
+  emails_sent: "a number of emails; 0 for never written to",
+  verified_days: "a number of days",
+  firm_domain: "a web domain, such as fund.com",
   customer_days: "a number of days",
   created_days: "a number of days",
 };

@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox, Field, Input, Select } from "@/components/ui/field";
 import type { LeadImportResult } from "@/lib/api/crm";
 import { guessMapping, parseCsv, type CsvTable } from "@/lib/crm/csv";
-import { LEAD_IMPORT_SKIP_LABELS } from "@/lib/crm/prospects";
+import { downloadText, toCsv } from "@/lib/crm/csv-download";
+import { LEAD_IMPORT_SKIP_LABELS, OVERWRITABLE_COLUMNS } from "@/lib/crm/prospects";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -57,6 +58,8 @@ const STANDARD_FIELDS = [
 const PART_SIZE = 500;
 const MAX_FILE_BYTES = 25_000_000;
 const MAX_EXTRA = 20;
+/** Rows left out that the page lists; the download has every one. */
+const SHOWN = 200;
 
 function columnKey(raw: string): string {
   let text = raw
@@ -79,12 +82,13 @@ function resultOf(state: ActionState): LeadImportResult | null {
   }
 }
 
-type Totals = Omit<LeadImportResult, "ok" | "import_id">;
+type Totals = Omit<LeadImportResult, "ok" | "import_id" | "dry_run">;
 
 /**
  * A researched list into prospects, in four steps on one page: read the file here in
- * the browser (nothing leaves until the button), say which column is which, say where
- * it came from, and send it in parts. Every row comes back accounted for.
+ * the browser (nothing leaves until a button), say which column is which, say where
+ * it came from, and send it in parts. Every row comes back accounted for — and the
+ * same accounting can be had first as a rehearsal that writes nothing.
  */
 export function LeadImport({
   action,
@@ -102,9 +106,17 @@ export function LeadImport({
   );
   const [reason, setReason] = useState("");
   const [updateExisting, setUpdateExisting] = useState(false);
+  /** The lead's columns the file may replace, by the service's names. */
+  const [overwrite, setOverwrite] = useState<string[]>([]);
   const [readError, setReadError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{ sent: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{
+    sent: number;
+    total: number;
+    rehearsal: boolean;
+  } | null>(null);
   const [outcome, setOutcome] = useState<Totals | null>(null);
+  /** The outcome on screen is a rehearsal: nothing was written. */
+  const [rehearsed, setRehearsed] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
   const load = (text: string, name: string) => {
@@ -120,6 +132,7 @@ export function LeadImport({
     setFileName(name);
     setTable(parsed);
     setMapping(guessMapping(parsed.header, STANDARD_FIELDS));
+    setOverwrite([]);
   };
 
   const mapped = new Set(Object.values(mapping));
@@ -155,10 +168,17 @@ export function LeadImport({
   const withEmail = rows.filter((row) => row.email).length;
   const ready = Boolean(mapping.email) && reason.trim().length >= 4 && progress === null;
 
-  const send = async () => {
+  // Only a column the file carries can replace anything.
+  const replaceable = OVERWRITABLE_COLUMNS.filter((column) => mapping[column.field]);
+  const replacing = updateExisting
+    ? overwrite.filter((name) => replaceable.some((column) => column.column === name))
+    : [];
+
+  const send = async (rehearsal: boolean) => {
     if (!table) return;
     setFailure(null);
     setOutcome(null);
+    setRehearsed(rehearsal);
     const total: Totals = {
       rows: 0,
       created: 0,
@@ -180,8 +200,7 @@ export function LeadImport({
       if (email && seen.has(email)) {
         total.rows += 1;
         total.skipped_count += 1;
-        if (total.skipped.length < 200)
-          total.skipped.push({ row: index + 1, email, reason: "DUPLICATE_IN_FILE" });
+        total.skipped.push({ row: index + 1, email, reason: "DUPLICATE_IN_FILE" });
         return;
       }
       if (email) seen.add(email);
@@ -192,7 +211,7 @@ export function LeadImport({
     const run = crypto.randomUUID();
     for (let start = 0; start < numbered.length; start += PART_SIZE) {
       const chunk = numbered.slice(start, start + PART_SIZE);
-      setProgress({ sent: start, total: numbered.length });
+      setProgress({ sent: start, total: numbered.length, rehearsal });
       const form = new FormData();
       form.set("rows_json", JSON.stringify(chunk.map((item) => item.row)));
       form.set("source_key", source);
@@ -200,16 +219,20 @@ export function LeadImport({
       form.set("label", fileName);
       form.set("run_id", run);
       if (updateExisting) form.set("update_existing", "on");
+      if (replacing.length) form.set("overwrite_json", JSON.stringify(replacing));
+      if (rehearsal) form.set("dry_run", "on");
       form.set("attempt", `${run}-${start}`);
       const state = await action(INITIAL_ACTION_STATE, form);
       const part = resultOf(state);
       if (!part) {
         setFailure(
-          `${state.message ?? "The import stopped."} Rows 1 to ${start.toLocaleString("en-GB")} are in; send the file again to finish — rows already in are left as they are.`,
+          rehearsal
+            ? `${state.message ?? "The rehearsal stopped."} Nothing was added.`
+            : `${state.message ?? "The import stopped."} Rows 1 to ${start.toLocaleString("en-GB")} are in; send the file again to finish — rows already in are left as they are.`,
         );
         setProgress(null);
         setOutcome(start ? total : null);
-        router.refresh();
+        if (!rehearsal) router.refresh();
         return;
       }
       total.rows += part.rows;
@@ -226,7 +249,7 @@ export function LeadImport({
     total.skipped.sort((a, b) => a.row - b.row);
     setProgress(null);
     setOutcome(total);
-    router.refresh();
+    if (!rehearsal) router.refresh();
   };
 
   return (
@@ -394,20 +417,64 @@ export function LeadImport({
               checked={updateExisting}
               onChange={(event) => setUpdateExisting(event.target.checked)}
             />
+            {updateExisting && replaceable.length > 0 && (
+              <fieldset className="list-import__extras">
+                <legend className="record-section__title">
+                  Let the file replace what is there
+                </legend>
+                <p className="page-note">
+                  Normally only blanks are filled. Tick a column and the file&rsquo;s value replaces
+                  the lead&rsquo;s wherever the file has one. Names, addresses and tags are never
+                  replaced.
+                </p>
+                <ul className="list-import__columns">
+                  {replaceable.map((column) => (
+                    <li key={column.column}>
+                      <Checkbox
+                        id={`lead-overwrite-${column.column}`}
+                        label={column.label}
+                        checked={overwrite.includes(column.column)}
+                        onChange={(event) =>
+                          setOverwrite(
+                            event.target.checked
+                              ? [...overwrite, column.column]
+                              : overwrite.filter((name) => name !== column.column),
+                          )
+                        }
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </fieldset>
+            )}
             <p className="page-note">
               An address that is already a person in the CRM, or on the stop list, is left out and
               named. Importing is not sending: nothing is mailed until a campaign is approved.
             </p>
             <div className="form-actions">
-              <Button type="button" variant="primary" disabled={!ready} onClick={() => void send()}>
-                {progress
+              <Button
+                type="button"
+                variant="primary"
+                disabled={!ready}
+                onClick={() => void send(false)}
+              >
+                {progress && !progress.rehearsal
                   ? `Adding… ${progress.sent.toLocaleString("en-GB")} of ${progress.total.toLocaleString("en-GB")}`
                   : `Add ${rows.length.toLocaleString("en-GB")} rows as prospects`}
+              </Button>
+              <Button type="button" disabled={!ready} onClick={() => void send(true)}>
+                {progress?.rehearsal
+                  ? `Checking… ${progress.sent.toLocaleString("en-GB")} of ${progress.total.toLocaleString("en-GB")}`
+                  : "Try it first"}
               </Button>
               {!ready && progress === null && mapping.email && (
                 <span className="page-note">Say where the addresses were published first.</span>
               )}
             </div>
+            <p className="page-note">
+              Trying it first goes through every row and writes nothing: the same counts, before
+              anything changes.
+            </p>
           </section>
         </>
       )}
@@ -420,15 +487,15 @@ export function LeadImport({
       {outcome && (
         <section className="list-import__result" aria-labelledby="lead-import-done" role="status">
           <h2 id="lead-import-done" className="record-section__title">
-            What happened
+            {rehearsed ? "What this file would do" : "What happened"}
           </h2>
           <dl className="list-import__counts">
             <div>
-              <dt>Added</dt>
+              <dt>{rehearsed ? "Would be added" : "Added"}</dt>
               <dd>{outcome.created.toLocaleString("en-GB")}</dd>
             </div>
             <div>
-              <dt>Filled in</dt>
+              <dt>{rehearsed ? "Would be filled in" : "Filled in"}</dt>
               <dd>{outcome.updated.toLocaleString("en-GB")}</dd>
             </div>
             <div>
@@ -436,20 +503,51 @@ export function LeadImport({
               <dd>{outcome.unchanged.toLocaleString("en-GB")}</dd>
             </div>
             <div>
-              <dt>Left out</dt>
+              <dt>{rehearsed ? "Would be left out" : "Left out"}</dt>
               <dd>{outcome.skipped_count.toLocaleString("en-GB")}</dd>
             </div>
           </dl>
-          <p className="page-note">
-            <Link className="text-link" href="/leads/prospects">
-              Open the prospects
-            </Link>{" "}
-            or see what the leads now suggest under{" "}
-            <Link className="text-link" href="/leads/segments">
-              Segments
-            </Link>
-            .
-          </p>
+          {rehearsed ? (
+            <p className="page-note">
+              Nothing has been added. When this reads right, press Add above and the same thing
+              happens for real.
+            </p>
+          ) : (
+            <p className="page-note">
+              <Link className="text-link" href="/leads/prospects">
+                Open the prospects
+              </Link>{" "}
+              or see what the leads now suggest under{" "}
+              <Link className="text-link" href="/leads/segments">
+                Segments
+              </Link>
+              .
+            </p>
+          )}
+          {outcome.skipped.length > 0 && (
+            <div className="form-actions">
+              <Button
+                type="button"
+                size="small"
+                onClick={() =>
+                  downloadText(
+                    "rows-left-out.csv",
+                    toCsv(
+                      ["row", "email", "why"],
+                      outcome.skipped.map((item) => [
+                        item.row,
+                        item.email,
+                        LEAD_IMPORT_SKIP_LABELS[item.reason] ?? item.reason,
+                      ]),
+                    ),
+                  )
+                }
+              >
+                Download the {outcome.skipped.length.toLocaleString("en-GB")}{" "}
+                {outcome.skipped.length === 1 ? "row" : "rows"} left out
+              </Button>
+            </div>
+          )}
           {outcome.skipped.length > 0 && (
             <div className="table-frame" role="region" aria-label="Rows left out" tabIndex={0}>
               <table className="data-table">
@@ -462,7 +560,7 @@ export function LeadImport({
                   </tr>
                 </thead>
                 <tbody>
-                  {outcome.skipped.slice(0, 200).map((item) => (
+                  {outcome.skipped.slice(0, SHOWN).map((item) => (
                     <tr key={`${item.row}-${item.email}`}>
                       <td className="data-table__num">{item.row}</td>
                       <td>{item.email || "—"}</td>
@@ -471,10 +569,10 @@ export function LeadImport({
                   ))}
                 </tbody>
               </table>
-              {outcome.skipped_count > outcome.skipped.length && (
+              {outcome.skipped.length > SHOWN && (
                 <p className="page-note">
-                  The first {outcome.skipped.length.toLocaleString("en-GB")} of{" "}
-                  {outcome.skipped_count.toLocaleString("en-GB")} are listed.
+                  The first {SHOWN} of {outcome.skipped.length.toLocaleString("en-GB")} are listed;
+                  the download has them all.
                 </p>
               )}
             </div>

@@ -1,12 +1,14 @@
 import Link from "next/link";
 
 import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
+import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { bulkProspectsAction, saveViewSegmentAction } from "@/app/(portal)/leads/actions";
 import { FacetPanel } from "@/components/crm/facet-panel";
 import { LeadTabs } from "@/components/crm/lead-tabs";
 import { LeadStagePill } from "@/components/crm/pills";
 import { AddressKind, FitPill } from "@/components/crm/prospect-pills";
 import { BulkViewForm, SaveSegmentForm } from "@/components/crm/prospect-tools";
+import { ExportMenu } from "@/components/documents/export-menu";
 import { FilterBuilder } from "@/components/lists/filter-builder";
 import { PageHeader } from "@/components/shell/page-header";
 import { ButtonLink } from "@/components/ui/button";
@@ -17,16 +19,20 @@ import { FilterChips } from "@/components/ui/filter-chips";
 import { Popover } from "@/components/ui/popover";
 import { SelectionBar } from "@/components/ui/selection-bar";
 import { Stat, StatGrid } from "@/components/ui/stat";
+import { Timestamp } from "@/components/ui/timestamp";
 import { ViewTabs } from "@/components/ui/view-tabs";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLeads, type CrmSettings, type LeadsPage } from "@/lib/api/crm";
+import { readExportQuota, type ExportQuota } from "@/lib/api/privileged";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { PROSPECT_SORTS, prospectFilterFields } from "@/lib/crm/prospects";
 import { LEAD_STAGES, LEAD_STAGE_LABELS } from "@/lib/crm/vocabulary";
-import { formatNumber } from "@/lib/format";
+import { canExport } from "@/lib/exports";
+import { formatAbsolute, formatNumber } from "@/lib/format";
 import { describeFilter, parseFilters, serializeFilter } from "@/lib/lists/filters";
 import { nextSort, parseSort, serializeSort } from "@/lib/lists/sort";
+import { requestNow } from "@/lib/request-time";
 import { boundedInteger, firstSearchValue } from "@/lib/search-params";
 
 export const metadata = { title: "Prospects" };
@@ -45,6 +51,7 @@ const COLUMNS = [
   { key: "address", label: "Address" },
   { key: "fit", sortable: true, label: "Fit" },
   { key: "stage", sortable: true, label: "Stage" },
+  { key: "emailed", label: "Written to" },
   { key: "owner", sortable: true, label: "Owner" },
 ];
 
@@ -58,6 +65,7 @@ function facetCount(page: LeadsPage, field: string, value: string): number {
 
 export default async function ProspectsPage({ searchParams }: ProspectsPageProps) {
   const context = await requireStaff(BASE);
+  const now = requestNow();
   const parameters = await searchParams;
   const stage = firstSearchValue(parameters.stage) ?? "";
   const q = firstSearchValue(parameters.q) ?? "";
@@ -97,6 +105,33 @@ export default async function ProspectsPage({ searchParams }: ProspectsPageProps
   }
   const names = await directoryOrNull(context.token);
   const canWrite = hasCapability(context, "crm:write");
+  const mayExport = canExport(context.me.capabilities, "prospects");
+  const sudoUntil = context.me.sudo_until
+    ? (formatAbsolute(context.me.sudo_until).split(", ")[1] ?? null)
+    : null;
+  // How much the person may still take out today, so a view too big to export says so
+  // before the reason is typed rather than after.
+  let quota: ExportQuota | null = null;
+  if (mayExport) {
+    try {
+      quota = await readExportQuota(context.token);
+    } catch (error) {
+      if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+        throw error;
+    }
+  }
+  const exportScope = page
+    ? [
+        `The ${formatNumber(page.total)} ${page.total === 1 ? "prospect" : "prospects"} this view matches, every page of it, with the address in the second column where a verifier looks for it.`,
+        quota === null
+          ? ""
+          : page.total > quota.left
+            ? `That is more than the ${formatNumber(quota.left)} records you can still take out today: narrow the view, or ask an owner to lift the limit for a day.`
+            : `You can take ${formatNumber(quota.left)} more records out today.`,
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : "";
 
   const query = { stage, q, sort: serializeSort(sort) };
   const listHref = (
@@ -285,40 +320,57 @@ export default async function ProspectsPage({ searchParams }: ProspectsPageProps
 
           <div className="list-tools" aria-label="List tools">
             <FilterBuilder fields={filterFields} basePath={BASE} currentQuery={currentQuery} />
-            {canWrite && page.total > 0 && (
+            {(canWrite || mayExport) && page.total > 0 && (
               <div className="list-tools__group">
-                <Popover label="Save as a segment · mail it" align="end" width="wide">
-                  <SaveSegmentForm
-                    action={saveViewSegmentAction}
-                    conditions={segmentConditions}
-                    suggestedName={suggestedName}
-                    total={page.total}
-                    blocked={
-                      q
-                        ? "A segment is built from filters, and search text is not one. Clear the search, or add a filter that says the same thing, then save."
-                        : segmentConditions.length > 8
-                          ? "A segment holds at most eight conditions; remove one first."
-                          : null
-                    }
+                {mayExport && (
+                  <ExportMenu
+                    kind="prospects"
+                    label="Export this view"
+                    scope={exportScope}
+                    view={{ conditions: conditionStrings, stage_filter: stage, q }}
+                    returnPath={BASE}
+                    returnQuery={currentQuery}
+                    sudoFresh={context.me.sudo_fresh}
+                    sudoUntilLabel={sudoUntil}
+                    sudoAction={confirmSudoAction}
                   />
-                </Popover>
-                <Popover label="Change the whole view" align="end" width="wide">
-                  {filtered ? (
-                    <BulkViewForm
-                      action={bulkProspectsAction}
-                      conditions={conditionStrings}
-                      q={q}
-                      stage={stage}
+                )}
+                {canWrite && (
+                  <Popover label="Save as a segment · mail it" align="end" width="wide">
+                    <SaveSegmentForm
+                      action={saveViewSegmentAction}
+                      conditions={segmentConditions}
+                      suggestedName={suggestedName}
                       total={page.total}
-                      staff={staffChoices}
+                      blocked={
+                        q
+                          ? "A segment is built from filters, and search text is not one. Clear the search, or add a filter that says the same thing, then save."
+                          : segmentConditions.length > 8
+                            ? "A segment holds at most eight conditions; remove one first."
+                            : null
+                      }
                     />
-                  ) : (
-                    <p className="page-note">
-                      Filter the list first. A change to every prospect at once is not offered; a
-                      change to a filtered view is.
-                    </p>
-                  )}
-                </Popover>
+                  </Popover>
+                )}
+                {canWrite && (
+                  <Popover label="Change the whole view" align="end" width="wide">
+                    {filtered ? (
+                      <BulkViewForm
+                        action={bulkProspectsAction}
+                        conditions={conditionStrings}
+                        q={q}
+                        stage={stage}
+                        total={page.total}
+                        staff={staffChoices}
+                      />
+                    ) : (
+                      <p className="page-note">
+                        Filter the list first. A change to every prospect at once is not offered; a
+                        change to a filtered view is.
+                      </p>
+                    )}
+                  </Popover>
+                )}
               </div>
             )}
           </div>
@@ -400,6 +452,18 @@ export default async function ProspectsPage({ searchParams }: ProspectsPageProps
                 </td>
                 <td className="nowrap">
                   <LeadStagePill stage={lead.stage} />
+                </td>
+                <td className="nowrap">
+                  {lead.emails_sent > 0 ? (
+                    <>
+                      {lead.emails_sent === 1 ? "Once" : `${formatNumber(lead.emails_sent)} times`}
+                      <span className="table-sub">
+                        <Timestamp value={lead.last_emailed_at} now={now} mode="relative" />
+                      </span>
+                    </>
+                  ) : (
+                    <span className="table-sub">Never</span>
+                  )}
                 </td>
                 <td className="nowrap">
                   {lead.owner_staff_id ? (

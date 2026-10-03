@@ -208,8 +208,106 @@ export async function importLeadsAction(
       label: fieldValue(formData, "label", 120),
       run_id: fieldValue(formData, "run_id", 64),
       update_existing: formData.get("update_existing") === "on",
+      // The lead's columns the file may replace; the service refuses any other name.
+      overwrite: jsonField<string[]>(formData, "overwrite_json", 400) ?? [],
+      // A rehearsal: the same accounting, nothing written.
+      dry_run: formData.get("dry_run") === "on",
     });
     return sent(null, { detail: JSON.stringify(result) });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+/** One part of a verifier's file: the address and what it said, per row. */
+export async function importLeadVerificationAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/import");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const rows = jsonField<Record<string, unknown>[]>(formData, "rows_json", 4_000_000) ?? [];
+  if (!rows.length) return { status: "error", message: "No rows to send." };
+  const label = fieldValue(formData, "label", 120).trim();
+  try {
+    const result = await crmApi.importLeadVerification(context.token, {
+      rows,
+      label: label.length >= 2 ? label : "A verifier's file",
+    });
+    revalidatePath("/leads/prospects");
+    revalidatePath("/leads/rules");
+    return sent(null, { detail: JSON.stringify(result) });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+const NOT_ADMIN_RULES: ActionState = {
+  status: "error",
+  message: "Only HQ owners and admins change the sending rules.",
+};
+
+function coldSaved(view: crmApi.ColdSettings): string {
+  return `Saved. ${view.mailable.toLocaleString("en-GB")} of ${plural(view.prospects, "prospect", "prospects")} could be written to first today.`;
+}
+
+/** The four checks and how long a verification counts; one reason for the change. */
+export async function saveColdChecksAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/rules");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN_RULES;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (reason.length < 4) return { status: "error", message: "Say why the checks are changing." };
+  const days = Number(fieldValue(formData, "verify_stale_days", 6).trim());
+  if (!Number.isInteger(days) || days < 1)
+    return { status: "error", message: "A verification counts for a whole number of days." };
+  try {
+    const view = await crmApi.updateColdSettings(context.token, {
+      reason,
+      require_verified: formData.get("require_verified") === "on",
+      allow_risky: formData.get("allow_risky") === "on",
+      skip_role_like: formData.get("skip_role_like") === "on",
+      one_per_firm: formData.get("one_per_firm") === "on",
+      verify_stale_days: days,
+    });
+    revalidatePath("/leads/rules");
+    return sent(coldSaved(view));
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+/** One country's rule, or back to its default. */
+export async function saveCountryRuleAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/rules");
+  if (!hasCapability(context, "hq:admin")) return NOT_ADMIN_RULES;
+  const reason = fieldValue(formData, "reason", 400).trim();
+  if (reason.length < 4) return { status: "error", message: "Say why the rule is changing." };
+  const country = fieldValue(formData, "country", 60).trim();
+  if (!country) return { status: "error", message: "Name the country." };
+  const reset = fieldValue(formData, "reset", 4) === "1";
+  try {
+    const view = await crmApi.updateColdSettings(context.token, {
+      reason,
+      jurisdiction: reset
+        ? { country, reset: true }
+        : {
+            country,
+            rule: fieldValue(formData, "rule", 12),
+            note: fieldValue(formData, "note", 300).trim(),
+            subject_prefix: fieldValue(formData, "subject_prefix", 12).trim(),
+          },
+    });
+    revalidatePath("/leads/rules");
+    return sent(reset ? `Back to the default. ${coldSaved(view).slice(7)}` : coldSaved(view));
   } catch (error) {
     return crmRefusal(error);
   }

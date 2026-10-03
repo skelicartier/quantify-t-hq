@@ -11422,12 +11422,22 @@
 }
 
 @layer pages {
-  /* On a phone the list tools wrap to the left edge, so a panel hung from its trigger's
-     right edge would open off the screen. There it hangs from the left instead. */
+  /* On a phone the list tools wrap, and a panel hung from its own trigger — from either
+     edge — can open off the screen once two or three tools share the row. There every
+     panel spans the tools row instead, opening under the whole of it. */
   @media (max-width: 720px) {
-    .list-tools .popover--end > .popover__panel {
-      right: auto;
+    .list-tools {
+      position: relative;
+    }
+
+    .list-tools .popover {
+      position: static;
+    }
+
+    .list-tools .popover > .popover__panel {
+      right: 0;
       left: 0;
+      width: auto;
     }
   }
 }

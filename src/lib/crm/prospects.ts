@@ -63,6 +63,92 @@ export const LEAD_IMPORT_SKIP_LABELS: Record<string, string> = {
   FULL: "The lead table is full",
 };
 
+/** How a verifier's word is kept: the service's rule (`prospects.verification_state`). */
+export function verifierWord(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, "_").slice(0, 40);
+}
+
+/** The state a kept word is read as under the service's vocabulary; "" when unknown. */
+export function verifierWordState(
+  word: string,
+  words: Readonly<Record<string, readonly string[]>>,
+): string {
+  for (const [state, list] of Object.entries(words)) if (list.includes(word)) return state;
+  return "";
+}
+
+/** What each state means for a first email, said beside a file's own word. */
+export const VERIFIED_READS: Record<string, string> = {
+  valid: "Valid: may be written to",
+  risky: "Risky: held unless the sending rules allow it",
+  invalid: "Invalid: never written to",
+  "": "Not recognised: left out and named",
+};
+
+/** Why a verifier's row was not applied. */
+export const VERIFICATION_PROBLEM_LABELS: Record<string, string> = {
+  UNKNOWN_RESULT: "The result is a word this page does not know",
+  NOT_A_LEAD: "No lead here has this address",
+};
+
+/**
+ * Columns an import may replace on a lead that is already here — the service's
+ * `OVERWRITABLE`. `field` is the import form's own name for the column.
+ */
+export const OVERWRITABLE_COLUMNS = [
+  { field: "title", column: "title", label: "Title" },
+  { field: "company", column: "company_name", label: "Firm" },
+  { field: "firm_type", column: "firm_type", label: "Firm type" },
+  { field: "website", column: "website", label: "Website" },
+  { field: "country", column: "country", label: "Country" },
+  { field: "city", column: "city", label: "City" },
+  { field: "phone", column: "phone", label: "Phone" },
+  { field: "registration_no", column: "registration_no", label: "Registration number" },
+  { field: "source_url", column: "source_url", label: "Where it was published" },
+  { field: "notes", column: "notes", label: "Notes" },
+] as const;
+
+/** The four checks a first email passes, as the sending rules page words them. */
+export const COLD_CHECKS = [
+  {
+    key: "require_verified",
+    label: "Only addresses a verification called valid",
+    description: "An address nobody has checked, or checked too long ago, is held.",
+  },
+  {
+    key: "allow_risky",
+    label: "Allow addresses a verification could not vouch for",
+    description:
+      "A domain that accepts anything, or a check that could not finish. These bounce most.",
+  },
+  {
+    key: "skip_role_like",
+    label: "Leave out mailboxes that read as shared",
+    description: "compliance@, investor.relations@ and the like: nobody's own inbox.",
+  },
+  {
+    key: "one_per_firm",
+    label: "One person per firm in a send",
+    description: "The best fit at each firm goes; colleagues are named and stay for later.",
+  },
+] as const;
+
+const view = (condition: string) => `/leads/prospects?f=${encodeURIComponent(condition)}`;
+
+/**
+ * For a reason prospects are held, the view that shows that kind of address. A lead is
+ * counted under the first rule that says no, so a view is named for what it shows and
+ * never claims to be exactly the held ones.
+ */
+export const COLD_HELD_VIEWS: Record<string, { href: string; label: string }> = {
+  NOT_VERIFIED: { href: view("verified:is:unchecked"), label: "The unchecked addresses" },
+  ADDRESS_INVALID: { href: view("verified:is:invalid"), label: "The invalid addresses" },
+  ADDRESS_RISKY: { href: view("verified:is:risky"), label: "The risky addresses" },
+  ROLE_LIKE_ADDRESS: { href: view("email_kind:is:role"), label: "The shared mailboxes" },
+  NO_RULE_FOR_COUNTRY: { href: "#countries", label: "Decide the country below" },
+  FIRM_STOPPED: { href: "/mail/suppressions", label: "The stop list" },
+};
+
 /** The breakdown shown above the list, in this order. */
 export const FACETS: readonly { field: string; title: string }[] = [
   { field: "firm_type", title: "Firm type" },
@@ -154,7 +240,10 @@ export function prospectFilterFields(
     { key: "company", label: "Company", kind: "text" },
     { key: "email", label: "Email", kind: "text" },
     { key: "import", label: "Came in with", kind: "text" },
+    { key: "firm_domain", label: "Firm's web domain", kind: "text" },
+    { key: "verified_days", label: "Days since verified", kind: "number" },
     { key: "created_days", label: "Days since received", kind: "number" },
+    { key: "emails_sent", label: "Emails sent", kind: "number" },
     { key: "last_emailed_days", label: "Days since last email", kind: "number" },
     {
       key: "origin",
@@ -188,7 +277,10 @@ export const PROSPECT_FIELD_KEYS = [
   "verified",
   "named",
   "import",
+  "firm_domain",
+  "verified_days",
   "created_days",
+  "emails_sent",
   "last_emailed_days",
 ] as const;
 

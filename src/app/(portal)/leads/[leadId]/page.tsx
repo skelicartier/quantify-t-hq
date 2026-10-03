@@ -464,6 +464,51 @@ export default async function LeadPage({ params }: LeadPageProps) {
                     "Typed in by hand"
                   )}
                 </KeyValueRow>
+                <KeyValueRow label="The address">
+                  {VERIFIED_LABELS[lead.verified_state] ?? lead.verified_state}
+                  {lead.verified_detail && lead.verified_detail !== lead.verified_state && (
+                    <>
+                      {" · "}the verifier said <span className="mono">{lead.verified_detail}</span>
+                    </>
+                  )}
+                  {lead.verified_at && (
+                    <>
+                      {" · "}
+                      <Timestamp value={lead.verified_at} now={now} mode="relative" />
+                    </>
+                  )}
+                </KeyValueRow>
+                <KeyValueRow label="Written to">
+                  {lead.emails_sent > 0 ? (
+                    <>
+                      {lead.emails_sent === 1 ? "Once" : `${lead.emails_sent} times`}
+                      {" · "}
+                      <Timestamp value={lead.last_emailed_at} now={now} mode="relative" />
+                    </>
+                  ) : (
+                    "Never"
+                  )}
+                </KeyValueRow>
+                <KeyValueRow label="The firm's domain">
+                  {lead.firm_domain ? (
+                    <>
+                      <span className="mono">{lead.firm_domain}</span>
+                      {canWrite && (
+                        <>
+                          {" · "}
+                          <Link
+                            className="text-link"
+                            href={`/mail/suppressions?firm=${encodeURIComponent(lead.firm_domain)}#stop-firm`}
+                          >
+                            Stop the whole firm
+                          </Link>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    "A free-mail address: no firm to go by"
+                  )}
+                </KeyValueRow>
               </KeyValue>
             )}
             {lead.message ? (

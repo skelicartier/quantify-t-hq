@@ -9,6 +9,7 @@ export const EXPORT_KINDS = [
   "companies",
   "people",
   "leads",
+  "prospects",
   "deals",
   "contracts",
   "quotes",
@@ -26,6 +27,7 @@ export const EXPORT_LABELS: Record<ExportKind, string> = {
   companies: "Companies",
   people: "People",
   leads: "Leads",
+  prospects: "Prospects",
   deals: "Deals",
   contracts: "Contracts",
   quotes: "Quotes",
@@ -43,6 +45,7 @@ export const EXPORT_NEEDS: Record<ExportKind, string | null> = {
   companies: null,
   people: null,
   leads: null,
+  prospects: null,
   deals: "deals:read",
   contracts: "revenue:read",
   quotes: "revenue:read",
@@ -96,4 +99,38 @@ export function canExport(capabilities: readonly string[], kind: ExportKind): bo
  */
 export function safeReturnPath(value: string, fallback = "/reports"): string {
   return /^\/(?!\/)[A-Za-z0-9/_-]*$/.test(value) ? value : fallback;
+}
+
+const RETURN_QUERY_KEYS = new Set(["f", "stage", "q", "sort", "offset", "view"]);
+
+/**
+ * The list's own query, carried so a refused export comes back to the same view and not
+ * to the unfiltered list. Only a list's filter keys survive, each of bounded length: the
+ * path is checked separately, so this can only ever choose a view of that page.
+ */
+export function safeReturnQuery(value: string): URLSearchParams {
+  const kept = new URLSearchParams();
+  if (value.length > 4_000) return kept;
+  for (const [key, item] of new URLSearchParams(value))
+    if (RETURN_QUERY_KEYS.has(key) && item.length <= 200) kept.append(key, item);
+  return kept;
+}
+
+/** A list view as an export's request carries it; anything else in the field is dropped. */
+export function exportView(raw: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || "{}");
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const view = parsed as Record<string, unknown>;
+  return {
+    conditions: Array.isArray(view.conditions)
+      ? view.conditions.filter((item): item is string => typeof item === "string").slice(0, 8)
+      : [],
+    stage_filter: typeof view.stage_filter === "string" ? view.stage_filter.slice(0, 20) : "",
+    q: typeof view.q === "string" ? view.q.slice(0, 120) : "",
+  };
 }
