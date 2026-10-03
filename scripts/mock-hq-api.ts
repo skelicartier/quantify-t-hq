@@ -24100,6 +24100,12 @@ type MailboxRow = {
   next_send_after: string | null;
   disconnected_at: string | null;
   created_at: string;
+  /** 0058: how far its inbox has been read, and when; a follow-up waits while it is stale. */
+  imap_uidvalidity: number | null;
+  imap_last_uid: number | null;
+  last_poll_at: string | null;
+  last_poll_ok_at: string | null;
+  last_poll_error: string;
 };
 const mailboxRows: MailboxRow[] = [];
 const MAILBOX_MAX_CAP = 50;
@@ -24278,6 +24284,12 @@ function mailboxView(box: MailboxRow, sender: MailSenderRow) {
     last_error: box.last_error,
     connected_at: box.connected_at,
     smtp_host: box.smtp_host,
+    reads_replies: mailboxReadsReplies(box),
+    last_poll_at: box.last_poll_at,
+    last_poll_ok_at: box.last_poll_ok_at,
+    last_poll_error: box.last_poll_error,
+    replies_open: mailReplies.filter((row) => row.mailbox_id === sender.id && !row.handled_at)
+      .length,
   };
 }
 function mailboxBoard(member: Staff) {
@@ -24325,6 +24337,7 @@ function mailboxBoard(member: Staff) {
         mailboxSettings.pool_daily_cap,
       ),
       sent_today: views.reduce((sum, view) => sum + view.sent_today, 0),
+      replies_open: views.reduce((sum, view) => sum + view.replies_open, 0),
     },
     settings: {
       ...mailboxSettings,
@@ -24433,6 +24446,11 @@ function mailboxCreate(
     next_send_after: null,
     disconnected_at: null,
     created_at: now(),
+    imap_uidvalidity: null,
+    imap_last_uid: null,
+    last_poll_at: null,
+    last_poll_ok_at: null,
+    last_poll_error: "",
   };
   mailboxRows.push(box);
   return { box, sender };
@@ -25284,9 +25302,520 @@ function mailCrmEvent(
     }
   }
 }
+// -- replies read back from the mailboxes (mail_replies.py) -------------------------------------
+/** A reply read back from a connected mailbox (0058). */
+type MailReplyRow = {
+  id: string;
+  mailbox_id: string;
+  rfc_message_id: string;
+  message_id: string | null;
+  enrolment_id: string | null;
+  contact_kind: string;
+  contact_id: string | null;
+  company_id: string | null;
+  from_email: string;
+  from_name: string;
+  subject: string;
+  received_at: string;
+  body_text: string;
+  kind: "reply" | "auto_reply" | "bounce";
+  proposed: string;
+  proposed_why: string;
+  return_on: string | null;
+  auto_action: "none" | "paused" | "paused_until" | "stopped" | "bounced";
+  auto_detail: string;
+  outcome: string;
+  handled_by: string | null;
+  handled_at: string | null;
+  imap_uid: number | null;
+  created_at: string;
+};
+const mailReplies: MailReplyRow[] = [];
+/** What lands in a mailbox's inbox: the mock's stand-in for its IMAP server, oldest first
+ * (a message's UID is its place in the list). */
+type MockInboundMessage = {
+  message_id: string;
+  from_email: string;
+  from_name: string;
+  subject: string;
+  body: string;
+  date: string;
+  in_reply_to: string;
+  references: string[];
+  automatic: boolean;
+  report: { recipient: string; status: string; original_id: string } | null;
+};
+const mailboxInboxes = new Map<string, MockInboundMessage[]>();
+const MAIL_REPLY_POLL_MS = 5 * 60_000;
+const MAIL_REPLY_STALE_MS = 30 * 60_000;
+const MAIL_REPLY_AUTO_LABELS: Record<string, string> = {
+  none: "",
+  paused: "Follow-ups paused until someone reads it",
+  paused_until: "Paused until they are back",
+  stopped: "Stopped: they asked us to stop",
+  bounced: "The address is dead: on the stop list",
+};
+// mail_replies.py's patterns, as they read in JavaScript.
+const MR_OOO_SUBJECT =
+  /\b(out of (the )?office|automatic reply|auto[- ]?reply|autoreply|away from (the )?office|on (annual )?leave|abwesenheits?notiz|abwesend|r[ée]ponse automatique|absent|fuera de la oficina|respuesta autom[áa]tica|risposta automatica|fuori ufficio|afwezig|automatisch antwoord|automatisk svar)\b/i;
+const MR_OOO_BODY =
+  /\b(out of (the )?office|away from (the |my )?(office|desk)|on (annual |parental |maternity |paternity |sick |study )?leave|on (a )?(holiday|vacation)|limited access to (my )?e-?mail|without access to (my )?e-?mail|currently travel+ing|(i will|i'll) be back|i am (currently )?away|i'm (currently )?away|back in the office|nicht im b[üu]ro|abwesend|absent(e)? du bureau|en cong[ée]|fuera de la oficina|de vacaciones|in ferie|fuori ufficio)\b/i;
+const MR_LEFT =
+  /\b(no longer (with|at|employed|works? (for|at)|working (for|at))|has left (the company|the firm|us)|left (the company|the firm)|is no longer (with|at|employed)|this (e-?mail )?address is no longer (monitored|in use|active))\b/i;
+const MR_STOP =
+  /\b(unsubscribe|remove me|take me off|stop (e-?mailing|contacting|sending|writing)|(please )?(do not|don'?t) (e-?mail|contact|write to|message) (me|us) (again|anymore|any more)|opt(-| )?out|no more e-?mails?|not contact me again|abmelden|d[ée]sinscri(re|vez)|darme de baja)\b/i;
+const MR_WRONG_PERSON =
+  /\b(wrong person|not the (right|best|correct|appropriate) (person|contact)|i'?m not (the right|responsible|the person)|(you|you'?d) (should|might want to|may want to|better) (contact|reach out to|speak (to|with)|talk to|write to)|please (contact|reach out to|speak (to|with)|write to) (my colleague|our|the))\b/i;
+const MR_NOT_INTERESTED =
+  /\b(not interested|no,? thank(s| you)|no thanks|we(?:'re| are) (all )?(set|good|covered|happy with)|not (a )?(fit|priority|for us|relevant)|no need|we already (use|have)|pass on this|not looking)\b/i;
+const MR_NOT_NOW =
+  /\b(not (right )?now|not at (the|this) (moment|time)|maybe later|later (this|next) (year|quarter|month)|next (quarter|year)|(reach|circle|check) (out |back )?(again )?in|get back to (me|us) in|after (the )?(holidays|summer|budget)|in (a few|two|three|six) (weeks|months))\b/i;
+const MR_POSITIVE =
+  /\b(interested|tell me more|send (me |over |us )?(some )?(more )?(info|information|details|a deck|pricing)|(book|schedule|set up|arrange|find) (a |some )?(call|meeting|demo|time)|happy to (chat|talk|connect|meet|take a look)|let'?s (talk|chat|connect|meet|speak)|when (are you|would you be) (free|available)|(sounds|looks) (good|great|interesting)|would love to)\b/i;
+const MR_MONTHS: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  januar: 1,
+  janvier: 1,
+  enero: 1,
+  feb: 2,
+  february: 2,
+  februar: 2,
+  février: 2,
+  fevrier: 2,
+  febrero: 2,
+  mar: 3,
+  march: 3,
+  märz: 3,
+  maerz: 3,
+  mars: 3,
+  marzo: 3,
+  apr: 4,
+  april: 4,
+  avril: 4,
+  abril: 4,
+  may: 5,
+  mai: 5,
+  mayo: 5,
+  jun: 6,
+  june: 6,
+  juni: 6,
+  juin: 6,
+  junio: 6,
+  jul: 7,
+  july: 7,
+  juli: 7,
+  juillet: 7,
+  julio: 7,
+  aug: 8,
+  august: 8,
+  août: 8,
+  aout: 8,
+  agosto: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  septembre: 9,
+  septiembre: 9,
+  oct: 10,
+  october: 10,
+  oktober: 10,
+  octobre: 10,
+  octubre: 10,
+  nov: 11,
+  november: 11,
+  novembre: 11,
+  noviembre: 11,
+  dec: 12,
+  december: 12,
+  dezember: 12,
+  décembre: 12,
+  decembre: 12,
+  diciembre: 12,
+};
+/** mail_replies.return_date: the latest date after a cue like "until", within 120 days. */
+function mailReplyReturnDate(text: string, received: string): string | null {
+  const head = text.slice(0, 1500);
+  const start = Date.parse(`${received.slice(0, 10)}T00:00:00Z`);
+  const horizon = start + 120 * 86_400_000;
+  const cue = /\b(until|till|til|through|back|return|returning|bis|jusqu|hasta|fino)\b/i;
+  const forms = [
+    /\b(?<d>\d{1,2})(?:st|nd|rd|th|\.)?\s+(?:of\s+)?(?<m>[a-zA-Zäéû]{3,10})\.?,?(?:\s+(?<y>\d{4}))?\b/gi,
+    /\b(?<m>[a-zA-Zäéû]{3,10})\.?\s+(?<d>\d{1,2})(?:st|nd|rd|th)?,?(?:\s+(?<y>\d{4}))?\b/gi,
+    /\b(?<y>\d{4})-(?<mo>\d{1,2})-(?<d>\d{1,2})\b/g,
+    /\b(?<d>\d{1,2})[./](?<mo>\d{1,2})(?:[./](?<y>\d{2,4}))?\b/g,
+  ];
+  const baseYear = new Date(start).getUTCFullYear();
+  const found: Array<{ cued: boolean; value: string }> = [];
+  for (const form of forms)
+    for (const match of head.matchAll(form)) {
+      const groups = match.groups ?? {};
+      let day = Number(groups.d);
+      let month: number;
+      if (groups.m) {
+        const named = MR_MONTHS[groups.m.toLowerCase()];
+        if (!named) continue;
+        month = named;
+      } else {
+        month = Number(groups.mo);
+        if (month > 12 && day <= 12) [day, month] = [month, day];
+      }
+      let year = groups.y ? Number(groups.y) : baseYear;
+      if (year < 100) year += 2000;
+      let ms = Date.UTC(year, month - 1, day);
+      const check = new Date(ms);
+      if (check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) continue;
+      if (!groups.y && ms < start - 86_400_000) ms = Date.UTC(year + 1, month - 1, day);
+      if (ms < start || ms > horizon) continue;
+      const at = match.index ?? 0;
+      found.push({
+        cued: cue.test(head.slice(Math.max(0, at - 40), at)),
+        value: new Date(ms).toISOString().slice(0, 10),
+      });
+    }
+  if (found.length === 0) return null;
+  const cued = found.filter((item) => item.cued).map((item) => item.value);
+  return (cued.length ? cued : found.map((item) => item.value)).sort().at(-1) ?? null;
+}
+/** mail_replies.classify: what the message is, and the outcome its words suggest. */
+function mailReplyClassify(
+  message: MockInboundMessage,
+  received: string,
+): { kind: MailReplyRow["kind"]; proposed: string; why: string; return_on: string | null } {
+  if (message.report)
+    return {
+      kind: "bounce",
+      proposed: "bounced",
+      why: `${message.report.recipient} ${message.report.status}`.trim(),
+      return_on: null,
+    };
+  const text = message.body;
+  const words = `${message.subject}\n${text}`;
+  if (message.automatic || MR_OOO_SUBJECT.test(message.subject)) {
+    const left = MR_LEFT.exec(words);
+    if (left)
+      return { kind: "auto_reply", proposed: "wrong_person", why: left[0], return_on: null };
+    const away = MR_OOO_BODY.exec(words) ?? MR_OOO_SUBJECT.exec(message.subject);
+    if (away)
+      return {
+        kind: "auto_reply",
+        proposed: "out_of_office",
+        why: away[0],
+        return_on: mailReplyReturnDate(text, received),
+      };
+    return { kind: "auto_reply", proposed: "", why: "an auto-reply header", return_on: null };
+  }
+  for (const [pattern, outcome] of [
+    [MR_STOP, "unsubscribe"],
+    [MR_WRONG_PERSON, "wrong_person"],
+    [MR_LEFT, "wrong_person"],
+  ] as const) {
+    const said = pattern.exec(text);
+    if (said) return { kind: "reply", proposed: outcome, why: said[0], return_on: null };
+  }
+  const later = MR_NOT_NOW.exec(text);
+  if (later) return { kind: "reply", proposed: "not_now", why: later[0], return_on: null };
+  const no = MR_NOT_INTERESTED.exec(text);
+  if (no) return { kind: "reply", proposed: "not_interested", why: no[0], return_on: null };
+  const yes = MR_POSITIVE.exec(text);
+  if (yes) return { kind: "reply", proposed: "replied_positive", why: yes[0], return_on: null };
+  return { kind: "reply", proposed: "", why: "", return_on: null };
+}
+function mailboxReadsReplies(box: MailboxRow): boolean {
+  return box.provider !== "smtp" || Boolean(box.imap_host);
+}
+/** mail_sequences.pause_for: hold an enrolment where it is; its queued mail is cancelled. */
+function mailPauseFor(row: MailEnrolmentRow, reason: string, until: string | null, skip: string) {
+  Object.assign(row, { state: "paused", paused_until: until, pause_reason: reason });
+  for (const message of mailMessages)
+    if (message.enrolment_id === row.id && ["pending", "retry"].includes(message.state)) {
+      message.state = "cancelled";
+      message.skip_reason = skip;
+    }
+}
+/** mail_sequences.pause_firm: the company record, or for a prospect its firm's own domain. */
+function mailPauseFirm(row: MailEnrolmentRow) {
+  if (row.company_id) return mailPauseCompany(row.company_id, row.id);
+  const domain = row.email_norm.split("@")[1] ?? "";
+  if (!domain || MAIL_FREE_DOMAINS.has(domain)) return;
+  const until = mailAddBusinessDays(now(), 3).slice(0, 10);
+  for (const other of mailEnrolments)
+    if (
+      other.id !== row.id &&
+      other.state === "active" &&
+      other.email_norm.split("@")[1] === domain
+    )
+      mailPauseFor(other, "COMPANY_ENGAGED", until, "COMPANY_ENGAGED");
+}
+/** mail_sequences.record_sales_stop: their address stops for sales mail; every sequence ends. */
+function mailRecordSalesStop(email: string, source: string) {
+  const existing = mailConsent.get(email);
+  mailConsent.set(email, {
+    email_norm: email,
+    marketing_state: existing?.marketing_state ?? "unknown",
+    topics_off: existing?.topics_off ?? [],
+    sales_stop: true,
+    lawful_basis: existing?.lawful_basis ?? "",
+    source: source.slice(0, 60),
+    timezone: existing?.timezone ?? "",
+    updated_at: now(),
+  });
+  for (const row of mailEnrolments)
+    if ((row.state === "active" || row.state === "paused") && row.email_norm === email)
+      mailExit(row, "UNSUBSCRIBED", "unsubscribe", "", source);
+}
+/** mail_sequences.outcome_effects: a stop, a suppression, the firm paused, the lead moved. */
+function mailOutcomeEffects(row: MailEnrolmentRow, outcome: string, actor: string, note: string) {
+  if (outcome === "unsubscribe") mailRecordSalesStop(row.email_norm, `outcome:${actor}`);
+  if (outcome === "bounced")
+    mailSuppress(row.email_norm, "hard_bounce", `outcome:${actor}`, note, actor);
+  if (outcome === "replied_positive" || outcome === "meeting_booked") mailPauseFirm(row);
+  if (row.contact_kind === "lead") {
+    const lead = leads.find((candidate) => candidate.id === row.contact_id);
+    if (
+      lead &&
+      (outcome === "replied_positive" || outcome === "meeting_booked") &&
+      ["new", "attempting"].includes(lead.stage)
+    )
+      lead.stage = "connected";
+    if (
+      lead &&
+      (outcome === "not_interested" || outcome === "wrong_person") &&
+      ["new", "attempting", "connected"].includes(lead.stage)
+    ) {
+      lead.stage = "disqualified";
+      lead.disqualify_reason = outcome === "not_interested" ? "not_a_fit" : "other";
+    }
+  }
+}
+function mailRepliesHandleOpen(
+  enrolmentId: string,
+  outcome: string,
+  staffId: string | null,
+): number {
+  let handled = 0;
+  for (const row of mailReplies)
+    if (row.enrolment_id === enrolmentId && !row.handled_at) {
+      Object.assign(row, { outcome, handled_by: staffId, handled_at: now() });
+      handled += 1;
+    }
+  return handled;
+}
+/** mail_replies.consider + the report branch: the send it answers, or null when it is not ours. */
+function mailReplyMatch(
+  message: MockInboundMessage,
+  sender: MailSenderRow,
+): { message: MailMessageRow | null; enrolment: MailEnrolmentRow | null } | null {
+  const ours = (ids: string[]) =>
+    ids.map((id) => mailMessages.find((row) => row.provider_message_id === id)).find(Boolean) ??
+    null;
+  const answered = message.report
+    ? ours([message.report.original_id])
+    : ours([message.in_reply_to, ...[...message.references].reverse()].filter(Boolean));
+  if (answered)
+    return {
+      message: answered,
+      enrolment: mailEnrolments.find((row) => row.id === answered.enrolment_id) ?? null,
+    };
+  if (message.report) return null;
+  const enrolment = mailEnrolments
+    .filter(
+      (row) =>
+        (row.state === "active" || row.state === "paused") &&
+        row.email_norm === message.from_email &&
+        row.sender_id === sender.id,
+    )
+    .sort((a, b) => b.enrolled_at.localeCompare(a.enrolled_at))[0];
+  return enrolment ? { message: null, enrolment } : null;
+}
+/** mail_replies.ingest: one message that answers our mail, kept and acted on. */
+function mailReplyIngest(
+  message: MockInboundMessage,
+  uid: number,
+  sender: MailSenderRow,
+  match: { message: MailMessageRow | null; enrolment: MailEnrolmentRow | null },
+): MailReplyRow | null {
+  if (
+    mailReplies.some(
+      (row) => row.mailbox_id === sender.id && row.rfc_message_id === message.message_id,
+    )
+  )
+    return null;
+  const received =
+    Math.abs(Date.parse(message.date) - Date.now()) < 7 * 86_400_000 ? message.date : now();
+  const verdict = mailReplyClassify(message, received);
+  if (message.report && verdict.kind !== "bounce") return null;
+  const id = randomUUID();
+  const enrolment = match.enrolment;
+  const live = enrolment && (enrolment.state === "active" || enrolment.state === "paused");
+  let action: MailReplyRow["auto_action"] = "none";
+  let detail = "";
+  if (verdict.kind === "bounce") {
+    if (!match.message) return null;
+    // Only the address the notice names, and only if it is the one we wrote to.
+    if (message.report?.recipient !== match.message.email_norm) {
+      detail = "the notice names another address";
+    } else {
+      Object.assign(match.message, {
+        state: "hard_bounced",
+        bounced_at: now(),
+        provider_status: "hard_bounce",
+      });
+      mailSuppress(match.message.email_norm, "hard_bounce", `reply:${id}`, verdict.why, "");
+      for (const row of mailEnrolments)
+        if (
+          (row.state === "active" || row.state === "paused") &&
+          row.email_norm === match.message.email_norm
+        )
+          mailExit(row, "HARD_BOUNCE", "bounced", "", verdict.why);
+      action = "bounced";
+      detail = verdict.why;
+    }
+  } else if (!live || !enrolment) {
+    detail = enrolment ? "the sequence had already ended" : "";
+  } else if (verdict.kind === "auto_reply") {
+    if (verdict.proposed === "out_of_office") {
+      const until =
+        verdict.return_on && verdict.return_on >= todayIso()
+          ? mailAddBusinessDays(`${verdict.return_on}T09:00:00Z`, 1).slice(0, 10)
+          : addDaysIso(todayIso(), 14);
+      mailPauseFor(enrolment, "OUT_OF_OFFICE", until, "OUT_OF_OFFICE");
+      action = "paused_until";
+      detail = until;
+    } else if (verdict.proposed === "wrong_person") {
+      mailPauseFor(enrolment, "REPLY_RECEIVED", null, "REPLIED");
+      action = "paused";
+    }
+  } else if (verdict.proposed === "unsubscribe" && message.from_email === enrolment.email_norm) {
+    mailRecordSalesStop(enrolment.email_norm, `reply:${id}`);
+    action = "stopped";
+    detail = verdict.why;
+  } else {
+    mailPauseFor(enrolment, "REPLY_RECEIVED", null, "REPLIED");
+    mailPauseFirm(enrolment);
+    action = "paused";
+    if (enrolment.contact_kind === "lead") {
+      const lead = leads.find((candidate) => candidate.id === enrolment.contact_id);
+      if (lead && ["new", "attempting"].includes(lead.stage)) lead.stage = "connected";
+    }
+  }
+  const settled =
+    ["bounced", "stopped", "paused_until"].includes(action) ||
+    (verdict.kind === "auto_reply" && !verdict.proposed);
+  const row: MailReplyRow = {
+    id,
+    mailbox_id: sender.id,
+    rfc_message_id: message.message_id,
+    message_id: match.message?.id ?? null,
+    enrolment_id: enrolment?.id ?? match.message?.enrolment_id ?? null,
+    contact_kind: enrolment?.contact_kind ?? match.message?.contact_kind ?? "",
+    contact_id: enrolment?.contact_id ?? match.message?.contact_id ?? null,
+    company_id: enrolment?.company_id || match.message?.company_id || null,
+    from_email: message.from_email,
+    from_name: message.from_name,
+    subject: message.subject,
+    received_at: received,
+    body_text: message.body,
+    kind: verdict.kind,
+    proposed: verdict.proposed,
+    proposed_why: verdict.why.slice(0, 200),
+    return_on: verdict.return_on,
+    auto_action: action,
+    auto_detail: detail.slice(0, 200),
+    outcome: "",
+    handled_by: null,
+    handled_at: settled ? now() : null,
+    imap_uid: uid,
+    created_at: now(),
+  };
+  mailReplies.push(row);
+  audit("mail.reply_read", null, "mail_reply", id, "", {
+    kind: verdict.kind,
+    proposed: verdict.proposed,
+    auto_action: action,
+  });
+  if (verdict.kind === "reply" && enrolment && enrolment.owner_staff_id)
+    inboxNotify({
+      recipients: [enrolment.owner_staff_id],
+      subject_type: enrolment.contact_kind,
+      subject_id: enrolment.contact_id,
+      subject_label: message.from_name || message.from_email,
+      reason: "reply",
+      summary: `${message.from_name || message.from_email} replied: ${message.body.slice(0, 160)}`,
+      link_path: "/mail/replies",
+    });
+  return row;
+}
+/** mail_replies.read_mailbox: its new messages; those that answer our sends kept. */
+function mailboxReadReplies(box: MailboxRow, sender: MailSenderRow) {
+  const found = { read: 0, kept: 0, paused: 0, stopped: 0, bounced: 0, error: "" };
+  const inbox = mailboxInboxes.get(sender.from_email) ?? [];
+  const first = box.imap_last_uid === null;
+  const since = Date.parse(`${(box.connected_at ?? now()).slice(0, 10)}T00:00:00Z`);
+  let highest = first ? 0 : (box.imap_last_uid ?? 0);
+  inbox.forEach((message, index) => {
+    const uid = index + 1;
+    if (first ? Date.parse(message.date) < since : uid <= (box.imap_last_uid ?? 0)) return;
+    highest = Math.max(highest, uid);
+    found.read += 1;
+    const match = mailReplyMatch(message, sender);
+    if (!match) return;
+    const row = mailReplyIngest(message, uid, sender, match);
+    if (!row) return;
+    found.kept += 1;
+    if (row.auto_action === "paused" || row.auto_action === "paused_until") found.paused += 1;
+    else if (row.auto_action === "stopped") found.stopped += 1;
+    else if (row.auto_action === "bounced") found.bounced += 1;
+  });
+  if (first) highest = Math.max(highest, inbox.length);
+  Object.assign(box, {
+    imap_uidvalidity: 1,
+    imap_last_uid: highest,
+    last_poll_at: now(),
+    last_poll_ok_at: now(),
+    last_poll_error: "",
+  });
+  return found;
+}
+function mailReadAllReplies() {
+  for (const { box, sender } of mailboxPairs()) {
+    if (box.state === "disconnected" || !mailboxReadsReplies(box)) continue;
+    if (box.last_poll_at && Date.now() - Date.parse(box.last_poll_at) < MAIL_REPLY_POLL_MS)
+      continue;
+    mailboxReadReplies(box, sender);
+  }
+}
+function mailReplyView(row: MailReplyRow) {
+  const sender = mailSenders.find((item) => item.id === row.mailbox_id);
+  return {
+    reply_id: row.id,
+    kind: row.kind,
+    from_email: row.from_email,
+    from_name: row.from_name,
+    subject: row.subject,
+    received_at: row.received_at,
+    text: row.body_text,
+    proposed: row.proposed,
+    proposed_label: MAIL_OUTCOMES[row.proposed] ?? "",
+    proposed_why: row.proposed_why,
+    return_on: row.return_on,
+    auto_action: row.auto_action,
+    auto_label: MAIL_REPLY_AUTO_LABELS[row.auto_action] ?? "",
+    auto_detail: row.auto_detail,
+    outcome: row.outcome,
+    handled_at: row.handled_at,
+    enrolment_id: row.enrolment_id,
+    contact_kind: row.contact_kind,
+    contact_id: row.contact_id,
+    mailbox: sender?.from_email ?? "",
+  };
+}
 function mailRunWorker(): Record<string, number | boolean> {
   const report = { claimed: 0, sent: 0, deferred: 0, skipped: 0, dry_run: 0, paused: false };
   mailSettings.last_worker_at = now();
+  // Replies first, whatever the sending switch says: an answer that landed since the last
+  // pass must stop the follow-up this pass would otherwise send.
+  mailReadAllReplies();
   if (!mailSettings.sending_enabled) return { ...report, paused: true };
   // Rested mailboxes whose rest is over go back to sending first.
   mailboxWakeRested();
@@ -25438,6 +25967,30 @@ function mailRunWorker(): Record<string, number | boolean> {
         defer(Date.parse(box!.next_send_after), "the mailbox's gap between sends");
         continue;
       }
+      if ((row.step_no ?? 0) > 1 && mailboxReadsReplies(box!)) {
+        // A follow-up goes only once the replies to the thread so far have been read.
+        if (!box!.last_poll_at || Date.now() - Date.parse(box!.last_poll_at) >= MAIL_REPLY_POLL_MS)
+          mailboxReadReplies(box!, boxSender);
+        if (mailboxPhase(box!) !== "active") {
+          Object.assign(row, { state: "held", last_error: "SENDER_PAUSED" });
+          continue;
+        }
+        if (
+          !box!.last_poll_ok_at ||
+          Date.now() - Date.parse(box!.last_poll_ok_at) >= MAIL_REPLY_STALE_MS
+        ) {
+          defer(Date.now() + 2 * MAIL_REPLY_POLL_MS, "waiting to read the mailbox's replies first");
+          continue;
+        }
+        const current = mailEnrolments.find((item) => item.id === row.enrolment_id);
+        if (row.enrolment_id && (!current || current.state !== "active")) {
+          row.state = "cancelled";
+          row.skip_reason =
+            current?.pause_reason === "REPLY_RECEIVED" ? "REPLIED" : "ENROLMENT_ENDED";
+          report.skipped += 1;
+          continue;
+        }
+      }
       const boxDomain = boxSender.from_email.split("@")[1] ?? "";
       if (mailboxSentToday(boxSender.id) >= mailboxCapToday(box!, boxSender)) {
         defer(mailNextSlotMs(tomorrow, zone), "cap reached: mailbox");
@@ -25528,7 +26081,12 @@ function mailRunWorker(): Record<string, number | boolean> {
       state: "delivered",
       sent_at: sentAt,
       delivered_at: sentAt,
-      provider_message_id: `<mock-${mailProviderCounter}@mail.test>`,
+      // A mailbox send carries `<message id@its domain>`, as the service's does: a reply's
+      // threading headers point straight back to it.
+      provider_message_id:
+        box && boxSender
+          ? `<${row.id}@${boxSender.from_email.split("@")[1] ?? "mail.test"}>`
+          : `<mock-${mailProviderCounter}@mail.test>`,
       provider_status: "delivered",
       subject: rendered.subject,
       attempts: row.attempts + 1,
@@ -26107,6 +26665,8 @@ function seedMail() {
   mailEnrolments.length = 0;
   mailFeeds.length = 0;
   mailboxRows.length = 0;
+  mailReplies.length = 0;
+  mailboxInboxes.clear();
   Object.assign(mailboxSettings, MAILBOX_DEFAULTS);
   mailEvents.length = 0;
   Object.assign(mailSettings, {
@@ -26759,6 +27319,11 @@ function seedMail() {
       next_send_after: null,
       disconnected_at: null,
       created_at: mailHoursAgo(24 * Math.max(1, 21 - readyOffset)),
+      imap_uidvalidity: 1,
+      imap_last_uid: 0,
+      last_poll_at: mailHoursAgo(0.05),
+      last_poll_ok_at: mailHoursAgo(0.05),
+      last_poll_error: "",
       ...extra,
     });
     if (extra.state === "resting") {
@@ -26767,7 +27332,7 @@ function seedMail() {
     }
     return sender;
   };
-  seedBox(OWNER_STAFF, "The Owner", "owner@quantifyterminal.co", "google", -32);
+  const ownerBox = seedBox(OWNER_STAFF, "The Owner", "owner@quantifyterminal.co", "google", -32);
   seedBox(OWNER_STAFF, "The Owner", "owner@getquantifyterminal.com", "microsoft", 9);
   seedBox(SALES_STAFF, "Sales Person", "sales.person@quantifyterminal.in", "smtp", -40, {
     state: "resting",
@@ -27026,6 +27591,148 @@ function seedMail() {
       updated_at: mailHoursAgo(24 * 30),
     });
   }
+  // Replies: three prospects written to from the owner's mailbox this week. One answered
+  // and waits for the owner's word, one is away until a date, and one's answer is still
+  // in the inbox for the next read to find.
+  const answering = leads
+    .filter(
+      (lead) =>
+        lead.origin === "prospect" &&
+        lead.email_kind === "named" &&
+        lead.verified_state === "valid" &&
+        !MAIL_FREE_DOMAINS.has(lead.email.split("@")[1] ?? ""),
+    )
+    .slice(0, 3);
+  const intro = mailSteps.get(MAIL_IDS.fundIntro) ?? [];
+  answering.forEach((lead, index) => {
+    lead.stage = index === 0 ? "connected" : "attempting";
+    const sentAt = mailHoursAgo(30 - index * 4);
+    const enrolment: MailEnrolmentRow = {
+      id: `eb700000-0000-4000-8000-0000000000${(index + 1).toString().padStart(2, "0")}`,
+      sequence_id: MAIL_IDS.fundIntro,
+      contact_kind: "lead",
+      contact_id: lead.id,
+      company_id: "",
+      email_norm: lead.email,
+      owner_staff_id: OWNER_STAFF,
+      sender_id: ownerBox.id,
+      state: "active",
+      current_step: 1,
+      waiting_task_id: "",
+      exit_reason: "",
+      outcome: "",
+      paused_until: null,
+      pause_reason: "",
+      thread_subject: `Quick question, ${lead.first_name}`,
+      thread_message_id: "",
+      enrolled_at: mailHoursAgo(31 - index * 4),
+      enrolled_by: OWNER_STAFF,
+      last_sent_at: sentAt,
+      exited_at: null,
+    };
+    mailEnrolments.push(enrolment);
+    for (const step of intro.filter((item) => item.kind === "email").slice(0, 2)) {
+      const id = randomUUID();
+      const sent = step.step_no === 1;
+      const providerId = sent ? `<${id}@quantifyterminal.co>` : "";
+      if (sent) enrolment.thread_message_id = providerId;
+      mailMessages.push({
+        id,
+        kind: "sequence",
+        campaign_id: "",
+        enrolment_id: enrolment.id,
+        step_no: step.step_no,
+        sender_id: ownerBox.id,
+        topic: "sales",
+        contact_kind: "lead",
+        contact_id: lead.id,
+        company_id: "",
+        email: lead.email,
+        email_norm: lead.email,
+        variables: {
+          first_name: lead.first_name ?? "",
+          company: lead.company_name,
+          owner_name: "The Owner",
+        },
+        template_id: step.template_id,
+        template_version: 1,
+        state: sent ? "delivered" : "pending",
+        scheduled_at: sent ? sentAt : mailAddBusinessDays(sentAt, 3),
+        sent_at: sent ? sentAt : null,
+        delivered_at: sent ? sentAt : null,
+        first_clicked_at: null,
+        first_opened_at: null,
+        bounced_at: null,
+        complained_at: null,
+        unsubscribed_at: null,
+        provider_message_id: providerId,
+        provider_status: sent ? "delivered" : "",
+        subject: sent ? enrolment.thread_subject : "",
+        in_reply_to: sent ? "" : enrolment.thread_message_id,
+        skip_reason: "",
+        last_error: "",
+        attempts: sent ? 1 : 0,
+        is_seed: false,
+      });
+    }
+  });
+  const inbox = (
+    lead: (typeof answering)[number],
+    body: string,
+    extra: Partial<MockInboundMessage> = {},
+  ) => {
+    const thread =
+      mailEnrolments.find((row) => row.contact_id === lead.id)?.thread_message_id ?? "";
+    return {
+      message_id: `<${randomUUID()}@${lead.email.split("@")[1]}>`,
+      from_email: lead.email,
+      from_name: lead.full_name,
+      subject: `Re: Quick question, ${lead.first_name}`,
+      body,
+      date: mailHoursAgo(6),
+      in_reply_to: thread,
+      references: [thread],
+      automatic: false,
+      report: null,
+      ...extra,
+    };
+  };
+  const [interested, away, later] = answering;
+  if (interested && away) {
+    // Already read: the answers the last pass found.
+    const read = [
+      inbox(
+        interested,
+        "Thanks — this is timely. Could you send pricing for a desk of four? I am free Thursday afternoon for a call.",
+      ),
+      inbox(
+        away,
+        `I am out of the office until ${addDaysIso(todayIso(), 6)} with limited access to email.`,
+        {
+          subject: `Automatic reply: Quick question, ${away.first_name}`,
+          automatic: true,
+        },
+      ),
+    ];
+    mailboxInboxes.set("owner@quantifyterminal.co", read);
+    read.forEach((message, index) => {
+      const match = mailReplyMatch(message, ownerBox);
+      if (match) mailReplyIngest(message, index + 1, ownerBox, match);
+    });
+    const box = mailboxRows.find((row) => row.sender_id === ownerBox.id);
+    if (box) box.imap_last_uid = read.length;
+  }
+  if (later)
+    // Waiting in the inbox for the next read.
+    mailboxInboxes.get("owner@quantifyterminal.co")?.push(
+      inbox(
+        later,
+        "Not right now — we are mid-way through a migration. Try us again in the new year.",
+        {
+          date: mailHoursAgo(0.5),
+        },
+      ),
+    );
   seedMailLists();
 }
 
@@ -29631,6 +30338,27 @@ routes.push(
   },
   {
     method: "POST",
+    pattern: "hq/mailboxes/{mailbox_id}/read",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const pair = mailboxPairOrRefuse(found.member, params.mailbox_id!);
+      if ("error" in pair) return pair.error;
+      if (pair.box.state === "disconnected")
+        return refuse(400, "malformed_request", { state: "connect the mailbox again first" });
+      if (!mailboxReadsReplies(pair.box))
+        return refuse(400, "malformed_request", {
+          reason:
+            "no incoming server was given for this mailbox, so its replies are recorded by hand",
+        });
+      const read = mailboxReadReplies(pair.box, pair.sender);
+      audit("mailbox.read", found.member.id, "mailbox", pair.sender.id, "", read);
+      return ok({ mailbox: mailboxView(pair.box, pair.sender), read });
+    },
+  },
+  {
+    method: "POST",
     pattern: "hq/mailboxes/{mailbox_id}/check",
     auth: true,
     capability: "crm:write",
@@ -29940,58 +30668,16 @@ routes.push(
         const until = String(body.pause_until ?? "").slice(0, 10);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(until) || until <= new Date().toISOString().slice(0, 10))
           return refuse(400, "malformed_request", { pause_until: "a return date after today" });
-        Object.assign(row, { state: "paused", paused_until: until, pause_reason: "OUT_OF_OFFICE" });
-        for (const message of mailMessages)
-          if (message.enrolment_id === row.id && ["pending", "retry"].includes(message.state)) {
-            message.state = "cancelled";
-            message.skip_reason = "OUT_OF_OFFICE";
-          }
+        mailPauseFor(row, "OUT_OF_OFFICE", until, "OUT_OF_OFFICE");
+        mailRepliesHandleOpen(row.id, outcome, found.member.id);
         audit("mail.enrolment_outcome", found.member.id, "mail_enrolment", row.id, note, {
           outcome,
         });
         return ok({ outcome, state: "paused", until });
       }
       mailExit(row, MAIL_OUTCOME_REASONS[outcome]!, outcome, found.member.id, note);
-      if (outcome === "unsubscribe") {
-        const existing = mailConsent.get(row.email_norm);
-        mailConsent.set(row.email_norm, {
-          email_norm: row.email_norm,
-          marketing_state: existing?.marketing_state ?? "unknown",
-          topics_off: existing?.topics_off ?? [],
-          sales_stop: true,
-          lawful_basis: existing?.lawful_basis ?? "",
-          source: `outcome:${found.member.id}`.slice(0, 60),
-          timezone: existing?.timezone ?? "",
-          updated_at: now(),
-        });
-      }
-      if (outcome === "bounced")
-        mailSuppress(
-          row.email_norm,
-          "hard_bounce",
-          `outcome:${found.member.id}`,
-          note,
-          found.member.id,
-        );
-      if (outcome === "replied_positive" || outcome === "meeting_booked")
-        mailPauseCompany(row.company_id, row.id);
-      if (row.contact_kind === "lead") {
-        const lead = leads.find((candidate) => candidate.id === row.contact_id);
-        if (
-          lead &&
-          (outcome === "replied_positive" || outcome === "meeting_booked") &&
-          ["new", "attempting"].includes(lead.stage)
-        )
-          lead.stage = "connected";
-        if (
-          lead &&
-          (outcome === "not_interested" || outcome === "wrong_person") &&
-          ["new", "attempting", "connected"].includes(lead.stage)
-        ) {
-          lead.stage = "disqualified";
-          lead.disqualify_reason = outcome === "not_interested" ? "not_a_fit" : "other";
-        }
-      }
+      mailOutcomeEffects(row, outcome, found.member.id, note);
+      mailRepliesHandleOpen(row.id, outcome, found.member.id);
       audit("mail.enrolment_outcome", found.member.id, "mail_enrolment", row.id, note, { outcome });
       return ok({ outcome, state: "exited", reason: MAIL_OUTCOME_REASONS[outcome] });
     },
@@ -30023,6 +30709,8 @@ routes.push(
         (step) => !sentSteps.has(step.step_no) && step.step_no >= Math.max(row.current_step, 1),
       );
       if (next) mailStageStep(row, next, now());
+      // Resumed by hand: whatever reply paused it was read and needs no outcome.
+      mailRepliesHandleOpen(row.id, "resumed", found.member.id);
       audit("mail.enrolment_resumed", found.member.id, "mail_enrolment", row.id, "", {});
       return ok({ state: "active" });
     },
@@ -30048,10 +30736,100 @@ routes.push(
         }))
         .filter((view) => view.awaiting_reply || view.state === "paused")
         .sort((a, b) => String(a.last_sent_at ?? "").localeCompare(String(b.last_sent_at ?? "")));
+      // What the mailboxes read back: everything still open, and the last fortnight's handled.
+      const replies = mailReplies
+        .filter(
+          (row) => !row.handled_at || Date.parse(row.received_at) >= Date.now() - 14 * 86_400_000,
+        )
+        .sort((a, b) => b.received_at.localeCompare(a.received_at))
+        .map((row) => {
+          const enrolment = mailEnrolments.find((item) => item.id === row.enrolment_id);
+          const owner = enrolment?.owner_staff_id ?? "";
+          return { row, enrolment, owner };
+        })
+        .filter(({ owner }) => !owner || owner === found.member.id || mayAll)
+        .map(({ row, enrolment, owner }) => ({
+          ...mailReplyView(row),
+          contact_name: row.contact_id ? mailContactLabel(row.contact_kind, row.contact_id) : "",
+          company_name: row.company_id
+            ? (companies.find((company) => company.id === row.company_id)?.name ?? "")
+            : row.contact_kind === "lead"
+              ? (leads.find((lead) => lead.id === row.contact_id)?.company_name ?? "")
+              : "",
+          sequence_name:
+            mailSequences.find((sequence) => sequence.id === enrolment?.sequence_id)?.name ?? "",
+          enrolment_state: enrolment?.state ?? "",
+          may_handle: !owner || owner === found.member.id || mayAll,
+        }));
+      const openBy = new Map<string, (typeof replies)[number]>();
+      for (const view of replies)
+        if (!view.handled_at && view.enrolment_id && !openBy.has(view.enrolment_id))
+          openBy.set(view.enrolment_id, view);
       return ok({
-        enrolments: rows,
+        enrolments: rows.map((row) => ({ ...row, reply: openBy.get(row.enrolment_id) ?? null })),
+        replies,
+        open_replies: replies.filter((view) => !view.handled_at).length,
         outcomes: Object.entries(MAIL_OUTCOMES).map(([key, label]) => ({ key, label })),
       });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/mail/replies/{reply_id}/handle",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const reply = mailReplies.find((row) => row.id === params.reply_id);
+      if (!reply) return refuse(404, "not_found");
+      const enrolment = mailEnrolments.find((row) => row.id === reply.enrolment_id);
+      const mayAll = (CAPABILITIES[found.member.role] ?? []).includes("mail:send");
+      const owner = enrolment?.owner_staff_id ?? "";
+      if (!((owner && owner === found.member.id) || mayAll))
+        return refuse(403, "forbidden", { reason: "not-yours" });
+      if (reply.handled_at) return refuse(400, "malformed_request", { reason: "already handled" });
+      const outcome = String(body.outcome ?? "");
+      if (outcome !== "dismissed" && !(outcome in MAIL_OUTCOMES))
+        return refuse(400, "malformed_request", {
+          outcome: `dismissed or one of ${Object.keys(MAIL_OUTCOMES).join(", ")}`,
+        });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      let until = String(body.pause_until ?? "").slice(0, 10);
+      if (outcome === "out_of_office" && !until && reply.return_on)
+        until = mailAddBusinessDays(`${reply.return_on}T09:00:00Z`, 1).slice(0, 10);
+      let result: Record<string, unknown> = {};
+      if (outcome === "dismissed") {
+        result = {};
+      } else if (enrolment && (enrolment.state === "active" || enrolment.state === "paused")) {
+        if (outcome === "out_of_office") {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(until) || until <= todayIso())
+            return refuse(400, "malformed_request", { pause_until: "a return date after today" });
+          mailPauseFor(enrolment, "OUT_OF_OFFICE", until, "OUT_OF_OFFICE");
+          result = { state: "paused", until };
+        } else {
+          mailExit(enrolment, MAIL_OUTCOME_REASONS[outcome]!, outcome, found.member.id, note);
+          mailOutcomeEffects(enrolment, outcome, found.member.id, note);
+          result = { state: "exited", reason: MAIL_OUTCOME_REASONS[outcome] };
+        }
+      } else if (enrolment) {
+        if (outcome === "out_of_office")
+          return refuse(400, "malformed_request", {
+            outcome: "the sequence has ended; there is nothing to pause",
+          });
+        enrolment.outcome = outcome;
+        mailOutcomeEffects(enrolment, outcome, found.member.id, note);
+        result = { state: enrolment.state, late: true };
+      }
+      if (enrolment && outcome !== "dismissed")
+        mailRepliesHandleOpen(enrolment.id, outcome, found.member.id);
+      Object.assign(reply, { outcome, handled_by: found.member.id, handled_at: now() });
+      audit("mail.reply_handled", found.member.id, "mail_reply", reply.id, note, {
+        outcome,
+        ...result,
+      });
+      return ok({ outcome, ...result });
     },
   },
   {

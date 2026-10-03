@@ -19,6 +19,7 @@ import {
   mailboxSchema,
   messageSchema,
   previewSchema,
+  replySchema,
   segmentSchema,
   senderSchema,
   sequenceSchema,
@@ -635,11 +636,28 @@ export function resumeEnrolment(token: string, enrolmentId: string) {
   );
 }
 
+const repliesSchema = okEnvelope.extend({
+  enrolments: z.array(enrolmentSchema.extend({ reply: replySchema.nullable().optional() })),
+  replies: z.array(replySchema),
+  open_replies: z.number(),
+  outcomes: labelled,
+});
+export type MailRepliesPage = z.infer<typeof repliesSchema>;
+
 export function readReplies(token: string) {
-  return fetchHqJson(
-    "hq/mail/replies",
-    okEnvelope.extend({ enrolments: z.array(enrolmentSchema), outcomes: labelled }),
-    { token },
+  return fetchHqJson("hq/mail/replies", repliesSchema, { token });
+}
+
+/** A person says what a reply was: an outcome, or "dismissed". */
+export function handleReply(
+  token: string,
+  replyId: string,
+  input: { outcome: string; note?: string; pause_until?: string },
+) {
+  return postHqJson(
+    `hq/mail/replies/${replyId}/handle`,
+    okEnvelope.extend({ outcome: z.string() }),
+    { token, body: input },
   );
 }
 
@@ -906,6 +924,25 @@ export function setMailboxState(token: string, mailboxId: string, state: "active
     `hq/mailboxes/${mailboxId}/state`,
     okEnvelope.extend({ mailbox: mailboxSchema, released: z.number() }),
     { token, body: { state } },
+  );
+}
+
+/** Read a mailbox's replies now, rather than on the next pass. */
+export function readMailboxNow(token: string, mailboxId: string) {
+  return postHqJson(
+    `hq/mailboxes/${mailboxId}/read`,
+    okEnvelope.extend({
+      mailbox: mailboxSchema,
+      read: z.object({
+        read: z.number(),
+        kept: z.number(),
+        paused: z.number(),
+        stopped: z.number(),
+        bounced: z.number(),
+        error: z.string(),
+      }),
+    }),
+    { token, body: {} },
   );
 }
 

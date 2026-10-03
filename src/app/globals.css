@@ -3190,6 +3190,67 @@
     overflow-wrap: anywhere;
   }
 
+  /* replies read back from the mailboxes: what they wrote, what HQ did, one press to record */
+  .reply-list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+  }
+
+  .reply-item {
+    display: grid;
+    gap: 6px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .reply-item__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+  }
+
+  .reply-item__meta,
+  .reply-item__context {
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .reply-item__context,
+  .reply-item__subject,
+  .reply-item__said {
+    margin: 0;
+  }
+
+  .reply-item__subject {
+    font-size: 13px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .reply-item__text {
+    max-width: 72ch;
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .reply-item__said {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .reply-item__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
   .inline-actions {
     display: flex;
     flex-wrap: wrap;

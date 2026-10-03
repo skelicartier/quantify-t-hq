@@ -8,6 +8,7 @@ import {
   disconnectMailboxAction,
   mailboxSettingsAction,
   mailboxStateAction,
+  readMailboxNowAction,
   readyMailboxAction,
   updateMailboxAction,
 } from "@/app/(portal)/mail/actions";
@@ -30,7 +31,7 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readMailboxes, type Mailbox, type MailboxBoard } from "@/lib/api/mail";
-import { formatAbsolute, formatDate, formatNumber } from "@/lib/format";
+import { formatAbsolute, formatDate, formatNumber, pluralize } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -146,6 +147,17 @@ export default async function MailboxesPage({ searchParams }: MailboxesPageProps
           </Callout>
         ) : (
           <>
+            {board.totals.replies_open > 0 && (
+              <Callout tone="attention" title="Replies wait for you">
+                {pluralize(board.totals.replies_open, "reply", "replies")} read from the mailboxes
+                {board.totals.replies_open === 1 ? " waits" : " wait"} for someone to say what{" "}
+                {board.totals.replies_open === 1 ? "it was" : "they were"}; their follow-ups are
+                paused until then.{" "}
+                <Link className="text-link" href="/mail/replies">
+                  Replies
+                </Link>
+              </Callout>
+            )}
             <StatGrid columns={6} label="The pool today">
               <Stat label="Mailboxes" value={formatNumber(board.totals.mailboxes)} />
               <Stat label="Sending" value={formatNumber(board.totals.sending)} />
@@ -263,6 +275,29 @@ export default async function MailboxesPage({ searchParams }: MailboxesPageProps
                         <span className="table-sub">
                           {formatNumber(mailbox.live_enrolments)} in sequences
                         </span>
+                        <span className="table-sub">
+                          {!mailbox.reads_replies ? (
+                            "Replies recorded by hand"
+                          ) : mailbox.last_poll_error ? (
+                            `Replies not read: ${mailbox.last_poll_error}`
+                          ) : mailbox.last_poll_ok_at ? (
+                            <Timestamp
+                              value={mailbox.last_poll_ok_at}
+                              now={now}
+                              mode="relative"
+                              prefix="Replies read"
+                            />
+                          ) : (
+                            "Replies not read yet"
+                          )}
+                        </span>
+                        {mailbox.replies_open > 0 && (
+                          <span className="table-sub">
+                            <Link className="text-link" href="/mail/replies">
+                              {pluralize(mailbox.replies_open, "reply", "replies")} waiting
+                            </Link>
+                          </span>
+                        )}
                       </td>
                       <td>
                         {mayChange(mailbox) && mailbox.phase !== "disconnected" && (
@@ -281,6 +316,20 @@ export default async function MailboxesPage({ searchParams }: MailboxesPageProps
                                 },
                               ]}
                             />
+                            {mailbox.reads_replies && (
+                              <RowAction
+                                action={readMailboxNowAction}
+                                fields={{ mailbox_id: mailbox.mailbox_id }}
+                                buttons={[
+                                  {
+                                    label: "Read replies",
+                                    className: "btn btn--small btn--ghost",
+                                    ariaLabel: `Read the replies in ${mailbox.address} now`,
+                                    pendingLabel: "Reading…",
+                                  },
+                                ]}
+                              />
+                            )}
                             <RowAction
                               action={checkMailboxAction}
                               fields={{ mailbox_id: mailbox.mailbox_id }}

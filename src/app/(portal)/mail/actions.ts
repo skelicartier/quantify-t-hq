@@ -1000,6 +1000,24 @@ export async function outcomeAction(
   );
 }
 
+/** A person says what a reply read back from a mailbox was. */
+export async function handleReplyAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/replies");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const outcome = fieldValue(formData, "outcome", 30);
+  try {
+    await mailApi.handleReply(context.token, fieldValue(formData, "reply_id", 64), { outcome });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  refresh("/mail/replies", "/mail/sequences", "/mail/mailboxes", "/home");
+  return sent(outcome === "dismissed" ? "Nothing recorded." : "Recorded.");
+}
+
 export async function resumeEnrolmentAction(
   _previous: ActionState,
   formData: FormData,
@@ -1333,6 +1351,35 @@ export async function mailboxStateAction(
       result.released > 0
         ? `Sending again: ${pluralize(result.released, "held message")} released.`
         : "Sending again.",
+    );
+  } catch (error) {
+    return mailboxRefusal(error);
+  }
+}
+
+/** Read a mailbox's replies now, rather than on the next pass. */
+export async function readMailboxNowAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff(MAILBOXES);
+  if (!hasCapability(context, "crm:write")) return NOT_MAILBOX_WRITER;
+  try {
+    const result = await mailApi.readMailboxNow(
+      context.token,
+      fieldValue(formData, "mailbox_id", 64),
+    );
+    refresh(MAILBOXES, "/mail/replies", "/home");
+    if (result.read.error)
+      return {
+        status: "error",
+        message: `Its inbox could not be read: ${result.mailbox.last_poll_error || result.read.error}.`,
+      };
+    return sent(
+      result.read.kept === 0
+        ? "Read: nothing new answers our mail."
+        : `Read: ${pluralize(result.read.kept, "reply", "replies")} kept, under Replies.`,
     );
   } catch (error) {
     return mailboxRefusal(error);

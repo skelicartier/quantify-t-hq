@@ -505,6 +505,7 @@ export const SKIP_REASON_LABELS: Record<string, string> = {
   ENROLMENT_ENDED: "Sequence ended",
   COMPANY_ENGAGED: "Colleague at the firm engaged",
   OUT_OF_OFFICE: "Out of office",
+  REPLIED: "They replied",
 };
 
 export const EXIT_REASON_LABELS: Record<string, string> = {
@@ -624,6 +625,13 @@ export const mailboxSchema = z.object({
   last_error: z.string(),
   connected_at: z.string().nullable(),
   smtp_host: z.string(),
+  /** Whether HQ reads its replies (a mailbox added without an incoming server does not),
+   * when it last did, and how many wait for a person. */
+  reads_replies: z.boolean(),
+  last_poll_at: z.string().nullable(),
+  last_poll_ok_at: z.string().nullable(),
+  last_poll_error: z.string(),
+  replies_open: z.number(),
 });
 export type Mailbox = z.infer<typeof mailboxSchema>;
 
@@ -657,6 +665,7 @@ export const mailboxBoardSchema = z.object({
     held: z.number(),
     capacity_today: z.number(),
     sent_today: z.number(),
+    replies_open: z.number(),
   }),
   settings: mailboxPoolSettingsSchema,
   /** Which ways of connecting the service is set up for. */
@@ -674,3 +683,38 @@ export const mailboxCheckSchema = z.object({
   kind: z.string(),
   detail: z.string(),
 });
+
+/** What a mailbox read back: a reply, an automatic answer or a bounce, and what HQ did. */
+export const replySchema = z.object({
+  reply_id: z.string(),
+  /** "reply", "auto_reply" or "bounce". */
+  kind: z.string(),
+  from_email: z.string(),
+  from_name: z.string(),
+  subject: z.string(),
+  received_at: z.string().nullable(),
+  /** What they wrote, the quoted history below it removed. */
+  text: z.string(),
+  /** The outcome the words suggest, and the phrase that suggested it; a person decides. */
+  proposed: z.string(),
+  proposed_label: z.string(),
+  proposed_why: z.string(),
+  return_on: z.string().nullable(),
+  /** What HQ did on its own: "paused", "paused_until", "stopped", "bounced" or "none". */
+  auto_action: z.string(),
+  auto_label: z.string(),
+  auto_detail: z.string(),
+  /** What a person recorded ("resumed" and "dismissed" too), and when. */
+  outcome: z.string(),
+  handled_at: z.string().nullable(),
+  enrolment_id: z.string().nullable(),
+  contact_kind: z.string(),
+  contact_id: z.string().nullable(),
+  mailbox: z.string(),
+  contact_name: z.string(),
+  company_name: z.string(),
+  sequence_name: z.string(),
+  enrolment_state: z.string(),
+  may_handle: z.boolean(),
+});
+export type MailReply = z.infer<typeof replySchema>;

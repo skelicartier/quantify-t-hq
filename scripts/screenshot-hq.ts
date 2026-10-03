@@ -2091,6 +2091,33 @@ async function captureMailboxFlows(page: Page, folder: string) {
   await page.locator("button", { hasText: "Save the ceilings" }).click();
   await page.locator("form:has(#ceilings-reason) .form-sent").waitFor({ timeout: 15_000 });
   console.log(`  ✓ ${folder}/mail-mailbox-ceilings`);
+
+  // Replies: the owner's mailbox read now. The answer waiting in its inbox is kept with its
+  // follow-ups paused and what it reads as, and recorded in one press; later passes find it
+  // settled. The seeded interested reply waits throughout.
+  await page.goto(`${BASE}/mail/mailboxes`, { waitUntil: "networkidle" });
+  const ownerRow = page.locator("tr", { hasText: "owner@quantifyterminal.co" }).first();
+  await ownerRow
+    .locator('button[aria-label="Read the replies in owner@quantifyterminal.co now"]')
+    .click();
+  await ownerRow.locator(".form-sent").waitFor({ timeout: 15_000 });
+  await page.goto(`${BASE}/mail/replies`, { waitUntil: "networkidle" });
+  if ((await page.locator(".reply-item", { hasText: "pricing for a desk of four" }).count()) === 0)
+    report(`${folder}/mail-replies-read`, "the seeded reply is not waiting");
+  const later = page.locator(".reply-item", { hasText: "mid-way through a migration" });
+  if ((await later.count()) === 0) {
+    report(`${folder}/mail-replies-read`, "the reply waiting in the inbox was not read");
+  } else if ((await later.locator("button", { hasText: "Record: Not now" }).count()) > 0) {
+    if (!/Follow-ups paused/.test(await later.innerText()))
+      report(`${folder}/mail-replies-read`, "the read reply does not say its follow-ups paused");
+    await shoot(page, `${folder}/mail-replies-read`);
+    await later.locator("button", { hasText: "Record: Not now" }).click();
+    await page
+      .locator(".reply-item", { hasText: "mid-way through a migration" })
+      .locator(".reply-item__said", { hasText: "Recorded: not now" })
+      .waitFor({ timeout: 15_000 });
+  }
+  await shoot(page, `${folder}/mail-replies-recorded`);
 }
 
 async function captureProspectFlows(page: Page, folder: string) {
