@@ -5477,6 +5477,24 @@
     display: contents;
   }
 
+  /* Push on this device, and the devices it is on. */
+  .push-device {
+    display: grid;
+    gap: 8px;
+  }
+
+  .push-device__on {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin: 0;
+  }
+
+  .push-devices {
+    margin-top: 12px;
+  }
+
   /* Signs of interest: what happened, what it rests on, and what was done. */
   .signal-list {
     margin: 0;

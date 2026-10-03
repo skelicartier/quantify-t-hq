@@ -51,5 +51,7 @@ export function proxy(request: NextRequest): NextResponse {
 export const config = {
   // Everything except Next's own assets and the icon files. The public pages are
   // allow-listed inside the handler, where the list is reviewable as code.
-  matcher: ["/((?!_next/|favicon\\.ico|icon\\.png|apple-icon\\.png|robots\\.txt|brand/).*)"],
+  matcher: [
+    "/((?!_next/|favicon\\.ico|icon\\.png|apple-icon\\.png|robots\\.txt|brand/|icons/|manifest\\.webmanifest|sw\\.js).*)",
+  ],
 };

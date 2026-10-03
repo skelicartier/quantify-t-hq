@@ -681,9 +681,9 @@ async function captureInteractions(page: Page, folder: string) {
 
   await page.goto(`${BASE}/admin/integrations`, { waitUntil: "networkidle" });
   // The window lasts ten minutes, so a later pass may find it already open.
-  if ((await page.locator("#sudo-code").count()) > 0) {
-    await page.fill("#sudo-code", "000000");
-    await page.locator(".sudo-gate button[type=submit]").click();
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
   }
   await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
   // The calendar round trip: consent is simulated by the mock, which answers with the
@@ -725,6 +725,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureBranchFlows(page, folder);
   await captureTargetFlows(page, folder);
   await captureSignalFlows(page, folder);
+  await capturePushFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -1138,9 +1139,9 @@ async function captureStatusPublic(page: Page, folder: string) {
  */
 async function capturePrivilegedFlows(page: Page, folder: string) {
   await page.goto(`${BASE}/admin/privileged`, { waitUntil: "networkidle" });
-  if ((await page.locator("#sudo-code").count()) > 0) {
-    await page.fill("#sudo-code", "000000");
-    await page.locator(".sudo-gate button[type=submit]").first().click();
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().first().click();
     await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
   }
   await page.locator("summary", { hasText: "Make someone eligible" }).click();
@@ -1304,9 +1305,9 @@ async function capturePlatformFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/admin-rules-worked`);
 
   await page.goto(`${BASE}/admin/webhooks`, { waitUntil: "networkidle" });
-  if ((await page.locator("#sudo-code").count()) > 0) {
-    await page.fill("#sudo-code", "000000");
-    await page.locator(".sudo-gate button[type=submit]").first().click();
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().first().click();
     await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
   }
   await page.locator("summary", { hasText: "Add a receiver" }).click();
@@ -1486,9 +1487,9 @@ async function captureControlFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/trust-control-evidenced`);
 
   await page.goto(`${BASE}/trust/controls`, { waitUntil: "networkidle" });
-  if ((await page.locator("#sudo-code").count()) > 0) {
-    await page.fill("#sudo-code", "000000");
-    await page.locator(".sudo-gate button[type=submit]").click();
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
     await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
   }
   await page.fill("#auditor-label", `Ledger & Co ${stamp}`);
@@ -1988,9 +1989,9 @@ async function captureFieldFlows(page: Page, folder: string) {
  */
 async function setProviderCampaigns(page: Page, on: boolean, name: string) {
   await page.goto(`${BASE}/leads/rules`, { waitUntil: "networkidle" });
-  if ((await page.locator("#sudo-code").count()) > 0) {
-    await page.fill("#sudo-code", "000000");
-    await page.locator(".sudo-gate button[type=submit]").click();
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
   }
   await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
   const box = page.locator("#cold-provider_campaigns");
@@ -2041,9 +2042,9 @@ async function captureMailboxFlows(page: Page, folder: string) {
       `${folder}/mail-mailbox-add`,
       `the outgoing server reads "${await page.inputValue("#add-smtp")}"`,
     );
-  if ((await page.locator("#sudo-code").count()) > 0) {
-    await page.fill("#sudo-code", "000000");
-    await page.locator(".sudo-gate button[type=submit]").click();
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
   }
   await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
   const addForm = page.locator("form:has(#add-password)");
@@ -2233,9 +2234,9 @@ async function captureDataQualityFlows(page: Page, folder: string) {
     waitUntil: "networkidle",
   });
   if ((await page.locator("#merge-fields").count()) > 0) {
-    if ((await page.locator("#sudo-code").count()) > 0) {
-      await page.fill("#sudo-code", "000000");
-      await page.locator(".sudo-gate button[type=submit]").click();
+    if ((await page.locator("#sudo-code:visible").count()) > 0) {
+      await page.locator("#sudo-code:visible").first().fill("000000");
+      await page.locator(".sudo-gate:visible button[type=submit]").first().click();
     }
     await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
     await page.locator(`input[name="choose.name"][value="${fold}"]`).check();
@@ -2636,9 +2637,9 @@ async function captureProspectFlows(page: Page, folder: string) {
   // The sending rules: a country nobody decided, decided and put back; a check flipped
   // and restored. Both need the fresh code, both are audited with their reason.
   await page.goto(`${BASE}/leads/rules`, { waitUntil: "networkidle" });
-  if ((await page.locator("#sudo-code").count()) > 0) {
-    await page.fill("#sudo-code", "000000");
-    await page.locator(".sudo-gate button[type=submit]").click();
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
   }
   await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
   const heldFirm = page.locator(".reason-list li", {
@@ -3663,6 +3664,39 @@ async function captureSignalFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/signals-acted`);
 }
 
+/**
+ * HQ on a device: the manifest and the service worker are served without a session, the
+ * push card settles on what this browser can do, and a test reaches the owner's phone.
+ */
+async function capturePushFlows(page: Page, folder: string) {
+  const manifest = await fetch(`${BASE}/manifest.webmanifest`);
+  const described = manifest.ok
+    ? ((await manifest.json()) as { name?: string; icons?: unknown[] })
+    : {};
+  if (
+    !manifest.ok ||
+    described.name !== "Quantify Terminal HQ" ||
+    (described.icons ?? []).length < 2
+  )
+    report(`${folder}/manifest`, `the manifest answered ${manifest.status}`);
+  const worker = await fetch(`${BASE}/sw.js`);
+  if (!worker.ok || !(worker.headers.get("content-type") ?? "").includes("javascript"))
+    report(`${folder}/service-worker`, `the service worker answered ${worker.status}`);
+  await page.goto(`${BASE}/me/notifications#push`, { waitUntil: "networkidle" });
+  const card = page.locator("#push");
+  await page.waitForFunction(
+    () =>
+      !(document.querySelector("#push .push-device")?.textContent ?? "Checking").includes(
+        "Checking",
+      ),
+    undefined,
+    { timeout: 15_000 },
+  );
+  await card.getByRole("button", { name: "Send a test" }).click();
+  await card.locator(".form-sent", { hasText: "took it" }).waitFor({ timeout: 10_000 });
+  await shoot(page, `${folder}/me-push-tested`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -3674,6 +3708,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   branches: captureBranchFlows,
   targets: captureTargetFlows,
   signals: captureSignalFlows,
+  push: capturePushFlows,
   inbox: captureInboxFlows,
 };
 

@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { requireStaff } from "@/lib/access/core";
 import { HqApiRequestError } from "@/lib/api/core";
 import * as inboxApi from "@/lib/api/inbox";
+import * as pushApi from "@/lib/api/push";
 import { fieldValue, refusalMessage } from "@/lib/auth/forms";
 import { sanitizeNextPath } from "@/lib/auth/route-policy";
 import type { ActionState } from "@/lib/forms/action-state";
@@ -213,4 +214,70 @@ export async function notificationPrefsAction(
   }
   revalidatePath("/me/notifications");
   return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
+
+/** This device's push subscription, as the browser described it. */
+export async function subscribePushAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const { token } = await requireStaff("/me/notifications");
+  try {
+    await pushApi.subscribePush(token, {
+      endpoint: fieldValue(formData, "endpoint", 800),
+      p256dh: fieldValue(formData, "p256dh", 200),
+      auth: fieldValue(formData, "auth", 100),
+      label: fieldValue(formData, "label", 120),
+    });
+  } catch (error) {
+    return refusal(error);
+  }
+  revalidatePath("/me/notifications");
+  return { status: "sent", message: "Push is on for this device.", sentAt: Date.now() };
+}
+
+export async function unsubscribePushAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const { token } = await requireStaff("/me/notifications");
+  try {
+    const endpoint = fieldValue(formData, "endpoint", 800);
+    await pushApi.unsubscribePush(
+      token,
+      endpoint ? { endpoint } : { subscription_id: fieldValue(formData, "subscription_id", 64) },
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  revalidatePath("/me/notifications");
+  return { status: "sent", message: "Push is off for that device.", sentAt: Date.now() };
+}
+
+export async function testPushAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const { token } = await requireStaff("/me/notifications");
+  let reached = 0;
+  let tried = 0;
+  try {
+    const answer = await pushApi.testPush(token);
+    tried = answer.results.length;
+    reached = answer.results.filter((row) => row.status >= 200 && row.status < 300).length;
+  } catch (error) {
+    return refusal(error);
+  }
+  revalidatePath("/me/notifications");
+  return {
+    status: "sent",
+    message:
+      tried === 0
+        ? "No device has push turned on yet."
+        : `Sent: ${reached} of ${tried} ${tried === 1 ? "device" : "devices"} took it.`,
+    sentAt: Date.now(),
+  };
 }

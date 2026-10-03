@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { signOutAction } from "@/app/login/actions";
 import { setHqTheme } from "@/app/(portal)/actions";
+import { AppDevice } from "@/components/shell/app-device";
 import { HqShell } from "@/components/shell/hq-shell";
 import { roleLabel } from "@/lib/access/role-labels";
 import { requireStaff } from "@/lib/access/core";
@@ -68,6 +69,7 @@ export default async function PortalLayout({ children }: Readonly<{ children: Re
       themeAction={setHqTheme}
     >
       {children}
+      <AppDevice unread={me.inbox_unread ?? 0} />
     </HqShell>
   );
 }

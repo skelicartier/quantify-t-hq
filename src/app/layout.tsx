@@ -41,6 +41,12 @@ export const metadata: Metadata = {
     template: "%s | Quantify Terminal HQ",
   },
   description: "The staff portal for Quantify Terminal.",
+  // Installable on a phone or a desk: the Quantify symbol, as the console and the website.
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: "/icons/apple-icon.png", sizes: "180x180", type: "image/png" }],
+  },
   robots: {
     index: false,
     follow: false,

@@ -6823,8 +6823,73 @@ function firstReplyWatch(): number {
   return warned;
 }
 
+// Web push (0068): a person's devices, as the service keeps them; a test answers 201.
+const MOCK_VAPID_PUBLIC =
+  "BPiHojbJFUCeb860klcYWw9Q2xjtkPbNNUbggiDcn4uY4LDuohx7UXITcNlKrgJFu5Mln4bXsuvzJ4zy6sFkGXM";
+const PUSH_HOSTS = [
+  "fcm.googleapis.com",
+  "android.googleapis.com",
+  "updates.push.services.mozilla.com",
+  "push.apple.com",
+  "notify.windows.com",
+];
+type PushRow = {
+  id: string;
+  staff_id: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  label: string;
+  created_at: string;
+  last_sent_at: string | null;
+  last_status: number | null;
+};
+const pushRows: PushRow[] = [];
+
+/** web_push.endpoint_allowed: https at a browser's push service, and nothing else. */
+function pushEndpointAllowed(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint);
+    return (
+      url.protocol === "https:" &&
+      (url.port === "" || url.port === "443") &&
+      PUSH_HOSTS.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function pushKeysOk(p256dh: string, auth: string): boolean {
+  const point = Buffer.from(p256dh, "base64url");
+  return point.length === 65 && point[0] === 4 && Buffer.from(auth, "base64url").length === 16;
+}
+
+function pushDeviceView(row: PushRow) {
+  return {
+    subscription_id: row.id,
+    label: row.label || "A device",
+    created_at: row.created_at,
+    last_sent_at: row.last_sent_at,
+    last_status: row.last_status,
+  };
+}
+
 function resetInbox() {
   notifications.length = 0;
+  pushRows.length = 0;
+  // The owner turned push on for a phone three days ago.
+  pushRows.push({
+    id: "5a500000-0000-4000-8000-000000000001",
+    staff_id: "aa000000-0000-4000-8000-00000000000a",
+    endpoint: "https://fcm.googleapis.com/fcm/send/mock-owner-phone",
+    p256dh: MOCK_VAPID_PUBLIC,
+    auth: "MDEyMzQ1Njc4OWFiY2RlZg",
+    label: "Chrome on Android",
+    created_at: agoIso(72),
+    last_sent_at: agoIso(20),
+    last_status: 201,
+  });
   inboxSubscriptions.clear();
   inboxReminders.length = 0;
   notificationPrefs.clear();
@@ -19638,6 +19703,95 @@ routes.push(
       row.cancelled_at = now();
       audit("inbox.reminder_cancelled", viewer.id, row.subject_type, row.subject_id);
       return ok({ cancelled: true });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/push",
+    auth: true,
+    handler: ({ headers }) => {
+      const viewer = caller(headers)!.member;
+      return ok({
+        enabled: true,
+        public_key: MOCK_VAPID_PUBLIC,
+        devices: pushRows
+          .filter((row) => row.staff_id === viewer.id)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at))
+          .map(pushDeviceView),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/push/subscribe",
+    auth: true,
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const endpoint = String(body.endpoint ?? "").trim();
+      const keys = (body.keys ?? {}) as Record<string, unknown>;
+      const p256dh = String(keys.p256dh ?? "").trim();
+      const auth = String(keys.auth ?? "").trim();
+      const label = String(body.label ?? "")
+        .trim()
+        .slice(0, 120);
+      if (endpoint.length > 800 || !pushEndpointAllowed(endpoint))
+        return refuse(400, "malformed_request", { endpoint: "a browser's push service address" });
+      if (!pushKeysOk(p256dh, auth))
+        return refuse(400, "malformed_request", {
+          keys: "the browser's keys for this subscription",
+        });
+      const existing = pushRows.find((row) => row.endpoint === endpoint);
+      if (existing) Object.assign(existing, { staff_id: viewer.id, p256dh, auth, label });
+      else {
+        if (pushRows.filter((row) => row.staff_id === viewer.id).length >= 8)
+          return refuse(400, "malformed_request", {
+            devices: "8 devices at most; turn one off first",
+          });
+        pushRows.push({
+          id: randomUUID(),
+          staff_id: viewer.id,
+          endpoint,
+          p256dh,
+          auth,
+          label,
+          created_at: now(),
+          last_sent_at: null,
+          last_status: null,
+        });
+      }
+      audit("push.subscribed", viewer.id, "staff", viewer.id, "", { device: label });
+      return ok({ device: pushDeviceView(pushRows.find((row) => row.endpoint === endpoint)!) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/push/unsubscribe",
+    auth: true,
+    handler: ({ headers, body }) => {
+      const viewer = caller(headers)!.member;
+      const row = body.subscription_id
+        ? pushRows.find((item) => item.id === String(body.subscription_id))
+        : pushRows.find((item) => item.endpoint === String(body.endpoint ?? ""));
+      if (!row || row.staff_id !== viewer.id) return refuse(404, "not_found");
+      pushRows.splice(pushRows.indexOf(row), 1);
+      audit("push.unsubscribed", viewer.id, "staff", viewer.id, "", { device: row.label });
+      return ok({ removed: true });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/push/test",
+    auth: true,
+    handler: ({ headers }) => {
+      const viewer = caller(headers)!.member;
+      const results = pushRows
+        .filter((row) => row.staff_id === viewer.id)
+        .map((row) => {
+          Object.assign(row, { last_sent_at: now(), last_status: 201 });
+          return { subscription_id: row.id, label: row.label, status: 201, removed: false };
+        });
+      audit("push.tested", viewer.id, "staff", viewer.id, "", { devices: results.length });
+      return ok({ results });
     },
   },
   {

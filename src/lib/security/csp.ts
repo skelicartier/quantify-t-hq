@@ -37,6 +37,9 @@ export function contentSecurityPolicy(
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${development ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
     "connect-src 'self'",
+    // The service worker that shows push notices: 'strict-dynamic' above would refuse it.
+    "worker-src 'self'",
+    "manifest-src 'self'",
     "upgrade-insecure-requests",
   ].join("; ");
 }
