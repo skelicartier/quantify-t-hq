@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
 import { customFieldSchema, customMapSchema, customValueSchema } from "@/lib/api/fields";
+import { targetSchema } from "@/lib/api/targets";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
 
@@ -183,6 +184,8 @@ const companyDetailSchema = okEnvelope.extend({
   open_tasks: z.array(taskSchema),
   activities: z.array(activitySchema),
   custom_fields: z.array(customValueSchema).default([]),
+  /** Its tier and short plan when it is a target account (0066). */
+  target: targetSchema.nullable().default(null),
 });
 export type CompanyDetail = z.infer<typeof companyDetailSchema>;
 

@@ -2745,6 +2745,22 @@ const dealStageEvents: Array<{
 }> = [];
 const activities: ActivityRow[] = [];
 const tasks: TaskRow[] = [];
+// Target accounts (0066): a tier and a short plan; who at the firm to reach.
+type AccountPlanRow = {
+  company_id: string;
+  tier: number;
+  why: string;
+  next_step: string;
+  next_step_due: string | null;
+  nudged_on: string | null;
+  created_by: string;
+  created_at: string;
+  updated_by: string;
+  updated_at: string;
+};
+const accountPlans: AccountPlanRow[] = [];
+const accountPlanPeople: Array<{ company_id: string; person_id: string }> = [];
+const TARGET_UNTOUCHED_DAYS = 14;
 const apiKeys: ApiKeyRow[] = [];
 
 // --- dual control ---------------------------------------------------------------------------
@@ -10378,6 +10394,8 @@ function seedCrm() {
     },
   );
   people.length = 0;
+  accountPlans.length = 0;
+  accountPlanPeople.length = 0;
   people.push(
     {
       id: "p0000000-0000-4000-8000-000000000001",
@@ -10423,6 +10441,60 @@ function seedCrm() {
       notes: "",
       last_contacted_at: null,
       created_at: agoIso(24 * 12),
+    },
+  );
+  // Target accounts: a family office the owner wants most, a customer's second desk, and
+  // the early-access firm one tier down.
+  accountPlans.push(
+    {
+      company_id: "c0000000-0000-4000-8000-000000000003",
+      tier: 1,
+      why: "A family office whose head of research asked about the overnight brief.",
+      next_step: "Send the deck and book a call",
+      next_step_due: daysFromNow(2),
+      nudged_on: null,
+      created_by: OWNER_STAFF,
+      created_at: agoIso(24 * 12),
+      updated_by: OWNER_STAFF,
+      updated_at: agoIso(24 * 12),
+    },
+    {
+      company_id: "c0000000-0000-4000-8000-000000000001",
+      tier: 1,
+      why: "A customer whose second desk has not seen the risk view.",
+      next_step: "Ask Elena for the risk team's lead",
+      next_step_due: daysFromNow(-1),
+      nudged_on: null,
+      created_by: OWNER_STAFF,
+      created_at: agoIso(24 * 20),
+      updated_by: OWNER_STAFF,
+      updated_at: agoIso(24 * 3),
+    },
+    {
+      company_id: "c0000000-0000-4000-8000-000000000002",
+      tier: 2,
+      why: "Two seats on trial; the second desk watches.",
+      next_step: "",
+      next_step_due: null,
+      nudged_on: null,
+      created_by: SALES_STAFF,
+      created_at: agoIso(24 * 9),
+      updated_by: SALES_STAFF,
+      updated_at: agoIso(24 * 9),
+    },
+  );
+  accountPlanPeople.push(
+    {
+      company_id: "c0000000-0000-4000-8000-000000000003",
+      person_id: "p0000000-0000-4000-8000-000000000003",
+    },
+    {
+      company_id: "c0000000-0000-4000-8000-000000000001",
+      person_id: "p0000000-0000-4000-8000-000000000001",
+    },
+    {
+      company_id: "c0000000-0000-4000-8000-000000000002",
+      person_id: "p0000000-0000-4000-8000-000000000002",
     },
   );
   leads.length = 0;
@@ -11629,7 +11701,96 @@ function companyDetailPayload(row: CompanyRow, money = true) {
     accounts,
     open_tasks: openTasks,
     activities: activityViews({ company_id: row.id }),
+    target: targetViews(row.id)[0] ?? null,
   };
+}
+
+/** targets.touches: when each company and person was last touched — activity, a person
+ * marked contacted, a mail sent, a meeting held, a deal moved; a person's touch is their firm's. */
+function targetTouches(): { company: Map<string, number>; person: Map<string, number> } {
+  const company = new Map<string, number>();
+  const person = new Map<string, number>();
+  const later = (map: Map<string, number>, key: string, at: string | null | undefined) => {
+    if (!key || !at) return;
+    const value = Date.parse(at);
+    if (!Number.isNaN(value) && value > (map.get(key) ?? -Infinity)) map.set(key, value);
+  };
+  for (const row of activities) {
+    later(company, row.company_id, row.at);
+    later(person, row.person_id, row.at);
+  }
+  for (const row of people) later(person, row.id, row.last_contacted_at);
+  const since = Date.now() - TARGET_UNTOUCHED_DAYS * 4 * 86_400_000;
+  for (const message of mailMessages) {
+    if (!message.sent_at || Date.parse(message.sent_at) < since) continue;
+    const match = people.find((row) => row.email.toLowerCase() === message.email_norm);
+    if (match) later(person, match.id, message.sent_at);
+  }
+  for (const row of meetings)
+    if (row.status === "completed") later(company, row.company_id, row.starts_at);
+  for (const row of deals) later(company, row.company_id, row.last_activity_at);
+  for (const row of people) {
+    const touched = person.get(row.id);
+    if (
+      row.company_id &&
+      touched !== undefined &&
+      touched > (company.get(row.company_id) ?? -Infinity)
+    )
+      company.set(row.company_id, touched);
+  }
+  return { company, person };
+}
+
+function targetViews(only?: string) {
+  const { company: companyLast, person: personLast } = targetTouches();
+  const today = todayIso();
+  return accountPlans
+    .filter((plan) => !only || plan.company_id === only)
+    .flatMap((plan) => {
+      const row = companies.find((item) => item.id === plan.company_id);
+      if (!row) return [];
+      const reach = accountPlanPeople
+        .filter((item) => item.company_id === plan.company_id)
+        .map((item) => people.find((person) => person.id === item.person_id))
+        .filter((person): person is (typeof people)[number] => Boolean(person))
+        .sort((a, b) => a.full_name.toLowerCase().localeCompare(b.full_name.toLowerCase()));
+      const last = companyLast.get(plan.company_id);
+      const days = last === undefined ? null : Math.floor((Date.now() - last) / 86_400_000);
+      return [
+        {
+          company_id: row.id,
+          name: row.name,
+          domain: row.domain,
+          lifecycle: row.lifecycle,
+          owner_staff_id: row.owner_staff_id,
+          owner_name: row.owner_staff_id ? nameOf(row.owner_staff_id) : "",
+          tier: plan.tier,
+          why: plan.why,
+          next_step: plan.next_step,
+          next_step_due: plan.next_step_due,
+          next_step_overdue: Boolean(plan.next_step_due && plan.next_step_due < today),
+          reach: reach.map((person) => {
+            const touched = personLast.get(person.id);
+            return {
+              person_id: person.id,
+              full_name: person.full_name || person.email,
+              title: person.title,
+              role_category: person.role_category,
+              last_touched_at: touched === undefined ? null : new Date(touched).toISOString(),
+            };
+          }),
+          roles: [...new Set(reach.map((person) => person.role_category).filter(Boolean))].sort(),
+          last_touched_at: last === undefined ? null : new Date(last).toISOString(),
+          days_untouched: days,
+          untouched: days === null || days >= TARGET_UNTOUCHED_DAYS,
+          open_deals: deals.filter((deal) => deal.company_id === row.id && deal.status === "open")
+            .length,
+          created_at: plan.created_at,
+          updated_at: plan.updated_at,
+          updated_by_name: plan.updated_by ? nameOf(plan.updated_by) : "",
+        },
+      ];
+    });
 }
 
 /** As the service's normalise_company_name: legal suffixes and punctuation gone. */
@@ -12004,6 +12165,131 @@ routes.push(
       companies.push(row);
       audit("company.created", found?.member.id ?? null, "company", row.id);
       return ok({ company: companyView(row) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/targets",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ headers, query }) => {
+      const tier = query.tier ?? "";
+      if (tier && !["1", "2", "3"].includes(tier))
+        return refuse(400, "malformed_request", { tier: "1, 2 or 3" });
+      const owner = query.owner === "me" ? caller(headers)!.member.id : (query.owner ?? "");
+      const everything = targetViews();
+      const shown = everything
+        .filter(
+          (view) =>
+            (!tier || view.tier === Number(tier)) &&
+            (!owner || view.owner_staff_id === owner) &&
+            (query.untouched !== "1" || view.untouched),
+        )
+        .sort(
+          (a, b) =>
+            a.tier - b.tier ||
+            Number(!a.untouched) - Number(!b.untouched) ||
+            (b.days_untouched ?? 1e6) - (a.days_untouched ?? 1e6) ||
+            a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+        );
+      return ok({
+        targets: shown,
+        counts: {
+          total: everything.length,
+          untouched: everything.filter((view) => view.untouched).length,
+          by_tier: Object.fromEntries(
+            [1, 2, 3].map((value) => [
+              String(value),
+              everything.filter((view) => view.tier === value).length,
+            ]),
+          ),
+        },
+        untouched_days: TARGET_UNTOUCHED_DAYS,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/{company_id}/target",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = companies.find((company) => company.id === params.company_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.archived)
+        return refuse(400, "malformed_request", { company: "archived; bring it back first" });
+      const tier = Number(body.tier);
+      if (![1, 2, 3].includes(tier)) return refuse(400, "malformed_request", { tier: "1, 2 or 3" });
+      const why = String(body.why ?? "").trim();
+      const nextStep = String(body.next_step ?? "").trim();
+      if (why.length > 400)
+        return refuse(400, "malformed_request", { why: "400 characters at most" });
+      if (nextStep.length > 200)
+        return refuse(400, "malformed_request", { next_step: "200 characters at most" });
+      const due = String(body.next_step_due ?? "")
+        .trim()
+        .slice(0, 10);
+      if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due))
+        return refuse(400, "malformed_request", { next_step_due: "YYYY-MM-DD" });
+      const reach = Array.isArray(body.reach)
+        ? [...new Set((body.reach as unknown[]).map((item) => String(item).toLowerCase()))]
+        : [];
+      if (!Array.isArray(body.reach ?? []))
+        return refuse(400, "malformed_request", { reach: "a list of people at the firm" });
+      if (reach.length > 12)
+        return refuse(400, "malformed_request", { reach: "12 people at most" });
+      if (
+        reach.some(
+          (id) => !people.some((person) => person.id === id && person.company_id === row.id),
+        )
+      )
+        return refuse(400, "malformed_request", { reach: "only people at this firm" });
+      const before = accountPlans.find((plan) => plan.company_id === row.id);
+      const fields = {
+        tier,
+        why,
+        next_step: nextStep,
+        next_step_due: due || null,
+        updated_by: found.member.id,
+        updated_at: now(),
+      };
+      if (before) Object.assign(before, fields);
+      else
+        accountPlans.push({
+          company_id: row.id,
+          ...fields,
+          nudged_on: null,
+          created_by: found.member.id,
+          created_at: now(),
+        });
+      for (let index = accountPlanPeople.length - 1; index >= 0; index -= 1)
+        if (accountPlanPeople[index]!.company_id === row.id) accountPlanPeople.splice(index, 1);
+      for (const person_id of reach) accountPlanPeople.push({ company_id: row.id, person_id });
+      audit("company.target_set", found.member.id, "company", row.id, "", {
+        tier,
+        was: before ? before.tier : null,
+        reach: reach.length,
+      });
+      return ok({ target: targetViews(row.id)[0] });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/{company_id}/target/remove",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const row = companies.find((company) => company.id === params.company_id);
+      if (!row) return refuse(404, "not_found");
+      const before = accountPlans.find((plan) => plan.company_id === row.id);
+      if (!before) return refuse(400, "malformed_request", { company: "not a target account" });
+      accountPlans.splice(accountPlans.indexOf(before), 1);
+      for (let index = accountPlanPeople.length - 1; index >= 0; index -= 1)
+        if (accountPlanPeople[index]!.company_id === row.id) accountPlanPeople.splice(index, 1);
+      audit("company.target_removed", found.member.id, "company", row.id, "", { was: before.tier });
+      return ok({ removed: true });
     },
   },
   {

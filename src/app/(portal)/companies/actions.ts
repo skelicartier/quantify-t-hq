@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import * as crmApi from "@/lib/api/crm";
+import * as targetsApi from "@/lib/api/targets";
 import { dismissDuplicates } from "@/lib/api/data-quality";
 import { fieldValue } from "@/lib/auth/forms";
 import { crmRefusal } from "@/lib/crm/refusal";
@@ -161,4 +162,50 @@ export async function importCompaniesAction(
   } catch (error) {
     return crmRefusal(error);
   }
+}
+
+/** Make the company a target account, or change its tier and plan. */
+export async function setTargetAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/targets");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const companyId = fieldValue(formData, "company_id", 64);
+  try {
+    await targetsApi.setTarget(context.token, companyId, {
+      tier: Number(fieldValue(formData, "tier", 2) || 0),
+      why: fieldValue(formData, "why", 400).trim(),
+      next_step: fieldValue(formData, "next_step", 200).trim(),
+      next_step_due: fieldValue(formData, "next_step_due", 10).trim(),
+      reach: formData
+        .getAll("reach")
+        .map((value) => String(value).slice(0, 64))
+        .slice(0, 12),
+    });
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath(`/companies/${companyId}`);
+  revalidatePath("/targets");
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
+
+export async function removeTargetAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/targets");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  const companyId = fieldValue(formData, "company_id", 64);
+  try {
+    await targetsApi.removeTarget(context.token, companyId);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+  revalidatePath(`/companies/${companyId}`);
+  revalidatePath("/targets");
+  return { status: "sent", message: "No longer a target account.", sentAt: Date.now() };
 }

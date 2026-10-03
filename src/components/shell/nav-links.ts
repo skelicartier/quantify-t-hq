@@ -31,6 +31,7 @@ import {
   UserPlus,
   Wallet,
   Waypoints,
+  Crosshair,
   Gauge,
   Users,
   CreditCard,
@@ -97,6 +98,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         activePrefix: "/companies/",
         capability: "crm:read",
         key: "c",
+      },
+      {
+        href: "/targets",
+        label: "Target accounts",
+        icon: Crosshair,
+        capability: "crm:read",
       },
       {
         href: "/people",

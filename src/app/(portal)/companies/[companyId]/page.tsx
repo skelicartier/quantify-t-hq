@@ -14,7 +14,14 @@ import {
   logActivityAction,
   setTaskStatusAction,
 } from "@/app/(portal)/_actions/work";
-import { mergeCompanyAction, updateCompanyAction } from "@/app/(portal)/companies/actions";
+import {
+  mergeCompanyAction,
+  removeTargetAction,
+  setTargetAction,
+  updateCompanyAction,
+} from "@/app/(portal)/companies/actions";
+import { TargetPlanForm } from "@/components/crm/target-plan-form";
+import { RowAction } from "@/components/ui/row-action";
 import { MergeRecordForm } from "@/components/crm/merge-record-form";
 import { createDealAction } from "@/app/(portal)/deals/actions";
 import { createPersonAction } from "@/app/(portal)/people/actions";
@@ -59,6 +66,7 @@ import {
 } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
+import { TIER_LABELS, untouchedWords } from "@/lib/crm/targets";
 import {
   FIRM_TYPES,
   LIFECYCLES,
@@ -621,6 +629,128 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
       >
         {tab === "overview" && (
           <>
+            {(detail.target || canWrite) && (
+              <RecordSection id="company-target" title="Target account">
+                {detail.target ? (
+                  <div className="target-plan">
+                    <p className="target-plan__head">
+                      <strong>
+                        {TIER_LABELS[detail.target.tier] ?? `Tier ${detail.target.tier}`}
+                      </strong>
+                      <span className={detail.target.untouched ? "due due--overdue" : "quiet"}>
+                        {untouchedWords(detail.target.days_untouched)}
+                      </span>
+                    </p>
+                    {detail.target.why && <p className="prose-block">{detail.target.why}</p>}
+                    <p>
+                      {detail.target.next_step ? (
+                        <>
+                          Next: {detail.target.next_step}
+                          {detail.target.next_step_due && (
+                            <span
+                              className={
+                                detail.target.next_step_overdue ? "due due--overdue" : "table-sub"
+                              }
+                            >
+                              {detail.target.next_step_overdue ? "Was due " : "By "}
+                              {formatDate(detail.target.next_step_due)}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="quiet">No next step yet.</span>
+                      )}
+                    </p>
+                    {detail.target.reach.length > 0 ? (
+                      <ul className="target-plan__reach">
+                        {detail.target.reach.map((person) => (
+                          <li key={person.person_id}>
+                            <Link href={`/people/${person.person_id}`}>{person.full_name}</Link>
+                            <span className="table-sub">
+                              {[person.title, person.role_category.replace(/_/g, " ")]
+                                .filter(Boolean)
+                                .join(" · ") || "No role on file"}
+                              {" · "}
+                              {person.last_touched_at ? (
+                                <>
+                                  touched{" "}
+                                  <Timestamp
+                                    value={person.last_touched_at}
+                                    now={now}
+                                    mode="relative"
+                                  />
+                                </>
+                              ) : (
+                                "not touched yet"
+                              )}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="quiet">Nobody chosen to reach yet.</p>
+                    )}
+                    {canWrite && (
+                      <div className="target-plan__actions">
+                        <Popover align="start" label="Change the plan" width="wide">
+                          <TargetPlanForm
+                            action={setTargetAction}
+                            companyId={company.company_id}
+                            people={people.map((person) => ({
+                              person_id: person.person_id,
+                              full_name: person.full_name || person.email,
+                              title: person.title,
+                              role_category: person.role_category,
+                            }))}
+                            initial={{
+                              tier: detail.target.tier,
+                              why: detail.target.why,
+                              next_step: detail.target.next_step,
+                              next_step_due: detail.target.next_step_due ?? "",
+                              reach: detail.target.reach.map((person) => person.person_id),
+                            }}
+                            submitLabel="Save the plan"
+                          />
+                        </Popover>
+                        <RowAction
+                          action={removeTargetAction}
+                          fields={{ company_id: company.company_id }}
+                          buttons={[
+                            {
+                              label: "No longer a target",
+                              pendingLabel: "Removing…",
+                              className: "btn btn--small btn--ghost",
+                            },
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <p className="page-note">
+                      A target account gets a tier, a line on why it matters, who there to reach and
+                      a next step — and its owner hears on Monday whenever nobody has touched it for
+                      two weeks.
+                    </p>
+                    <Popover align="start" label="Make it a target account" width="wide">
+                      <TargetPlanForm
+                        action={setTargetAction}
+                        companyId={company.company_id}
+                        people={people.map((person) => ({
+                          person_id: person.person_id,
+                          full_name: person.full_name || person.email,
+                          title: person.title,
+                          role_category: person.role_category,
+                        }))}
+                        initial={{ tier: 1, why: "", next_step: "", next_step_due: "", reach: [] }}
+                        submitLabel="Make it a target"
+                      />
+                    </Popover>
+                  </>
+                )}
+              </RecordSection>
+            )}
             <RecordSection id="company-deals" title="Open deals">
               {openDealsTable}
             </RecordSection>

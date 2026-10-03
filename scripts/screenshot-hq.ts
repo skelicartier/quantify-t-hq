@@ -121,6 +121,9 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "data-health", path: "/data-health", ready: ".stat-grid" },
   // The weekly review: the scorecard, the quarter's priorities, the note.
   { name: "reports-review", path: "/reports/review", ready: ".score-list" },
+  // Target accounts: the most wanted first, and those nobody has touched in two weeks.
+  { name: "targets", path: "/targets", ready: ".data-table" },
+  { name: "targets-untouched", path: "/targets?untouched=1", ready: "main#main-content" },
   // Where leads come from: what they said against what their visit showed, on to won.
   { name: "reports-attribution", path: "/reports/attribution", ready: ".barlist" },
   {
@@ -713,6 +716,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureReviewFlows(page, folder);
   await captureTriageFlows(page, folder);
   await captureBranchFlows(page, folder);
+  await captureTargetFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -3566,6 +3570,48 @@ async function captureBranchFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/sequence-branched`);
 }
 
+/**
+ * A target account made from a company's own page — a tier, why it matters, the next step
+ * and its day — then found on the target list, then taken off again so the next pass
+ * starts as this one did.
+ */
+async function captureTargetFlows(page: Page, folder: string) {
+  const kestrel = "c0000000-0000-4000-8000-000000000004";
+  await page.goto(`${BASE}/companies/${kestrel}`, { waitUntil: "networkidle" });
+  // A RecordSection's id is on its heading; the section is named by it.
+  const section = page.locator("section[aria-labelledby='company-target']");
+  const off = section.getByRole("button", { name: "No longer a target" });
+  if (await off.count()) {
+    await off.click();
+    await section
+      .locator("summary", { hasText: "Make it a target account" })
+      .waitFor({ timeout: 10_000 });
+  }
+  await section.locator("summary", { hasText: "Make it a target account" }).click();
+  const form = section.locator("form:has(select[name=tier])");
+  await form.locator("select[name=tier]").selectOption("2");
+  await form
+    .locator("textarea[name=why]")
+    .fill("Left for a cheaper terminal; the new risk view answers the reason they gave.");
+  await form.locator("input[name=next_step]").fill("Call the desk head who signed before");
+  await form
+    .locator("input[name=next_step_due]")
+    .fill(new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10));
+  await form.getByRole("button", { name: "Make it a target" }).click();
+  await section.locator(".target-plan__head", { hasText: "Tier 2" }).waitFor({ timeout: 15_000 });
+  await shoot(page, `${folder}/company-target-made`);
+  await page.goto(`${BASE}/targets`, { waitUntil: "networkidle" });
+  if ((await page.locator("tr", { hasText: "Kestrel Research" }).count()) === 0)
+    report(`${folder}/targets-with-kestrel`, "the new target is not on the list");
+  await shoot(page, `${folder}/targets-with-kestrel`);
+  await page.goto(`${BASE}/companies/${kestrel}`, { waitUntil: "networkidle" });
+  await section.getByRole("button", { name: "No longer a target" }).click();
+  await section
+    .locator("summary", { hasText: "Make it a target account" })
+    .waitFor({ timeout: 15_000 });
+  console.log(`  ✓ ${folder}/company-target-removed`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -3575,6 +3621,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   review: captureReviewFlows,
   triage: captureTriageFlows,
   branches: captureBranchFlows,
+  targets: captureTargetFlows,
   inbox: captureInboxFlows,
 };
 

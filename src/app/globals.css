@@ -5477,6 +5477,38 @@
     display: contents;
   }
 
+  /* A target account's plan on the company page. */
+  .target-plan {
+    display: grid;
+    gap: 8px;
+  }
+
+  .target-plan p {
+    margin: 0;
+  }
+
+  .target-plan__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+  }
+
+  .target-plan__reach {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .target-plan__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
   /* A sequence's branches: one short form per answer. */
   .branch-list {
     display: grid;
