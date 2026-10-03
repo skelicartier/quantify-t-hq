@@ -272,10 +272,48 @@ company console) reported first; the file keeps all three with their sources.
 | Signs of interest | migration 0067 (`prospect_signals.py`): first-party signs on the firms being worked, read from what HQ and the product already hold — a product account made with a lead's own address or at a firm being worked (free mail names no firm), a click through from our mail (seed inboxes left out), someone writing in from a firm whose people are being written to as prospects, product use at a prospect or early-access firm with linked accounts. Each is kept once per kind, record and evidence; its owner hears under a new inbox reason, "Sign of interest" (in Other unless added to their Priority); a person closes it — acted on with a line, or dismissed — and a closed sign never reopens. Swept on the hourly pass and on a read more than a quarter of an hour after the last                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | CRM → Leads → Signs of interest; the lead and company pages (their open signs)                                                                                             | service `86b8a5c`; HQ `f51a7d5`                           |
 | Web push          | migration 0068 (`web_push.py`, `push_routes.py`): HQ installs as an app (a manifest; the Quantify symbol, as the console and the website use; a service worker that only shows notices and opens HQ's own pages, caching nothing; the unread count on the installed icon). Push is turned on per device and registered only at the browsers' push services; rows in a person's Priority reach their devices outside their quiet hours; a test says what each push service answered; a device its push service calls gone is removed. VAPID and the RFC 8291 payload are written on the pinned `cryptography` package and checked against the RFC's worked example. The keys come once from `scripts/hq_vapid_keys.py` as `QT_HQ_VAPID_*`; without them push is off and says so                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | My notifications (Push to your devices); the installed app                                                                                                                 | service `d4fc421`; HQ: the commit adding this             |
 
+### 2026-10-03 — Table stakes (`docs/RESEARCH-2026-10-03-TABLESTAKES.md`, fifth research pass)
+
+What every serious tool ships as standard, from four researchers across about twenty
+products and a fifth reading HQ itself; §2 of that file is the gap list (HAS / WEAK /
+LACKS against the market's rating) and §3 the order below.
+
+| Wave              | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Where                                                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Exports of a view | An export can be the view on screen: the portal sends the ids its page shows, in its order, read in the export route with the same code that draws the page (`src/lib/lists/views.ts`, shared by Companies, People, Leads, Deals); an id narrows a file and never widens it. Columns: every one, or a chosen few from the kind's own list (`GET hq/exports/{kind}/columns`), which now carries the custom fields the role can read, typed as the field is. On a phone a page-bar popover spans the bar (it opened past the left edge).                                                                                                                                                                                                                                                                         | service `export_routes.py`; portal `export-menu.tsx`, `exports/route.ts`, `lists/views.ts`        |
+| Backup            | Admin → Backup: an Owner asks with a reason after a fresh code; with another Owner it waits for them (approval kind `backup`, migration 0069) and the asker downloads it once within 48 hours; alone it is made at once (`sole_approver`). One zip: a CSV per export kind with custom fields, the timeline, comments, support threads (internal notes marked), stages, sources, the price list, field definitions, the staff directory, mailing lists, consent and suppressions, and a README with who, who approved, why, what is left out and each file's SHA-256. Outside the export quota (the approval is the control), in the ledger; no marker rows. The approval schema now parses every kind the service has (`write_off` was missing: a waiting write-off broke the request and the Approvals list). | service `backup_routes.py`, `dual_control.py`; portal `admin/backup/*`, `documents/backup-zip.ts` |
+
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
-**Prospects, in this order** (report sections in `docs/RESEARCH-2026-10-03-LEADS.md`;
-the cold-mail rules, the send programme and the data operations are built, §4):
+**The table-stakes order** (`docs/RESEARCH-2026-10-03-TABLESTAKES.md` §3; exports of a
+view and the backup are built, §4):
+
+1. **A person's data, as a file**: the privacy desk makes the package an access or
+   portability request needs — every record HQ holds under the address, as JSON and CSVs
+   with a README — recorded on the request.
+2. **Archive and restore**: companies, people, deals and leads archived and put back from
+   an Archived view, links kept so a restore is whole, nothing deleted; undo on a single
+   edit; History puts a previous value back.
+3. **Share**: copy a link on every record; send a record to a colleague with a line; a
+   quote as a link the customer opens (expiry, view count, accept or decline); one page
+   of every live external link, each revocable.
+4. **Imports to the leads' standard** for companies and people: dry run, the file of rows
+   left out, history, undo, the owner matched by email.
+5. **Find and create**: search across notes, tasks, meetings, contracts, invoices and help
+   articles with a results page; recently viewed from the read log; create from ⌘K;
+   favourites kept with the account; single-key shortcuts switchable off (WCAG 2.1.4).
+6. **Handover**: the offboarding run moves everything a leaver owns to a named colleague.
+7. **Tasks**: recurring tasks and a due-day reminder.
+8. **Reports**: a report builder, saved and shared, pinned to a personal dashboard, each
+   figure a link to its records.
+9. **Audit and history**: audit search by date and text; history on leads, tickets,
+   meetings and tasks.
+10. **The desk**: presence and a crossed-reply warning; the backlog over time and time to
+    resolution.
+11. **Files on records** (needs the storage account decided with production), **email
+    from a record**, **hosted forms**, **times in the person's zone** — in that order.
+
+**Prospects, still to do** (report sections in `docs/RESEARCH-2026-10-03-LEADS.md`):
 
 1. **An enrichment adapter with provenance** (backlog 18): one or two providers in order;
    provider, time and cost per field; a value a person typed is never overwritten. It
@@ -327,7 +365,7 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0068 and publish → move the desk onto SQL → Vercel
+Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0069 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → link each staff
 member's Quantify Terminal account (Product) → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
@@ -351,6 +389,26 @@ and app password without either).
 ---
 
 ## 7. Checkpoint — update at the end of every wave
+
+**As of exports of a view and the backup** (2026-10-03, fifth research pass).
+
+- Service `f4fda0d` (exports of a view), `b6c2d06` (0069 backup), local. Service suite
+  2,105 passed, 4 skipped (`tests/test_hq_export_views.py` 6, `tests/test_hq_backup.py` 4).
+- HQ `5b78940`, `e129302`, committed locally and pushed with the batch once a full walk
+  per width passes. Portal gates: format, lint, types, 369 tests, the build; the parts
+  `HQ_HARNESS_FLOW=exports` (a view's CSV holds the screen's rows in its order) and
+  `=backup` at both widths in both themes.
+- Another session is working in the product repo (theses, the watch, overnight): stage
+  only HQ's files there, by name.
+- Turbopack will not follow a `node_modules` symlink out of the project, so a scratch copy
+  of HQ can type-check and test but cannot run the dev server; run waves in the real tree.
+- After hours of edits the dev server's hot reload can panic and reload a page in a loop
+  (a flow then "misses" a redraw that did happen): restart it before a harness part.
+- A form whose success changes what the page shows (a backup request becomes the waiting
+  request) is gone before its "Sent" line can show: a flow waits for the new state.
+- The mock's other Owners (`newbie@`, `newbie2@`) have no authenticator, so nobody can
+  sign in to approve: `POST /api/v1/mock/approve-pending {kind}` approves the newest
+  waiting request as the service would (test-only, outside `hq/`).
 
 **As of target accounts, signs of interest and web push** (2026-10-03).
 
