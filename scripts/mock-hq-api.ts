@@ -18618,6 +18618,311 @@ routes.push(
     },
   },
   {
+    // Mirrors privacy_routes.handle_request_package + privacy_package.gather.
+    method: "POST",
+    pattern: "hq/privacy/requests/{request_id}/package",
+    auth: true,
+    capability: "privacy:write",
+    sudo: true,
+    handler: ({ headers, params }) => {
+      const viewer = caller(headers)!.member;
+      const row = privacyRequests.find((item) => item.id === params.request_id);
+      if (!row) return refuse(404, "not_found");
+      if (row.kind !== "access" && row.kind !== "portability")
+        return refuse(400, "malformed_request", {
+          kind: "a copy of the data answers an access or portability request",
+        });
+      if (!PV_OPEN.includes(row.status))
+        return refuse(400, "malformed_request", { status: "the request is closed" });
+      if (row.identity_state === "requested")
+        return refuse(400, "malformed_request", {
+          identity: "confirm who is asking before their data is gathered",
+        });
+      const linked = people.find((item) => item.id === row.person_id);
+      const email = (row.requester_email || linked?.email || "").toLowerCase();
+      if (!email && !linked)
+        return refuse(400, "malformed_request", {
+          email: "the request names no address or person to search for",
+        });
+      const withheld = new Set<string>();
+      const customOf = (recordType: string, recordId: string) => {
+        const out: Record<string, string> = {};
+        for (const field of cfLive(recordType, true)) {
+          const value = customValues.get(cfKey(field.id, recordId)) ?? "";
+          if (!value) continue;
+          if (!cfCanSee(headers, field)) {
+            withheld.add(field.label);
+            continue;
+          }
+          out[field.label] = cfDisplay(field, value);
+        }
+        return out;
+      };
+      const mine = people.filter(
+        (item) => (email && item.email.toLowerCase() === email) || item.id === linked?.id,
+      );
+      const personIds = new Set(mine.map((item) => item.id));
+      const leadsHeld = leads.filter((item) => email && item.email.toLowerCase() === email);
+      const leadIds = new Set(leadsHeld.map((item) => item.id));
+      const accounts = new Set(mine.map((item) => item.account_user_id).filter(Boolean));
+      const attended = new Map(
+        meetingAttendees
+          .filter(
+            (item) =>
+              (email && item.email.toLowerCase() === email) || personIds.has(item.person_id),
+          )
+          .map((item) => [item.meeting_id, item]),
+      );
+      const consent = email ? mailConsent.get(email) : undefined;
+      const sections: Array<[string, string, Array<Record<string, unknown>>]> = [
+        [
+          "people",
+          "Your contact record",
+          mine.map((item) => ({
+            name: item.full_name,
+            email: item.email,
+            title: item.title,
+            phone: item.phone,
+            company: companyName(item.company_id),
+            do_not_contact: item.do_not_contact,
+            last_contacted_at: item.last_contacted_at,
+            added_at: item.created_at,
+            notes: item.notes,
+            product_account_linked: Boolean(item.account_user_id),
+            custom_fields: customOf("person", item.id),
+          })),
+        ],
+        [
+          "leads",
+          "How you came to us",
+          leadsHeld.map((item) => ({
+            kind: item.origin === "prospect" ? "found on a public page" : "wrote to us",
+            received_at: item.created_at,
+            source: item.source_key,
+            name: item.full_name,
+            email: item.email,
+            title: item.title ?? null,
+            company: item.company_name,
+            country: item.country ?? null,
+            city: item.city ?? null,
+            message: item.message,
+            stage: item.stage,
+            disqualified_because: item.disqualify_reason,
+            published_on: item.source_url ?? null,
+            campaign: item.utm_campaign ?? null,
+            referrer: item.referrer ?? null,
+            custom_fields: customOf("lead", item.id),
+          })),
+        ],
+        [
+          "notes",
+          "Notes our team wrote (internal)",
+          activities
+            .filter((item) => personIds.has(item.person_id) || leadIds.has(item.lead_id))
+            .map((item) => ({
+              at: item.at,
+              kind: item.kind,
+              by: item.staff_name,
+              text: item.body,
+              internal: true,
+            })),
+        ],
+        [
+          "comments",
+          "Comments our team wrote (internal)",
+          comments
+            .filter(
+              (item) =>
+                !item.deleted_at &&
+                ((item.subject_type === "person" && personIds.has(item.subject_id)) ||
+                  (item.subject_type === "lead" && leadIds.has(item.subject_id))),
+            )
+            .map((item) => ({
+              at: item.created_at,
+              by: nameOf(item.author_id),
+              text: item.body,
+              internal: true,
+            })),
+        ],
+        [
+          "mail_sent",
+          "Email we sent you",
+          mailMessages
+            .filter((item) => email && item.email_norm === email && !item.is_seed)
+            .map((item) => ({
+              sent_at: item.sent_at ?? item.scheduled_at,
+              subject: item.subject,
+              from: nameOf(item.sender_id) || "Quantify Terminal",
+              state: item.state,
+              opened_at: item.first_opened_at,
+              clicked_at: item.first_clicked_at,
+              unsubscribed_at: item.unsubscribed_at,
+            })),
+        ],
+        [
+          "mail_received",
+          "Email you sent us",
+          mailReplies
+            .filter((item) => email && item.from_email.toLowerCase() === email)
+            .map((item) => ({
+              received_at: item.received_at,
+              subject: item.subject,
+              text: item.body_text,
+              read_as: item.kind,
+            })),
+        ],
+        [
+          "consent",
+          "Your mail preferences",
+          consent
+            ? [
+                {
+                  marketing: consent.marketing_state,
+                  topics_off: consent.topics_off.join(","),
+                  sales_stop: consent.sales_stop,
+                  basis: consent.lawful_basis,
+                  recorded_from: consent.source,
+                  updated_at: consent.updated_at,
+                },
+              ]
+            : [],
+        ],
+        [
+          "suppressions",
+          "Times we stopped mailing you",
+          mailSuppressions
+            .filter((item) => email && item.email_norm === email)
+            .map((item) => ({
+              since: item.created_at,
+              scope: item.scope,
+              reason: item.reason,
+              released_at: item.released_at,
+            })),
+        ],
+        [
+          "mailing_lists",
+          "Mailing lists you are on",
+          mailListMembers
+            .filter((item) => email && item.email_norm === email)
+            .map((item) => ({
+              list: mailLists.find((list) => list.id === item.list_id)?.name ?? "",
+              added_at: item.added_at,
+              basis: item.basis,
+              source: item.source,
+              company: item.company,
+              title: item.title,
+            })),
+        ],
+        [
+          "meetings",
+          "Meetings you attended",
+          meetings
+            .filter((item) => attended.has(item.id))
+            .map((item) => ({
+              starts_at: item.starts_at,
+              title: item.title,
+              status: item.status,
+              your_response: attended.get(item.id)?.response ?? null,
+            })),
+        ],
+        [
+          "support",
+          "Support conversations",
+          tickets
+            .filter(
+              (item) =>
+                (email && item.contact_email.toLowerCase() === email) ||
+                accounts.has(item.account_id),
+            )
+            .flatMap((item) =>
+              item.messages.map((message) => ({
+                ticket: item.subject,
+                at: message.at,
+                from: message.author === "customer" ? "you" : message.author_name || "Support",
+                text: message.body,
+                internal: message.visibility === "internal",
+              })),
+            ),
+        ],
+        [
+          "applications",
+          "Job applications",
+          applicants
+            .filter((item) => email && item.email.toLowerCase() === email)
+            .map((item) => ({
+              applied_at: item.created_at,
+              name: item.full_name,
+              email: item.email,
+              phone: item.phone,
+              links: item.links,
+              cover_note: item.cover_note,
+              stage: item.stage,
+              decided_at: item.decided_at,
+              kept_until: item.keep_until,
+            })),
+        ],
+        [
+          "document_requests",
+          "Documents you asked for",
+          tcRequests
+            .filter((item) => email && item.email.toLowerCase() === email)
+            .map((item) => ({
+              asked_at: item.created_at,
+              name: item.name,
+              company: item.company,
+              reason: item.reason,
+              status: item.status,
+              sent_on: item.sent_on,
+            })),
+        ],
+        [
+          "privacy_requests",
+          "Your privacy requests",
+          privacyRequests
+            .filter((item) => email && item.requester_email.toLowerCase() === email)
+            .map((item) => ({
+              reference: item.reference,
+              kind: item.kind,
+              received_on: item.received_on,
+              status: item.status,
+              responded_on: item.responded_on,
+            })),
+        ],
+      ];
+      const items = sections.reduce((sum, [, , rows]) => sum + rows.length, 0);
+      const held = sections.filter(([, , rows]) => rows.length > 0).map(([, title]) => title);
+      const left = [...withheld].sort();
+      pvEvent(
+        "request",
+        row.id,
+        "packaged",
+        `Data file made: ${items} item${items === 1 ? "" : "s"} in ${held.length} section${held.length === 1 ? "" : "s"}${held.length ? ` (${held.join(", ")})` : ""}. ${
+          items
+            ? "Read it before it is sent: internal notes are included and may fall under an exemption."
+            : "HQ holds nothing under this address."
+        }${left.length ? ` Left out for an admin to add: ${left.join(", ")}.` : ""}`,
+        viewer.id,
+      );
+      audit("privacy_request.packaged", viewer.id, "privacy_request", row.id, "", {
+        reference: row.reference,
+        items,
+        sections: held.length,
+        withheld: left.length,
+      });
+      return ok({
+        reference: row.reference,
+        kind: row.kind,
+        email,
+        name: linked?.full_name || row.requester_name,
+        generated_at: now(),
+        made_by: viewer.display_name || viewer.email,
+        sections: sections.map(([key, title, rows]) => ({ key, title, rows })),
+        withheld: left,
+        items,
+      });
+    },
+  },
+  {
     method: "GET",
     pattern: "hq/incidents",
     auth: true,

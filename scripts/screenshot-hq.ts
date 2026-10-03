@@ -729,6 +729,7 @@ async function captureInteractions(page: Page, folder: string) {
   await capturePushFlows(page, folder);
   await captureExportFlows(page, folder);
   await captureBackupFlows(page, folder);
+  await captureDataFileFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -3700,12 +3701,24 @@ async function capturePushFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/me-push-tested`);
 }
 
-/** A downloaded file's text, read whole. */
-async function downloadText(download: Download): Promise<string> {
+/** A downloaded file's bytes, read whole. */
+async function downloadBytes(download: Download): Promise<Buffer> {
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+/** A downloaded file's text, read whole. */
+async function downloadText(download: Download): Promise<string> {
+  return (await downloadBytes(download)).toString("utf8");
+}
+
+/** The names of the files inside a stored zip, in order, from its central directory. */
+function zipNames(zip: Buffer): string[] {
+  return [
+    ...zip.toString("latin1").matchAll(/PK\x01\x02[\s\S]{42}([A-Za-z_]+\.(?:csv|txt|json))/g),
+  ].map((match) => match[1]!);
 }
 
 /** Opens a list's Export menu with the confirm-it's-you window open. */
@@ -3836,13 +3849,8 @@ async function captureBackupFlows(page: Page, folder: string) {
     page.waitForEvent("download", { timeout: 60_000 }),
     page.getByRole("button", { name: "Download the backup" }).click(),
   ]);
-  const stream = await download.createReadStream();
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(chunk as Buffer);
-  const zip = Buffer.concat(chunks);
-  const names = [
-    ...zip.toString("latin1").matchAll(/PK\x01\x02[\s\S]{42}([A-Za-z_]+\.(?:csv|txt))/g),
-  ].map((match) => match[1]);
+  const zip = await downloadBytes(download);
+  const names = zipNames(zip);
   const expected = ["README.txt", "companies.csv", "people.csv", "deals.csv", "activities.csv"];
   if (
     !download.suggestedFilename().startsWith("hq-backup-") ||
@@ -3862,6 +3870,38 @@ async function captureBackupFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/admin-backup-listed`);
 }
 
+/**
+ * A copy of a person's data for the seeded access request: one zip with a README first,
+ * the whole as JSON and a CSV per section held; the timeline then says it was made.
+ */
+async function captureDataFileFlows(page: Page, folder: string) {
+  const path = "/privacy/requests/ad000001-0000-4000-8000-000000000000";
+  await page.goto(`${BASE}${path}#copy`, { waitUntil: "networkidle" });
+  const section = page.locator("section[aria-labelledby='copy']");
+  if ((await section.locator("#sudo-code").count()) > 0) {
+    await section.locator("#sudo-code").fill("000000");
+    await section.locator(".sudo-gate button[type=submit]").click();
+  }
+  await section.locator(".sudo-gate--open").waitFor({ timeout: 10_000 });
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    section.getByRole("button", { name: "Download the data file" }).click(),
+  ]);
+  const names = zipNames(await downloadBytes(download));
+  if (
+    !download.suggestedFilename().endsWith("-data.zip") ||
+    names[0] !== "README.txt" ||
+    !names.includes("data.json") ||
+    !names.includes("people.csv")
+  )
+    report(`${folder}/privacy-data-file`, `the file held ${names.join(", ")}`);
+  else console.log(`  ✓ ${folder}/privacy-data-file (${names.length} files)`);
+  await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
+  if ((await page.locator(".event-timeline__row", { hasText: "Data file made" }).count()) === 0)
+    report(`${folder}/privacy-data-file-recorded`, "the timeline does not say the file was made");
+  await shoot(page, `${folder}/privacy-data-file-recorded`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -3877,6 +3917,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   inbox: captureInboxFlows,
   exports: captureExportFlows,
   backup: captureBackupFlows,
+  datafile: captureDataFileFlows,
 };
 
 async function runPart(browser: Browser) {

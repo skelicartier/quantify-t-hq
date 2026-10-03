@@ -51,6 +51,7 @@ const EVENT_LABELS: Record<string, string> = {
   search: "Searched",
   stop_contact: "Contact stopped",
   erased: "Erased",
+  packaged: "Data file made",
   note: "Note",
 };
 
@@ -71,13 +72,30 @@ const CHANNELS: Record<string, string> = {
 
 type Params = Promise<{ requestId: string }>;
 
+/** What the page says when a data file came back refused, keyed by `?package=`. */
+const PACKAGE_OUTCOMES: Record<string, string> = {
+  sudo: "Confirm it's you first, then make the file again.",
+  identity: "Confirm who is asking before their data is gathered.",
+  forbidden: "Your role cannot make this file.",
+  failed: "The file could not be made just now. Nothing left HQ.",
+};
+
 /**
  * One request and its clock: who asked for what, when the answer is due and why, where
  * HQ already holds their data, the checklist of every system searched, and the acts —
  * stop the clock, extend, respond, refuse — each recorded on the timeline.
  */
-export default async function PrivacyRequestPage({ params }: { params: Params }) {
+export default async function PrivacyRequestPage({
+  params,
+  searchParams,
+}: {
+  params: Params;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { requestId } = await params;
+  const packageParam = (await searchParams).package;
+  const packageOutcome =
+    PACKAGE_OUTCOMES[(Array.isArray(packageParam) ? packageParam[0] : packageParam) ?? ""];
   const context = await requireStaff(`/privacy/requests/${requestId}`);
   if (!hasCapability(context, "privacy:read")) {
     return (
@@ -385,6 +403,50 @@ export default async function PrivacyRequestPage({ params }: { params: Params })
                 </li>
               ))}
             </ul>
+          </RecordSection>
+        )}
+
+        {(request.kind === "access" || request.kind === "portability") && (
+          <RecordSection id="copy" title="A copy of their data">
+            <p className="page-note">
+              Everything HQ holds under {request.requester_email || "their address"}, as one file: a
+              CSV for each kind of record and the whole as JSON. Notes our team wrote are in it,
+              marked internal; read it before it is sent. Making it is written on the timeline.
+            </p>
+            {packageOutcome && (
+              <Callout tone="danger" role="alert" compact>
+                {packageOutcome}
+              </Callout>
+            )}
+            {!request.open ? (
+              <p className="muted">The request is closed.</p>
+            ) : request.identity_state === "requested" ? (
+              <p className="muted">
+                Their data is gathered once identity is confirmed, so it cannot go to the wrong
+                person.
+              </p>
+            ) : !canWrite ? (
+              <p className="muted">The desk makes the file; your role reads the request.</p>
+            ) : (
+              <>
+                <SudoGate
+                  action={confirmSudoAction}
+                  fresh={fresh}
+                  untilLabel={untilLabel}
+                  returnPath={`/privacy/requests/${request.id}`}
+                  purpose="Gathering a person's data needs a fresh code from your authenticator app."
+                />
+                <form
+                  className="stack-form stack-form--tight"
+                  method="post"
+                  action={`/privacy/requests/${request.id}/package`}
+                >
+                  <button className="btn btn--primary" type="submit" disabled={!fresh}>
+                    Download the data file
+                  </button>
+                </form>
+              </>
+            )}
           </RecordSection>
         )}
 

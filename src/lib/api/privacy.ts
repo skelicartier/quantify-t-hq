@@ -151,6 +151,35 @@ export function readPrivacyRequest(token: string, requestId: string) {
   return fetchHqJson(`hq/privacy/requests/${requestId}`, requestDetailSchema, { token });
 }
 
+const packageSchema = okEnvelope.extend({
+  reference: z.string(),
+  kind: z.string(),
+  email: z.string(),
+  name: z.string(),
+  generated_at: z.string(),
+  made_by: z.string(),
+  /** Each section a list of plain records, in the order the file presents them. */
+  sections: z.array(
+    z.object({
+      key: z.string(),
+      title: z.string(),
+      rows: z.array(z.record(z.string(), z.unknown())),
+    }),
+  ),
+  /** Sensitive fields the maker's role cannot read, left for an admin to add. */
+  withheld: z.array(z.string()),
+  items: z.number(),
+});
+export type PrivacyPackage = z.infer<typeof packageSchema>;
+
+/** Everything HQ holds under the request's address, for the desk to read and send. */
+export function makePrivacyPackage(token: string, requestId: string) {
+  return postHqJson(`hq/privacy/requests/${requestId}/package`, packageSchema, {
+    token,
+    body: {},
+  });
+}
+
 export function logPrivacyRequest(token: string, body: Record<string, string>) {
   return postHqJson(
     "hq/privacy/requests/create",
