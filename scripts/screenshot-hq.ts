@@ -205,6 +205,8 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "admin-approvals", path: "/admin/approvals", ready: "main#main-content" },
   { name: "admin-security", path: "/admin/security", ready: "main#main-content" },
   { name: "inbox", path: "/inbox", ready: ".inbox-list, .empty-state" },
+  // The person's Priority alone, and the rule that fills it.
+  { name: "inbox-priority", path: "/inbox?box=priority", ready: ".inbox-list, .empty-state" },
   { name: "inbox-done", path: "/inbox?view=done", ready: "main#main-content" },
   { name: "me-notifications", path: "/me/notifications", ready: ".prefs-modes" },
   { name: "revenue-receivables", path: "/revenue/receivables", ready: "main#main-content" },
@@ -2906,18 +2908,47 @@ async function captureInboxFlows(page: Page, folder: string) {
   console.log(`  ✓ ${folder}/company-follow-remind`);
 
   await page.goto(`${BASE}/me/notifications`, { waitUntil: "networkidle" });
+  const saveMail = page.getByRole("button", { name: "Save", exact: true });
   await page.locator("label.prefs-mode", { hasText: "One digest a day" }).click();
   await page.selectOption("#prefs-quiet-from", "22");
   await page.selectOption("#prefs-quiet-to", "7");
-  await page.locator("button", { hasText: "Save" }).click();
+  await saveMail.click();
   await page.waitForSelector(".form-sent", { timeout: 10_000 });
   // Back to the default so the next pass starts where this one did.
   await page.locator("label.prefs-mode", { hasText: "Mail me what stays unread" }).click();
   await page.selectOption("#prefs-quiet-from", "");
   await page.selectOption("#prefs-quiet-to", "");
-  await page.locator("button", { hasText: "Save" }).click();
+  await saveMail.click();
   await page.waitForSelector(".form-sent", { timeout: 10_000 });
   console.log(`  ✓ ${folder}/me-notifications-saved`);
+
+  // Priority is the person's own: "Assigned" counted in it moves those lines up to the
+  // Priority side; then the default is put back, so the next pass starts as this one did.
+  await page.goto(`${BASE}/me/notifications#priority`, { waitUntil: "networkidle" });
+  const ruleForm = page.locator("form:has(input[name=priority_reason])");
+  const assigned = ruleForm.locator('input[name="priority_reason"][value="assigned"]');
+  if (!(await assigned.isChecked())) await assigned.check();
+  await ruleForm.getByRole("button", { name: "Save the rule" }).click();
+  await ruleForm.locator(".form-sent").waitFor({ timeout: 10_000 });
+  await shoot(page, `${folder}/me-priority-rule`);
+  await page.goto(`${BASE}/inbox`, { waitUntil: "networkidle" });
+  const assignedLines = page.locator(".inbox-item", {
+    has: page.locator(".pill", { hasText: "Assigned" }),
+  });
+  const inOther = page.locator('section[aria-labelledby="inbox-other"] .inbox-item', {
+    has: page.locator(".pill", { hasText: "Assigned" }),
+  });
+  if ((await assignedLines.count()) > 0 && (await inOther.count()) > 0)
+    report(`${folder}/inbox-priority-rule`, "an Assigned line stayed under Other");
+  await shoot(page, `${folder}/inbox-priority-rule`);
+  await page.goto(`${BASE}/me/notifications#priority`, { waitUntil: "networkidle" });
+  await ruleForm.getByRole("button", { name: "Put the default back" }).click();
+  await ruleForm
+    .getByRole("button", { name: "Put the default back" })
+    .waitFor({ state: "detached", timeout: 10_000 });
+  if (await ruleForm.locator('input[name="priority_reason"][value="assigned"]').isChecked())
+    report(`${folder}/me-priority-default`, "the default rule still counts Assigned");
+  console.log(`  ✓ ${folder}/me-priority-default`);
 }
 
 /**

@@ -2630,6 +2630,8 @@ type LeadRow = {
   nurture_note?: string;
   nurtured_by?: string;
   nurture_returned_at?: string | null;
+  /** 0064: when the desk was told its first reply was about to run late. */
+  first_reply_warned_at?: string | null;
   /** The visit's campaign tags and the page that sent it, as the intake keeps them. */
   utm_source?: string;
   utm_medium?: string;
@@ -6433,6 +6435,7 @@ type NotificationRow = {
 };
 const INBOX_REASONS: Record<string, [number, string]> = {
   security: [90, "Security"],
+  late: [85, "First reply running late"],
   review: [80, "Waiting on you"],
   mention: [70, "Mentioned"],
   assigned: [60, "Assigned"],
@@ -6456,6 +6459,8 @@ const INBOX_PAGES: Record<string, string> = {
   incident: "/privacy/incidents/{id}",
 };
 const INBOX_SPECIFICITY = ["deal", "lead", "meeting", "person", "company"];
+/** What counts as Priority until a person says otherwise (inbox.PRIORITY_DEFAULT). */
+const PRIORITY_DEFAULT = ["security", "late", "review", "mention"];
 const notifications: NotificationRow[] = [];
 const inboxSubscriptions = new Map<
   string,
@@ -6482,6 +6487,8 @@ const notificationPrefs = new Map<
     quiet_from: number | null;
     quiet_to: number | null;
     time_zone: string;
+    /** The person's own Priority rule, comma-separated; null (or absent) is the default. */
+    priority_reasons?: string | null;
   }
 >();
 
@@ -6697,15 +6704,83 @@ function inboxUnread(staffId: string): number {
 }
 
 function notificationPrefsFor(staffId: string) {
-  return (
-    notificationPrefs.get(staffId) ?? {
-      email_mode: "unread",
-      delay_minutes: 15,
-      quiet_from: null,
-      quiet_to: null,
-      time_zone: "UTC",
-    }
-  );
+  const stored = notificationPrefs.get(staffId) ?? {
+    email_mode: "unread",
+    delay_minutes: 15,
+    quiet_from: null,
+    quiet_to: null,
+    time_zone: "UTC",
+  };
+  const raw = stored.priority_reasons ?? null;
+  // As inbox.parse_priority: the named reasons in weight order, unknown words dropped.
+  const own =
+    raw === null
+      ? null
+      : Object.keys(INBOX_REASONS).filter((reason) =>
+          raw
+            .split(",")
+            .map((part) => part.trim())
+            .includes(reason),
+        );
+  return {
+    email_mode: stored.email_mode,
+    delay_minutes: stored.delay_minutes,
+    quiet_from: stored.quiet_from,
+    quiet_to: stored.quiet_to,
+    time_zone: stored.time_zone,
+    priority_reasons: own ?? [...PRIORITY_DEFAULT],
+    priority_default: own === null,
+  };
+}
+
+function inboxIsPriority(reason: string, staffId: string): boolean {
+  return notificationPrefsFor(staffId).priority_reasons.includes(reason);
+}
+
+/** inbox.first_reply_watch: warn once about each lead a quarter of an hour from late. */
+function firstReplyWatch(): number {
+  const workers = staff
+    .filter((member) => member.is_active && (CAPABILITIES[member.role] ?? []).includes("crm:write"))
+    .map((member) => member.id);
+  let warned = 0;
+  for (const row of leads) {
+    if (
+      (row.origin ?? "inbound") !== "inbound" ||
+      row.first_replied_at ||
+      !["new", "attempting", "connected"].includes(row.stage) ||
+      row.anonymised_at ||
+      row.duplicate_of_id ||
+      row.nurture_until ||
+      row.first_reply_warned_at
+    )
+      continue;
+    const waited = minutesSince(row.created_at);
+    if (waited < 45) continue;
+    const owner = staff.find((member) => member.id === row.owner_staff_id && member.is_active);
+    const who = row.full_name || row.email || "A lead";
+    const lateAt = new Date(Date.parse(row.created_at) + 60 * 60_000);
+    // As inbox.waited_words: minutes under two hours, then hours, then days.
+    const words =
+      waited < 120
+        ? `${waited} minute${waited === 1 ? "" : "s"}`
+        : waited < 48 * 60
+          ? `${Math.floor(waited / 60)} hours`
+          : `${Math.floor(waited / (24 * 60))} days`;
+    inboxNotify({
+      recipients: owner ? [owner.id] : workers,
+      subject_type: "lead",
+      subject_id: row.id,
+      subject_label: who,
+      reason: "late",
+      summary:
+        waited < 60
+          ? `${who} wrote in ${words} ago and has had no reply; the hour runs out at ${lateAt.toISOString().slice(11, 16)} UTC.`
+          : `${who} wrote in ${words} ago and is past the hour without a reply.`,
+    });
+    row.first_reply_warned_at = now();
+    warned += 1;
+  }
+  return warned;
 }
 
 function resetInbox() {
@@ -11672,12 +11747,20 @@ routes.push(
         },
       };
       inboxFireReminders(found.member.id);
+      firstReplyWatch();
       const unreadRows = notifications
         .filter((row) => row.recipient_id === found.member.id && inboxState(row) === "unread")
-        .sort((a, b) => b.last_at.localeCompare(a.last_at));
+        .sort((a, b) => b.last_at.localeCompare(a.last_at))
+        .map((row) => ({
+          ...notificationView(row),
+          priority: inboxIsPriority(row.reason, found.member.id),
+        }))
+        // Stable: newest first within each side.
+        .sort((a, b) => Number(b.priority) - Number(a.priority));
       payload.inbox = {
         unread: unreadRows.length,
-        items: unreadRows.slice(0, 5).map(notificationView),
+        priority_unread: unreadRows.filter((item) => item.priority).length,
+        items: unreadRows.slice(0, 5),
         available: true,
       };
       if (capabilities.includes("tickets:read")) {
@@ -18835,13 +18918,22 @@ routes.push(
     handler: ({ headers, query }) => {
       const viewer = caller(headers)!.member;
       inboxFireReminders(viewer.id);
+      firstReplyWatch();
       const view = query.view || "inbox";
       if (!["inbox", "snoozed", "done"].includes(view))
         return refuse(400, "malformed_request", { view: "inbox, snoozed or done" });
+      const box = query.box ?? "";
+      if (!["", "priority", "other"].includes(box))
+        return refuse(400, "malformed_request", { box: "priority or other" });
+      const prefs = notificationPrefsFor(viewer.id);
       const mine = notifications
         .filter((row) => row.recipient_id === viewer.id)
         .sort((a, b) => b.last_at.localeCompare(a.last_at));
-      const views = mine.map(notificationView);
+      const views = mine.map((row) => ({
+        ...notificationView(row),
+        priority: prefs.priority_reasons.includes(row.reason),
+      }));
+      const open = views.filter((item) => item.state === "unread" || item.state === "read");
       const wanted: Record<string, string[]> = {
         inbox: ["unread", "read"],
         snoozed: ["snoozed"],
@@ -18849,15 +18941,21 @@ routes.push(
       };
       let items = views.filter(
         (item) =>
-          wanted[view]!.includes(item.state) && (!query.reason || item.reason === query.reason),
+          wanted[view]!.includes(item.state) &&
+          (!query.reason || item.reason === query.reason) &&
+          (!box || item.priority === (box === "priority")),
       );
       if (view === "done") items = items.slice(0, 100);
       return ok({
         items,
         counts: {
           unread: views.filter((item) => item.state === "unread").length,
-          inbox: views.filter((item) => item.state === "unread" || item.state === "read").length,
+          inbox: open.length,
           snoozed: views.filter((item) => item.state === "snoozed").length,
+          priority: open.filter((item) => item.priority).length,
+          priority_unread: open.filter((item) => item.priority && item.state === "unread").length,
+          other: open.filter((item) => !item.priority).length,
+          other_unread: open.filter((item) => !item.priority && item.state === "unread").length,
         },
         reminders: inboxReminders
           .filter((row) => row.staff_id === viewer.id && !row.fired_at && !row.cancelled_at)
@@ -18872,6 +18970,7 @@ routes.push(
             remind_at: row.remind_at,
           })),
         reasons: Object.entries(INBOX_REASONS).map(([reason, [, label]]) => ({ reason, label })),
+        rule: { reasons: prefs.priority_reasons, default: prefs.priority_default },
       });
     },
   },
@@ -19077,8 +19176,25 @@ routes.push(
       const viewer = caller(headers)!.member;
       const current = notificationPrefsFor(viewer.id);
       const mode = String(body.email_mode ?? current.email_mode);
-      if (!["unread", "digest", "off"].includes(mode))
-        return refuse(400, "malformed_request", { email_mode: "unread, digest or off" });
+      if (!["unread", "priority", "digest", "off"].includes(mode))
+        return refuse(400, "malformed_request", { email_mode: "unread, priority, digest or off" });
+      let rule: string | null = notificationPrefs.get(viewer.id)?.priority_reasons ?? null;
+      if (body.priority_default) rule = null;
+      else if ("priority_reasons" in body) {
+        const asked = body.priority_reasons;
+        if (!Array.isArray(asked) || !asked.every((item) => typeof item === "string"))
+          return refuse(400, "malformed_request", { priority_reasons: "a list of reasons" });
+        const unknown = [...new Set(asked as string[])]
+          .filter((item) => !(item in INBOX_REASONS))
+          .sort();
+        if (unknown.length)
+          return refuse(400, "malformed_request", {
+            priority_reasons: `not a reason: ${unknown.join(", ")}`,
+          });
+        rule = Object.keys(INBOX_REASONS)
+          .filter((reason) => (asked as string[]).includes(reason))
+          .join(",");
+      }
       const delay = Number(body.delay_minutes ?? current.delay_minutes);
       if (!Number.isInteger(delay) || delay < 5 || delay > 240)
         return refuse(400, "malformed_request", { delay_minutes: "between 5 and 240" });
@@ -19108,6 +19224,7 @@ routes.push(
         quiet_from: quietFrom,
         quiet_to: quietTo,
         time_zone: zone,
+        priority_reasons: rule,
       });
       audit("inbox.prefs_updated", viewer.id, "staff", viewer.id);
       return ok({ prefs: notificationPrefsFor(viewer.id) });

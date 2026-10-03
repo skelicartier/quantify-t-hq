@@ -24,6 +24,8 @@ export const inboxItemSchema = z.object({
   last_at: z.string().nullable(),
   state: z.enum(INBOX_STATES),
   snoozed_until: z.string().nullable(),
+  /** In the person's Priority (by their own rule), or in Other. */
+  priority: z.boolean().default(false),
 });
 export type InboxItem = z.infer<typeof inboxItemSchema>;
 
@@ -40,13 +42,27 @@ export type Reminder = z.infer<typeof reminderSchema>;
 
 const inboxSchema = okEnvelope.extend({
   items: z.array(inboxItemSchema),
-  counts: z.object({ unread: z.number(), inbox: z.number(), snoozed: z.number() }),
+  counts: z.object({
+    unread: z.number(),
+    inbox: z.number(),
+    snoozed: z.number(),
+    /** Open rows on each side, and how many of them are unread. */
+    priority: z.number().default(0),
+    priority_unread: z.number().default(0),
+    other: z.number().default(0),
+    other_unread: z.number().default(0),
+  }),
   reminders: z.array(reminderSchema),
   reasons: z.array(z.object({ reason: z.string(), label: z.string() })),
+  /** The reasons this person's Priority holds, and whether that is still the default. */
+  rule: z.object({ reasons: z.array(z.string()), default: z.boolean() }),
 });
 export type InboxPage = z.infer<typeof inboxSchema>;
 
-export function readInbox(token: string, query: { view?: string; reason?: string } = {}) {
+export function readInbox(
+  token: string,
+  query: { view?: string; reason?: string; box?: string } = {},
+) {
   const filtered: Record<string, string> = {};
   for (const [name, value] of Object.entries(query)) if (value) filtered[name] = value;
   return fetchHqJson("hq/inbox", inboxSchema, { token, query: filtered });
@@ -123,11 +139,14 @@ export function cancelReminder(token: string, reminderId: string) {
 }
 
 export const prefsSchema = z.object({
-  email_mode: z.enum(["unread", "digest", "off"]),
+  email_mode: z.enum(["unread", "priority", "digest", "off"]),
   delay_minutes: z.number(),
   quiet_from: z.number().nullable(),
   quiet_to: z.number().nullable(),
   time_zone: z.string(),
+  /** The reasons that count as Priority for this person; the default until they change it. */
+  priority_reasons: z.array(z.string()),
+  priority_default: z.boolean(),
 });
 export type NotificationPrefs = z.infer<typeof prefsSchema>;
 
@@ -148,5 +167,13 @@ export function updateNotificationPrefs(
   return postHqJson("hq/me/notifications/update", okEnvelope.extend({ prefs: prefsSchema }), {
     token,
     body: input,
+  });
+}
+
+/** The person's own Priority rule — the mail settings are left as they are — or the default back. */
+export function updatePriorityRule(token: string, reasons: readonly string[] | "default") {
+  return postHqJson("hq/me/notifications/update", okEnvelope.extend({ prefs: prefsSchema }), {
+    token,
+    body: reasons === "default" ? { priority_default: true } : { priority_reasons: [...reasons] },
   });
 }

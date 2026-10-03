@@ -5477,6 +5477,24 @@
     display: contents;
   }
 
+  /* The inbox's two sides: what needs the person now, then what can wait. */
+  .inbox-side {
+    display: grid;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .inbox-side__title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .inbox-side__count {
+    color: var(--quiet);
+    font-weight: 400;
+  }
+
   /* The inbox: one line per thing. Unread reads as a filled dot and a heavier title —
      never a coloured edge. */
   .inbox-list {

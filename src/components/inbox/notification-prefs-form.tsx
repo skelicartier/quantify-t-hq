@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
+import { submitWithoutReset } from "@/lib/forms/submit-without-reset";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
 
@@ -15,6 +16,11 @@ const MODES = [
     value: "unread",
     label: "Mail me what stays unread",
     hint: "One mail listing what you have not read after the delay below.",
+  },
+  {
+    value: "priority",
+    label: "Mail me for Priority alone",
+    hint: "The same mail, for what stays unread in your Priority; the rest waits in the inbox.",
   },
   { value: "digest", label: "One digest a day", hint: "Early each morning, UTC." },
   { value: "off", label: "No mail", hint: "Only the inbox, and the count beside it." },
@@ -55,7 +61,8 @@ export function NotificationPrefsForm({
   const [mode, setMode] = useState(prefs.email_mode);
   const zones = ZONES.includes(prefs.time_zone) ? ZONES : [prefs.time_zone, ...ZONES];
   return (
-    <form className="stack-form" action={formAction}>
+    // The mode is a controlled choice: a reset after saving would show the old one.
+    <form className="stack-form" onSubmit={submitWithoutReset(formAction)}>
       <AttemptField state={state} />
       <fieldset className="prefs-modes">
         <legend className="field__label">When to mail you</legend>
@@ -85,7 +92,7 @@ export function NotificationPrefsForm({
           id="prefs-delay"
           name="delay_minutes"
           defaultValue={String(prefs.delay_minutes)}
-          disabled={isPending || mode !== "unread"}
+          disabled={isPending || (mode !== "unread" && mode !== "priority")}
         >
           {DELAYS.map((minutes) => (
             <option key={minutes} value={minutes}>

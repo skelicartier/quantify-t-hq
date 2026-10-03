@@ -23,9 +23,14 @@ const homeSchema = z.object({
   staff: z.object({ display_name: z.string(), role: z.string() }),
   /** Notes that named this person and that they have not marked seen. */
   mentions: z.object({ unseen: z.number(), mentions: z.array(mentionSchema) }).optional(),
-  /** What waits in this person's inbox, newest first; everyone's. */
+  /** What waits in this person's inbox, their Priority first, newest first; everyone's. */
   inbox: z
-    .object({ unread: z.number(), items: z.array(inboxItemSchema), available: z.boolean() })
+    .object({
+      unread: z.number(),
+      priority_unread: z.number().default(0),
+      items: z.array(inboxItemSchema),
+      available: z.boolean(),
+    })
     .optional(),
   desk: z
     .object({

@@ -297,8 +297,13 @@ export default async function HomePage() {
                     {home.inbox.unread > 0 && (
                       <span className="briefing__count">{home.inbox.unread}</span>
                     )}
-                    <Link className="briefing__more" href="/inbox">
-                      Open the inbox
+                    <Link
+                      className="briefing__more"
+                      href={home.inbox.priority_unread > 0 ? "/inbox?box=priority" : "/inbox"}
+                    >
+                      {home.inbox.priority_unread > 0
+                        ? `${home.inbox.priority_unread} in your Priority`
+                        : "Open the inbox"}
                     </Link>
                   </div>
                   {home.inbox.items.length === 0 ? (

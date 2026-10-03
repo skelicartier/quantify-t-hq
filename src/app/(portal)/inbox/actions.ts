@@ -166,6 +166,30 @@ export async function cancelReminderAction(
   return { status: "sent", message: "Cancelled.", sentAt: Date.now() };
 }
 
+/** Which reasons count as Priority for this person, or the default rule back. */
+export async function priorityRuleAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const { token } = await requireStaff("/me/notifications");
+  const reasons = formData
+    .getAll("priority_reason")
+    .map((value) => String(value).slice(0, 20))
+    .slice(0, 20);
+  try {
+    await inboxApi.updatePriorityRule(
+      token,
+      fieldValue(formData, "intent", 8) === "default" ? "default" : reasons,
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  revalidatePath("/me/notifications");
+  revalidatePath("/inbox");
+  return { status: "sent", message: "Saved.", sentAt: Date.now() };
+}
+
 export async function notificationPrefsAction(
   _previous: ActionState,
   formData: FormData,
