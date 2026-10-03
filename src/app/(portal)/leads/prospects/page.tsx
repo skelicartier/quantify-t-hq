@@ -4,6 +4,7 @@ import { bulkUndoAction, bulkUpdateAction } from "@/app/(portal)/_actions/bulk";
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { bulkProspectsAction, saveViewSegmentAction } from "@/app/(portal)/leads/actions";
 import { FacetPanel } from "@/components/crm/facet-panel";
+import { LeadJobsBanner } from "@/components/crm/lead-jobs";
 import { LeadTabs } from "@/components/crm/lead-tabs";
 import { LeadStagePill } from "@/components/crm/pills";
 import { AddressKind, FitPill } from "@/components/crm/prospect-pills";
@@ -23,7 +24,15 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { ViewTabs } from "@/components/ui/view-tabs";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { readCrmSettings, readLeads, type CrmSettings, type LeadsPage } from "@/lib/api/crm";
+import {
+  readCrmSettings,
+  readLeadJob,
+  readLeadJobs,
+  readLeads,
+  type CrmSettings,
+  type LeadJob,
+  type LeadsPage,
+} from "@/lib/api/crm";
 import { readExportQuota, type ExportQuota } from "@/lib/api/privileged";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { PROSPECT_SORTS, prospectFilterFields } from "@/lib/crm/prospects";
@@ -87,6 +96,28 @@ export default async function ProspectsPage({ searchParams }: ProspectsPageProps
   // without it instead of an error.
   const conditions = parseFilters(parameters.f, filterFields);
   const conditionStrings = conditions.map(serializeFilter);
+
+  // A change running in the background, read first: reading the oldest moves it along a
+  // slice, so whoever watches it, works it — and the table below shows where it got to.
+  let jobs: LeadJob[] = [];
+  let ended: LeadJob[] = [];
+  try {
+    const listed = await readLeadJobs(context.token);
+    jobs = listed.jobs;
+    ended = listed.recent;
+    if (jobs[0]) {
+      const moved = (await readLeadJob(context.token, jobs[0].job_id)).job;
+      const live = moved.state === "queued" || moved.state === "running";
+      jobs = live ? [moved, ...jobs.slice(1)] : jobs.slice(1);
+      if (!live) ended = [moved, ...ended];
+    }
+    ended = ended.filter(
+      (job) => job.finished_at && now - Date.parse(job.finished_at) < 60 * 60 * 1000,
+    );
+  } catch (error) {
+    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+      throw error;
+  }
 
   let page: LeadsPage | null = null;
   try {
@@ -212,6 +243,13 @@ export default async function ProspectsPage({ searchParams }: ProspectsPageProps
             )}
           </>
         }
+      />
+      <LeadJobsBanner
+        jobs={jobs}
+        ended={ended}
+        now={now}
+        canWrite={canWrite}
+        ownerName={(staffId) => names?.get(staffId)?.display_name ?? ""}
       />
       {page === null ? (
         <Callout tone="danger" role="alert">

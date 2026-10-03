@@ -283,6 +283,8 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/leads", () => crm.readLeads(token)],
   ["hq/leads/{lead_id}", () => crm.readLead(token, ids.lead_id!)],
   ["hq/leads/imports", () => crm.readLeadImports(token)],
+  ["hq/leads/jobs", () => crm.readLeadJobs(token)],
+  ["hq/leads/jobs/{job_id}", () => crm.readLeadJob(token, ids.lead_job_id!)],
   ["hq/leads/suggestions", () => crm.readLeadSuggestions(token)],
   ["hq/settings/leads", () => crm.readLeadSettings(token)],
   ["hq/settings/cold", () => crm.readColdSettings(token)],

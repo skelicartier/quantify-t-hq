@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import {
@@ -31,7 +32,13 @@ import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readMailboxes, type Mailbox, type MailboxBoard } from "@/lib/api/mail";
-import { formatAbsolute, formatDate, formatNumber, pluralize } from "@/lib/format";
+import { formatAbsolute, formatDate, formatNumber, formatPercent, pluralize } from "@/lib/format";
+import {
+  NO_DOMAIN,
+  checkDomain,
+  type DomainRecords,
+  type RecordState,
+} from "@/lib/mail/domain-records";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
 
@@ -39,6 +46,16 @@ export const metadata = { title: "Mailboxes" };
 export const dynamic = "force-dynamic";
 
 const BASE = "/mail/mailboxes";
+
+const RECORD_TONES: Record<RecordState, PillTone> = {
+  ok: "live",
+  attention: "attention",
+  missing: "danger",
+  unknown: "neutral",
+};
+
+/** Above this share of bounces a domain is in trouble: the research's 2%. */
+const BOUNCE_LIMIT = 0.02;
 
 const PHASE_TONES: Record<string, PillTone> = {
   active: "live",
@@ -90,6 +107,107 @@ function climb(mailbox: Mailbox): string {
   return mailbox.cap_today >= mailbox.daily_cap
     ? "at its cap"
     : `day ${formatNumber(mailbox.ramp_day)} of the climb`;
+}
+
+/**
+ * Each sending domain: its records, read from DNS (and kept a while), and its last month.
+ * Its own component so the page never waits on DNS: it streams in when the records do.
+ */
+async function SendingDomains({ domains, now }: { domains: MailboxBoard["domains"]; now: number }) {
+  const records = new Map<string, DomainRecords | null>(
+    await Promise.all(
+      domains.map(
+        async (domain) =>
+          [
+            domain.domain,
+            await checkDomain(domain.domain, domain.hosts).catch(() => null),
+          ] as const,
+      ),
+    ),
+  );
+  return (
+    <DataTable
+      caption="Sending domains"
+      columns={[
+        { key: "domain", label: "Domain" },
+        { key: "records", label: "Records", width: "42%" },
+        { key: "month", label: "Last 30 days" },
+        { key: "today", label: "Today", align: "end" as const },
+      ]}
+      columnMenu={false}
+      scroll={false}
+    >
+      {domains.map((domain) => {
+        const found = records.get(domain.domain);
+        const rate = domain.sent_30d ? domain.bounces_30d / domain.sent_30d : 0;
+        return (
+          <tr key={domain.domain}>
+            <td>
+              <span className="table-title mono">{domain.domain}</span>
+              <span className="table-sub">
+                {pluralize(domain.mailboxes, "mailbox", "mailboxes")}
+                {domain.hosts.length ? `, through ${domain.hosts.join(", ")}` : ""}
+              </span>
+            </td>
+            <td>
+              {found && found.spf.detail === NO_DOMAIN.detail ? (
+                <ul className="record-checks">
+                  <li>
+                    <StatusPill value="missing" label="Not in DNS" tone="danger" />
+                    <span className="record-checks__detail">{NO_DOMAIN.detail}</span>
+                  </li>
+                </ul>
+              ) : found ? (
+                <ul className="record-checks">
+                  {(["spf", "dkim", "dmarc", "mx"] as const).map((key) => (
+                    <li key={key}>
+                      <StatusPill
+                        value={found[key].state}
+                        label={key.toUpperCase()}
+                        tone={RECORD_TONES[found[key].state]}
+                      />
+                      <span className="record-checks__detail">{found[key].detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <span className="table-sub">Its records could not be read just now.</span>
+              )}
+            </td>
+            <td>
+              {formatNumber(domain.sent_30d)} sent
+              <span className="table-sub">
+                {formatNumber(domain.bounces_30d)} bounced
+                {domain.sent_30d ? ` (${formatPercent(rate)})` : ""}
+                {rate > BOUNCE_LIMIT ? ": above the 2% receivers tolerate" : ""}
+              </span>
+              <span className="table-sub">
+                {domain.blocks_30d
+                  ? `Blocked ${pluralize(domain.blocks_30d, "time")}`
+                  : "Never blocked"}
+                {domain.last_block_at ? (
+                  <>
+                    , last <Timestamp value={domain.last_block_at} now={now} mode="relative" />
+                  </>
+                ) : null}
+              </span>
+              {domain.rested_at && (
+                <span className="table-sub">
+                  Every mailbox rested{" "}
+                  <Timestamp value={domain.rested_at} now={now} mode="relative" />
+                </span>
+              )}
+            </td>
+            <td className="data-table__num">
+              {domain.cap_today > 0
+                ? `${formatNumber(domain.sent_today_counted)} of ${formatNumber(domain.cap_today)}`
+                : "None today"}
+            </td>
+          </tr>
+        );
+      })}
+    </DataTable>
+  );
 }
 
 type MailboxesPageProps = {
@@ -316,32 +434,6 @@ export default async function MailboxesPage({ searchParams }: MailboxesPageProps
                                 },
                               ]}
                             />
-                            {mailbox.reads_replies && (
-                              <RowAction
-                                action={readMailboxNowAction}
-                                fields={{ mailbox_id: mailbox.mailbox_id }}
-                                buttons={[
-                                  {
-                                    label: "Read replies",
-                                    className: "btn btn--small btn--ghost",
-                                    ariaLabel: `Read the replies in ${mailbox.address} now`,
-                                    pendingLabel: "Reading…",
-                                  },
-                                ]}
-                              />
-                            )}
-                            <RowAction
-                              action={checkMailboxAction}
-                              fields={{ mailbox_id: mailbox.mailbox_id }}
-                              buttons={[
-                                {
-                                  label: "Check",
-                                  className: "btn btn--small btn--ghost",
-                                  ariaLabel: `Check that ${mailbox.address} signs in`,
-                                  pendingLabel: "Checking…",
-                                },
-                              ]}
-                            />
                             <Link
                               className="btn btn--small btn--ghost"
                               href={`${BASE}?mailbox=${encodeURIComponent(mailbox.mailbox_id)}#mailbox-change`}
@@ -369,6 +461,34 @@ export default async function MailboxesPage({ searchParams }: MailboxesPageProps
                 )}
                 {chosen && chosen.phase !== "disconnected" && (
                   <RecordSection id="mailbox-change" title={`Change ${chosen.address}`}>
+                    <div className="inline-actions mailbox-checks">
+                      <RowAction
+                        action={checkMailboxAction}
+                        fields={{ mailbox_id: chosen.mailbox_id }}
+                        buttons={[
+                          {
+                            label: "Check it signs in",
+                            className: "btn btn--small",
+                            ariaLabel: `Check that ${chosen.address} signs in`,
+                            pendingLabel: "Checking…",
+                          },
+                        ]}
+                      />
+                      {chosen.reads_replies && (
+                        <RowAction
+                          action={readMailboxNowAction}
+                          fields={{ mailbox_id: chosen.mailbox_id }}
+                          buttons={[
+                            {
+                              label: "Read its replies now",
+                              className: "btn btn--small",
+                              ariaLabel: `Read the replies in ${chosen.address} now`,
+                              pendingLabel: "Reading…",
+                            },
+                          ]}
+                        />
+                      )}
+                    </div>
                     <div className="record-layout">
                       <div className="record-layout__main">
                         <MailboxPaceForm
@@ -446,28 +566,13 @@ export default async function MailboxesPage({ searchParams }: MailboxesPageProps
                 )}
 
                 {board.domains.length > 0 && (
-                  <DataTable
-                    caption="Sending domains"
-                    columns={[
-                      { key: "domain", label: "Domain" },
-                      { key: "mailboxes", label: "Mailboxes", align: "end" as const },
-                      { key: "room", label: "Room today", align: "end" as const },
-                      { key: "sent", label: "Sent today", align: "end" as const },
-                    ]}
-                    columnMenu={false}
-                    scroll={false}
+                  <Suspense
+                    fallback={
+                      <p className="page-note">Reading the sending domains&apos; records…</p>
+                    }
                   >
-                    {board.domains.map((domain) => (
-                      <tr key={domain.domain}>
-                        <td className="mono">{domain.domain}</td>
-                        <td className="data-table__num">{formatNumber(domain.mailboxes)}</td>
-                        <td className="data-table__num">{formatNumber(domain.cap_today)}</td>
-                        <td className="data-table__num">
-                          {formatNumber(domain.sent_today_counted)}
-                        </td>
-                      </tr>
-                    ))}
-                  </DataTable>
+                    <SendingDomains domains={board.domains} now={now} />
+                  </Suspense>
                 )}
                 <p className="page-note">
                   Each sending domain should be plainly the team&apos;s, lead to the main site and

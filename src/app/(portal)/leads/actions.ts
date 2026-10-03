@@ -376,12 +376,35 @@ export async function bulkProspectsAction(
       set,
     });
     revalidatePath("/leads/prospects");
+    if (result.queued && result.job)
+      return sent(
+        `Changing ${plural(result.matched, "lead", "leads")} in the background: ${result.job.processed.toLocaleString("en-GB")} done so far. The banner above says how far it has got.`,
+      );
     const parts = [
       `Changed ${plural(result.changed, "lead", "leads")} of ${result.matched.toLocaleString("en-GB")}`,
     ];
     if (result.unchanged) parts.push(`${result.unchanged.toLocaleString("en-GB")} already had it`);
     if (result.skipped) parts.push(`${result.skipped.toLocaleString("en-GB")} could not change`);
     return sent(`${parts.join("; ")}.`);
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}
+
+/** Stop a change running in the background where it is. */
+export async function cancelLeadJobAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/leads/prospects");
+  if (!hasCapability(context, "crm:write")) return READ_ONLY;
+  try {
+    const result = await crmApi.cancelLeadJob(context.token, fieldValue(formData, "job_id", 64));
+    revalidatePath("/leads/prospects");
+    return sent(
+      `Stopped after ${plural(result.job.processed, "lead", "leads")}; what was changed stays changed.`,
+    );
   } catch (error) {
     return crmRefusal(error);
   }

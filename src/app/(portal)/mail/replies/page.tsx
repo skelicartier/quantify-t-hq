@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import {
+  addReferralAction,
   handleReplyAction,
   outcomeAction,
   resumeEnrolmentAction,
@@ -111,6 +112,45 @@ function ReplyItem({
           <summary className="text-link">All of it</summary>
           <p className="reply-item__text">{reply.text}</p>
         </details>
+      )}
+      {reply.referrals.length > 0 && (
+        <ul className="reply-item__referrals" aria-label={`Named in ${name}'s reply`}>
+          {reply.referrals.map((person) => (
+            <li key={person.email}>
+              <span>
+                Named instead: <strong>{person.name || person.email}</strong>
+                {person.name ? <span className="reply-item__meta"> {person.email}</span> : null}
+              </span>
+              {person.known_as.kind && person.known_as.id ? (
+                <Link
+                  className="text-link"
+                  href={contactHref(person.known_as.kind, person.known_as.id)}
+                >
+                  Already {person.known_as.kind === "lead" ? "a lead" : "in the CRM"}
+                </Link>
+              ) : (
+                canWrite && (
+                  <RowAction
+                    action={addReferralAction}
+                    fields={{
+                      email: person.email,
+                      name: person.name,
+                      company: reply.company_name,
+                      from: name,
+                    }}
+                    buttons={[
+                      {
+                        label: "Add as a prospect",
+                        className: "btn btn--small btn--ghost",
+                        ariaLabel: `Add ${person.name || person.email} as a prospect`,
+                      },
+                    ]}
+                  />
+                )
+              )}
+            </li>
+          ))}
+        </ul>
       )}
       {(reply.auto_label || reply.proposed_label) && (
         <p className="reply-item__said">

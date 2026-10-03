@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError } from "@/lib/api/core";
+import * as crmApi from "@/lib/api/crm";
 import * as mailApi from "@/lib/api/mail";
 import { fieldValue } from "@/lib/auth/forms";
 import { crmRefusal } from "@/lib/crm/refusal";
@@ -1016,6 +1017,35 @@ export async function handleReplyAction(
   }
   refresh("/mail/replies", "/mail/sequences", "/mail/mailboxes", "/home");
   return sent(outcome === "dismissed" ? "Nothing recorded." : "Recorded.");
+}
+
+/** Whoever a reply named instead, added as a prospect; the cold rules then judge them. */
+export async function addReferralAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/mail/replies");
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const email = fieldValue(formData, "email", 254).trim().toLowerCase();
+  const name = fieldValue(formData, "name", 160).trim();
+  const from = fieldValue(formData, "from", 254).trim();
+  try {
+    const created = await crmApi.createLead(context.token, {
+      email,
+      full_name: name,
+      origin: "prospect",
+      source_key: "outbound",
+      company_name: fieldValue(formData, "company", 200).trim(),
+      notes: `Named in ${from}'s reply as the person to write to instead.`,
+    });
+    refresh("/mail/replies", "/leads/prospects");
+    return sent(`Added ${name || email} as a prospect.`, {
+      detail: created.lead.lead_id,
+    });
+  } catch (error) {
+    return crmRefusal(error);
+  }
 }
 
 export async function resumeEnrolmentAction(

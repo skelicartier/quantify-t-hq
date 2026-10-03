@@ -3190,6 +3190,53 @@
     overflow-wrap: anywhere;
   }
 
+  .mailbox-checks {
+    margin-bottom: 16px;
+  }
+
+  /* a sending domain's records: one line each, the pill then what it means */
+  .record-checks {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .record-checks li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 8px;
+  }
+
+  .record-checks__detail {
+    flex: 1 1 14rem;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  /* a whole view's change running in the background: how far, kept current, and a stop */
+  .lead-jobs {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .lead-jobs__line {
+    margin: 0 0 8px;
+  }
+
+  .lead-jobs__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
   /* replies read back from the mailboxes: what they wrote, what HQ did, one press to record */
   .reply-list {
     display: grid;
@@ -3242,6 +3289,22 @@
   .reply-item__said {
     color: var(--muted);
     font-size: 12.5px;
+  }
+
+  .reply-item__referrals {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .reply-item__referrals li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    overflow-wrap: anywhere;
   }
 
   .reply-item__actions {

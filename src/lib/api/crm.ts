@@ -568,17 +568,66 @@ export function rollbackLeadImport(token: string, importId: string, reason: stri
   );
 }
 
+/** A change to a whole view, run in the background because one request could not carry it. */
+export const leadJobSchema = z.object({
+  job_id: z.string(),
+  /** "queued", "running", "done", "cancelled" or "failed". */
+  state: z.string(),
+  set: z.record(z.string(), z.unknown()),
+  described: z.record(z.string(), z.unknown()),
+  matched: z.number(),
+  processed: z.number(),
+  changed: z.number(),
+  unchanged: z.number(),
+  skipped: z.number(),
+  created_by: z.object({ staff_id: z.string(), name: z.string() }).nullable(),
+  created_at: z.string().nullable(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  last_error: z.string(),
+});
+export type LeadJob = z.infer<typeof leadJobSchema>;
+
 const leadBulkSchema = okEnvelope.extend({
   matched: z.number(),
   changed: z.number(),
   unchanged: z.number(),
   skipped: z.number(),
+  /** More leads than a request can carry: the change goes on in the background as `job`. */
+  queued: z.boolean(),
+  job: leadJobSchema.nullable(),
 });
 export type LeadBulkResult = z.infer<typeof leadBulkSchema>;
 
 /** One change to chosen rows (`ids`) or to everything a filter matches. */
 export function bulkLeads(token: string, input: Record<string, unknown>) {
   return postHqJson("hq/leads/bulk", leadBulkSchema, { token, body: input });
+}
+
+export function readLeadJobs(token: string) {
+  return fetchHqJson(
+    "hq/leads/jobs",
+    okEnvelope.extend({
+      jobs: z.array(leadJobSchema),
+      recent: z.array(leadJobSchema),
+      inline_limit: z.number(),
+    }),
+    { token },
+  );
+}
+
+/** One job's progress. Reading it moves it along a little: whoever watches it, works it. */
+export function readLeadJob(token: string, jobId: string) {
+  return fetchHqJson(`hq/leads/jobs/${jobId}`, okEnvelope.extend({ job: leadJobSchema }), {
+    token,
+  });
+}
+
+export function cancelLeadJob(token: string, jobId: string) {
+  return postHqJson(`hq/leads/jobs/${jobId}/cancel`, okEnvelope.extend({ job: leadJobSchema }), {
+    token,
+    body: {},
+  });
 }
 
 const leadSuggestionSchema = z.object({

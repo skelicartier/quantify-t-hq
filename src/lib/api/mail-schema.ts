@@ -656,6 +656,16 @@ export const mailboxBoardSchema = z.object({
       sent_today: z.number(),
       sent_today_counted: z.number(),
       phases: z.record(z.string(), z.number()),
+      /** Its last thirty days: what was sent, what bounced, how often it was blocked. */
+      sent_30d: z.number(),
+      bounces_30d: z.number(),
+      blocks_30d: z.number(),
+      quota_30d: z.number(),
+      last_block_at: z.string().nullable(),
+      /** When every mailbox on it last rested because two were blocked in two days. */
+      rested_at: z.string().nullable(),
+      /** The hosts its mailboxes sign in at: what its DNS records should name. */
+      hosts: z.array(z.string()),
     }),
   ),
   totals: z.object({
@@ -686,6 +696,14 @@ export const mailboxCheckSchema = z.object({
 
 /** What a mailbox read back: a reply, an automatic answer or a bounce, and what HQ did. */
 export const replySchema = z.object({
+  /** Whoever a "wrong person" or out-of-office reply names instead, and what the CRM holds. */
+  referrals: z.array(
+    z.object({
+      email: z.string(),
+      name: z.string(),
+      known_as: z.object({ kind: z.string(), id: z.string() }).partial(),
+    }),
+  ),
   reply_id: z.string(),
   /** "reply", "auto_reply" or "bounce". */
   kind: z.string(),

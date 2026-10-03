@@ -8378,6 +8378,130 @@ const leadImports: LeadImportRow[] = [];
 const LEAD_IMPORT_MAX = 1_000;
 const LEAD_MAX = 100_000;
 const LEAD_BULK_MAX = 25_000;
+/** lead_jobs.INLINE_LIMIT: more leads than this and a change runs in the background. */
+const LEAD_JOB_INLINE_LIMIT = 300;
+/** The service works up to 1,000 leads a slice inside a time budget; the mock has no clock
+ * to beat, so it works 100 — enough for whoever watches to see a job move. */
+const LEAD_JOB_MOCK_SLICE = 100;
+type LeadBulkSpec = {
+  stage: string;
+  dqReason: string;
+  setOwner: boolean;
+  owner: string;
+  tagsAdd: string[];
+  tagsRemove: string[];
+  verified: string | null;
+  touchTags: boolean;
+};
+type LeadJobRow = {
+  id: string;
+  state: "queued" | "running" | "done" | "cancelled" | "failed";
+  change: Record<string, unknown>;
+  spec: LeadBulkSpec;
+  described: Record<string, unknown>;
+  target_ids: string[];
+  processed: number;
+  changed: number;
+  unchanged: number;
+  skipped: number;
+  created_by: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  last_error: string;
+};
+const leadJobs: LeadJobRow[] = [];
+/** lead_jobs.apply_change: one lead's part of a bulk change, as a single edit would make it. */
+function leadBulkApply(row: LeadRow, spec: LeadBulkSpec): "changed" | "unchanged" | "skipped" {
+  if (row.anonymised_at) return "skipped";
+  let touched = false;
+  if (spec.stage) {
+    // Converted: the deal exists, and the lead does not move again.
+    if (row.stage === "qualified") return "skipped";
+    if (row.stage !== spec.stage) {
+      row.stage = spec.stage;
+      row.disqualify_reason = spec.stage === "disqualified" ? spec.dqReason : "";
+      touched = true;
+      mailCrmEvent("lead_stage", { lead_id: row.id, stage: spec.stage });
+    } else if (spec.stage === "disqualified" && row.disqualify_reason !== spec.dqReason) {
+      row.disqualify_reason = spec.dqReason;
+      touched = true;
+    }
+  }
+  if (spec.setOwner && spec.owner !== row.owner_staff_id) {
+    row.owner_staff_id = spec.owner;
+    touched = true;
+  }
+  if (spec.touchTags) {
+    const next = leadCleanTags([
+      ...(row.tags ?? []).filter((tag) => !spec.tagsRemove.includes(tag)),
+      ...spec.tagsAdd,
+    ]);
+    if (next.join(",") !== (row.tags ?? []).join(",")) {
+      row.tags = next;
+      touched = true;
+    }
+  }
+  if (spec.verified !== null && spec.verified !== (row.verified_state ?? "")) {
+    row.verified_state = spec.verified;
+    row.verified_at = spec.verified ? now() : null;
+    touched = true;
+  }
+  if (!touched) return "unchanged";
+  row.updated_at = now();
+  return "changed";
+}
+function leadJobLive(job: LeadJobRow): boolean {
+  return job.state === "queued" || job.state === "running";
+}
+/** lead_jobs.run_slice: one slice of the job, and its end when the last lead is reached. */
+function leadJobSlice(job: LeadJobRow): LeadJobRow {
+  if (!leadJobLive(job)) return job;
+  job.state = "running";
+  job.started_at ??= now();
+  let worked = 0;
+  while (job.processed < job.target_ids.length && worked < LEAD_JOB_MOCK_SLICE) {
+    const row = leads.find((lead) => lead.id === job.target_ids[job.processed]);
+    job[row ? leadBulkApply(row, job.spec) : "skipped"] += 1;
+    job.processed += 1;
+    worked += 1;
+  }
+  if (job.processed >= job.target_ids.length) {
+    job.state = "done";
+    job.finished_at = now();
+    audit("lead.bulk_updated", job.created_by, "lead", "bulk", "", {
+      set: job.change,
+      ...job.described,
+      matched: job.target_ids.length,
+      job_id: job.id,
+      changed: job.changed,
+      unchanged: job.unchanged,
+      skipped: job.skipped,
+    });
+  }
+  return job;
+}
+function leadJobsRunDue() {
+  for (const job of [...leadJobs].reverse()) if (leadJobLive(job)) leadJobSlice(job);
+}
+function leadJobView(job: LeadJobRow) {
+  return {
+    job_id: job.id,
+    state: job.state,
+    set: job.change,
+    described: job.described,
+    matched: job.target_ids.length,
+    processed: job.processed,
+    changed: job.changed,
+    unchanged: job.unchanged,
+    skipped: job.skipped,
+    created_by: { staff_id: job.created_by, name: mailStaffName(job.created_by) },
+    created_at: job.created_at,
+    started_at: job.started_at,
+    finished_at: job.finished_at,
+    last_error: job.last_error,
+  };
+}
 
 /**
  * A researched list for the demo: invented people at invented firms on reserved
@@ -8945,6 +9069,7 @@ function seedCrm() {
     },
   );
   leads.length = 0;
+  leadJobs.length = 0;
   leads.push(
     {
       id: "1e000000-0000-4000-8000-000000000001",
@@ -11760,64 +11885,116 @@ routes.push(
           conditions: parsed.conditions.map((c) => `${c.field}:${c.op}:${c.value}`),
         };
       }
-      let changed = 0;
-      let unchanged = 0;
-      let skipped = 0;
-      for (const row of targets) {
-        if (row.anonymised_at) {
-          skipped += 1;
-          continue;
-        }
-        let touched = false;
-        if (stage) {
-          if (row.stage === "qualified") {
-            // Converted: the deal exists, and the lead does not move again.
-            skipped += 1;
-            continue;
-          }
-          if (row.stage !== stage) {
-            row.stage = stage;
-            row.disqualify_reason = stage === "disqualified" ? dqReason : "";
-            touched = true;
-            mailCrmEvent("lead_stage", { lead_id: row.id, stage });
-          } else if (stage === "disqualified" && row.disqualify_reason !== dqReason) {
-            row.disqualify_reason = dqReason;
-            touched = true;
-          }
-        }
-        if (setOwner && owner !== row.owner_staff_id) {
-          row.owner_staff_id = owner;
-          touched = true;
-        }
-        if ("tags_add" in change || "tags_remove" in change) {
-          const next = leadCleanTags([
-            ...(row.tags ?? []).filter((tag) => !tagsRemove.includes(tag)),
-            ...tagsAdd,
-          ]);
-          if (next.join(",") !== (row.tags ?? []).join(",")) {
-            row.tags = next;
-            touched = true;
-          }
-        }
-        if (verified !== null && verified !== (row.verified_state ?? "")) {
-          row.verified_state = verified;
-          row.verified_at = verified ? now() : null;
-          touched = true;
-        }
-        if (touched) {
-          row.updated_at = now();
-          changed += 1;
-        } else unchanged += 1;
+      const spec: LeadBulkSpec = {
+        stage,
+        dqReason,
+        setOwner,
+        owner,
+        tagsAdd,
+        tagsRemove,
+        verified,
+        touchTags: "tags_add" in change || "tags_remove" in change,
+      };
+      if (targets.length > LEAD_JOB_INLINE_LIMIT) {
+        // lead_jobs.py: more than a request can safely carry runs in the background; the
+        // first slice in the request itself.
+        const job: LeadJobRow = {
+          id: randomUUID(),
+          state: "queued",
+          change,
+          spec,
+          described,
+          target_ids: targets.map((row) => row.id),
+          processed: 0,
+          changed: 0,
+          unchanged: 0,
+          skipped: 0,
+          created_by: found.member.id,
+          created_at: now(),
+          started_at: null,
+          finished_at: null,
+          last_error: "",
+        };
+        leadJobs.unshift(job);
+        audit("lead.bulk_queued", found.member.id, "lead_job", job.id, "", {
+          set: change,
+          ...described,
+          matched: targets.length,
+        });
+        leadJobSlice(job);
+        const view = leadJobView(job);
+        return ok({
+          matched: targets.length,
+          changed: view.changed,
+          unchanged: view.unchanged,
+          skipped: view.skipped,
+          queued: leadJobLive(job),
+          job: view,
+        });
       }
+      const counts = { changed: 0, unchanged: 0, skipped: 0 };
+      for (const row of targets) counts[leadBulkApply(row, spec)] += 1;
       audit("lead.bulk_updated", found.member.id, "lead", "bulk", "", {
         set: change,
         ...described,
         matched: targets.length,
-        changed,
-        unchanged,
-        skipped,
+        ...counts,
       });
-      return ok({ matched: targets.length, changed, unchanged, skipped });
+      return ok({ matched: targets.length, ...counts, queued: false, job: null });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/leads/jobs",
+    auth: true,
+    capability: "crm:read",
+    handler: () => {
+      const dayAgo = Date.now() - 86_400_000;
+      return ok({
+        jobs: leadJobs.filter(leadJobLive).map(leadJobView),
+        recent: leadJobs
+          .filter((job) => !leadJobLive(job) && Date.parse(job.created_at) >= dayAgo)
+          .map(leadJobView),
+        inline_limit: LEAD_JOB_INLINE_LIMIT,
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/leads/jobs/{job_id}",
+    auth: true,
+    capability: "crm:read",
+    handler: ({ params }) => {
+      const job = leadJobs.find((row) => row.id === params.job_id);
+      if (!job) return refuse(404, "not_found");
+      // Whoever watches it, works it.
+      leadJobSlice(job);
+      return ok({ job: leadJobView(job) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/leads/jobs/{job_id}/cancel",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, params }) => {
+      const found = caller(headers)!;
+      const job = leadJobs.find((row) => row.id === params.job_id);
+      if (!job) return refuse(404, "not_found");
+      if (
+        job.created_by !== found.member.id &&
+        !(CAPABILITIES[found.member.role] ?? []).includes("hq:admin")
+      )
+        return refuse(403, "forbidden", { reason: "not-yours" });
+      if (!leadJobLive(job))
+        return refuse(400, "malformed_request", { state: `already ${job.state}` });
+      Object.assign(job, { state: "cancelled", finished_at: now() });
+      audit("lead.bulk_cancelled", found.member.id, "lead_job", job.id, "", {
+        processed: job.processed,
+        matched: job.target_ids.length,
+        changed: job.changed,
+      });
+      return ok({ job: leadJobView(job) });
     },
   },
   {
@@ -24108,6 +24285,31 @@ type MailboxRow = {
   last_poll_error: string;
 };
 const mailboxRows: MailboxRow[] = [];
+/** 0060: the refusals that matter to a sending domain, kept for its history. */
+type MailboxEventRow = {
+  id: string;
+  mailbox_id: string;
+  domain: string;
+  kind: "block" | "quota" | "auth" | "bounce" | "domain_rest";
+  at: string;
+  detail: string;
+};
+const mailboxEvents: MailboxEventRow[] = [];
+function mailboxRecordEvent(
+  sender: MailSenderRow,
+  kind: MailboxEventRow["kind"],
+  detail: string,
+  at = now(),
+) {
+  mailboxEvents.push({
+    id: randomUUID(),
+    mailbox_id: sender.id,
+    domain: sender.from_email.split("@")[1] ?? "",
+    kind,
+    at,
+    detail: detail.slice(0, 400),
+  });
+}
 const MAILBOX_MAX_CAP = 50;
 const MAILBOX_POOL_CEILING = 1_000;
 const MAILBOX_DEFAULTS = { pool_daily_cap: 500, domain_daily_cap: 150, warm_up_days: 21 };
@@ -24303,6 +24505,13 @@ function mailboxBoard(member: Staff) {
       sent_today: number;
       phases: Record<string, number>;
       sent_today_counted: number;
+      sent_30d: number;
+      bounces_30d: number;
+      blocks_30d: number;
+      quota_30d: number;
+      last_block_at: string | null;
+      rested_at: string | null;
+      hosts: string[];
     }
   >();
   for (const view of views) {
@@ -24313,6 +24522,13 @@ function mailboxBoard(member: Staff) {
       sent_today: 0,
       phases: {},
       sent_today_counted: 0,
+      sent_30d: 0,
+      bounces_30d: 0,
+      blocks_30d: 0,
+      quota_30d: 0,
+      last_block_at: null,
+      rested_at: null,
+      hosts: [],
     };
     entry.mailboxes += 1;
     entry.cap_today += view.cap_today;
@@ -24321,8 +24537,39 @@ function mailboxBoard(member: Staff) {
     entry.phases[view.phase] = (entry.phases[view.phase] ?? 0) + 1;
     domains.set(view.domain, entry);
   }
-  for (const entry of domains.values())
+  // mailboxes.board: each domain's last thirty days, and the hosts its mailboxes use.
+  const monthAgo = Date.now() - 30 * 86_400_000;
+  for (const entry of domains.values()) {
     entry.cap_today = Math.min(entry.cap_today, mailboxSettings.domain_daily_cap);
+    const pairs = mailboxPairs().filter(
+      ({ sender }) => (sender.from_email.split("@")[1] ?? "") === entry.domain,
+    );
+    const ids = new Set(pairs.map(({ sender }) => sender.id));
+    const events = mailboxEvents.filter(
+      (event) => event.domain === entry.domain && Date.parse(event.at) >= monthAgo,
+    );
+    const last = (kind: MailboxEventRow["kind"]) =>
+      events
+        .filter((event) => event.kind === kind)
+        .map((event) => event.at)
+        .sort()
+        .at(-1) ?? null;
+    Object.assign(entry, {
+      sent_30d: mailMessages.filter(
+        (row) => ids.has(row.sender_id) && row.sent_at && Date.parse(row.sent_at) >= monthAgo,
+      ).length,
+      bounces_30d: events.filter((event) => event.kind === "bounce").length,
+      blocks_30d: events.filter((event) => event.kind === "block").length,
+      quota_30d: events.filter((event) => event.kind === "quota").length,
+      last_block_at: last("block"),
+      rested_at: last("domain_rest"),
+      hosts: [
+        ...new Set(
+          pairs.map(({ box }) => (box.provider === "smtp" ? box.smtp_host : box.provider)),
+        ),
+      ].sort(),
+    });
+  }
   return {
     mailboxes: views,
     domains: [...domains.values()].sort((a, b) => a.domain.localeCompare(b.domain)),
@@ -25662,6 +25909,7 @@ function mailReplyIngest(
         provider_status: "hard_bounce",
       });
       mailSuppress(match.message.email_norm, "hard_bounce", `reply:${id}`, verdict.why, "");
+      mailboxRecordEvent(sender, "bounce", verdict.why);
       for (const row of mailEnrolments)
         if (
           (row.state === "active" || row.state === "paused") &&
@@ -25785,9 +26033,61 @@ function mailReadAllReplies() {
     mailboxReadReplies(box, sender);
   }
 }
+const MR_ADDRESS = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+const MR_NAME_BEFORE =
+  /([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){0,2})\s*(?:[(<:,–—-]|\bat\b|\bon\b)?\s*$/;
+const MR_NOT_NAMES = new Set([
+  "please",
+  "contact",
+  "email",
+  "e-mail",
+  "write",
+  "reach",
+  "kindly",
+  "mail",
+  "dear",
+  "hi",
+  "hello",
+  "thanks",
+  "regards",
+  "my",
+  "colleague",
+]);
+/** mail_replies.referrals: whoever a "wrong person" or out-of-office reply names instead. */
+function mailReplyReferrals(row: MailReplyRow) {
+  if (row.proposed !== "wrong_person" && row.proposed !== "out_of_office") return [];
+  const ours = new Set(mailSenders.map((sender) => sender.from_email.split("@")[1] ?? ""));
+  const text = row.body_text.slice(0, 4000);
+  const found: Array<{ email: string; name: string; known_as: { kind?: string; id?: string } }> =
+    [];
+  for (const match of text.matchAll(MR_ADDRESS)) {
+    const address = match[0].replace(/\.$/, "").toLowerCase();
+    if (address === row.from_email || found.some((item) => item.email === address)) continue;
+    if (ours.has(address.split("@")[1] ?? "")) continue;
+    const at = match.index ?? 0;
+    const words = (MR_NAME_BEFORE.exec(text.slice(Math.max(0, at - 48), at))?.[1] ?? "")
+      .split(/\s+/)
+      .filter(Boolean);
+    while (words.length && MR_NOT_NAMES.has(words[0]!.toLowerCase())) words.shift();
+    const lead = leads.find((item) => item.email === address && !item.anonymised_at);
+    const person = people.find((item) => (item.email ?? "").toLowerCase() === address);
+    found.push({
+      email: address,
+      name: words.join(" "),
+      known_as: lead
+        ? { kind: "lead", id: lead.id }
+        : person
+          ? { kind: "person", id: person.id }
+          : {},
+    });
+    if (found.length >= 3) break;
+  }
+  return found;
+}
 function mailReplyView(row: MailReplyRow) {
   const sender = mailSenders.find((item) => item.id === row.mailbox_id);
   return {
+    referrals: mailReplyReferrals(row),
     reply_id: row.id,
     kind: row.kind,
     from_email: row.from_email,
@@ -25816,6 +26116,8 @@ function mailRunWorker(): Record<string, number | boolean> {
   // Replies first, whatever the sending switch says: an answer that landed since the last
   // pass must stop the follow-up this pass would otherwise send.
   mailReadAllReplies();
+  // A whole view's change running in the background gets its share of the pass.
+  leadJobsRunDue();
   if (!mailSettings.sending_enabled) return { ...report, paused: true };
   // Rested mailboxes whose rest is over go back to sending first.
   mailboxWakeRested();
@@ -26667,6 +26969,7 @@ function seedMail() {
   mailboxRows.length = 0;
   mailReplies.length = 0;
   mailboxInboxes.clear();
+  mailboxEvents.length = 0;
   Object.assign(mailboxSettings, MAILBOX_DEFAULTS);
   mailEvents.length = 0;
   Object.assign(mailSettings, {
@@ -27334,12 +27637,25 @@ function seedMail() {
   };
   const ownerBox = seedBox(OWNER_STAFF, "The Owner", "owner@quantifyterminal.co", "google", -32);
   seedBox(OWNER_STAFF, "The Owner", "owner@getquantifyterminal.com", "microsoft", 9);
-  seedBox(SALES_STAFF, "Sales Person", "sales.person@quantifyterminal.in", "smtp", -40, {
-    state: "resting",
-    rest_until: new Date(Date.now() + 30 * 3_600_000).toISOString(),
-    rest_reason: "refused as a block: 550 5.7.1 message rejected as spam by policy",
-    last_error: "refused as a block: 550 5.7.1 message rejected as spam by policy",
-  });
+  const resting = seedBox(
+    SALES_STAFF,
+    "Sales Person",
+    "sales.person@quantifyterminal.in",
+    "smtp",
+    -40,
+    {
+      state: "resting",
+      rest_until: new Date(Date.now() + 30 * 3_600_000).toISOString(),
+      rest_reason: "refused as a block: 550 5.7.1 message rejected as spam by policy",
+      last_error: "refused as a block: 550 5.7.1 message rejected as spam by policy",
+    },
+  );
+  mailboxRecordEvent(
+    resting,
+    "block",
+    "550 5.7.1 message rejected as spam by policy",
+    mailHoursAgo(18),
+  );
   // The programme: the intro sequence fed from the verified Indian PMS segment, paused
   // this week while the verifier's second file is awaited.
   mailFeeds.push({
@@ -27602,7 +27918,7 @@ function seedMail() {
         lead.verified_state === "valid" &&
         !MAIL_FREE_DOMAINS.has(lead.email.split("@")[1] ?? ""),
     )
-    .slice(0, 3);
+    .slice(0, 4);
   const intro = mailSteps.get(MAIL_IDS.fundIntro) ?? [];
   answering.forEach((lead, index) => {
     lead.stage = index === 0 ? "connected" : "attempting";
@@ -27697,7 +28013,7 @@ function seedMail() {
       ...extra,
     };
   };
-  const [interested, away, later] = answering;
+  const [interested, away, later, wrong] = answering;
   if (interested && away) {
     // Already read: the answers the last pass found.
     const read = [
@@ -27713,6 +28029,15 @@ function seedMail() {
           automatic: true,
         },
       ),
+      // The wrong person, who names the right one: offered as a new prospect.
+      ...(wrong
+        ? [
+            inbox(
+              wrong,
+              `I'm not the right person for this. Please speak to my colleague Priya Nair (priya.nair@${wrong.email.split("@")[1]}), who runs our research desk.`,
+            ),
+          ]
+        : []),
     ];
     mailboxInboxes.set("owner@quantifyterminal.co", read);
     read.forEach((message, index) => {

@@ -2056,10 +2056,11 @@ async function captureMailboxFlows(page: Page, folder: string) {
     report(`${folder}/mail-mailbox-paused`, "the paused mailbox does not say so");
   await page.locator(`button[aria-label="Resume ${consent}"]`).click();
   await page.locator(`button[aria-label="Pause ${consent}"]`).waitFor({ timeout: 15_000 });
+  await page.locator(`a[aria-label="Change ${consent}"]`).click();
+  await page.waitForSelector(`#mailbox-change:has-text("Change ${consent}")`, { timeout: 15_000 });
   await page.locator(`button[aria-label="Check that ${consent} signs in"]`).click();
   await page
-    .locator("tr", { hasText: consent })
-    .locator(".form-sent", { hasText: "Signed in" })
+    .locator(".mailbox-checks .form-sent", { hasText: "Signed in" })
     .waitFor({ timeout: 15_000 });
 
   // The server one disconnected, so the next pass can add it again.
@@ -2096,11 +2097,14 @@ async function captureMailboxFlows(page: Page, folder: string) {
   // follow-ups paused and what it reads as, and recorded in one press; later passes find it
   // settled. The seeded interested reply waits throughout.
   await page.goto(`${BASE}/mail/mailboxes`, { waitUntil: "networkidle" });
-  const ownerRow = page.locator("tr", { hasText: "owner@quantifyterminal.co" }).first();
-  await ownerRow
+  await page.locator('a[aria-label="Change owner@quantifyterminal.co"]').click();
+  await page.waitForSelector('#mailbox-change:has-text("Change owner@quantifyterminal.co")', {
+    timeout: 15_000,
+  });
+  await page
     .locator('button[aria-label="Read the replies in owner@quantifyterminal.co now"]')
     .click();
-  await ownerRow.locator(".form-sent").waitFor({ timeout: 15_000 });
+  await page.locator(".mailbox-checks .form-sent").waitFor({ timeout: 15_000 });
   await page.goto(`${BASE}/mail/replies`, { waitUntil: "networkidle" });
   if ((await page.locator(".reply-item", { hasText: "pricing for a desk of four" }).count()) === 0)
     report(`${folder}/mail-replies-read`, "the seeded reply is not waiting");
@@ -2115,6 +2119,17 @@ async function captureMailboxFlows(page: Page, folder: string) {
     await page
       .locator(".reply-item", { hasText: "mid-way through a migration" })
       .locator(".reply-item__said", { hasText: "Recorded: not now" })
+      .waitFor({ timeout: 15_000 });
+  }
+  // Whoever a "wrong person" reply names instead is one press from being a prospect.
+  const named = page.locator(".reply-item__referrals li", { hasText: "Priya Nair" }).first();
+  if ((await named.count()) === 0) {
+    report(`${folder}/mail-replies-referral`, "the colleague the reply names is not offered");
+  } else if ((await named.locator("button", { hasText: "Add as a prospect" }).count()) > 0) {
+    await named.locator("button", { hasText: "Add as a prospect" }).click();
+    await page
+      .locator(".reply-item__referrals li", { hasText: "Priya Nair" })
+      .locator("a", { hasText: "Already a lead" })
       .waitFor({ timeout: 15_000 });
   }
   await shoot(page, `${folder}/mail-replies-recorded`);
@@ -2217,6 +2232,41 @@ async function captureProspectFlows(page: Page, folder: string) {
   await page.locator("button", { hasText: "Apply to the whole view" }).click();
   await page.waitForSelector("text=/Changed 24 leads of 24/", { timeout: 15_000 });
   await shoot(page, `${folder}/prospects-bulk-done`);
+
+  // A view of everyone (a change to the unfiltered list is not offered; a filter that every
+  // prospect passes is): more than a request carries, so it runs in the background. The
+  // first slice goes in the request; each read of the page works another until it ends.
+  const everyoneView = `${BASE}/leads/prospects?f=${encodeURIComponent("tags:nhas:never")}`;
+  await page.goto(everyoneView, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Change the whole view" }).click();
+  await page.selectOption("#bulk-change", "tags_add");
+  await page.fill("#bulk-tags", `everyone ${stamp}`);
+  await page.check("#bulk-confirm");
+  await page.locator("button", { hasText: "Apply to the whole view" }).click();
+  await page.waitForSelector("text=/in the background/", { timeout: 15_000 });
+  await page.reload({ waitUntil: "networkidle" });
+  if ((await page.locator(".lead-jobs").count()) === 0)
+    report(`${folder}/prospects-bulk-background`, "no banner for the change in the background");
+  await shoot(page, `${folder}/prospects-bulk-background`);
+  for (let read = 0; read < 12; read += 1) {
+    if ((await page.locator(".lead-jobs .callout", { hasText: "Finished" }).count()) > 0) break;
+    await page.reload({ waitUntil: "networkidle" });
+  }
+  if ((await page.locator(".lead-jobs .callout", { hasText: "Finished" }).count()) === 0)
+    report(`${folder}/prospects-bulk-background`, "the change in the background never finished");
+  const everyone = await page
+    .locator(".stat", { hasText: "In this view" })
+    .locator(".stat__value")
+    .innerText();
+  await page.goto(`${BASE}/leads/prospects?f=${encodeURIComponent(`tags:has:everyone ${stamp}`)}`, {
+    waitUntil: "networkidle",
+  });
+  const tagged = await page
+    .locator(".stat", { hasText: "In this view" })
+    .locator(".stat__value")
+    .innerText();
+  if (tagged !== everyone)
+    report(`${folder}/prospects-bulk-background`, `${tagged} of ${everyone} carry the tag`);
 
   await page.goto(`${BASE}/leads/prospects?f=${encodeURIComponent(`tags:has:harness ${stamp}`)}`, {
     waitUntil: "networkidle",
