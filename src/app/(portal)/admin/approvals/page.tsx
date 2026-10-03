@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   collectApprovalAction,
   confirmSudoAction,
@@ -190,7 +191,12 @@ export default async function ApprovalsPage() {
                             <Timestamp value={row.expires_at} now={now} mode="relative" />
                           </span>
                         </div>
-                        {row.can_collect && (
+                        {row.can_collect && row.kind === "backup" && (
+                          <Link className="btn btn--small btn--primary" href="/admin/backup">
+                            Download under Backup
+                          </Link>
+                        )}
+                        {row.can_collect && row.kind !== "backup" && (
                           <CollectKeyForm
                             action={collectApprovalAction}
                             approvalId={row.approval_id}

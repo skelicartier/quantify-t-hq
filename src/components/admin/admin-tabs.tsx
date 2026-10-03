@@ -6,6 +6,7 @@ const TABS = [
   { href: "/admin/approvals", label: "Approvals" },
   { href: "/admin/security", label: "Security" },
   { href: "/admin/privileged", label: "Privileged access" },
+  { href: "/admin/backup", label: "Backup" },
   { href: "/admin/ai", label: "AI assistance" },
   { href: "/admin/webhooks", label: "Webhooks" },
   { href: "/admin/rules", label: "Rules" },

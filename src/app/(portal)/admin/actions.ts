@@ -163,7 +163,13 @@ function refreshStaff(staffId?: string) {
 
 // --- dual control ---------------------------------------------------------------------
 
-const APPROVAL_PATHS = ["/admin/approvals", "/home", "/admin/staff", "/admin/integrations"];
+const APPROVAL_PATHS = [
+  "/admin/approvals",
+  "/home",
+  "/admin/staff",
+  "/admin/integrations",
+  "/admin/backup",
+];
 
 function refreshApprovals() {
   for (const path of APPROVAL_PATHS) revalidatePath(path);

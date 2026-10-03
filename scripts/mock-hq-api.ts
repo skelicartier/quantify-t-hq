@@ -2790,7 +2790,7 @@ const apiKeys: ApiKeyRow[] = [];
 
 type ApprovalRow = {
   id: string;
-  kind: "role_grant" | "api_key" | "factor_reset" | "write_off";
+  kind: "role_grant" | "api_key" | "factor_reset" | "write_off" | "backup";
   status: "pending" | "approved" | "declined" | "withdrawn" | "expired" | "done";
   requested_by: string;
   requested_at: string;
@@ -2839,6 +2839,7 @@ function personOf(staffId: string) {
 function approvalSummary(kind: ApprovalRow["kind"], payload: Record<string, unknown>): string {
   if (kind === "factor_reset")
     return `reset ${String(payload.target_label ?? "a colleague")}'s authenticator`;
+  if (kind === "backup") return "download a backup of everything HQ holds";
   if (kind === "write_off")
     return `write off invoice ${String(payload.number ?? "")} (${String(payload.currency ?? "")} ${String(payload.amount ?? "")}) for ${String(payload.company ?? "a customer")}`;
   if (kind === "api_key") {
@@ -2850,6 +2851,7 @@ function approvalSummary(kind: ApprovalRow["kind"], payload: Record<string, unkn
 }
 
 function approvalPayloadView(kind: ApprovalRow["kind"], payload: Record<string, unknown>) {
+  if (kind === "backup") return {};
   if (kind === "factor_reset") {
     return {
       target_label: String(payload.target_label ?? ""),
@@ -2919,7 +2921,9 @@ function approvalView(row: ApprovalRow, viewer?: Staff) {
       approverRoles(row.kind).includes(viewer.role);
     view.can_withdraw = mine && ["pending", "approved"].includes(status);
     view.can_collect =
-      mine && status === "approved" && (row.kind === "api_key" || row.kind === "factor_reset");
+      mine &&
+      status === "approved" &&
+      (row.kind === "api_key" || row.kind === "factor_reset" || row.kind === "backup");
   }
   return view;
 }
@@ -20165,6 +20169,10 @@ routes.push(
       const row = approvals.find((candidate) => candidate.id === params.approval_id);
       if (!row) return refuse(404, "not_found");
       if (row.requested_by !== viewer.id) return refuse(403, "forbidden", { reason: "not-yours" });
+      if (row.kind === "backup")
+        return refuse(400, "malformed_request", {
+          kind: "a backup is downloaded from Admin \u2192 Backup",
+        });
       if (row.kind !== "api_key" && row.kind !== "factor_reset")
         return refuse(400, "malformed_request", {
           kind: "only an intake key or an authenticator reset is collected",
@@ -24581,74 +24589,10 @@ routes.push(
       // Beyond crm:export, what the records themselves need — as the service checks.
       if (spec.needs && !capsFor(exporter.role).includes(spec.needs))
         return refuse(403, "forbidden", { required_capability: spec.needs });
-      let records = spec.rows(headers);
-      if (kind === "prospects") {
-        const parsed = leadParseConditions(body.conditions);
-        if (Object.keys(parsed.errors).length)
-          return refuse(400, "malformed_request", parsed.errors);
-        const stageFilter = String(body.stage_filter ?? "");
-        const needle = String(body.q ?? "")
-          .trim()
-          .toLowerCase();
-        records = leadApply(
-          leads
-            .filter((row) => row.origin === "prospect")
-            .map(leadView)
-            .filter((view) => !stageFilter || view.stage === stageFilter)
-            .filter(
-              (view) =>
-                !needle ||
-                `${view.full_name} ${view.email} ${view.company_name} ${view.title} ${view.country} ${view.city}`
-                  .toLowerCase()
-                  .includes(needle),
-            ),
-          parsed.conditions,
-        ).map((view) =>
-          keyed(view.lead_id, [
-            view.lead_id,
-            view.email,
-            view.full_name,
-            view.title,
-            view.company_name,
-            view.firm_type,
-            view.country,
-            view.city,
-            view.email_kind,
-            view.verified_state,
-            view.verified_detail,
-            view.verified_at,
-            view.fit_band,
-            view.fit_score,
-            view.stage,
-            view.tags.join(", "),
-            view.firm_domain,
-            view.source_url,
-          ]),
-        );
-      }
-      // The custom fields this role may read, typed as the field is.
-      const fields = exportCustomFields(kind, headers);
-      const columns: Array<[string, string, string?]> = [
-        ...spec.columns,
-        ...fields.map(
-          (field) =>
-            [
-              `custom.${field.field_key}`,
-              field.label,
-              EXPORT_CUSTOM_TYPES[field.kind] ?? "text",
-            ] as [string, string, string],
-        ),
-      ];
-      if (fields.length)
-        records = records.map((record) => ({
-          id: record.id,
-          cells: [
-            ...record.cells,
-            ...fields.map((field) =>
-              exportCustomCell(field, customValues.get(cfKey(field.id, record.id)) ?? ""),
-            ),
-          ],
-        }));
+      const built = exportTable(kind, headers, body);
+      if ("errors" in built) return refuse(400, "malformed_request", built.errors);
+      const { columns, fields } = built;
+      let records = built.records;
       // A view names its records, in the page's order: an id narrows the file, never widens it.
       if (body.ids !== undefined && body.ids !== null) {
         if (!Array.isArray(body.ids) || body.ids.length > 50_000)
@@ -24804,6 +24748,565 @@ const EXPORT_CUSTOM_TYPES: Record<string, string> = {
 function exportCustomFields(kind: string, headers: Record<string, string | string[] | undefined>) {
   const recordType = EXPORT_CUSTOM_RECORDS[kind];
   return recordType ? cfLive(recordType).filter((row) => cfCanSee(headers, row)) : [];
+}
+
+// =====================================================================================
+// A backup of everything (mirrors backup_routes.py): an Owner's, waiting for a second
+// Owner when one exists; outside the quota but in the export ledger; every export kind
+// whole with its custom fields, then the timeline, comments, the support threads, the
+// settings that give records meaning, the directory, lists, consent and suppressions.
+// =====================================================================================
+const BACKUP_EXCLUDED = [
+  "The audit log: it has its own signed export under Admin \u2192 Audit, verifiable on its own.",
+  "Secrets, sign-in factors (passwords, authenticator secrets, passkeys, recovery codes) and sessions.",
+  "Keys and their hashes, webhook secrets, connected mailboxes' credentials and the AI provider's key.",
+  "The bodies of mail sent: each message's row is kept with the record it went to, not its text.",
+  "Who read which record (kept 90 days for security, not part of the company's records).",
+];
+type BackupTable = { columns: Array<[string, string, string?]>; rows: ExportCell[][] };
+const BACKUP_EXTRA: Array<[string, string, () => BackupTable]> = [
+  [
+    "activities",
+    "Timeline: notes, calls and emails logged",
+    () => ({
+      columns: [
+        ["at", "When", "datetime"],
+        ["kind", "Kind"],
+        ["author", "By"],
+        ["company_id", "Company ID"],
+        ["person_id", "Person ID"],
+        ["deal_id", "Deal ID"],
+        ["lead_id", "Lead ID"],
+        ["meeting_id", "Meeting ID"],
+        ["body", "Text"],
+      ],
+      rows: [...activities]
+        .sort((a, b) => a.at.localeCompare(b.at))
+        .map((row) => [
+          row.at,
+          row.kind,
+          row.staff_name,
+          row.company_id || null,
+          row.person_id || null,
+          row.deal_id || null,
+          row.lead_id || null,
+          null,
+          row.body,
+        ]),
+    }),
+  ],
+  [
+    "comments",
+    "Comments",
+    () => ({
+      columns: [
+        ["id", "ID"],
+        ["subject_type", "On a"],
+        ["subject_id", "Record ID"],
+        ["parent_id", "Reply to"],
+        ["author", "By"],
+        ["body", "Comment"],
+        ["created_at", "Written", "datetime"],
+        ["edited_at", "Edited", "datetime"],
+        ["resolved_at", "Resolved", "datetime"],
+      ],
+      // A comment its author deleted is not part of the record any more.
+      rows: comments
+        .filter((row) => !row.deleted_at)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        .map((row) => [
+          row.id,
+          row.subject_type,
+          row.subject_id,
+          row.parent_id,
+          nameOf(row.author_id),
+          row.body,
+          row.created_at,
+          row.edited_at,
+          row.resolved_at,
+        ]),
+    }),
+  ],
+  [
+    "ticket_messages",
+    "Support threads: replies and internal notes",
+    () => ({
+      columns: [
+        ["ticket", "Ticket"],
+        ["subject", "Subject"],
+        ["message", "Message ID"],
+        ["at", "When", "datetime"],
+        ["author", "From"],
+        ["author_name", "Name"],
+        ["visibility", "Kind"],
+        ["body", "Text"],
+      ],
+      rows: tickets.flatMap((ticket) =>
+        ticket.messages.map((message) => [
+          ticket.id,
+          ticket.subject,
+          message.id,
+          message.at,
+          message.author,
+          message.author_name,
+          message.visibility === "internal" ? "internal note" : "reply",
+          message.body,
+        ]),
+      ),
+    }),
+  ],
+  [
+    "custom_fields",
+    "Custom field definitions",
+    () => ({
+      columns: [
+        ["record_type", "On"],
+        ["key", "Key"],
+        ["label", "Label"],
+        ["kind", "Kind"],
+        ["options", "Choices"],
+        ["required", "Required", "bool"],
+        ["sensitive", "Sensitive", "bool"],
+        ["archived", "Archived", "bool"],
+      ],
+      rows: [...customFields]
+        .sort((a, b) => a.record_type.localeCompare(b.record_type) || a.position - b.position)
+        .map((row) => [
+          row.record_type,
+          row.field_key,
+          row.label,
+          CF_KINDS[row.kind] ?? row.kind,
+          row.options.map((option) => option.label).join("; "),
+          row.required,
+          row.sensitive,
+          Boolean(row.archived_at),
+        ]),
+    }),
+  ],
+  [
+    "pipeline_stages",
+    "Pipeline stages",
+    () => ({
+      columns: [
+        ["key", "Key"],
+        ["label", "Stage"],
+        ["position", "Order", "number"],
+        ["win_probability", "Win probability", "number"],
+        ["stale_after_days", "Stale after (days)", "number"],
+        ["outcome", "Outcome"],
+        ["exit_criteria", "Exit criteria"],
+        ["archived", "Archived", "bool"],
+      ],
+      rows: [...stages]
+        .sort((a, b) => a.position - b.position)
+        .map((row) => [
+          row.key,
+          row.label,
+          row.position,
+          row.win_probability,
+          row.stale_after_days,
+          row.outcome,
+          row.exit_criteria,
+          row.archived,
+        ]),
+    }),
+  ],
+  [
+    "sources",
+    "Lead sources",
+    () => ({
+      columns: [
+        ["key", "Key"],
+        ["label", "Source"],
+        ["archived", "Archived", "bool"],
+      ],
+      rows: [...sources]
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map((row) => [row.key, row.label, row.archived]),
+    }),
+  ],
+  [
+    "price_list",
+    "Price list",
+    () => ({
+      columns: [
+        ["key", "Key"],
+        ["name", "Plan"],
+        ["unit_amount", "Price per seat", "money"],
+        ["currency", "Currency"],
+        ["billing_cadence", "Billing"],
+        ["min_seats", "Minimum seats", "number"],
+        ["archived", "Archived", "bool"],
+      ],
+      rows: [...plans]
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map((row) => [
+          row.key,
+          row.name,
+          row.unit_amount,
+          row.currency,
+          row.billing_cadence,
+          row.min_seats,
+          row.archived,
+        ]),
+    }),
+  ],
+  [
+    "staff",
+    "Staff directory",
+    () => ({
+      // The directory, not the HR file: no personal address, no emergency contact.
+      columns: [
+        ["id", "ID"],
+        ["display_name", "Name"],
+        ["email", "Email"],
+        ["role", "Role"],
+        ["kind", "Kind"],
+        ["is_active", "Active", "bool"],
+        ["starts_on", "Starts", "date"],
+        ["ends_on", "Ends", "date"],
+        ["manager_id", "Reports to (ID)"],
+        ["created_at", "Added", "datetime"],
+      ],
+      rows: [...staff]
+        .sort((a, b) => (a.display_name || a.email).localeCompare(b.display_name || b.email))
+        .map((row) => [
+          row.id,
+          row.display_name,
+          row.email,
+          row.role,
+          row.kind,
+          row.is_active,
+          row.starts_on ?? null,
+          row.ends_on,
+          row.manager_id ?? null,
+          row.created_at,
+        ]),
+    }),
+  ],
+  [
+    "mailing_list_members",
+    "Mailing lists and their members",
+    () => ({
+      columns: [
+        ["list", "List"],
+        ["email", "Email"],
+        ["first_name", "First name"],
+        ["last_name", "Last name"],
+        ["company", "Company"],
+        ["title", "Title"],
+        ["country", "Country"],
+        ["person_id", "Person ID"],
+        ["basis", "Basis"],
+        ["added_at", "Added", "datetime"],
+      ],
+      rows: [...mailLists]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .flatMap((list) =>
+          mailListMembers
+            .filter((member) => member.list_id === list.id)
+            .map((member) => [
+              list.name,
+              member.email,
+              member.first_name,
+              member.last_name,
+              member.company,
+              member.title,
+              member.country,
+              member.person_id || null,
+              member.basis,
+              member.added_at,
+            ]),
+        ),
+    }),
+  ],
+  [
+    "mail_consent",
+    "Mail consent",
+    () => ({
+      columns: [
+        ["email", "Email"],
+        ["marketing_state", "Marketing"],
+        ["topics_off", "Topics off"],
+        ["sales_stop", "Sales stop", "bool"],
+        ["lawful_basis", "Basis"],
+        ["source", "Recorded from"],
+        ["updated_at", "Updated", "datetime"],
+      ],
+      rows: [...mailConsent.values()]
+        .sort((a, b) => a.email_norm.localeCompare(b.email_norm))
+        .map((row) => [
+          row.email_norm,
+          row.marketing_state,
+          row.topics_off.join(","),
+          row.sales_stop,
+          row.lawful_basis,
+          row.source,
+          row.updated_at,
+        ]),
+    }),
+  ],
+  [
+    "mail_suppressions",
+    "Addresses not to mail",
+    () => ({
+      columns: [
+        ["email", "Email"],
+        ["scope", "Scope"],
+        ["scope_key", "For"],
+        ["reason", "Reason"],
+        ["source", "From"],
+        ["created_at", "Since", "datetime"],
+        ["released_at", "Released", "datetime"],
+      ],
+      rows: [...mailSuppressions]
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        .map((row) => [
+          row.email_norm,
+          row.scope,
+          row.scope_key,
+          row.reason,
+          row.source,
+          row.created_at,
+          row.released_at,
+        ]),
+    }),
+  ],
+];
+const BACKUP_FILES = [
+  ...Object.entries(EXPORT_SPECS).map(([name, spec]) => ({ name, title: spec.title })),
+  ...BACKUP_EXTRA.map(([name, title]) => ({ name, title })),
+];
+
+function backupMine(viewer: Staff): ApprovalRow | undefined {
+  expireStaleApprovals();
+  return approvals
+    .filter(
+      (row) =>
+        row.kind === "backup" &&
+        row.requested_by === viewer.id &&
+        ["pending", "approved"].includes(approvalStatus(row)),
+    )
+    .sort((a, b) => b.requested_at.localeCompare(a.requested_at))[0];
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/backup",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ headers }) => {
+      const found = caller(headers)!;
+      const mine = backupMine(found.member);
+      return ok({
+        can_make: found.role === "owner",
+        needs_approval: approvers("backup", found.member.id).length > 0,
+        request: mine ? approvalView(mine, found.member) : null,
+        recent: exportLedger
+          .filter((row) => row.kind === "backup")
+          .slice(0, 10)
+          .map((row) => ({
+            made_by: nameOf(row.staff_id),
+            made_at: row.created_at,
+            rows: row.rows,
+            reason: row.reason,
+          })),
+        files: BACKUP_FILES,
+        excluded: BACKUP_EXCLUDED,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/backup/request",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      if (found.role !== "owner") return refuse(403, "forbidden", { required_role: "owner" });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 8)
+        return refuse(400, "malformed_request", { reason: "say what the backup is for" });
+      if (approvers("backup", found.member.id).length === 0) return ok({ pending_approval: false });
+      if (backupMine(found.member))
+        return refuse(400, "malformed_request", {
+          request: "you already have a backup waiting or ready to download",
+        });
+      return ok({
+        pending_approval: true,
+        approval: requestApproval("backup", found.member, {}, reason),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/backup/make",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      if (found.role !== "owner") return refuse(403, "forbidden", { required_role: "owner" });
+      let approval: ApprovalRow | undefined;
+      let reason: string;
+      if (approvers("backup", found.member.id).length > 0) {
+        approval = approvals.find((row) => row.id === String(body.approval_id ?? ""));
+        if (!approval || approval.kind !== "backup") return refuse(404, "not_found");
+        if (approval.requested_by !== found.member.id)
+          return refuse(403, "forbidden", { reason: "not-yours" });
+        const status = approvalStatus(approval);
+        if (status !== "approved") {
+          if (status === "expired") approval.status = "expired";
+          return refuse(400, "malformed_request", { status: `${status}, not approved` });
+        }
+        reason = approval.reason;
+      } else {
+        reason = String(body.reason ?? "")
+          .trim()
+          .slice(0, 400);
+        if (reason.length < 8)
+          return refuse(400, "malformed_request", { reason: "say what the backup is for" });
+      }
+      const files = [
+        ...Object.entries(EXPORT_SPECS).map(([name, spec]) => {
+          const built = exportTable(name, headers, {}) as Exclude<
+            ReturnType<typeof exportTable>,
+            { errors: Record<string, string> }
+          >;
+          return {
+            name,
+            title: spec.title,
+            columns: built.columns.map(([key, label, type]) => ({
+              key,
+              label,
+              type: type ?? "text",
+            })),
+            table: built.records.map((record) => record.cells),
+          };
+        }),
+        ...BACKUP_EXTRA.map(([name, title, build]) => {
+          const built = build();
+          return {
+            name,
+            title,
+            columns: built.columns.map(([key, label, type]) => ({
+              key,
+              label,
+              type: type ?? "text",
+            })),
+            table: built.rows,
+          };
+        }),
+      ];
+      const rows = files.reduce((sum, file) => sum + file.table.length, 0);
+      audit("backup.made", found.member.id, "backup", approval?.id ?? "sole", reason, {
+        files: files.length,
+        rows,
+        dual_control: approval ? "approved" : "sole_approver",
+        approved_by: approval?.decided_by ?? "",
+      });
+      recordExport(found.member.id, "backup", "backup", rows, reason, null);
+      if (approval) {
+        approval.status = "done";
+        approval.result_id = "backup";
+      }
+      return ok({
+        generated_at: now(),
+        made_by: found.member.display_name || found.member.email,
+        approved_by: approval ? nameOf(approval.decided_by) : "",
+        reason,
+        rows,
+        files,
+        excluded: BACKUP_EXCLUDED,
+      });
+    },
+  },
+);
+
+/**
+ * Every column and record of a kind the caller may take, custom values filled in — the
+ * service's export_routes.build without the view's ids, shared by an export and a backup.
+ */
+function exportTable(
+  kind: string,
+  headers: Record<string, string | string[] | undefined>,
+  body: Record<string, unknown>,
+):
+  | { columns: Array<[string, string, string?]>; records: ExportRecord[]; fields: CfFieldRow[] }
+  | { errors: Record<string, string> } {
+  const spec = EXPORT_SPECS[kind]!;
+  let records = spec.rows(headers);
+  if (kind === "prospects") {
+    const parsed = leadParseConditions(body.conditions);
+    if (Object.keys(parsed.errors).length) return { errors: parsed.errors };
+    const stageFilter = String(body.stage_filter ?? "");
+    const needle = String(body.q ?? "")
+      .trim()
+      .toLowerCase();
+    records = leadApply(
+      leads
+        .filter((row) => row.origin === "prospect")
+        .map(leadView)
+        .filter((view) => !stageFilter || view.stage === stageFilter)
+        .filter(
+          (view) =>
+            !needle ||
+            `${view.full_name} ${view.email} ${view.company_name} ${view.title} ${view.country} ${view.city}`
+              .toLowerCase()
+              .includes(needle),
+        ),
+      parsed.conditions,
+    ).map((view) =>
+      keyed(view.lead_id, [
+        view.lead_id,
+        view.email,
+        view.full_name,
+        view.title,
+        view.company_name,
+        view.firm_type,
+        view.country,
+        view.city,
+        view.email_kind,
+        view.verified_state,
+        view.verified_detail,
+        view.verified_at,
+        view.fit_band,
+        view.fit_score,
+        view.stage,
+        view.tags.join(", "),
+        view.firm_domain,
+        view.source_url,
+      ]),
+    );
+  }
+  // The custom fields this role may read, typed as the field is.
+  const fields = exportCustomFields(kind, headers);
+  const columns: Array<[string, string, string?]> = [
+    ...spec.columns,
+    ...fields.map(
+      (field) =>
+        [`custom.${field.field_key}`, field.label, EXPORT_CUSTOM_TYPES[field.kind] ?? "text"] as [
+          string,
+          string,
+          string,
+        ],
+    ),
+  ];
+  if (fields.length)
+    records = records.map((record) => ({
+      id: record.id,
+      cells: [
+        ...record.cells,
+        ...fields.map((field) =>
+          exportCustomCell(field, customValues.get(cfKey(field.id, record.id)) ?? ""),
+        ),
+      ],
+    }));
+  return { columns, records, fields };
 }
 
 /** A stored custom value as its column's type, as the service's `_typed`. */
@@ -35903,13 +36406,24 @@ const BREAK_GLASS_TEST_DAYS = 90;
 /** The mock runs with a marker domain set, as production would once it is configured. */
 const MOCK_MARKER_DOMAIN = process.env.MOCK_MARKER_DOMAIN ?? "mark.quantifyterminal.test";
 const MARKER_KINDS = ["people", "leads", "prospects", "mail_list"];
+/** As the service's exports.KIND_LABELS. */
 const EXPORT_KIND_LABELS: Record<string, string> = {
   companies: "companies",
   people: "people",
   leads: "leads",
+  prospects: "prospects",
   deals: "deals",
   contracts: "contracts",
+  quotes: "quotes",
+  invoices: "invoices",
+  tasks: "tasks",
+  meetings: "meetings",
+  tickets: "support tickets",
+  vendors: "vendors",
+  expenses: "expense claims",
+  controls: "controls",
   mail_list: "a mailing list",
+  backup: "everything (a backup)",
 };
 const MASK_DOT = "•";
 const MASKED_FIELDS: Record<string, string> = {
@@ -36018,8 +36532,12 @@ function isMasked(value: unknown): boolean {
 }
 function exportQuota(staffId: string) {
   const since = Date.now() - EXPORT_WINDOW_MS;
+  // A backup is under a second Owner's approval instead of the quota (exports.UNQUOTED_KINDS).
   const used = exportLedger
-    .filter((row) => row.staff_id === staffId && Date.parse(row.created_at) >= since)
+    .filter(
+      (row) =>
+        row.staff_id === staffId && Date.parse(row.created_at) >= since && row.kind !== "backup",
+    )
     .reduce((sum, row) => sum + row.rows, 0);
   const extra = exportLifts
     .filter((row) => row.staff_id === staffId && Date.parse(row.until) > Date.now())
@@ -51699,6 +52217,32 @@ function respond(
   if (method === "POST" && route === "mock/reset") {
     resetWorld();
     return ok({ reset: true });
+  }
+  // Test-only, as above: a second person approves the newest waiting request of a kind,
+  // for a walk that has no second enrolled Owner to sign in as (the newbies have no
+  // authenticator yet). It decides exactly as hq/approvals/{id}/approve would.
+  if (method === "POST" && route === "mock/approve-pending") {
+    const row = approvals.find(
+      (candidate) =>
+        candidate.kind === String(body.kind ?? "") && approvalStatus(candidate) === "pending",
+    );
+    const approver = row
+      ? approvers(row.kind, row.requested_by, row.target_staff_id)[0]
+      : undefined;
+    if (!row || !approver || row.kind === "role_grant" || row.kind === "write_off")
+      return refuse(404, "not_found");
+    row.status = "approved";
+    row.expires_at = hoursFromNowIso(APPROVAL_TTL_HOURS);
+    row.decided_by = approver.id;
+    row.decided_at = now();
+    row.decision_note = String(body.note ?? "").slice(0, 400);
+    audit("approval.approved", approver.id, "approval", row.id, row.decision_note, {
+      kind: row.kind,
+      summary: approvalSummary(row.kind, row.payload),
+      requested_by: row.requested_by,
+      executed: false,
+    });
+    return ok({ approval: approvalView(row) });
   }
   if (DEGRADED.has(route)) return refuse(503, "upstream_unavailable");
   const matched = matchRoute(method, route);

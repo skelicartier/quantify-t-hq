@@ -80,6 +80,7 @@ vi.mock("@/lib/api/core", async (importOriginal) => {
 });
 
 import * as auth from "@/lib/api/auth";
+import * as backupApi from "@/lib/api/backup";
 import * as crm from "@/lib/api/crm";
 import * as dataQuality from "@/lib/api/data-quality";
 import * as reviewApi from "@/lib/api/review";
@@ -315,6 +316,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/reports/weekly", () => reports.readWeeklyReport(token, ids.week!)],
   ["hq/reports/attribution", () => reports.readAttribution(token, 90)],
   ["hq/exports/companies/columns", () => reports.readExportColumns(token, "companies")],
+  ["hq/backup", () => backupApi.readBackup(token)],
   ["hq/targets", () => targetsApi.readTargets(token)],
   ["hq/signals", () => signalsApi.readSignals(token)],
   ["hq/push", () => pushApi.readPush(token)],

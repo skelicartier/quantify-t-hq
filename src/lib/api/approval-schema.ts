@@ -1,13 +1,22 @@
 import { z } from "zod";
 
 /**
- * A request under dual control: an Owner or Admin seat, an intake key, or an Owner's or
- * Admin's authenticator reset, waiting for a second person with the standing to approve. A leaf module, so the key, staff and Home
- * clients can all share it without importing one another.
+ * A request under dual control: an Owner or Admin seat, an intake key, an Owner's or
+ * Admin's authenticator reset, an invoice written off, or a backup of everything, waiting
+ * for a second person with the standing to approve. A leaf module, so the key, staff,
+ * receivables, backup and Home clients can all share it without importing one another.
  */
+export const APPROVAL_KINDS = [
+  "role_grant",
+  "api_key",
+  "factor_reset",
+  "write_off",
+  "backup",
+] as const;
+
 export const approvalSchema = z.object({
   approval_id: z.string(),
-  kind: z.enum(["role_grant", "api_key", "factor_reset"]),
+  kind: z.enum(APPROVAL_KINDS),
   status: z.enum(["pending", "approved", "declined", "withdrawn", "expired", "done"]),
   /** One clause, as a person would say it: "invite x as admin". */
   summary: z.string(),
@@ -22,6 +31,10 @@ export const approvalSchema = z.object({
     from: z.string().optional(),
     target_label: z.string().optional(),
     target_role: z.string().optional(),
+    number: z.string().optional(),
+    currency: z.string().optional(),
+    amount: z.string().optional(),
+    company: z.string().optional(),
   }),
   reason: z.string(),
   requested_by: z.object({ staff_id: z.string(), name: z.string() }).nullable(),

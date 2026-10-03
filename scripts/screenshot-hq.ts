@@ -256,6 +256,7 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "success-onboarding", path: "/success/onboarding", ready: "main#main-content" },
   { name: "service-status", path: "/service-status", ready: ".status-components" },
   { name: "admin-privileged", path: "/admin/privileged", ready: "main#main-content" },
+  { name: "admin-backup", path: "/admin/backup", ready: "main#main-content" },
   { name: "admin-ai", path: "/admin/ai", ready: "main#main-content" },
   { name: "admin-rules", path: "/admin/rules", ready: "main#main-content" },
   { name: "admin-webhooks", path: "/admin/webhooks", ready: "main#main-content" },
@@ -727,6 +728,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureSignalFlows(page, folder);
   await capturePushFlows(page, folder);
   await captureExportFlows(page, folder);
+  await captureBackupFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -3793,6 +3795,73 @@ async function captureExportFlows(page: Page, folder: string) {
   else console.log(`  ✓ ${folder}/deals-export-view (${sheet.suggestedFilename()})`);
 }
 
+/**
+ * A backup, asked for by the Owner: it waits for a second Owner (the mock's newbies are
+ * Owners), who approves it — through the mock's test hook, since neither has an
+ * authenticator to sign in with — and then the asker downloads one zip, whose README
+ * comes first and whose files are every kind of record; the page then lists it.
+ */
+async function captureBackupFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/admin/backup`, { waitUntil: "networkidle" });
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").click();
+  }
+  await page.locator(".sudo-gate--open").waitFor({ timeout: 10_000 });
+  const withdraw = page.getByRole("button", { name: "Withdraw" });
+  if ((await withdraw.count()) > 0) {
+    // A request left by an earlier pass: taken back so this one starts from the form.
+    await withdraw.click();
+    await page.locator("#backup-reason").waitFor({ timeout: 15_000 });
+  }
+  if ((await page.locator("#backup-reason").count()) > 0) {
+    await page.locator("#backup-reason").fill("Screenshot run: a copy for the records");
+    await page.getByRole("button", { name: "Ask the other Owners" }).click();
+    // The form gives way to the request itself, waiting for a second Owner.
+    await page
+      .locator(".backup-request", { hasText: "waits for a second Owner" })
+      .waitFor({ timeout: 15_000 });
+    await shoot(page, `${folder}/admin-backup-asked`);
+  }
+  const approved = await fetch("http://127.0.0.1:7071/api/v1/mock/approve-pending", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ kind: "backup", note: "Fine for the board" }),
+  });
+  if (!approved.ok)
+    report(`${folder}/admin-backup-approved`, `approval answered ${approved.status}`);
+  await page.goto(`${BASE}/admin/backup`, { waitUntil: "networkidle" });
+  await shoot(page, `${folder}/admin-backup-approved`);
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 60_000 }),
+    page.getByRole("button", { name: "Download the backup" }).click(),
+  ]);
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  const zip = Buffer.concat(chunks);
+  const names = [
+    ...zip.toString("latin1").matchAll(/PK\x01\x02[\s\S]{42}([A-Za-z_]+\.(?:csv|txt))/g),
+  ].map((match) => match[1]);
+  const expected = ["README.txt", "companies.csv", "people.csv", "deals.csv", "activities.csv"];
+  if (
+    !download.suggestedFilename().startsWith("hq-backup-") ||
+    zip.subarray(0, 2).toString() !== "PK"
+  )
+    report(`${folder}/admin-backup-made`, `the download was ${download.suggestedFilename()}`);
+  else if (names[0] !== "README.txt" || expected.some((name) => !names.includes(name)))
+    report(`${folder}/admin-backup-made`, `the zip holds ${names.join(", ")}`);
+  else console.log(`  ✓ ${folder}/admin-backup-made (${names.length} files)`);
+  await page.goto(`${BASE}/admin/backup`, { waitUntil: "networkidle" });
+  if (
+    (await page
+      .locator("tbody tr", { hasText: "Screenshot run: a copy for the records" })
+      .count()) === 0
+  )
+    report(`${folder}/admin-backup-listed`, "the backup is not listed under Backups made");
+  await shoot(page, `${folder}/admin-backup-listed`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -3807,6 +3876,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   push: capturePushFlows,
   inbox: captureInboxFlows,
   exports: captureExportFlows,
+  backup: captureBackupFlows,
 };
 
 async function runPart(browser: Browser) {

@@ -11778,6 +11778,49 @@
     overflow-wrap: anywhere;
   }
 
+  /* What a file holds, one line each: the words, then the file's own name. */
+  .file-list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .file-list > li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--text);
+    font-size: var(--fs-ui);
+  }
+
+  .file-list__name {
+    flex: none;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+  }
+
+  /* A backup asked for and waiting: what was asked, and the way to take it back. */
+  .backup-request {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .backup-request > p {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--fs-body);
+  }
+
   .export-columns__tag {
     flex: none;
     margin-left: auto;
