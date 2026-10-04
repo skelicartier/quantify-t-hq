@@ -22,6 +22,8 @@ type Fixture = {
   intern: Record<string, unknown>;
   /** Reads made without a session: the recipient's stop page. */
   anonymous?: Record<string, unknown>;
+  /** The answers to writes a page reads back as a summary: an import's counts. */
+  results?: Record<string, unknown>;
 };
 
 const FIXTURE_FILE = resolve(
@@ -291,6 +293,16 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/leads", () => crm.readLeads(token)],
   ["hq/leads/{lead_id}", () => crm.readLead(token, ids.lead_id!)],
   ["hq/leads/imports", () => crm.readLeadImports(token)],
+  ["hq/companies/imports", () => crm.readCompanyImports(token)],
+  ["hq/people/imports", () => crm.readPeopleImports(token)],
+  [
+    "hq/companies/{company_id} (came in with a file)",
+    async () => {
+      const detail = await crm.readCompany(token, ids.imported_company_id!);
+      expect(detail.imported?.label).toBe("october.csv");
+      return detail;
+    },
+  ],
   ["hq/leads/jobs", () => crm.readLeadJobs(token)],
   ["hq/leads/jobs/{job_id}", () => crm.readLeadJob(token, ids.lead_job_id!)],
   ["hq/leads/duplicates", () => dataQuality.readLeadDuplicates(token, {})],
@@ -402,6 +414,29 @@ describe("every portal read parses the service's own payload", () => {
       const page = await statusApi.readPublicStatus();
       // The public page never says who posted an update.
       expect(JSON.stringify(page)).not.toContain("posted_by");
+    });
+  });
+
+  describe.skipIf(!fixture?.results)("the answers a page reads back", () => {
+    it("hq/companies/import, its rehearsal, and hq/people/import", () => {
+      for (const route of [
+        "hq/companies/import",
+        "hq/companies/import?dry_run",
+        "hq/people/import",
+      ]) {
+        const result = crm.RECORD_IMPORT_SCHEMAS.result.parse(fixture!.results![route]);
+        expect(result.rows).toBeGreaterThan(0);
+      }
+      const rehearsal = crm.RECORD_IMPORT_SCHEMAS.result.parse(
+        fixture!.results!["hq/companies/import?dry_run"],
+      );
+      expect([rehearsal.dry_run, rehearsal.import_id]).toEqual([true, ""]);
+    });
+    it("hq/people/imports/{import_id}/rollback", () => {
+      const taken = crm.RECORD_IMPORT_SCHEMAS.takeBack.parse(
+        fixture!.results!["hq/people/imports/{import_id}/rollback"],
+      );
+      expect(taken.removed).toBe(1);
     });
   });
 

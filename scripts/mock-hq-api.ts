@@ -12784,73 +12784,7 @@ routes.push(
     pattern: "hq/companies/import",
     auth: true,
     capability: "crm:write",
-    handler: ({ body, headers }) => {
-      const rows = body.rows;
-      if (!Array.isArray(rows) || !rows.length)
-        return refuse(400, "malformed_request", { rows: "a non-empty list" });
-      if (rows.length > 500)
-        return refuse(400, "malformed_request", { rows: "at most 500 rows at a time" });
-      const reason = String(body.reason ?? "").trim();
-      if (reason.length < 4)
-        return refuse(400, "malformed_request", { reason: "say where the file came from" });
-      const domains = new Set(companies.filter((row) => row.domain).map((row) => row.domain));
-      const names = new Map(companies.map((row) => [normaliseCompanyName(row.name), row.name]));
-      const created: { company_id: string; name: string }[] = [];
-      const skipped: { row: number; name: string; reason: string }[] = [];
-      const invalid: { row: number; reason: string }[] = [];
-      (rows as Record<string, unknown>[]).forEach((raw, index) => {
-        const number = index + 1;
-        const name = String(raw?.name ?? "")
-          .trim()
-          .slice(0, 200);
-        if (!name) return void invalid.push({ row: number, reason: "a name is required" });
-        const domain = String(raw?.domain ?? "")
-          .trim()
-          .toLowerCase();
-        if (domain && FREE_MAIL.has(domain))
-          return void invalid.push({
-            row: number,
-            reason: "a personal mail domain cannot anchor a company",
-          });
-        const key = normaliseCompanyName(name);
-        if (domain && domains.has(domain))
-          return void skipped.push({ row: number, name, reason: `domain ${domain} already known` });
-        if (key && names.has(key))
-          return void skipped.push({ row: number, name, reason: `looks like ${names.get(key)}` });
-        const sourceKey = String(raw?.source_key ?? "").trim();
-        const row: CompanyRow = {
-          id: randomUUID(),
-          name,
-          domain,
-          firm_type: String(raw?.firm_type ?? "").trim(),
-          team_size_band: String(raw?.team_size_band ?? "").trim(),
-          country: String(raw?.country ?? "").trim(),
-          lifecycle: "prospect",
-          owner_staff_id: "",
-          source_key: sources.some((source) => source.key === sourceKey)
-            ? sourceKey
-            : sourceKey
-              ? "other"
-              : "",
-          notes: String(raw?.notes ?? "").trim(),
-          customer_since: null,
-          archived: false,
-          created_at: now(),
-          updated_at: now(),
-        };
-        companies.push(row);
-        created.push({ company_id: row.id, name });
-        if (domain) domains.add(domain);
-        if (key) names.set(key, name);
-      });
-      audit("crm.imported", caller(headers)?.member.id ?? null, "import", "companies", reason, {
-        rows: rows.length,
-        created: created.length,
-        skipped: skipped.length,
-        invalid: invalid.length,
-      });
-      return ok({ created, skipped, invalid, rows: rows.length });
-    },
+    handler: (context) => recordImportPart("companies", context),
   },
   {
     method: "POST",
@@ -13030,87 +12964,7 @@ routes.push(
     pattern: "hq/people/import",
     auth: true,
     capability: "crm:write",
-    handler: ({ body, headers }) => {
-      const rows = body.rows;
-      if (!Array.isArray(rows) || !rows.length)
-        return refuse(400, "malformed_request", { rows: "a non-empty list" });
-      if (rows.length > 500)
-        return refuse(400, "malformed_request", { rows: "at most 500 rows at a time" });
-      const reason = String(body.reason ?? "").trim();
-      if (reason.length < 4)
-        return refuse(400, "malformed_request", { reason: "say where the file came from" });
-      const byDomain = new Map(
-        companies.filter((row) => row.domain && !row.archived).map((row) => [row.domain, row.id]),
-      );
-      const byName = new Map(
-        companies
-          .filter((row) => !row.archived)
-          .map((row) => [normaliseCompanyName(row.name), row.id]),
-      );
-      const emails = new Set(
-        people.filter((row) => row.email).map((row) => row.email.toLowerCase()),
-      );
-      const created: { person_id: string; name: string; company_id: string }[] = [];
-      const skipped: { row: number; name: string; reason: string }[] = [];
-      const invalid: { row: number; reason: string }[] = [];
-      (rows as Record<string, unknown>[]).forEach((raw, index) => {
-        const number = index + 1;
-        const email = String(raw?.email ?? "")
-          .trim()
-          .toLowerCase();
-        const fullName = String(raw?.full_name ?? "")
-          .trim()
-          .slice(0, 160);
-        if (email && !email.includes("@"))
-          return void invalid.push({ row: number, reason: "not an address" });
-        if (!email && !fullName)
-          return void invalid.push({ row: number, reason: "a name or an email is required" });
-        if (email && emails.has(email))
-          return void skipped.push({
-            row: number,
-            name: fullName || email,
-            reason: `${email} is already a person`,
-          });
-        let companyId = "";
-        const companyDomain = String(raw?.company_domain ?? "")
-          .trim()
-          .toLowerCase();
-        const companyHint = String(raw?.company ?? raw?.company_name ?? "").trim();
-        if (companyDomain && byDomain.has(companyDomain)) companyId = byDomain.get(companyDomain)!;
-        else if (companyHint && byName.has(normaliseCompanyName(companyHint)))
-          companyId = byName.get(normaliseCompanyName(companyHint))!;
-        else {
-          const mailDomain = email.split("@")[1] ?? "";
-          if (mailDomain && !FREE_MAIL.has(mailDomain) && byDomain.has(mailDomain))
-            companyId = byDomain.get(mailDomain)!;
-        }
-        const row: PersonRow = {
-          id: randomUUID(),
-          company_id: companyId,
-          full_name: fullName,
-          email,
-          title: String(raw?.title ?? "").trim(),
-          role_category: String(raw?.role_category ?? "").trim(),
-          phone: String(raw?.phone ?? "").trim(),
-          account_user_id: "",
-          do_not_contact: false,
-          source_key: String(raw?.source_key ?? "").trim(),
-          notes: String(raw?.notes ?? "").trim(),
-          last_contacted_at: null,
-          created_at: now(),
-        };
-        people.push(row);
-        created.push({ person_id: row.id, name: fullName || email, company_id: companyId });
-        if (email) emails.add(email);
-      });
-      audit("crm.imported", caller(headers)?.member.id ?? null, "import", "people", reason, {
-        rows: rows.length,
-        created: created.length,
-        skipped: skipped.length,
-        invalid: invalid.length,
-      });
-      return ok({ created, skipped, invalid, rows: rows.length });
-    },
+    handler: (context) => recordImportPart("people", context),
   },
   {
     method: "GET",
@@ -51741,12 +51595,14 @@ const BODY_ROW_ROUTES = new Set([
 ]);
 
 function matchRoute(method: string, route: string) {
+  // An exact route wins over a pattern, as in the service's route table: without this,
+  // `hq/companies/imports` read as the company whose id is "imports".
+  const exact = routes.find(
+    (entry) => entry.method === method && !entry.pattern.includes("{") && entry.pattern === route,
+  );
+  if (exact) return { entry: exact, params: {} as Record<string, string> };
   for (const entry of routes) {
-    if (entry.method !== method) continue;
-    if (!entry.pattern.includes("{")) {
-      if (entry.pattern === route) return { entry, params: {} as Record<string, string> };
-      continue;
-    }
+    if (entry.method !== method || !entry.pattern.includes("{")) continue;
     const regex = new RegExp(
       `^${entry.pattern.replace(/\{([a-z_]+)\}/g, "(?<$1>[A-Za-z0-9._-]{1,64})")}$`,
     );
@@ -53141,6 +52997,972 @@ function seedNurture() {
 }
 seedNurture();
 
+// --- companies and people from a file (0071) — mirrors record_imports.py ------------------
+// A file in parts under one run id, every row accounted for, one ledger line per file; the
+// owner matched by address; an export brought back matching by id; blanks filled and only
+// ticked columns replaced; and a way back out that removes what nobody touched and puts
+// back a field only while it still holds what the file wrote.
+
+type RecordImportKind = "companies" | "people";
+type CrmImportRow = {
+  id: string;
+  kind: RecordImportKind;
+  label: string;
+  reason: string;
+  rows: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  left_out: number;
+  staff_id: string;
+  started_at: string;
+  updated_at: string;
+  rolled_back_at: string | null;
+  rolled_back_by: string | null;
+  removed_count: number;
+  reverted_count: number;
+  kept_count: number;
+};
+type CrmImportLedgerRow = {
+  id: string;
+  import_id: string;
+  record_id: string;
+  /** "" when the file made the record; otherwise the column, or custom.<key>. */
+  field: string;
+  old_value: string;
+  new_value: string;
+  at: string;
+  reverted_at: string | null;
+};
+const crmImports: CrmImportRow[] = [];
+const crmImportRows: CrmImportLedgerRow[] = [];
+const RECORD_IMPORT_MAX = 500;
+const RECORD_IMPORT_REASONS = [
+  "INVALID",
+  "DUPLICATE_IN_FILE",
+  "LOOKS_LIKE",
+  "ARCHIVED",
+  "NO_SUCH_RECORD",
+];
+const RECORD_IMPORT_COLUMNS: Record<RecordImportKind, Array<[string, string]>> = {
+  companies: [
+    ["firm_type", "Firm type"],
+    ["team_size_band", "Team size"],
+    ["country", "Country"],
+    ["source_key", "Source"],
+    ["owner_staff_id", "Owner"],
+    ["notes", "Notes"],
+  ],
+  people: [
+    ["title", "Title"],
+    ["role_category", "Role"],
+    ["phone", "Phone"],
+    ["company_id", "Company"],
+    ["source_key", "Source"],
+    ["notes", "Notes"],
+  ],
+};
+const RECORD_LIFECYCLES = [
+  "prospect",
+  "early_access",
+  "customer",
+  "former_customer",
+  "disqualified",
+];
+const RECORD_TYPE: Record<RecordImportKind, "company" | "person"> = {
+  companies: "company",
+  people: "person",
+};
+
+const importText = (value: unknown) =>
+  value === null || value === undefined || value === false
+    ? ""
+    : value === true
+      ? "true"
+      : String(value).trim();
+const importClean = (value: unknown, limit: number) =>
+  String(value ?? "")
+    .trim()
+    .slice(0, limit);
+const importLower = (value: unknown) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase();
+
+type ImportLeftOut = { row: number; name: string; reason: string; detail: string };
+type ImportPart = {
+  dryRun: boolean;
+  runId: string;
+  at: string;
+  created: number;
+  updated: number;
+  unchanged: number;
+  leftOut: ImportLeftOut[];
+  createdRecords: Array<Record<string, string>>;
+  ledger: CrmImportLedgerRow[];
+  audits: Array<[string, string, Record<string, unknown>]>;
+  ownersNotFound: string[];
+  firmsNotFound: string[];
+  seen: Set<string>;
+};
+
+function importNote(
+  part: ImportPart,
+  recordId: string,
+  field: string,
+  old: unknown,
+  value: unknown,
+) {
+  part.ledger.push({
+    id: randomUUID(),
+    import_id: part.runId,
+    record_id: recordId,
+    field,
+    old_value: importText(old).slice(0, 2000),
+    new_value: importText(value).slice(0, 2000),
+    at: part.at,
+    reverted_at: null,
+  });
+}
+
+function importLeaveOut(part: ImportPart, row: number, name: string, reason: string, detail = "") {
+  part.leftOut.push({ row, name: name.slice(0, 200), reason, detail: detail.slice(0, 300) });
+}
+
+/** The file's custom cells as stored text, or the refusal naming the field. */
+function importCustom(
+  recordType: string,
+  raw: unknown,
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> | { refusal: string } {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw))
+    return { refusal: "an object of field keys and values" };
+  const byKey = new Map(cfLive(recordType).map((row) => [row.field_key, row]));
+  const values: Record<string, string> = {};
+  for (const [key, cell] of Object.entries(raw as Record<string, unknown>)) {
+    const row = byKey.get(key);
+    if (!row) return { refusal: "no such field, or it is archived" };
+    if (!cfCanSee(headers, row)) return { refusal: `${row.label} is kept by an admin` };
+    let text = importClean(cell, 2001);
+    if (!text) continue;
+    if (CF_LISTS.includes(row.kind)) {
+      const byLabel = new Map(
+        row.options.map((option) => [option.label.toLowerCase(), option.value]),
+      );
+      const parts =
+        row.kind === "multi_choice" ? text.split(",").map((part) => part.trim()) : [text];
+      text = parts
+        .filter(Boolean)
+        .map((part) => byLabel.get(part.toLowerCase()) ?? part)
+        .join(",");
+    }
+    const value = cfNormalise(row, text);
+    if (typeof value !== "string") return value;
+    if (value) values[key] = value;
+  }
+  return values;
+}
+
+function importSource(raw: unknown): string {
+  const word = importLower(raw);
+  if (!word) return "";
+  const found = sources.find(
+    (row) => row.key.toLowerCase() === word || row.label.toLowerCase() === word,
+  );
+  if (found) return found.key;
+  return sources.some((row) => row.key === "other") ? "other" : "";
+}
+
+/** The columns a matched record takes: its blanks, and the ticked columns that differ. */
+function importChanges(
+  kind: RecordImportKind,
+  current: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+  overwrite: string[],
+): Record<string, string> {
+  const changes: Record<string, string> = {};
+  for (const [column] of RECORD_IMPORT_COLUMNS[kind]) {
+    const value = importText(incoming[column]);
+    if (!value) continue;
+    const old = importText(current[column]);
+    if (!old) changes[column] = value;
+    else if (overwrite.includes(column) && old.toLowerCase() !== value.toLowerCase())
+      changes[column] = value;
+  }
+  return changes;
+}
+
+function importApplyUpdate(
+  kind: RecordImportKind,
+  part: ImportPart,
+  record: Record<string, unknown>,
+  changes: Record<string, unknown>,
+  custom: Record<string, string>,
+  label: string,
+): boolean {
+  const recordType = RECORD_TYPE[kind];
+  const recordId = String(record.id);
+  const fills: CfWrite[] = [];
+  for (const [key, value] of Object.entries(custom)) {
+    const row = cfLive(recordType).find((field) => field.field_key === key)!;
+    if (!customValues.get(cfKey(row.id, recordId))) fills.push({ row, before: "", value });
+  }
+  if (!Object.keys(changes).length && !fills.length) return false;
+  for (const [column, value] of Object.entries(changes))
+    importNote(part, recordId, column, record[column], value);
+  for (const fill of fills)
+    importNote(part, recordId, `custom.${fill.row.field_key}`, "", fill.value);
+  part.updated += 1;
+  if (part.dryRun) return true;
+  const before = { ...record };
+  Object.assign(record, changes);
+  if (kind === "companies") record.updated_at = part.at;
+  const customChanges = fills.length ? cfWrite(recordId, fills) : {};
+  part.audits.push([
+    `${recordType}.updated`,
+    recordId,
+    {
+      fields: [...Object.keys(changes), ...Object.keys(customChanges)].sort(),
+      changes: { ...changesBetween(before, changes), ...customChanges },
+      import_id: part.runId,
+      file: label,
+    },
+  ]);
+  return true;
+}
+
+function importCompanyRows(
+  part: ImportPart,
+  rows: Record<string, unknown>[],
+  options: {
+    updateExisting: boolean;
+    overwrite: string[];
+    defaultOwner: string;
+    label: string;
+    headers: Record<string, string | string[] | undefined>;
+  },
+) {
+  const activeByEmail = new Map(
+    staff
+      .filter((member) => member.is_active)
+      .map((member) => [member.email.toLowerCase(), member.id]),
+  );
+  const byId = new Map(companies.map((row) => [row.id.toLowerCase(), row]));
+  const byDomain = new Map(companies.filter((row) => row.domain).map((row) => [row.domain, row]));
+  const byName = new Map<string, CompanyRow>();
+  for (const row of companies) {
+    const key = normaliseCompanyName(row.name);
+    if (key && (!byName.has(key) || !row.archived)) byName.set(key, row);
+  }
+  rows.forEach((raw, index) => {
+    const number = index + 1;
+    const name = importClean(raw.name, 200);
+    const shown = name || importClean(raw.domain, 200) || importClean(raw.id, 64);
+    const domain = normaliseDomain(raw.domain);
+    if (domain && FREE_MAIL.has(domain))
+      return importLeaveOut(
+        part,
+        number,
+        shown,
+        "INVALID",
+        "a personal mail domain cannot anchor a company",
+      );
+    const lifecycle = importLower(raw.lifecycle).replace(/[\s-]+/g, "_");
+    if (lifecycle && !RECORD_LIFECYCLES.includes(lifecycle))
+      return importLeaveOut(
+        part,
+        number,
+        shown,
+        "INVALID",
+        `one of ${RECORD_LIFECYCLES.join(", ")}`,
+      );
+    const custom = importCustom("company", raw.custom, options.headers);
+    if ("refusal" in custom)
+      return importLeaveOut(part, number, shown, "INVALID", String(custom.refusal));
+    const fields: Record<string, string> = {};
+    for (const [column, limit] of [
+      ["firm_type", 40],
+      ["team_size_band", 20],
+      ["country", 60],
+      ["notes", 2000],
+    ] as const)
+      if (importClean(raw[column], limit)) fields[column] = importClean(raw[column], limit);
+    const source = importSource(raw.source);
+    if (source) fields.source_key = source;
+    const ownerEmail = importLower(raw.owner);
+    const owner = ownerEmail ? activeByEmail.get(ownerEmail) : undefined;
+    if (
+      ownerEmail &&
+      !owner &&
+      part.ownersNotFound.length < 20 &&
+      !part.ownersNotFound.includes(ownerEmail)
+    )
+      part.ownersNotFound.push(ownerEmail);
+    if (owner) fields.owner_staff_id = owner;
+
+    const recordId = importLower(raw.id);
+    const nameKey = normaliseCompanyName(name);
+    let match: CompanyRow | undefined;
+    if (recordId) {
+      match = byId.get(recordId);
+      if (!match)
+        return importLeaveOut(part, number, shown, "NO_SUCH_RECORD", "no company has this ID");
+    } else if (domain) match = byDomain.get(domain);
+    const key = recordId ? `id:${recordId}` : domain ? `domain:${domain}` : `name:${nameKey}`;
+    if (part.seen.has(key))
+      return importLeaveOut(
+        part,
+        number,
+        shown,
+        "DUPLICATE_IN_FILE",
+        "an earlier row is the same company",
+      );
+    part.seen.add(key);
+    if (!match && !domain && nameKey && byName.has(nameKey)) {
+      const alike = byName.get(nameKey)!;
+      return importLeaveOut(
+        part,
+        number,
+        shown,
+        "LOOKS_LIKE",
+        `looks like ${alike.name}${alike.archived ? " (archived)" : ""}: give its domain or its ID to match it`,
+      );
+    }
+    if (match && match.archived)
+      return importLeaveOut(
+        part,
+        number,
+        shown,
+        "ARCHIVED",
+        `${match.name} is archived: put it back from Archived first`,
+      );
+    if (match) {
+      if (!options.updateExisting) return void (part.unchanged += 1);
+      const changes = importChanges(
+        "companies",
+        match as unknown as Record<string, unknown>,
+        fields,
+        options.overwrite,
+      );
+      if (
+        !importApplyUpdate(
+          "companies",
+          part,
+          match as unknown as Record<string, unknown>,
+          changes,
+          custom,
+          options.label,
+        )
+      )
+        part.unchanged += 1;
+      return;
+    }
+    if (!name) return importLeaveOut(part, number, shown, "INVALID", "a name is required");
+    const row: CompanyRow = {
+      id: randomUUID(),
+      name,
+      domain,
+      firm_type: fields.firm_type ?? "",
+      team_size_band: fields.team_size_band ?? "",
+      country: fields.country ?? "",
+      lifecycle: lifecycle || "prospect",
+      owner_staff_id: fields.owner_staff_id ?? options.defaultOwner,
+      source_key: fields.source_key ?? "",
+      notes: fields.notes ?? "",
+      customer_since: null,
+      archived: false,
+      created_at: part.at,
+      updated_at: part.at,
+    };
+    part.created += 1;
+    importNote(part, row.id, "", "", "");
+    if (part.createdRecords.length < 50) part.createdRecords.push({ record_id: row.id, name });
+    byId.set(row.id, row);
+    if (domain) byDomain.set(domain, row);
+    if (nameKey && !byName.has(nameKey)) byName.set(nameKey, row);
+    if (part.dryRun) return;
+    companies.push(row);
+    const writes = Object.entries(custom).map(([fieldKey, value]) => ({
+      row: cfLive("company").find((field) => field.field_key === fieldKey)!,
+      before: "",
+      value,
+    }));
+    if (writes.length) cfWrite(row.id, writes);
+  });
+}
+
+function importPersonCompany(
+  part: ImportPart,
+  raw: Record<string, unknown>,
+  email: string,
+): string {
+  const live = companies.filter((row) => !row.archived);
+  const namedDomain = normaliseDomain(raw.company_domain);
+  const named = importClean(raw.company, 200);
+  const byDomain = namedDomain ? live.find((row) => row.domain === namedDomain) : undefined;
+  if (byDomain) return byDomain.id;
+  const byName = named
+    ? live.find((row) => normaliseCompanyName(row.name) === normaliseCompanyName(named))
+    : undefined;
+  if (byName) return byName.id;
+  const mailDomain = email.includes("@") ? (email.split("@")[1] ?? "") : "";
+  if (mailDomain && !FREE_MAIL.has(mailDomain)) {
+    const byMail = live.find((row) => row.domain === mailDomain);
+    if (byMail) return byMail.id;
+  }
+  const missing = named || namedDomain;
+  if (missing && part.firmsNotFound.length < 20 && !part.firmsNotFound.includes(missing))
+    part.firmsNotFound.push(missing);
+  return "";
+}
+
+function importPeopleRows(
+  part: ImportPart,
+  rows: Record<string, unknown>[],
+  options: {
+    updateExisting: boolean;
+    overwrite: string[];
+    label: string;
+    headers: Record<string, string | string[] | undefined>;
+  },
+) {
+  const byId = new Map(people.map((row) => [row.id.toLowerCase(), row]));
+  const byEmail = new Map(
+    people.filter((row) => row.email).map((row) => [row.email.toLowerCase(), row]),
+  );
+  rows.forEach((raw, index) => {
+    const number = index + 1;
+    const fullName =
+      importClean(raw.full_name, 160) ||
+      [importClean(raw.first_name, 80), importClean(raw.last_name, 80)].filter(Boolean).join(" ");
+    const email = importLower(raw.email).slice(0, 254);
+    const recordId = importLower(raw.id);
+    const shown = fullName || email || recordId;
+    if (email && !email.includes("@"))
+      return importLeaveOut(part, number, shown, "INVALID", "not an address");
+    if (!recordId && !fullName && !email)
+      return importLeaveOut(part, number, shown, "INVALID", "a name or an email is required");
+    const custom = importCustom("person", raw.custom, options.headers);
+    if ("refusal" in custom)
+      return importLeaveOut(part, number, shown, "INVALID", String(custom.refusal));
+    const fields: Record<string, string> = {};
+    for (const [column, limit] of [
+      ["title", 120],
+      ["role_category", 40],
+      ["phone", 40],
+      ["notes", 2000],
+    ] as const)
+      if (importClean(raw[column], limit)) fields[column] = importClean(raw[column], limit);
+    const source = importSource(raw.source);
+    if (source) fields.source_key = source;
+    const companyId = importPersonCompany(part, raw, email);
+    if (companyId) fields.company_id = companyId;
+
+    let match: PersonRow | undefined;
+    if (recordId) {
+      match = byId.get(recordId);
+      if (!match)
+        return importLeaveOut(part, number, shown, "NO_SUCH_RECORD", "no person has this ID");
+    } else if (email) match = byEmail.get(email);
+    const key = recordId ? `id:${recordId}` : email ? `email:${email}` : "";
+    if (key && part.seen.has(key))
+      return importLeaveOut(
+        part,
+        number,
+        shown,
+        "DUPLICATE_IN_FILE",
+        "an earlier row is the same person",
+      );
+    if (key) part.seen.add(key);
+    if (match && match.archived)
+      return importLeaveOut(
+        part,
+        number,
+        shown,
+        "ARCHIVED",
+        `${match.full_name || match.email || "This person"} is archived: put them back from Archived first`,
+      );
+    const stop = ["yes", "y", "true", "1", "x"].includes(importLower(raw.do_not_contact));
+    if (match) {
+      if (!options.updateExisting) return void (part.unchanged += 1);
+      const changes: Record<string, unknown> = importChanges(
+        "people",
+        match as unknown as Record<string, unknown>,
+        fields,
+        options.overwrite,
+      );
+      // The stricter wish wins: a file adds a stop and never takes one away.
+      if (stop && !match.do_not_contact) changes.do_not_contact = true;
+      if (
+        !importApplyUpdate(
+          "people",
+          part,
+          match as unknown as Record<string, unknown>,
+          changes,
+          custom,
+          options.label,
+        )
+      )
+        part.unchanged += 1;
+      return;
+    }
+    const row: PersonRow = {
+      id: randomUUID(),
+      company_id: fields.company_id ?? "",
+      full_name: fullName,
+      email,
+      title: fields.title ?? "",
+      role_category: fields.role_category ?? "",
+      phone: fields.phone ?? "",
+      account_user_id: "",
+      do_not_contact: stop,
+      source_key: fields.source_key ?? "",
+      notes: fields.notes ?? "",
+      last_contacted_at: null,
+      created_at: part.at,
+    };
+    part.created += 1;
+    importNote(part, row.id, "", "", "");
+    if (part.createdRecords.length < 50)
+      part.createdRecords.push({ record_id: row.id, name: shown, company_id: row.company_id });
+    byId.set(row.id, row);
+    if (email) byEmail.set(email, row);
+    if (part.dryRun) return;
+    people.push(row);
+    const writes = Object.entries(custom).map(([fieldKey, value]) => ({
+      row: cfLive("person").find((field) => field.field_key === fieldKey)!,
+      before: "",
+      value,
+    }));
+    if (writes.length) cfWrite(row.id, writes);
+  });
+}
+
+function recordImportPart(kind: RecordImportKind, context: Parameters<Handler>[0]) {
+  const { body, headers } = context;
+  const rows = body.rows;
+  if (!Array.isArray(rows) || !rows.length)
+    return refuse(400, "malformed_request", { rows: "a non-empty list" });
+  if (rows.length > RECORD_IMPORT_MAX)
+    return refuse(400, "malformed_request", {
+      rows: `at most ${RECORD_IMPORT_MAX} rows a request; send the file in parts`,
+    });
+  if (!rows.every((row) => typeof row === "object" && row !== null && !Array.isArray(row)))
+    return refuse(400, "malformed_request", { rows: "each row is an object" });
+  const reason = importClean(body.reason, 400);
+  if (reason.length < 4)
+    return refuse(400, "malformed_request", { reason: "say where the file came from" });
+  const label = importClean(body.label, 120);
+  const dryRun = Boolean(body.dry_run);
+  const updateExisting = Boolean(body.update_existing);
+  const allowed = RECORD_IMPORT_COLUMNS[kind].map(([column]) => column);
+  const asked = body.overwrite ?? [];
+  if (!Array.isArray(asked) || asked.some((name) => !allowed.includes(String(name))))
+    return refuse(400, "malformed_request", { overwrite: `columns among ${allowed.join(", ")}` });
+  const overwrite = updateExisting ? asked.map(String) : [];
+  // Rows the portal left out as repeats of earlier rows: counted into the file's line.
+  const repeats = body.repeats ?? 0;
+  if (
+    typeof repeats !== "number" ||
+    !Number.isInteger(repeats) ||
+    repeats < 0 ||
+    repeats > 1_000_000
+  )
+    return refuse(400, "malformed_request", { repeats: "a count from 0 to 1000000" });
+  const who = caller(headers)!.member;
+  let defaultOwner = "";
+  if (kind === "companies") {
+    const wanted = importLower(body.default_owner);
+    if (wanted === "me") defaultOwner = who.id;
+    else if (wanted) {
+      const member = staff.find((row) => row.id.toLowerCase() === wanted && row.is_active);
+      if (!member)
+        return refuse(400, "malformed_request", {
+          default_owner: "an active colleague, yourself, or nobody",
+        });
+      defaultOwner = member.id;
+    }
+  }
+  const runId = importLower(body.run_id) || randomUUID();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(runId))
+    return refuse(400, "malformed_request", { run_id: "not an id" });
+  const at = now();
+  let run = dryRun ? undefined : crmImports.find((row) => row.id === runId);
+  if (run && (run.rolled_back_at || run.kind !== kind))
+    return refuse(400, "malformed_request", {
+      run_id: "that import was taken back; start a new one",
+    });
+  if (!run && !dryRun) {
+    run = {
+      id: runId,
+      kind,
+      label,
+      reason,
+      rows: 0,
+      created: 0,
+      updated: 0,
+      unchanged: 0,
+      left_out: 0,
+      staff_id: who.id,
+      started_at: at,
+      updated_at: at,
+      rolled_back_at: null,
+      rolled_back_by: null,
+      removed_count: 0,
+      reverted_count: 0,
+      kept_count: 0,
+    };
+    crmImports.push(run);
+  }
+  const part: ImportPart = {
+    dryRun,
+    runId,
+    at,
+    created: 0,
+    updated: 0,
+    unchanged: 0,
+    leftOut: [],
+    createdRecords: [],
+    ledger: [],
+    audits: [],
+    ownersNotFound: [],
+    firmsNotFound: [],
+    seen: new Set(),
+  };
+  const typed = rows as Record<string, unknown>[];
+  if (kind === "companies")
+    importCompanyRows(part, typed, { updateExisting, overwrite, defaultOwner, label, headers });
+  else importPeopleRows(part, typed, { updateExisting, overwrite, label, headers });
+  const result = {
+    import_id: dryRun ? "" : runId,
+    dry_run: dryRun,
+    rows: rows.length,
+    created: part.created,
+    updated: part.updated,
+    unchanged: part.unchanged,
+    left_out_count: part.leftOut.length,
+    left_out: part.leftOut,
+    created_records: part.createdRecords,
+    owners_not_found: part.ownersNotFound,
+    firms_not_found: part.firmsNotFound,
+  };
+  if (dryRun || !run) return ok(result);
+  crmImportRows.push(...part.ledger);
+  run.rows += rows.length + repeats;
+  run.created += part.created;
+  run.updated += part.updated;
+  run.unchanged += part.unchanged;
+  run.left_out += part.leftOut.length + repeats;
+  run.updated_at = at;
+  for (const [action, recordId, detail] of part.audits)
+    audit(action, who.id, RECORD_TYPE[kind], recordId, "", detail);
+  audit("crm.imported", who.id, "import", kind, reason, {
+    import_id: runId,
+    label,
+    rows: rows.length,
+    created: part.created,
+    updated: part.updated,
+    unchanged: part.unchanged,
+    left_out: part.leftOut.length,
+    repeats,
+  });
+  return ok(result);
+}
+
+function recordImportHistory(kind: RecordImportKind) {
+  const live = new Set(
+    (kind === "companies" ? companies : people)
+      .filter((row) => !("archived" in row && row.archived))
+      .map((row) => row.id),
+  );
+  const runs = crmImports
+    .filter((row) => row.kind === kind)
+    .sort((a, b) => b.started_at.localeCompare(a.started_at))
+    .slice(0, 100);
+  return ok({
+    imports: runs.map((run) => {
+      const ledger = crmImportRows.filter((row) => row.import_id === run.id && !row.reverted_at);
+      const rolledBack = Boolean(run.rolled_back_at);
+      return {
+        import_id: run.id,
+        label: run.label,
+        reason: run.reason,
+        rows: run.rows,
+        created: run.created,
+        updated: run.updated,
+        unchanged: run.unchanged,
+        left_out: run.left_out,
+        by: run.staff_id ? { staff_id: run.staff_id, name: nameOf(run.staff_id) } : null,
+        started_at: run.started_at,
+        rolled_back_at: run.rolled_back_at,
+        rolled_back_by_name: run.rolled_back_by ? nameOf(run.rolled_back_by) : "",
+        removed_count: run.removed_count,
+        reverted_count: run.reverted_count,
+        kept_count: run.kept_count,
+        remaining: rolledBack
+          ? 0
+          : ledger.filter((row) => !row.field && live.has(row.record_id)).length,
+        changes: rolledBack ? 0 : ledger.filter((row) => row.field).length,
+      };
+    }),
+    max_rows: RECORD_IMPORT_MAX,
+    columns: RECORD_IMPORT_COLUMNS[kind].map(([column, label]) => ({ column, label })),
+    reasons: RECORD_IMPORT_REASONS,
+  });
+}
+
+/** What points at a company or a person: a record that names it has been worked on. */
+function importReferenced(recordType: "company" | "person", ids: Set<string>): Set<string> {
+  const stores: Array<[Array<unknown>, string]> =
+    recordType === "company"
+      ? [
+          [people, "company_id"],
+          [deals, "company_id"],
+          [leads, "converted_company_id"],
+          [contracts, "company_id"],
+          [activities, "company_id"],
+          [tasks, "company_id"],
+          [meetings, "company_id"],
+          [companies, "parent_id"],
+          [mailEnrolments, "company_id"],
+          [accountPlans, "company_id"],
+          [accountPlanPeople, "company_id"],
+        ]
+      : [
+          [deals, "primary_person_id"],
+          [leads, "converted_person_id"],
+          [activities, "person_id"],
+          [tasks, "person_id"],
+          [meetings, "person_id"],
+          [meetingAttendees, "person_id"],
+          [mailEnrolments, "contact_id"],
+          [accountPlanPeople, "person_id"],
+        ];
+  const found = new Set<string>();
+  for (const [store, column] of stores)
+    for (const row of store) {
+      const value = String((row as Record<string, unknown>)[column] ?? "");
+      if (ids.has(value)) found.add(value);
+    }
+  return found;
+}
+
+function recordImportTakeBack(kind: RecordImportKind, context: Parameters<Handler>[0]) {
+  const { params, body, headers } = context;
+  const run = crmImports.find((row) => row.id === params.import_id && row.kind === kind);
+  if (!run) return refuse(404, "not_found");
+  if (run.rolled_back_at)
+    return refuse(400, "malformed_request", { import_id: "already taken back" });
+  const reason = importClean(body.reason, 400);
+  if (reason.length < 4)
+    return refuse(400, "malformed_request", { reason: "say why the file is being taken back" });
+  const who = caller(headers)!.member;
+  const at = now();
+  const recordType = RECORD_TYPE[kind];
+  const store = (kind === "companies" ? companies : people) as Array<Record<string, unknown>>;
+  const ledger = crmImportRows.filter((row) => row.import_id === run.id && !row.reverted_at);
+  const made = ledger.filter((row) => !row.field);
+  const madeIds = new Set(made.map((row) => row.record_id));
+  const audited = new Set(
+    auditEvents
+      .filter(
+        (event) =>
+          String(event.occurred_at) >= run.started_at &&
+          event.entity_type === recordType &&
+          madeIds.has(String(event.entity_id)),
+      )
+      .map((event) => String(event.entity_id)),
+  );
+  const referenced = importReferenced(recordType, madeIds);
+  const removable = new Set<string>();
+  let keptRecords = 0;
+  for (const recordId of madeIds) {
+    const record = store.find((row) => row.id === recordId);
+    if (!record) continue;
+    const edited =
+      typeof record.updated_at === "string" && typeof record.created_at === "string"
+        ? record.updated_at > record.created_at
+        : false;
+    if (record.archived || edited || audited.has(recordId) || referenced.has(recordId))
+      keptRecords += 1;
+    else removable.add(recordId);
+  }
+  audit("crm.import_rolled_back", who.id, "import", run.id, reason, {
+    kind,
+    label: run.label,
+    made: madeIds.size,
+    removing: removable.size,
+    kept: keptRecords,
+    changes: ledger.length - made.length,
+  });
+  for (let index = store.length - 1; index >= 0; index -= 1)
+    if (removable.has(String(store[index]!.id))) store.splice(index, 1);
+  for (const key of [...customValues.keys()])
+    if (removable.has(key.split("\u0000")[1] ?? "")) customValues.delete(key);
+  for (const row of made) if (removable.has(row.record_id)) row.reverted_at = at;
+
+  let reverted = 0;
+  let keptChanges = 0;
+  const byRecord = new Map<string, CrmImportLedgerRow[]>();
+  for (const row of ledger)
+    if (row.field) byRecord.set(row.record_id, [...(byRecord.get(row.record_id) ?? []), row]);
+  for (const [recordId, rows] of byRecord) {
+    const record = store.find((row) => row.id === recordId);
+    if (!record) {
+      keptChanges += rows.length;
+      continue;
+    }
+    const columns: Record<string, unknown> = {};
+    const custom: CfWrite[] = [];
+    for (const row of rows) {
+      let current: string;
+      let definition: CfFieldRow | undefined;
+      if (row.field.startsWith("custom.")) {
+        definition = customFields.find(
+          (field) => field.record_type === recordType && field.field_key === row.field.slice(7),
+        );
+        current = definition ? (customValues.get(cfKey(definition.id, recordId)) ?? "") : "";
+      } else current = importText(record[row.field]);
+      if (
+        current.toLowerCase() !== row.new_value.toLowerCase() ||
+        (row.field.startsWith("custom.") && !definition)
+      ) {
+        keptChanges += 1;
+        continue;
+      }
+      if (definition) custom.push({ row: definition, before: row.new_value, value: row.old_value });
+      else if (row.field === "do_not_contact") columns.do_not_contact = row.old_value === "true";
+      else columns[row.field] = row.old_value;
+      row.reverted_at = at;
+      reverted += 1;
+    }
+    if (!Object.keys(columns).length && !custom.length) continue;
+    const before = { ...record };
+    Object.assign(record, columns);
+    if (kind === "companies" && Object.keys(columns).length) record.updated_at = at;
+    const customChanges = custom.length ? cfWrite(recordId, custom) : {};
+    audit(`${recordType}.updated`, who.id, recordType, recordId, "", {
+      fields: [...Object.keys(columns), ...Object.keys(customChanges)].sort(),
+      changes: { ...changesBetween(before, columns), ...customChanges },
+      import_rolled_back: run.id,
+    });
+  }
+  run.rolled_back_at = at;
+  run.rolled_back_by = who.id;
+  run.removed_count = removable.size;
+  run.reverted_count = reverted;
+  run.kept_count = keptRecords + keptChanges;
+  run.updated_at = at;
+  return ok({
+    import_id: run.id,
+    removed: removable.size,
+    reverted,
+    kept_records: keptRecords,
+    kept_changes: keptChanges,
+  });
+}
+
+/** The file a record came in with, for its page. */
+function importProvenance(recordId: string) {
+  const made = crmImportRows.find((row) => row.record_id === recordId && !row.field);
+  const run = made ? crmImports.find((row) => row.id === made.import_id) : undefined;
+  if (!run) return null;
+  return { import_id: run.id, label: run.label, at: run.started_at, by_name: nameOf(run.staff_id) };
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/companies/imports",
+    auth: true,
+    capability: "crm:read",
+    handler: () => recordImportHistory("companies"),
+  },
+  {
+    method: "GET",
+    pattern: "hq/people/imports",
+    auth: true,
+    capability: "crm:read",
+    handler: () => recordImportHistory("people"),
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/imports/{import_id}/rollback",
+    auth: true,
+    capability: "crm:write",
+    sudo: true,
+    handler: (context) => recordImportTakeBack("companies", context),
+  },
+  {
+    method: "POST",
+    pattern: "hq/people/imports/{import_id}/rollback",
+    auth: true,
+    capability: "crm:write",
+    sudo: true,
+    handler: (context) => recordImportTakeBack("people", context),
+  },
+);
+for (const [pattern, key, idKey] of [
+  ["hq/companies/{company_id}", "company", "company_id"],
+  ["hq/people/{person_id}", "person", "person_id"],
+] as const)
+  cfWrap("GET", pattern, (original) => (context) => {
+    const answer = original(context);
+    if (answer.status !== 200) return answer;
+    const payload = answer.body as Record<string, unknown>;
+    const record = payload[key] as Record<string, unknown>;
+    payload.imported = importProvenance(String(record[idKey] ?? ""));
+    return answer;
+  });
+
+/**
+ * A file brought in a fortnight ago, so the history has a line on a fresh mock: three of
+ * the seeded prospects came in with it.
+ */
+function seedRecordImports() {
+  crmImports.length = 0;
+  crmImportRows.length = 0;
+  const started = new Date(Date.now() - 14 * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const sales = staff.find((member) => member.email.startsWith("sales@"));
+  const prospects = companies
+    .filter((row) => row.lifecycle === "prospect" && !row.archived)
+    .slice(0, 3);
+  if (!sales || !prospects.length) return;
+  const id = "f1e00000-0000-4000-8000-000000000001";
+  crmImports.push({
+    id,
+    kind: "companies",
+    label: "Fund managers, London conference.csv",
+    reason: "Attendee list from the September conference",
+    rows: prospects.length + 2,
+    created: prospects.length,
+    updated: 0,
+    unchanged: 1,
+    left_out: 1,
+    staff_id: sales.id,
+    started_at: started,
+    updated_at: started,
+    rolled_back_at: null,
+    rolled_back_by: null,
+    removed_count: 0,
+    reverted_count: 0,
+    kept_count: 0,
+  });
+  for (const row of prospects)
+    crmImportRows.push({
+      id: randomUUID(),
+      import_id: id,
+      record_id: row.id,
+      field: "",
+      old_value: "",
+      new_value: "",
+      at: started,
+      reverted_at: null,
+    });
+}
+seedRecordImports();
+
 function resetWorld() {
   resetInbox();
   pendings.clear();
@@ -53191,6 +54013,7 @@ function resetWorld() {
   seedInbox();
   seedWeeklyReview();
   seedNurture();
+  seedRecordImports();
   Object.assign(retentionRules, RETENTION_SEED);
   webhookEvents.length = 0;
   for (const member of staff) {

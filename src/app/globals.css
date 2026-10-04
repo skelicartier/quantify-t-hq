@@ -5382,6 +5382,42 @@
     font-size: 20px;
   }
 
+  /* The rows an import left out: the reason is what matters, so on a phone each row
+     stacks rather than hiding its reason past the edge of a scrolling table. */
+  .left-out-list {
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line-soft);
+    list-style: none;
+  }
+
+  .left-out-list__row {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) minmax(0, 2fr);
+    gap: 2px 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .left-out-list__at {
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .left-out-list__name,
+  .left-out-list__why {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 720px) {
+    .left-out-list__row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
   .list-import__result {
     display: grid;
     gap: 12px;

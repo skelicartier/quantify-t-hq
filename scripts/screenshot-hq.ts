@@ -73,7 +73,8 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "home", path: "/home", ready: "main#main-content" },
   { name: "support-queue", path: "/support", ready: ".desk" },
   { name: "support-following", path: "/support?view=all&following=1", ready: ".desk" },
-  { name: "companies-import", path: "/companies/import", ready: ".csv-import" },
+  { name: "companies-import", path: "/companies/import", ready: ".list-import" },
+  { name: "people-import", path: "/people/import", ready: ".list-import" },
   { name: "companies-grouped", path: "/companies?group=lifecycle", ready: ".data-table" },
   {
     name: "companies-peek",
@@ -736,6 +737,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureArchiveFlows(page, folder);
   await captureShareFlows(page, folder);
   await captureQuoteLinkFlows(page, folder);
+  await captureRecordImportFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -4006,6 +4008,123 @@ async function captureQuoteLinkFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/quote-link-answered`);
 }
 
+/** Pass the fresh-code gate on a page, when it is shown. */
+async function passSudoGate(page: Page) {
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
+    await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  }
+}
+
+/** Take a file back from its page's history and wait for the line to say so. */
+async function takeBackFile(page: Page, path: string, label: string, name: string) {
+  await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
+  await passSudoGate(page);
+  const row = page.locator("tbody tr", { hasText: label });
+  await row.locator("details > summary", { hasText: "Take back" }).click();
+  await row.locator("input[name=reason]").fill("Screenshot run: the harness's own file");
+  await row.getByRole("button", { name: "Take this file back" }).click();
+  // The form goes with the act: the line itself says the file was taken back.
+  await row.filter({ hasText: "Taken back" }).waitFor({ timeout: 15_000 });
+  await shoot(page, name);
+}
+
+/**
+ * Companies and people from a file. A companies file is rehearsed (nothing written) and
+ * then brought in: one added with its owner matched by address, one already here, and a
+ * repeat, a look-alike and a personal domain left out — downloadable as the file's own
+ * columns with the reason. A people file then joins one person to that company by their
+ * address's domain and names a firm HQ does not have. Both files are listed, and taken
+ * back people first: the company has nobody on it again, so it goes too.
+ */
+async function captureRecordImportFlows(page: Page, folder: string) {
+  const stamp = Date.now().toString(36);
+  const domain = `harness-${stamp}.example`;
+  const companiesFile = `harness-companies-${stamp}.csv`;
+  const companies = [
+    "Name,Domain,Country,Owner,Notes",
+    `Harness Fund ${stamp},${domain},India,sales@hq.test,Brought in by the harness`,
+    `Harness Fund ${stamp} again,${domain},India,,The same domain again`,
+    "Kestrel Research,kestrelresearch.io,Ireland,,Already here",
+    "Kestrel Research Ltd,,Ireland,,A look-alike with no domain",
+    "Mail Co,gmail.com,India,,Not a company's domain",
+  ].join("\n");
+  await page.goto(`${BASE}/companies/import`, { waitUntil: "networkidle" });
+  await page.setInputFiles("#companies-csv", {
+    name: companiesFile,
+    mimeType: "text/csv",
+    buffer: Buffer.from(companies, "utf8"),
+  });
+  await page.waitForSelector("#companies-map-domain", { timeout: 10_000 });
+  if ((await page.locator("#companies-map-owner").inputValue()) !== "Owner")
+    report(`${folder}/companies-import-mapped`, "the Owner column was not matched to the owner");
+  await page.fill("#companies-import-reason", "The harness's own invented firms");
+  await shoot(page, `${folder}/companies-import-mapped`);
+  await page.getByRole("button", { name: "Try it first" }).click();
+  await page.waitForSelector("#companies-import-done:has-text('What this file would do')", {
+    timeout: 30_000,
+  });
+  const rehearsed = await page.locator(".list-import__counts dd").allInnerTexts();
+  if (rehearsed.join("/") !== "1/0/1/3")
+    report(
+      `${folder}/companies-import-rehearsed`,
+      `expected 1 added, 1 already here and 3 left out, saw ${rehearsed.join("/")}`,
+    );
+  await shoot(page, `${folder}/companies-import-rehearsed`);
+  await page.getByRole("button", { name: /Bring in [0-9,]+ rows as companies/ }).click();
+  await page.waitForSelector("#companies-import-done:has-text('What happened')", {
+    timeout: 30_000,
+  });
+  const counts = await page.locator(".list-import__counts dd").allInnerTexts();
+  if (counts.join("/") !== "1/0/1/3")
+    report(`${folder}/companies-import-done`, `expected 1/0/1/3, saw ${counts.join("/")}`);
+  if ((await page.locator(".left-out-list__row").count()) !== 3)
+    report(`${folder}/companies-import-done`, "the three rows left out are not listed");
+  await shoot(page, `${folder}/companies-import-done`);
+
+  const peopleFile = `harness-people-${stamp}.csv`;
+  const people = [
+    "First name,Last name,Email,Title,Company",
+    `Asha,Harness,asha@${domain},Analyst,`,
+    `Ravi,Harness,ravi.${stamp}@gmail.com,Partner,Nowhere Holdings ${stamp}`,
+    ",,not-an-address,,",
+  ].join("\n");
+  await page.goto(`${BASE}/people/import`, { waitUntil: "networkidle" });
+  await page.setInputFiles("#people-csv", {
+    name: peopleFile,
+    mimeType: "text/csv",
+    buffer: Buffer.from(people, "utf8"),
+  });
+  await page.waitForSelector("#people-map-email", { timeout: 10_000 });
+  await page.fill("#people-import-reason", "The harness's own invented people");
+  await page.getByRole("button", { name: /Bring in [0-9,]+ rows as people/ }).click();
+  await page.waitForSelector("#people-import-done:has-text('What happened')", {
+    timeout: 30_000,
+  });
+  const peopleCounts = await page.locator(".list-import__counts dd").allInnerTexts();
+  if (peopleCounts.join("/") !== "2/0/0/1")
+    report(`${folder}/people-import-done`, `expected 2/0/0/1, saw ${peopleCounts.join("/")}`);
+  if (
+    (await page
+      .locator(".list-import__result", { hasText: `Nowhere Holdings ${stamp}` })
+      .count()) === 0
+  )
+    report(`${folder}/people-import-done`, "the firm HQ does not have is not named");
+  await shoot(page, `${folder}/people-import-done`);
+
+  await takeBackFile(page, "/people/import", peopleFile, `${folder}/people-import-taken-back`);
+  await takeBackFile(
+    page,
+    "/companies/import",
+    companiesFile,
+    `${folder}/companies-import-taken-back`,
+  );
+  const line = page.locator("tbody tr", { hasText: companiesFile });
+  if ((await line.filter({ hasText: "1 removed" }).count()) === 0)
+    report(`${folder}/companies-import-taken-back`, "the company the file added did not go");
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4025,6 +4144,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   archive: captureArchiveFlows,
   share: captureShareFlows,
   quotelink: captureQuoteLinkFlows,
+  crmimport: captureRecordImportFlows,
 };
 
 async function runPart(browser: Browser) {

@@ -548,6 +548,14 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
               <Property label="Added">
                 <Timestamp value={company.created_at} mode="date" />
               </Property>
+              {detail.imported && (
+                <Property label="Came in with">
+                  <Link className="text-link" href="/companies/import">
+                    {detail.imported.label || "A file"}
+                  </Link>
+                  {detail.imported.by_name ? `, brought in by ${detail.imported.by_name}` : ""}
+                </Property>
+              )}
               <InlineField
                 {...inline}
                 name="notes"

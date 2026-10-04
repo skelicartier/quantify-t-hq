@@ -9,6 +9,17 @@ import { targetSchema } from "@/lib/api/targets";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
 
+/** The file a record came in with, on its page; null when somebody typed it in. */
+export const importedFromSchema = z
+  .object({
+    import_id: z.string(),
+    label: z.string(),
+    at: z.string().nullable(),
+    by_name: z.string(),
+  })
+  .nullable();
+export type ImportedFrom = z.infer<typeof importedFromSchema>;
+
 /**
  * Money the service totals for us, per currency and never added across: a deal in euros
  * and one in dollars are two figures, and `{}` is "nothing to total".
@@ -193,6 +204,8 @@ const companyDetailSchema = okEnvelope.extend({
   target: targetSchema.nullable().default(null),
   /** Its open signs of interest (0067). */
   signals: z.array(signalSchema).default([]),
+  /** The file it came in with (0071). */
+  imported: importedFromSchema.default(null),
 });
 export type CompanyDetail = z.infer<typeof companyDetailSchema>;
 
@@ -219,29 +232,106 @@ export function mergeCompany(token: string, companyId: string, into: string) {
   );
 }
 
-const importResultSchema = okEnvelope.extend({
-  created: z.array(z.object({ name: z.string() }).passthrough()),
-  skipped: z.array(z.object({ row: z.number(), name: z.string(), reason: z.string() })),
-  invalid: z.array(z.object({ row: z.number(), reason: z.string() })),
+/** Companies and people from a file (0071): one part's answer, every row accounted for. */
+const recordImportResultSchema = okEnvelope.extend({
+  /** "" for a rehearsal: nothing was written, so there is no file to name. */
+  import_id: z.string(),
+  dry_run: z.boolean(),
   rows: z.number(),
+  created: z.number(),
+  updated: z.number(),
+  unchanged: z.number(),
+  left_out_count: z.number(),
+  left_out: z.array(
+    z.object({ row: z.number(), name: z.string(), reason: z.string(), detail: z.string() }),
+  ),
+  created_records: z.array(
+    z.object({ record_id: z.string(), name: z.string(), company_id: z.string().optional() }),
+  ),
+  /** Owner addresses the file gave that are no active colleague's. */
+  owners_not_found: z.array(z.string()),
+  /** Firms the file named that HQ does not have. */
+  firms_not_found: z.array(z.string()),
 });
-export type ImportResult = z.infer<typeof importResultSchema>;
+export type RecordImportResult = z.infer<typeof recordImportResultSchema>;
+export type RecordImportKind = "companies" | "people";
 
-export function importCompanies(
-  token: string,
-  rows: readonly Record<string, string>[],
-  reason: string,
-) {
-  return postHqJson("hq/companies/import", importResultSchema, { token, body: { rows, reason } });
+export function importCompanies(token: string, input: Record<string, unknown>) {
+  return postHqJson("hq/companies/import", recordImportResultSchema, { token, body: input });
 }
 
-export function importPeople(
-  token: string,
-  rows: readonly Record<string, string>[],
-  reason: string,
-) {
-  return postHqJson("hq/people/import", importResultSchema, { token, body: { rows, reason } });
+export function importPeople(token: string, input: Record<string, unknown>) {
+  return postHqJson("hq/people/import", recordImportResultSchema, { token, body: input });
 }
+
+const recordImportLineSchema = z.object({
+  import_id: z.string(),
+  label: z.string(),
+  reason: z.string(),
+  rows: z.number(),
+  created: z.number(),
+  updated: z.number(),
+  unchanged: z.number(),
+  left_out: z.number(),
+  by: z.object({ staff_id: z.string(), name: z.string() }).nullable(),
+  started_at: z.string().nullable(),
+  rolled_back_at: z.string().nullable(),
+  rolled_back_by_name: z.string(),
+  removed_count: z.number(),
+  reverted_count: z.number(),
+  kept_count: z.number(),
+  /** Records the file made that are still here: what taking it back looks at. */
+  remaining: z.number(),
+  /** Fields it filled or replaced that have not been put back. */
+  changes: z.number(),
+});
+export type RecordImportLine = z.infer<typeof recordImportLineSchema>;
+
+const recordImportsSchema = okEnvelope.extend({
+  imports: z.array(recordImportLineSchema),
+  max_rows: z.number(),
+  /** The columns a file may fill in, and replace when ticked. */
+  columns: z.array(z.object({ column: z.string(), label: z.string() })),
+  reasons: z.array(z.string()),
+});
+export type RecordImports = z.infer<typeof recordImportsSchema>;
+
+export function readCompanyImports(token: string) {
+  return fetchHqJson("hq/companies/imports", recordImportsSchema, { token });
+}
+
+export function readPeopleImports(token: string) {
+  return fetchHqJson("hq/people/imports", recordImportsSchema, { token });
+}
+
+const recordTakeBackSchema = okEnvelope.extend({
+  import_id: z.string(),
+  removed: z.number(),
+  reverted: z.number(),
+  kept_records: z.number(),
+  kept_changes: z.number(),
+});
+export type RecordTakeBack = z.infer<typeof recordTakeBackSchema>;
+
+export function rollbackCompanyImport(token: string, importId: string, reason: string) {
+  return postHqJson(`hq/companies/imports/${importId}/rollback`, recordTakeBackSchema, {
+    token,
+    body: { reason },
+  });
+}
+
+export function rollbackPeopleImport(token: string, importId: string, reason: string) {
+  return postHqJson(`hq/people/imports/${importId}/rollback`, recordTakeBackSchema, {
+    token,
+    body: { reason },
+  });
+}
+
+/** Exported for the contract test: the answers to a write, parsed as the actions parse them. */
+export const RECORD_IMPORT_SCHEMAS = {
+  result: recordImportResultSchema,
+  takeBack: recordTakeBackSchema,
+} as const;
 
 /** A group someone judged "not the same", remembered by its exact records. */
 export const dismissalSchema = z.object({
@@ -346,6 +436,8 @@ const personDetailSchema = okEnvelope.extend({
   activities: z.array(activitySchema),
   open_tasks: z.array(taskSchema),
   custom_fields: z.array(customValueSchema).default([]),
+  /** The file they came in with (0071). */
+  imported: importedFromSchema.default(null),
 });
 export type PersonDetail = z.infer<typeof personDetailSchema>;
 

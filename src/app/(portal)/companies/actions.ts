@@ -9,6 +9,7 @@ import * as crmApi from "@/lib/api/crm";
 import * as targetsApi from "@/lib/api/targets";
 import { dismissDuplicates } from "@/lib/api/data-quality";
 import { fieldValue } from "@/lib/auth/forms";
+import { sendImportPart, takeBackImport } from "@/lib/crm/record-import-actions";
 import { crmRefusal } from "@/lib/crm/refusal";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
@@ -129,39 +130,22 @@ export async function dismissCrmGroupAction(
 }
 
 /** Rows a spreadsheet was mapped to, posted as JSON; the service validates each one. */
+/** One part of a file, or a rehearsal of it: every row comes back accounted for. */
 export async function importCompaniesAction(
   _previous: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
   await requireSameOriginServerAction(formData);
-  const context = await requireStaff("/companies/import");
-  if (!hasCapability(context, "crm:write")) return READ_ONLY;
-  const reason = fieldValue(formData, "reason", 400).trim();
-  if (reason.length < 4) return { status: "error", message: "Say where the file came from." };
-  let rows: Record<string, string>[];
-  try {
-    const parsed: unknown = JSON.parse(fieldValue(formData, "rows_json", 2_000_000) || "[]");
-    if (!Array.isArray(parsed)) throw new Error("not a list");
-    rows = parsed.filter(
-      (row): row is Record<string, string> => typeof row === "object" && row !== null,
-    );
-  } catch {
-    return { status: "error", message: "The rows could not be read. Map the columns again." };
-  }
-  if (rows.length === 0) return { status: "error", message: "No rows to import." };
-  if (rows.length > 500) return { status: "error", message: "At most 500 rows at a time." };
-  try {
-    const result = await crmApi.importCompanies(context.token, rows, reason);
-    revalidatePath("/companies");
-    return {
-      status: "sent",
-      message: `${result.created.length} created · ${result.skipped.length} skipped · ${result.invalid.length} invalid`,
-      sentAt: Date.now(),
-      detail: JSON.stringify(result),
-    };
-  } catch (error) {
-    return crmRefusal(error);
-  }
+  return sendImportPart("companies", formData);
+}
+
+/** Take a file back out: what nobody has touched since goes; the answer says what stayed. */
+export async function rollbackCompaniesImportAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  return takeBackImport("companies", formData);
 }
 
 /** Make the company a target account, or change its tier and plan. */
