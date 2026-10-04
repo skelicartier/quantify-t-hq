@@ -1233,6 +1233,13 @@ async function capturePrivilegedFlows(page: Page, folder: string) {
   await page.goto(`${BASE}/team/aa000000-0000-4000-8000-00000000000e`, {
     waitUntil: "networkidle",
   });
+  // A reveal needs a fresh code. The one confirmed above may have been an earlier flow's,
+  // run out since (the window is ten minutes): confirm again when the page asks.
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
+    await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  }
   const phone = page.locator(".reveal").filter({ hasText: "\u2022\u2022\u2022\u2022 23" }).first();
   if ((await phone.count()) === 0) {
     report(`${folder}/team-member-revealed`, "the emergency contact's phone is not masked");
@@ -4594,6 +4601,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   deskteam: captureDeskTeamFlows,
   reports: captureReportFlows,
   oneoff: captureOneOffFlows,
+  privileged: capturePrivilegedFlows,
 };
 
 async function runPart(browser: Browser) {
