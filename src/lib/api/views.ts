@@ -13,6 +13,8 @@ export const savedViewSchema = z.object({
   /** The list's query string without the leading `?`. */
   query: z.string(),
   shared: z.boolean(),
+  /** 0074: a shared view the team may change (its filters), not only open. */
+  team_edits: z.boolean().default(false),
   owner_staff_id: z.string(),
   mine: z.boolean(),
   updated_at: z.string().nullable(),

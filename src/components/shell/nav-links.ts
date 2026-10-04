@@ -18,6 +18,7 @@ import {
   Handshake,
   Inbox,
   LayoutDashboard,
+  PanelsTopLeft,
   LifeBuoy,
   HeartHandshake,
   Mail,
@@ -78,6 +79,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/home", label: "Home", icon: LayoutDashboard, key: "h" },
       // Everyone's: what needs this person, with the reason it is here.
       { href: "/inbox", label: "Inbox", icon: Bell, key: "i" },
+      // Everyone's: the reports they pinned, over whatever their role reads.
+      { href: "/reports/dashboard", label: "My dashboard", icon: PanelsTopLeft },
     ],
   },
   {

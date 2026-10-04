@@ -4,6 +4,7 @@ import { readCompanies, readLeads } from "@/lib/api/crm";
 import { readDealsBoard } from "@/lib/api/deals";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
 import { LEAD_STAGE_LABELS, LIFECYCLE_LABELS } from "@/lib/crm/vocabulary";
+import { readMe } from "@/lib/api/auth";
 import { formatMrr, formatWait } from "@/lib/format";
 import {
   companyFilterFields,
@@ -14,6 +15,15 @@ import {
   readLeadField,
 } from "@/lib/lists/definitions";
 import { applyFilters, parseFilters } from "@/lib/lists/filters";
+import {
+  formatReportValue,
+  loadReport,
+  parseDefinitionQuery,
+  recordsHref,
+  reportKindOfListKey,
+  runReport,
+  type ReportKind,
+} from "@/lib/reports/builder";
 
 export type DigestTable = {
   columns: string[];
@@ -21,7 +31,16 @@ export type DigestTable = {
   total: number;
 };
 
-export const DIGEST_LISTS = ["companies", "leads", "deals"] as const;
+export const DIGEST_LISTS = [
+  "companies",
+  "leads",
+  "deals",
+  "report-companies",
+  "report-leads",
+  "report-deals",
+  "report-tickets",
+  "report-tasks",
+] as const;
 const MAX_ROWS = 50;
 
 /**
@@ -110,5 +129,53 @@ export async function renderDigest(
       total: matched.length,
     };
   }
+  const kind = reportKindOfListKey(listKey);
+  if (kind) return renderReportDigest(token, kind, query);
   throw new Error(`no digest for the list ${listKey}`);
+}
+
+/**
+ * A saved report, mailed: each group's figure with a link to its records, run as the
+ * recipient — their reads, and money only if their role reads it.
+ */
+async function renderReportDigest(
+  token: string,
+  kind: ReportKind,
+  query: string,
+): Promise<DigestTable> {
+  const definition = parseDefinitionQuery(query, kind);
+  const [me, loaded] = await Promise.all([
+    readMe(token),
+    loadReport(token, definition, new Date().toISOString().slice(0, 10)),
+  ]);
+  const result = runReport(loaded, definition, me.capabilities.includes("revenue:read"));
+  const counting = result.unit === "count";
+  const format = (value: number | null) => formatReportValue(result, value);
+  // The notes come first: the service keeps the first fifty rows, and what the figure must
+  // be read with is never the part to lose. A time series keeps its latest months.
+  const notes = [
+    ...(result.refused ? [result.refused] : []),
+    ...result.leftOut.map((line) => `Left out: ${line.count} ${line.why}`),
+    ...result.notes,
+  ];
+  const room = MAX_ROWS - notes.length;
+  const groups = result.groupLabel
+    ? result.time
+      ? result.groups.slice(-room)
+      : result.groups.slice(0, room)
+    : [{ key: "", label: "All matching records", value: result.total, count: result.matched }];
+  return {
+    columns: [result.groupLabel || "Report", result.measureLabel, ...(counting ? [] : ["Records"])],
+    rows: [
+      ...notes.map((note) => ({
+        cells: [note, "", ...(counting ? [] : [""])],
+        path: recordsHref(definition),
+      })),
+      ...groups.map((group) => ({
+        cells: [group.label, format(group.value), ...(counting ? [] : [String(group.count)])],
+        path: result.groupLabel ? recordsHref(definition, group.key) : recordsHref(definition),
+      })),
+    ],
+    total: result.matched,
+  };
 }

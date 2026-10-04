@@ -115,6 +115,7 @@ import * as settings from "@/lib/api/settings";
 import * as staff from "@/lib/api/staff";
 import * as team from "@/lib/api/team";
 import * as tickets from "@/lib/api/tickets";
+import * as viewsApi from "@/lib/api/views";
 import * as trustApi from "@/lib/api/trust";
 import * as financeApi from "@/lib/api/finance";
 import * as quotesApi from "@/lib/api/quotes";
@@ -297,6 +298,16 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/staff/{staff_id}/handover", () => team.readHandover(token, ids.leaver_id!)],
   ["hq/search", () => searchApi.readSearch(token, "acme")],
   ["hq/me/recent", () => searchApi.readRecent(token)],
+  [
+    "hq/views",
+    async () => {
+      // A saved report is a view on a report-<kind> list, and carries whether the team edits it.
+      const read = await viewsApi.readViews(token, "");
+      expect(read.views.find((view) => view.list_key === "report-deals")?.team_edits).toBe(true);
+      return read;
+    },
+  ],
+  ["hq/preferences", () => viewsApi.readPreferences(token)],
   ["hq/companies/imports", () => crm.readCompanyImports(token)],
   ["hq/people/imports", () => crm.readPeopleImports(token)],
   [

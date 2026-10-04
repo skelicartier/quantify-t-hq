@@ -2540,6 +2540,8 @@ type SavedViewRow = {
   name: string;
   query: string;
   shared: boolean;
+  /** 0074: a shared view the team may change (its filters), not only open. */
+  team_edits: boolean;
   owner_staff_id: string;
   updated_at: string;
 };
@@ -2686,6 +2688,7 @@ function seedViews() {
       name: "UK customers",
       query: "lifecycle=customer&f=country%3Ais%3AUnited+Kingdom",
       shared: true,
+      team_edits: false,
       owner_staff_id: SALES_STAFF,
       updated_at: agoIso(24 * 9),
     },
@@ -2695,9 +2698,39 @@ function seedViews() {
       name: "Stuck this quarter",
       query: "sort=-days&view=table",
       shared: false,
+      team_edits: false,
       owner_staff_id: OWNER_STAFF,
       updated_at: agoIso(24 * 3),
     },
+    // Reports are saved views on a report-<kind> list: one the team shares, one private.
+    {
+      id: "sv000000-0000-4000-8000-000000000003",
+      list_key: "report-deals",
+      name: "Open pipeline by stage",
+      query: "kind=deals&by=stage&measure=sum%3Avalue",
+      shared: true,
+      team_edits: true,
+      owner_staff_id: SALES_STAFF,
+      updated_at: agoIso(24 * 2),
+    },
+    {
+      id: "sv000000-0000-4000-8000-000000000004",
+      list_key: "report-tickets",
+      name: "Conversations by priority",
+      query: "kind=tickets&by=priority&chart=table",
+      shared: false,
+      team_edits: false,
+      owner_staff_id: OWNER_STAFF,
+      updated_at: agoIso(24),
+    },
+  );
+  // The Owner pinned both to their dashboard.
+  preferences.set(
+    `${OWNER_STAFF}\u0000hq-dashboard`,
+    JSON.stringify([
+      "sv000000-0000-4000-8000-000000000003",
+      "sv000000-0000-4000-8000-000000000004",
+    ]),
   );
 }
 
@@ -2708,6 +2741,7 @@ function viewView(row: SavedViewRow, viewer: string) {
     name: row.name,
     query: row.query,
     shared: row.shared,
+    team_edits: row.shared && row.team_edits,
     owner_staff_id: row.owner_staff_id,
     mine: row.owner_staff_id === viewer,
     updated_at: row.updated_at,
@@ -13256,18 +13290,28 @@ routes.push(
       const found = caller(headers)!;
       const me = found.member.id;
       const isAdmin = (CAPABILITIES[found.member.role] ?? []).includes("hq:admin");
-      const cleanQuery = (value: unknown) => {
+      // Mirrors view_routes._query_or_refuse.
+      const cleanQuery = (value: unknown): { query: string } | { refused: string } => {
         const text = String(value ?? "").trim();
-        if (text.length > 400) return null;
-        if (/[\n\r<>]/.test(text)) return null;
-        return text.replace(/^\?/, "");
+        if (text.length > 400) return { refused: "at most 400 characters" };
+        if (/[\n\r<>]/.test(text)) return { refused: "a query string" };
+        return { query: text.replace(/^\?/, "") };
       };
       const viewId = String(body.view_id ?? "").trim();
       if (viewId) {
         const row = savedViews.find((candidate) => candidate.id === viewId);
         if (!row) return refuse(404, "not_found");
-        if (row.owner_staff_id !== me && !isAdmin)
-          return refuse(403, "forbidden", { reason: "not your view" });
+        const manages = row.owner_staff_id === me || isAdmin;
+        // Mirrors handle_view_save: the team-edit share lets anyone change the filters, and
+        // only the owner or an admin renames it or changes who sees it.
+        if (!manages) {
+          if (!(row.shared && row.team_edits))
+            return refuse(403, "forbidden", { reason: "not your view" });
+          if ("name" in body || "shared" in body || "team_edits" in body)
+            return refuse(403, "forbidden", {
+              reason: "only its owner or an admin renames it or changes its sharing",
+            });
+        }
         let changed = false;
         if ("name" in body) {
           const name = String(body.name ?? "")
@@ -13278,15 +13322,23 @@ routes.push(
           changed = true;
         }
         if ("query" in body) {
-          const query = cleanQuery(body.query);
-          if (query === null) return refuse(400, "malformed_request", { query: "a query string" });
-          row.query = query;
+          const cleaned = cleanQuery(body.query);
+          if ("refused" in cleaned)
+            return refuse(400, "malformed_request", { query: cleaned.refused });
+          row.query = cleaned.query;
           changed = true;
         }
         if ("shared" in body) {
           if (typeof body.shared !== "boolean")
             return refuse(400, "malformed_request", { shared: "true or false" });
           row.shared = body.shared;
+          if (!row.shared) row.team_edits = false;
+          changed = true;
+        }
+        if ("team_edits" in body) {
+          if (typeof body.team_edits !== "boolean")
+            return refuse(400, "malformed_request", { team_edits: "true or false" });
+          row.team_edits = body.team_edits && row.shared;
           changed = true;
         }
         if (!changed) return refuse(400, "malformed_request", { reason: "nothing to change" });
@@ -13301,8 +13353,9 @@ routes.push(
         .trim()
         .slice(0, 80);
       if (!name) return refuse(400, "malformed_request", { name: "name the view" });
-      const query = cleanQuery(body.query);
-      if (query === null) return refuse(400, "malformed_request", { query: "a query string" });
+      const cleaned = cleanQuery(body.query);
+      if ("refused" in cleaned) return refuse(400, "malformed_request", { query: cleaned.refused });
+      const query = cleaned.query;
       const mine = savedViews.filter(
         (row) => row.list_key === listKey && row.owner_staff_id === me,
       );
@@ -13318,6 +13371,7 @@ routes.push(
         name,
         query,
         shared: body.shared === true,
+        team_edits: body.shared === true && body.team_edits === true,
         owner_staff_id: me,
         updated_at: now(),
       };
@@ -45081,6 +45135,12 @@ const DIGEST_LISTS: Record<string, [string, string]> = {
   companies: ["Companies", "crm:read"],
   leads: ["Leads", "crm:read"],
   deals: ["Deals", "deals:read"],
+  // A saved report is a view on its report-<kind> list (digests.LISTS).
+  "report-companies": ["Report on companies", "crm:read"],
+  "report-leads": ["Report on leads", "crm:read"],
+  "report-deals": ["Report on deals", "deals:read"],
+  "report-tickets": ["Report on support conversations", "tickets:read"],
+  "report-tasks": ["Report on tasks", "crm:read"],
 };
 const digestsStore: DigestRow[] = [];
 /** What the mock "mailed": the harness reads it to see a digest arrived. */

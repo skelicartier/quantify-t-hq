@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { formatPercent } from "@/lib/format";
 
 /**
@@ -15,6 +17,10 @@ export type BarRow = {
   /** A second line under the label, e.g. "12 customers". */
   sub?: string | undefined;
   tone?: "accent" | "loss" | "muted" | undefined;
+  /** Where the records behind the bar are listed; the label becomes the link. */
+  href?: string | undefined;
+  /** Printed instead of the formatted value: "—" where there is nothing to measure. */
+  display?: string | undefined;
 };
 
 export function BarList({
@@ -35,7 +41,7 @@ export function BarList({
       {rows.map((row) => (
         <li key={row.key} className="barlist__row">
           <span className="barlist__label">
-            {row.label}
+            {row.href ? <Link href={row.href}>{row.label}</Link> : row.label}
             {row.sub && <span className="barlist__sub">{row.sub}</span>}
           </span>
           <span className="barlist__track" aria-hidden="true">
@@ -44,7 +50,7 @@ export function BarList({
               style={{ width: `${(Math.abs(row.value) / largest) * 100}%` }}
             />
           </span>
-          <span className="barlist__value">{format(row.value)}</span>
+          <span className="barlist__value">{row.display ?? format(row.value)}</span>
           <span className="barlist__share">
             {row.share === undefined ? "" : formatPercent(row.share)}
           </span>

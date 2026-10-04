@@ -71,8 +71,15 @@ function ScheduleFields({ settings, prefix }: { settings: DigestSettings; prefix
  * Saved views, mailed: what matches a view on the list, as you would see it on the list,
  * at the time you choose. Nothing is sent when nothing matches, unless you ask for that.
  */
-export default async function DigestsPage() {
+export default async function DigestsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const context = await requireStaff("/me/digests");
+  // A report's page links here with itself chosen.
+  const asked = (await searchParams).view;
+  const wanted = (Array.isArray(asked) ? asked[0] : asked) ?? "";
   let settings: DigestSettings | null = null;
   try {
     settings = await readDigests(context.token);
@@ -81,13 +88,15 @@ export default async function DigestsPage() {
       throw error;
   }
   const open = settings?.views.filter((view) => !view.subscribed) ?? [];
+  const chosen = open.find((view) => view.view_id === wanted)?.view_id ?? open[0]?.view_id;
+  const alreadyMailed = settings?.views.find((view) => view.view_id === wanted && view.subscribed);
 
   return (
     <>
       <PageHeader
         eyebrow="Me"
         title="My digests"
-        description="A saved view of Companies, Leads or Deals, mailed to you on a schedule: the rows that match it, read as you — the same filters, the same figures you are allowed to see. Save a view on the list first."
+        description="A saved view of Companies, Leads or Deals, or a saved report, mailed to you on a schedule: what matches it, read as you — the same filters, the same figures you are allowed to see. Save a view on the list, or a report, first."
       />
       {settings === null ? (
         <Callout tone="danger" role="alert">
@@ -95,6 +104,11 @@ export default async function DigestsPage() {
         </Callout>
       ) : (
         <div className="page-content">
+          {alreadyMailed && (
+            <Callout tone="neutral" compact>
+              “{alreadyMailed.name}” is already one of your digests: change its schedule below.
+            </Callout>
+          )}
           {!settings.mail_ready && (
             <Callout tone="attention" compact>
               Mail is not set up yet, so digests are kept but none can be sent.
@@ -175,7 +189,8 @@ export default async function DigestsPage() {
               <p className="muted">
                 Every view you can open is already a digest. Save a view on{" "}
                 <Link href="/companies">Companies</Link>, <Link href="/leads">Leads</Link> or{" "}
-                <Link href="/deals">Deals</Link> to mail another.
+                <Link href="/deals">Deals</Link>, or a <Link href="/reports/builder">report</Link>,
+                to mail another.
               </p>
             ) : (
               <ActForm
@@ -187,7 +202,7 @@ export default async function DigestsPage() {
                 tight={false}
               >
                 <Field id="digest-view" label="View">
-                  <Select id="digest-view" name="view_id" defaultValue={open[0]?.view_id}>
+                  <Select id="digest-view" name="view_id" defaultValue={chosen}>
                     {open.map((view) => (
                       <option key={view.view_id} value={view.view_id}>
                         {view.list_label}: {view.name}

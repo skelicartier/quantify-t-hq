@@ -5456,6 +5456,187 @@
     font-size: 12.5px;
   }
 
+  /* Reports: a figure, the builder's controls, saving, a dashboard of pinned ones. */
+  .report-builder .rsection + .rsection {
+    margin-top: 28px;
+  }
+
+  .report-kinds {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+
+  .report-kinds__current {
+    padding: 0 8px;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .report-builder__form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px 16px;
+    margin-bottom: 12px;
+  }
+
+  .report-builder__form .field {
+    flex: 1 1 180px;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .report-figure {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .report-figure__whole {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    margin: 0;
+  }
+
+  .report-figure__label {
+    flex-basis: 100%;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .report-figure__value {
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-decoration: none;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  .report-figure__value:hover,
+  .report-figure__value:focus-visible {
+    text-decoration: underline;
+  }
+
+  .report-figure__of {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .report-figure__note,
+  .report-figure__more {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .report-save {
+    display: grid;
+    gap: 14px;
+    max-width: 520px;
+  }
+
+  .report-save__sharing {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .report-save__option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+  }
+
+  .report-save .btn {
+    justify-self: start;
+  }
+
+  .report-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px 24px;
+    margin: 0 0 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .report-facts dt {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .report-facts dd {
+    margin: 2px 0 0;
+    overflow-wrap: anywhere;
+  }
+
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+    gap: 16px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .dashboard-card {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    min-width: 0;
+    padding: 14px 16px 16px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+  }
+
+  .dashboard-card__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .dashboard-card__title {
+    margin: 0;
+    min-width: 0;
+    font-size: 15px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .dashboard-card__title a {
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  .dashboard-card__title a:hover,
+  .dashboard-card__title a:focus-visible {
+    text-decoration: underline;
+  }
+
+  .dashboard-card__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .dashboard-card__tools .stack-form {
+    margin: 0;
+  }
+
   /* The audit filter's two days stay together when the strip wraps. */
   .audit-days {
     display: inline-flex;

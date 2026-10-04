@@ -138,6 +138,30 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "reports-attribution", path: "/reports/attribution", ready: ".barlist" },
   // The desk over time: the backlog, first replies and resolutions, by priority, day by day.
   { name: "reports-desk", path: "/reports/desk", ready: ".stat-grid" },
+  // Reports built from any list: the builder, a line over months, the saved ones, one
+  // report, the records behind a figure, and the dashboard of pinned reports.
+  {
+    name: "reports-builder",
+    path: "/reports/builder?kind=deals&by=stage",
+    ready: ".report-figure",
+  },
+  {
+    name: "reports-builder-line",
+    path: "/reports/builder?kind=tickets&by=opened&chart=line",
+    ready: ".report-figure",
+  },
+  { name: "reports-saved", path: "/reports/saved", ready: ".data-table" },
+  {
+    name: "report",
+    path: "/reports/saved/sv000000-0000-4000-8000-000000000003",
+    ready: ".report-figure",
+  },
+  {
+    name: "report-records",
+    path: "/reports/records?kind=tickets&by=priority&g=high",
+    ready: ".data-table",
+  },
+  { name: "reports-dashboard", path: "/reports/dashboard", ready: ".dashboard-grid" },
   {
     name: "lead-went-on",
     path: "/leads/1e000000-0000-4000-8000-000000000006",
@@ -757,6 +781,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureHandoverFlows(page, folder);
   await captureRepeatTaskFlows(page, folder);
   await captureDeskTeamFlows(page, folder);
+  await captureReportFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -4373,6 +4398,105 @@ async function captureDeskTeamFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/support-sent-anyway`);
 }
 
+/**
+ * A report from nothing: deals by owner, their total monthly value; saved for the team,
+ * pinned, a bar opened to its records, moved up the dashboard, offered as a digest, and
+ * deleted (which takes it off the dashboard too).
+ */
+async function captureReportFlows(page: Page, folder: string) {
+  const name = `Pipeline by owner ${Date.now().toString(36)}`;
+  await page.goto(`${BASE}/reports/builder?kind=deals`, { waitUntil: "networkidle" });
+  await page.selectOption("#report-by", "owner");
+  await page.selectOption("#report-measure", "sum:value");
+  await page.locator(".report-builder__form button[type=submit]").click();
+  await page.waitForURL(/by=owner/, { timeout: 15_000 });
+  await page.locator(".report-figure .barlist").waitFor({ timeout: 15_000 });
+  await page.fill("#report-name", name);
+  await page.locator("input[name=sharing][value=team]").check();
+  await shoot(page, `${folder}/report-built`);
+  await page.getByRole("button", { name: "Save report" }).click();
+  await page.waitForURL(/\/reports\/saved\/[0-9a-z-]+$/, { timeout: 15_000 });
+  const reportUrl = page.url();
+  if ((await page.locator("h1", { hasText: name }).count()) === 0)
+    report(`${folder}/report-saved`, "the saved report does not open under its name");
+  if ((await page.locator(".report-facts dd", { hasText: "The team opens it" }).count()) === 0)
+    report(`${folder}/report-saved`, "the report does not say the team can open it");
+  await page.getByRole("button", { name: "Pin to my dashboard" }).click();
+  await page
+    .getByRole("button", { name: "Take off my dashboard" })
+    .waitFor({ timeout: 15_000 })
+    .catch(() => undefined);
+  if ((await page.getByRole("button", { name: "Take off my dashboard" }).count()) === 0)
+    report(`${folder}/report-saved`, "pinning did not take");
+  await shoot(page, `${folder}/report-saved`);
+
+  // A bar opens the records behind it, and there are as many as the bar says.
+  const bar = page.locator(".barlist__row").first();
+  const sub = (
+    (await bar
+      .locator(".barlist__sub")
+      .innerText()
+      .catch(() => "")) || ""
+  ).trim();
+  await bar.locator(".barlist__label a").click();
+  await page.waitForURL(/\/reports\/records\?/, { timeout: 15_000 });
+  await page.locator(".data-table, .page-note").first().waitFor({ timeout: 15_000 });
+  const said = (await page.locator(".page-content > .page-note").first().innerText()).trim();
+  if (sub && !said.startsWith(sub.split(" ")[0] ?? ""))
+    report(`${folder}/report-records-flow`, `the bar said "${sub}" and the records page "${said}"`);
+  await shoot(page, `${folder}/report-records-flow`);
+
+  // On the dashboard it is last; Up moves it one place.
+  await page.goto(`${BASE}/reports/dashboard`, { waitUntil: "networkidle" });
+  const cards = page.locator(".dashboard-card");
+  const before = await cards.count();
+  if ((await cards.last().locator(".dashboard-card__title", { hasText: name }).count()) === 0)
+    report(`${folder}/report-dashboard`, "the pinned report is not last on the dashboard");
+  if (before > 1) {
+    await cards
+      .last()
+      .getByRole("button", { name: `Move ${name} up` })
+      .click();
+    await page
+      .locator(".dashboard-card")
+      .nth(before - 2)
+      .locator(".dashboard-card__title", { hasText: name })
+      .waitFor({ timeout: 15_000 })
+      .catch(() => undefined);
+    if (
+      (await page
+        .locator(".dashboard-card")
+        .nth(before - 2)
+        .locator(".dashboard-card__title", { hasText: name })
+        .count()) === 0
+    )
+      report(`${folder}/report-dashboard`, "Up did not move the report");
+  }
+  await shoot(page, `${folder}/report-dashboard`);
+
+  // Mailed: the digests page opens with it chosen.
+  await page.goto(reportUrl, { waitUntil: "networkidle" });
+  await page.getByRole("link", { name: "Mail it to me" }).click();
+  await page.waitForURL(/\/me\/digests\?view=/, { timeout: 15_000 });
+  const chosen = await page
+    .locator("#digest-view option:checked")
+    .innerText()
+    .catch(() => "");
+  if (!chosen.includes(name))
+    report(`${folder}/report-digest`, `the digest form chose "${chosen}", not the report`);
+  await shoot(page, `${folder}/report-digest`);
+
+  // Deleted: off the saved list and off the dashboard.
+  await page.goto(reportUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "Delete the report" }).click();
+  await page.waitForURL(/\/reports\/saved$/, { timeout: 15_000 });
+  if ((await page.locator("td a", { hasText: name }).count()) > 0)
+    report(`${folder}/report-deleted`, "the deleted report is still listed");
+  await page.goto(`${BASE}/reports/dashboard`, { waitUntil: "networkidle" });
+  if ((await page.locator(".dashboard-card__title", { hasText: name }).count()) > 0)
+    report(`${folder}/report-deleted`, "the deleted report is still on the dashboard");
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4397,6 +4521,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   handover: captureHandoverFlows,
   repeat: captureRepeatTaskFlows,
   deskteam: captureDeskTeamFlows,
+  reports: captureReportFlows,
 };
 
 async function runPart(browser: Browser) {
