@@ -287,19 +287,17 @@ LACKS against the market's rating) and §3 the order below.
 | Quote links                     | A sent, valid quote gets a link its customer opens at `/q/<token>` without a session: the order form with prices (never list prices, discounts or approvals), accept with name, address and "I agree", or decline with a reason. Accepting signs the quote as a recorded signature does — the deal's quote, the others withdrawn — with the link, the moment and the document's SHA-256 in the signed copy. One answer per link; the first view and the answer reach whoever made it; an unknown, revoked or expired token is the same 404; answers throttled per address. The token is shown once and only its hash kept; never past the quote's own date.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | service `quote_link_routes.py`, `quote_routes.py`; portal `deals/quote-links.tsx`, `deals/quote-answer.tsx`, `app/q/[token]`                              |
 | Outside links                   | Admin → Outside links: every link that lets someone outside HQ read something inside it — auditor views of the control map and customer quote links — who made it, when it ends, how often it was opened, where it is revoked. Live first, then the last ninety days.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | service `share_routes.handle_external_links`; portal `admin/links/page.tsx`                                                                               |
 | Imports of companies and people | Migration 0071 (`record_imports.py`): CRM → Companies → Import and People → Import to the leads' standard. A file in parts under one run is one line in a ledger; every row accounted for (added, filled in, already here, left out with the reason), first as a rehearsal that writes nothing. Matched by the record's ID (an HQ export comes back in), then by domain or address; a company with no domain sharing only a name is a look-alike, left out; an archived match is left out. "Fill in" fills blanks, only ticked columns are replaced, an empty cell never wipes, names/domains/addresses never change, a "do not contact" is always honoured and never removed. A company's owner by the colleague's address, else the default chosen; the answer names unknown owners and firms. Custom fields typed as the field is (a choice by its label too). The rows left out download as the file's own columns with the reason last. Taking a file back (fresh code, reason) removes what nobody has edited, archived, linked to or written about since and puts back each field still holding the file's value; the rest stays, counted. A record names the file it came in with. Automations do not run on imported rows; validation rules and required fields do not apply (bulk writes never have). | service `record_imports.py`, 0071; portal `crm/record-import.tsx`, `crm/record-import-history.tsx`, `lib/crm/record-import-actions.ts`                    |
+| Find and create                 | `hq/search` (`search_routes.py`): one search across companies, people, leads, deals, tickets, meetings, tasks, notes and calls, contracts, invoices, quotes and help articles — each kind only for a role whose own list reads it; ranked whole field, start, word start, anywhere, a title over a note, archived last and marked; every word of a several-word search must appear; at most 200 matches a kind ("200+"); notes and leads searched in SQL, not by reading the table; a list of matches opens no record. `hq/me/recent`: the person's own read log (90 days), one row a record, only what their role can still open. Portal: ⌘K searches everything with "See all results" to `/search` (kinds with counts, one kind up to 50, the query marked in titles and notes); before typing it shows Recently viewed and Create (New company, person, lead, Log a meeting, New task — each opens its page's form via `?new=1`); favourites kept with the account (preference `hq-favourites`); single-key shortcuts switchable off in the sheet or from ⌘K (`hq-single-keys`, WCAG 2.1.4), ⌘K always works.                                                                                                                                                                                               | service `search_routes.py`; portal `search/page.tsx`, `shell/command-palette.tsx`, `lib/prefs/single-keys.ts`, `shell/favourites.tsx`                     |
 | Backup                          | Admin → Backup: an Owner asks with a reason after a fresh code; with another Owner it waits for them (approval kind `backup`, migration 0069) and the asker downloads it once within 48 hours; alone it is made at once (`sole_approver`). One zip: a CSV per export kind with custom fields, the timeline, comments, support threads (internal notes marked), stages, sources, the price list, field definitions, the staff directory, mailing lists, consent and suppressions, and a README with who, who approved, why, what is left out and each file's SHA-256. Outside the export quota (the approval is the control), in the ledger; no marker rows. The approval schema now parses every kind the service has (`write_off` was missing: a waiting write-off broke the request and the Approvals list).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | service `backup_routes.py`, `dual_control.py`; portal `admin/backup/*`, `documents/backup-zip.ts`                                                         |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
 **The table-stakes order** (`docs/RESEARCH-2026-10-03-TABLESTAKES.md` §3; exports of a
 view, the backup, a person's data file, archive, share, quote links, the outside-links
-register and imports of companies and people are built, §4). Left from the archive item: undo on a single edit, and History
+register, imports of companies and people, and find and create are built, §4). Left from the archive item: undo on a single edit, and History
 putting a previous value back (a deal already leaves the lists when it closes and a lead
 when it is disqualified, so those two kinds were not given an archive of their own).
 
-5. **Find and create**: search across notes, tasks, meetings, contracts, invoices and help
-   articles with a results page; recently viewed from the read log; create from ⌘K;
-   favourites kept with the account; single-key shortcuts switchable off (WCAG 2.1.4).
 6. **Handover**: the offboarding run moves everything a leaver owns to a named colleague.
 7. **Tasks**: recurring tasks and a due-day reminder.
 8. **Reports**: a report builder, saved and shared, pinned to a personal dashboard, each
@@ -395,7 +393,35 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of imports of companies and people** (2026-10-04, fifth research pass).
+**As of find and create** (2026-10-04, fifth research pass).
+
+- Service: `search_routes.py` (`hq/search`, `hq/me/recent`), gateway `search_activities`,
+  `search_leads` and `list_recent_reads`; no migration (the read log is 0030's). Tests in
+  `tests/test_hq_search.py` (6).
+- A search reads every kind the role may open, but a table that can be large (leads, notes)
+  is asked in SQL for the query's longest word, at most 400 rows; the ranking then asks
+  for every word. Other kinds are read whole and filtered, as their own lists already are.
+- The mock now has `hq/search` and `hq/me/recent` mirroring the ranking; the harness part is
+  `HQ_HARNESS_FLOW=find` (palette before typing and after, the results page, one kind,
+  New company from ⌘K, the single-key switch, a favourite restored from the account).
+- Favourites and the single-key switch ride the existing preferences route
+  (`hq-favourites`, `hq-single-keys`); a preference holds 2,000 characters, so the
+  account copy of the favourites trims labels and drops the oldest past that.
+- The 2026-10-04 walks before this wave: desktop 789 checks and phone 789, clean, on the
+  batch through the imports; HQ pushed after them.
+- The harness had never shot ⌘K open, so the palette's markup had never met axe: options
+  (buttons) inside list items inside a listbox failed three critical rules on every
+  open. It is now the grouped listbox of the WAI-ARIA practices — the input a combobox
+  with `aria-activedescendant`, `role="group"` sections labelled by a presentation item,
+  `li role="option"` rows. Its 46px input row was a shrinkable flex item, squeezed to
+  20px by a long list; the input and footer no longer shrink.
+- The search highlight was light text on bright amber (1.65:1); it is weight and the faint
+  accent wash on the text's own colour. A count inside the selected kind takes the
+  link's colour (quiet grey on the wash was 4.43:1).
+- A flow that picks a palette row must match its title exactly: "See all results for
+  “new company”" contains "New company" (Playwright's `hasText` ignores case).
+
+**Before that: imports of companies and people** (2026-10-04, fifth research pass).
 
 - Service `43a98d9` (the company insert), `56be588` (0071 imports), `6e6420a` (repeats
   counted), local. Service suite 2,136 passed, 4 skipped (`tests/test_hq_record_imports.py`

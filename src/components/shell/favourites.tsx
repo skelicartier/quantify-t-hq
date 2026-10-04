@@ -5,10 +5,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSyncExternalStore } from "react";
 
+import { syncPreference } from "@/lib/prefs/sync";
+
 /**
- * Favourites: the ten records a person keeps returning to, pinned at the top of the
- * rail. Kept on this device only — a favourite is a private bookmark, not a shared fact —
- * so the list is read from storage and never sent to the service.
+ * Favourites: the records a person keeps returning to, pinned at the top of the rail.
+ * Private to the person, and kept with their account like their other display
+ * preferences, so a favourite pinned on the laptop is there on the phone: the device's
+ * copy is the fast path, mirrored to the account and brought back by the hydrator.
  */
 
 export type Favourite = { href: string; label: string; kind: string };
@@ -44,14 +47,26 @@ function parse(raw: string): Favourite[] {
   }
 }
 
+/** The list as the account keeps it: a preference holds 2,000 characters at most. */
+function forAccount(favourites: readonly Favourite[]): string {
+  const kept = favourites.map((entry) => ({ ...entry, label: entry.label.slice(0, 80) }));
+  let text = JSON.stringify(kept);
+  while (text.length > 2000 && kept.length) {
+    kept.pop();
+    text = JSON.stringify(kept);
+  }
+  return text;
+}
+
 function write(favourites: readonly Favourite[]) {
+  const text = JSON.stringify(favourites);
   try {
-    if (favourites.length) window.localStorage.setItem(KEY, JSON.stringify(favourites));
-    else window.localStorage.removeItem(KEY);
+    window.localStorage.setItem(KEY, text);
   } catch {
     // Without storage the star lasts for the page.
   }
   window.dispatchEvent(new Event(EVENT));
+  syncPreference(KEY, forAccount(favourites));
 }
 
 function subscribe(onChange: () => void) {

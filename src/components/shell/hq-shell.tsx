@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { searchRecordsAction } from "@/app/(portal)/_actions/search";
+import { recentlyViewedAction, searchRecordsAction } from "@/app/(portal)/_actions/search";
 import { PrintFrame } from "@/components/documents/print-frame";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { ContextBar } from "@/components/shell/context-bar";
@@ -72,7 +72,11 @@ export function HqShell({
           {children}
         </main>
       </div>
-      <CommandPalette capabilities={capabilities} search={searchRecordsAction} />
+      <CommandPalette
+        capabilities={capabilities}
+        search={searchRecordsAction}
+        recent={recentlyViewedAction}
+      />
       <Shortcuts capabilities={capabilities} />
     </ThemeScope>
   );

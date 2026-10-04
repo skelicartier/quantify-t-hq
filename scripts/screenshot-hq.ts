@@ -75,6 +75,8 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "support-following", path: "/support?view=all&following=1", ready: ".desk" },
   { name: "companies-import", path: "/companies/import", ready: ".list-import" },
   { name: "people-import", path: "/people/import", ready: ".list-import" },
+  { name: "search", path: "/search?q=kestrel", ready: ".search-results" },
+  { name: "search-recent", path: "/search", ready: "main#main-content" },
   { name: "companies-grouped", path: "/companies?group=lifecycle", ready: ".data-table" },
   {
     name: "companies-peek",
@@ -738,6 +740,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureShareFlows(page, folder);
   await captureQuoteLinkFlows(page, folder);
   await captureRecordImportFlows(page, folder);
+  await captureFindFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -4125,6 +4128,107 @@ async function captureRecordImportFlows(page: Page, folder: string) {
     report(`${folder}/companies-import-taken-back`, "the company the file added did not go");
 }
 
+/** Open ⌘K from anywhere and wait for its input. */
+async function openPaletteFrom(page: Page) {
+  await page.keyboard.press("Control+k");
+  await page.locator("dialog.palette[open] input").waitFor({ timeout: 10_000 });
+}
+
+/**
+ * Find and create. A company opened shows under Recently viewed; ⌘K finds it by name and
+ * hands the full results page the query; one kind can be asked for; "New company" opens
+ * the Companies form; the single-key switch stops `g h` and is put back; and a favourite
+ * pinned here comes back from the account on a device with nothing stored.
+ */
+async function captureFindFlows(page: Page, folder: string) {
+  const firm = "c0000000-0000-4000-8000-000000000004";
+  await page.goto(`${BASE}/companies/${firm}`, { waitUntil: "networkidle" });
+  const name = (await page.locator(".rhead h1").first().innerText()).trim();
+  await page.goto(`${BASE}/search`, { waitUntil: "networkidle" });
+  if (
+    (await page
+      .locator("section[aria-labelledby='search-recent'] .search-result__title", { hasText: name })
+      .count()) === 0
+  )
+    report(`${folder}/search-recent-opened`, `${name} is not under Recently viewed`);
+  await shoot(page, `${folder}/search-recent-opened`);
+
+  await openPaletteFrom(page);
+  // What was opened lately arrives a moment after the palette does.
+  const lately = page.locator(".palette__group", { hasText: "Recently viewed" });
+  await lately.waitFor({ timeout: 10_000 }).catch(() => undefined);
+  if ((await lately.count()) === 0)
+    report(`${folder}/palette-before-typing`, "the palette does not show what was opened lately");
+  await shoot(page, `${folder}/palette-before-typing`);
+  await page.locator("dialog.palette[open] input").fill("kestrel");
+  const seeAll = page.locator(".palette__item", { hasText: "See all results for" });
+  await seeAll.waitFor({ timeout: 15_000 });
+  await page.locator(".palette__item", { hasText: "Kestrel" }).nth(1).waitFor({ timeout: 15_000 });
+  await shoot(page, `${folder}/palette-search`);
+  await seeAll.click();
+  await page.waitForURL("**/search?q=kestrel", { timeout: 15_000 });
+  await page.locator(".search-results").first().waitFor({ timeout: 15_000 });
+  await shoot(page, `${folder}/search-results`);
+  await page.locator(".search-kinds a", { hasText: "Companies" }).click();
+  await page.waitForURL("**/search?q=kestrel&kind=company", { timeout: 15_000 });
+  await page.locator("#search-company").waitFor({ timeout: 15_000 });
+  await shoot(page, `${folder}/search-one-kind`);
+
+  await openPaletteFrom(page);
+  await page.locator("dialog.palette[open] input").fill("new company");
+  // By its exact title: "See all results for “new company”" contains the words too.
+  await page
+    .locator(".palette__item", {
+      has: page.locator(".palette__title", { hasText: /^New company$/ }),
+    })
+    .click();
+  await page.waitForURL("**/companies?new=1", { timeout: 15_000 });
+  if ((await page.locator("details.popover[open]").count()) === 0)
+    report(`${folder}/companies-new-open`, "the create form is not open");
+  await shoot(page, `${folder}/companies-new-open`);
+
+  // The switch: off, `g h` does nothing; on again for the passes after this one.
+  await page.goto(`${BASE}/companies`, { waitUntil: "networkidle" });
+  await openPaletteFrom(page);
+  await page.locator("dialog.palette[open] input").fill("keyboard shortcuts");
+  await page
+    .locator(".palette__item", {
+      has: page.locator(".palette__title", { hasText: /^Keyboard shortcuts$/ }),
+    })
+    .click();
+  const sheet = page.locator("dialog.shortcuts[open]");
+  await sheet.waitFor({ timeout: 10_000 });
+  const toggle = sheet.locator(".shortcuts__switch input");
+  if (await toggle.isChecked()) await toggle.uncheck();
+  await shoot(page, `${folder}/shortcuts-off`);
+  await sheet.getByRole("button", { name: "Close" }).click();
+  await page.keyboard.press("g");
+  await page.keyboard.press("h");
+  await page.waitForTimeout(600);
+  if (!page.url().includes("/companies"))
+    report(`${folder}/shortcuts-off`, "a single-key shortcut fired while switched off");
+  await page.evaluate(() => window.dispatchEvent(new Event("hq-shortcuts-open")));
+  await sheet.waitFor({ timeout: 10_000 });
+  await toggle.check();
+  await sheet.getByRole("button", { name: "Close" }).click();
+
+  // A favourite kept with the account: pinned, the device forgets it, a reload brings it back.
+  await page.goto(`${BASE}/companies/${firm}`, { waitUntil: "networkidle" });
+  const star = page.locator("button.fav-star").first();
+  if ((await star.getAttribute("aria-pressed")) !== "true") await star.click();
+  await page.waitForTimeout(1_200); // the account copy is written after a short pause
+  await page.evaluate(() => window.localStorage.removeItem("hq-favourites"));
+  await page.goto(`${BASE}/home`, { waitUntil: "networkidle" });
+  const pinned = page.locator(".rail__group--favourites a", { hasText: name });
+  await pinned.waitFor({ timeout: 10_000 }).catch(() => undefined);
+  if ((await pinned.count()) === 0)
+    report(`${folder}/favourite-from-account`, "the favourite did not come back from the account");
+  console.log(`  ✓ ${folder}/favourite-from-account`);
+  await page.goto(`${BASE}/companies/${firm}`, { waitUntil: "networkidle" });
+  if ((await star.getAttribute("aria-pressed")) === "true") await star.click();
+  await page.waitForTimeout(1_200);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4145,6 +4249,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   share: captureShareFlows,
   quotelink: captureQuoteLinkFlows,
   crmimport: captureRecordImportFlows,
+  find: captureFindFlows,
 };
 
 async function runPart(browser: Browser) {

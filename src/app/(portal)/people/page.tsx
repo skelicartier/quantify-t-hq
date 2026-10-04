@@ -77,7 +77,7 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
               Archived
             </Link>
             {canWrite ? (
-              <Popover label="Add person" variant="primary">
+              <Popover label="Add person" variant="primary" defaultOpen={parameters.new === "1"}>
                 <PersonCreateForm
                   action={createPersonAction}
                   companies={companyOptions}

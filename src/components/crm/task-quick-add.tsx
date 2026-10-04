@@ -17,6 +17,8 @@ type TaskQuickAddProps = {
   /** Active colleagues; the first option is the person adding the task. */
   assignees: ReadonlyArray<{ staff_id: string; display_name: string }>;
   selfId: string;
+  /** The cursor starts here: the form was asked for from ⌘K (`?new=1`). */
+  autoFocus?: boolean;
 };
 
 /** One line to promise something: what, by when, for whom. */
@@ -26,6 +28,7 @@ export function TaskQuickAdd({
   returnPath,
   assignees,
   selfId,
+  autoFocus = false,
 }: TaskQuickAddProps) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   const scope = Object.values(links).find(Boolean) ?? "all";
@@ -45,6 +48,7 @@ export function TaskQuickAdd({
         className="input task-add__title"
         name="title"
         maxLength={200}
+        autoFocus={autoFocus}
         required
         placeholder="Add a task — what will you do next?"
         disabled={isPending}

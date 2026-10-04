@@ -8,6 +8,8 @@ type PopoverProps = {
   /** Which edge the panel hangs from; "end" for header actions on the right. */
   align?: "start" | "end";
   width?: "narrow" | "wide";
+  /** Drawn open: a create form reached from ⌘K (`?new=1`). */
+  defaultOpen?: boolean;
   children: ReactNode;
 };
 
@@ -22,10 +24,11 @@ export function Popover({
   variant = "default",
   align = "end",
   width = "narrow",
+  defaultOpen = false,
   children,
 }: PopoverProps) {
   return (
-    <details className={`popover popover--${align}`}>
+    <details className={`popover popover--${align}`} open={defaultOpen || undefined}>
       <summary className={buttonClass({ variant, size: "small", className: "popover__trigger" })}>
         {label}
       </summary>

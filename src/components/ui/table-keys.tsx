@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 import { isTypingTarget } from "@/components/shell/palette-bus";
+import { singleKeysOn } from "@/lib/prefs/single-keys";
 
 /**
  * `j`/`k` walk the rows of every list on the page, `Enter` opens the active row's
@@ -30,6 +31,8 @@ export function TableKeys() {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (isTypingTarget(event.target)) return;
       if (document.querySelector("dialog[open]")) return;
+      // Escape is not a character key; the letters wait on the person's switch.
+      if (event.key !== "Escape" && event.key !== "Enter" && !singleKeysOn()) return;
       const list = rows();
       if (list.length === 0) return;
       if (event.key === "j" || event.key === "k") {

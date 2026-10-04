@@ -17,6 +17,8 @@ export function PreferencesHydrator({
   useEffect(() => {
     const events: Record<string, string> = {
       "hq-density": "hq-density-change",
+      "hq-favourites": "hq-favourites-change",
+      "hq-single-keys": "hq-single-keys-change",
     };
     for (const [key, value] of Object.entries(preferences)) {
       try {

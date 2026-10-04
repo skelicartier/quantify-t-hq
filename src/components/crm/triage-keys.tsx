@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 import { isTypingTarget } from "@/components/shell/palette-bus";
+import { singleKeysOn } from "@/lib/prefs/single-keys";
 
 /**
  * Triage's four verbs and the skip, on the keyboard: `1` take it, `2` its look-alikes,
@@ -16,6 +17,7 @@ export function TriageKeys() {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (isTypingTarget(event.target)) return;
       if (document.querySelector("dialog[open]")) return;
+      if (!singleKeysOn()) return;
       const key = event.key.toLowerCase();
       if (!["1", "2", "3", "h", "j"].includes(key)) return;
       const target = document.querySelector<HTMLElement>(`[data-triage-key="${key}"]`);

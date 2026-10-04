@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 import { isTypingTarget } from "@/components/shell/palette-bus";
+import { singleKeysOn } from "@/lib/prefs/single-keys";
 
 export const COMPOSER_MODE_EVENT = "hq-composer-mode";
 
@@ -27,6 +28,7 @@ export function DeskKeys() {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (isTypingTarget(event.target)) return;
       if (document.querySelector("dialog[open]")) return;
+      if (!singleKeysOn()) return;
       const map: Record<string, () => boolean> = {
         r: () => {
           window.dispatchEvent(new CustomEvent(COMPOSER_MODE_EVENT, { detail: "reply" }));

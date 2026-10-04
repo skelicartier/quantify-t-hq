@@ -53963,6 +53963,536 @@ function seedRecordImports() {
 }
 seedRecordImports();
 
+// --- find anything — mirrors search_routes.py ---------------------------------------------
+// Each kind searched only for those whose role reads it; ranked whole field, start, word
+// start, anywhere; a title over a note; archived last; at most 200 matches a kind; a
+// person's recently viewed from their own reads. Reading matches opens no record.
+
+const SEARCH_KINDS: Array<[string, string, string]> = [
+  ["company", "Companies", "crm:read"],
+  ["person", "People", "crm:read"],
+  ["lead", "Leads", "crm:read"],
+  ["deal", "Deals", "deals:read"],
+  ["ticket", "Support", "tickets:read"],
+  ["meeting", "Meetings", "crm:read"],
+  ["task", "Tasks", "crm:read"],
+  ["note", "Notes and calls", "crm:read"],
+  ["contract", "Contracts", "revenue:read"],
+  ["invoice", "Invoices", "revenue:read"],
+  ["quote", "Quotes", "revenue:read"],
+  ["article", "Help articles", "tickets:read"],
+];
+const SEARCH_CAP = 200;
+const SEARCH_WORD_BREAK = /[\s@.,·/()\-_:;'"]+/;
+
+type SearchHit = {
+  kind: string;
+  id: string;
+  title: string;
+  subtitle: string;
+  href: string;
+  snippet: string;
+  archived: boolean;
+  at: string | null;
+  rank: number;
+};
+
+function searchFieldScore(needle: string, text: string): number {
+  const low = text.toLowerCase();
+  if (!low || !low.includes(needle)) return 0;
+  if (low === needle) return 100;
+  if (low.startsWith(needle)) return 80;
+  if (low.split(SEARCH_WORD_BREAK).some((word) => word && word.startsWith(needle))) return 60;
+  return 40;
+}
+
+function searchScore(query: string, fields: Array<[string, number]>): [number, string] {
+  const needle = query.toLowerCase();
+  let best = 0;
+  let matched = "";
+  for (const [text, weight] of fields) {
+    const found = searchFieldScore(needle, text);
+    if (found && found + weight > best) {
+      best = found + weight;
+      matched = text;
+    }
+  }
+  if (best) return [best, matched];
+  const words = needle.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return [0, ""];
+  const joined = fields.map(([text]) => text.toLowerCase()).join(" ");
+  if (words.every((word) => joined.includes(word)))
+    return [30, fields.find(([text]) => text.toLowerCase().includes(words[0]!))?.[0] ?? ""];
+  return [0, ""];
+}
+
+function searchSnippet(text: string, query: string, width = 140): string {
+  const flat = text.split(/\s+/).filter(Boolean).join(" ");
+  if (flat.length <= width) return flat;
+  const first = query.toLowerCase().split(/\s+/)[0] ?? query.toLowerCase();
+  const at = flat.toLowerCase().indexOf(first);
+  if (at < 0) return `${flat.slice(0, width - 1).replace(/\s+\S*$/, "")}…`;
+  const start = Math.max(0, at - Math.floor(width / 3));
+  const end = Math.min(flat.length, start + width);
+  let piece = flat.slice(start, end);
+  if (start > 0) piece = `…${piece.includes(" ") ? piece.slice(piece.indexOf(" ") + 1) : piece}`;
+  if (end < flat.length) piece = `${piece.replace(/\s+\S*$/, "")}…`;
+  return piece;
+}
+
+function searchDay(value: string | null | undefined): string {
+  if (!value) return "";
+  const when = new Date(value);
+  if (Number.isNaN(when.getTime())) return "";
+  return `${when.getUTCDate()} ${when.toLocaleString("en-GB", { month: "short", timeZone: "UTC" })} ${when.getUTCFullYear()}`;
+}
+
+function searchAttached(row: {
+  deal_id?: string;
+  company_id?: string;
+  person_id?: string;
+  lead_id?: string;
+}): [string, string] {
+  if (row.deal_id)
+    return [
+      deals.find((item) => item.id === row.deal_id)?.name ?? "a record",
+      `/deals/${row.deal_id}`,
+    ];
+  if (row.company_id)
+    return [companyName(row.company_id) || "a record", `/companies/${row.company_id}`];
+  if (row.person_id) {
+    const person = people.find((item) => item.id === row.person_id);
+    return [person?.full_name || person?.email || "a record", `/people/${row.person_id}`];
+  }
+  if (row.lead_id) {
+    const lead = leads.find((item) => item.id === row.lead_id);
+    return [lead?.full_name || lead?.email || "a record", `/leads/${row.lead_id}`];
+  }
+  return ["", ""];
+}
+
+function searchHit(
+  kind: string,
+  id: string,
+  title: string,
+  subtitle: string,
+  href: string,
+  rank: number,
+  at: string | null,
+  snippet = "",
+  archived = false,
+): SearchHit {
+  return {
+    kind,
+    id: id.toLowerCase(),
+    title: title || "Untitled",
+    subtitle,
+    href,
+    snippet,
+    archived,
+    at,
+    rank: rank - (archived ? 50 : 0),
+  };
+}
+
+const join = (...parts: Array<string | null | undefined>) => parts.filter(Boolean).join(" · ");
+
+function searchKind(kind: string, q: string): SearchHit[] {
+  const hits: SearchHit[] = [];
+  const push = (hit: SearchHit | null) => {
+    if (hit && hits.length < SEARCH_CAP) hits.push(hit);
+  };
+  switch (kind) {
+    case "company":
+      for (const row of companies) {
+        const [rank, matched] = searchScore(q, [
+          [row.name, 10],
+          [row.domain, 0],
+          [row.notes, -10],
+        ]);
+        if (rank)
+          push(
+            searchHit(
+              "company",
+              row.id,
+              row.name,
+              join(row.domain, row.lifecycle.replace(/_/g, " ")),
+              `/companies/${row.id}`,
+              rank,
+              row.updated_at,
+              matched === row.notes && row.notes ? searchSnippet(row.notes, q) : "",
+              row.archived,
+            ),
+          );
+      }
+      break;
+    case "person":
+      for (const row of people) {
+        const [rank] = searchScore(q, [
+          [row.full_name, 10],
+          [row.email, 5],
+          [row.title, 0],
+        ]);
+        if (rank)
+          push(
+            searchHit(
+              "person",
+              row.id,
+              row.full_name || row.email,
+              join(row.title, companyName(row.company_id), row.email),
+              `/people/${row.id}`,
+              rank,
+              row.created_at,
+              "",
+              Boolean(row.archived),
+            ),
+          );
+      }
+      break;
+    case "lead":
+      for (const row of [...leads].sort((a, b) => b.created_at.localeCompare(a.created_at))) {
+        if (row.anonymised_at) continue;
+        const [rank] = searchScore(q, [
+          [row.full_name, 10],
+          [row.email, 5],
+          [row.company_name, 0],
+        ]);
+        if (rank)
+          push(
+            searchHit(
+              "lead",
+              row.id,
+              row.full_name || row.email,
+              join(row.origin === "prospect" ? "Prospect" : "Lead", row.stage, row.company_name),
+              `/leads/${row.id}`,
+              rank,
+              row.created_at,
+            ),
+          );
+      }
+      break;
+    case "deal":
+      for (const row of deals) {
+        const firm = companyName(row.company_id);
+        const [rank, matched] = searchScore(q, [
+          [row.name, 10],
+          [firm, 0],
+          [row.next_step, -5],
+          [row.notes, -10],
+        ]);
+        if (rank) {
+          const where =
+            row.status === "open"
+              ? (stages.find((stage) => stage.key === row.stage_key)?.label ?? row.stage_key)
+              : row.status.charAt(0).toUpperCase() + row.status.slice(1);
+          const note =
+            matched && (matched === row.notes || matched === row.next_step) ? matched : "";
+          push(
+            searchHit(
+              "deal",
+              row.id,
+              row.name,
+              join(firm, where),
+              `/deals/${row.id}`,
+              rank,
+              row.last_activity_at,
+              note ? searchSnippet(note, q) : "",
+            ),
+          );
+        }
+      }
+      break;
+    case "ticket":
+      for (const row of tickets) {
+        const [rank] = searchScore(q, [
+          [row.subject, 10],
+          [row.contact_email, 0],
+          [row.id, 0],
+        ]);
+        if (rank)
+          push(
+            searchHit(
+              "ticket",
+              row.id,
+              row.subject,
+              join(row.status.replace(/_/g, " "), row.contact_email),
+              `/support/${row.id}`,
+              rank,
+              row.updated_at,
+            ),
+          );
+      }
+      break;
+    case "meeting":
+      for (const row of meetings) {
+        const [rank, matched] = searchScore(q, [
+          [row.title, 10],
+          [row.description, -5],
+          [row.prep_notes, -10],
+          [row.outcome_notes, -10],
+        ]);
+        if (rank)
+          push(
+            searchHit(
+              "meeting",
+              row.id,
+              row.title,
+              join(searchDay(row.starts_at), companyName(row.company_id)),
+              `/meetings/${row.id}`,
+              rank,
+              row.starts_at,
+              matched && matched !== row.title ? searchSnippet(matched, q) : "",
+            ),
+          );
+      }
+      break;
+    case "task":
+      for (const row of tasks) {
+        const [rank, matched] = searchScore(q, [
+          [row.title, 10],
+          [row.body, -10],
+        ]);
+        if (rank) {
+          const [on, href] = searchAttached(row);
+          const status = row.status || "open";
+          push(
+            searchHit(
+              "task",
+              row.id,
+              row.title,
+              join(
+                status.charAt(0).toUpperCase() + status.slice(1),
+                row.due_on && status === "open" ? `due ${searchDay(row.due_on)}` : "",
+                on ? `on ${on}` : "",
+              ),
+              href || "/tasks",
+              rank,
+              row.created_at,
+              matched && matched === row.body ? searchSnippet(row.body, q) : "",
+            ),
+          );
+        }
+      }
+      break;
+    case "note":
+      for (const row of [...activities].sort((a, b) => b.at.localeCompare(a.at))) {
+        // The table is asked for the longest word; the ranking then asks for every word.
+        const probe = q
+          .toLowerCase()
+          .split(/\s+/)
+          .reduce((longest, word) => (word.length > longest.length ? word : longest), "");
+        if (row.kind === "system" || !row.body.toLowerCase().includes(probe)) continue;
+        const [rank] = searchScore(q, [[row.body, -10]]);
+        if (!rank) continue;
+        const [on, href] = searchAttached(row);
+        const kindLabel = row.kind ? row.kind.charAt(0).toUpperCase() + row.kind.slice(1) : "Note";
+        push(
+          searchHit(
+            "note",
+            `${row.company_id || row.person_id || row.deal_id || row.lead_id}-${row.at}`,
+            on ? `${kindLabel} on ${on}` : kindLabel,
+            join(row.staff_name, searchDay(row.at)),
+            href || "/home",
+            rank,
+            row.at,
+            searchSnippet(row.body, q),
+          ),
+        );
+      }
+      break;
+    case "contract":
+      for (const row of contracts) {
+        const firm = companyName(row.company_id);
+        const [rank, matched] = searchScore(q, [
+          [firm, 10],
+          [row.plan_name, 0],
+          [row.notes, -10],
+        ]);
+        if (rank)
+          push(
+            searchHit(
+              "contract",
+              row.id,
+              `${firm || "A customer"}'s contract`,
+              join(row.plan_name, row.status),
+              `/revenue/contracts/${row.id}`,
+              rank,
+              row.created_at,
+              matched && matched === row.notes ? searchSnippet(row.notes, q) : "",
+            ),
+          );
+      }
+      break;
+    case "invoice":
+      for (const row of invoicesRx) {
+        const firm = companyName(row.company_id);
+        const [rank] = searchScore(q, [
+          [row.number, 10],
+          [firm, 0],
+          [row.po_number, 0],
+        ]);
+        if (rank) {
+          const gross = (row.net_cents + row.tax_cents) / 100;
+          push(
+            searchHit(
+              "invoice",
+              row.id,
+              row.number || "Invoice",
+              join(
+                firm,
+                row.status,
+                `${row.currency} ${gross.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              ),
+              `/revenue/invoices/${row.id}`,
+              rank,
+              row.issued_on,
+            ),
+          );
+        }
+      }
+      break;
+    case "quote":
+      for (const row of quoteRows) {
+        const dealName = deals.find((item) => item.id === row.deal_id)?.name ?? "";
+        const [rank] = searchScore(q, [
+          [row.number, 10],
+          [row.title, 5],
+          [dealName, 0],
+        ]);
+        if (rank)
+          push(
+            searchHit(
+              "quote",
+              row.id,
+              join(row.number, row.title),
+              join(dealName, row.status),
+              `/deals/${row.deal_id}/quotes/${row.id}`,
+              rank,
+              row.created_at,
+            ),
+          );
+      }
+      break;
+    case "article":
+      for (const row of helpArticles) {
+        const [rank, matched] = searchScore(q, [
+          [row.title, 10],
+          [row.body, -10],
+        ]);
+        if (rank)
+          push(
+            searchHit(
+              "article",
+              row.id,
+              row.title,
+              row.status.charAt(0).toUpperCase() + row.status.slice(1),
+              `/help/${row.id}`,
+              rank,
+              row.updated_at,
+              matched && matched === row.body ? searchSnippet(row.body, q) : "",
+              row.status === "archived",
+            ),
+          );
+      }
+      break;
+  }
+  return hits;
+}
+
+const RECENT_KIND_CAPS: Record<string, string> = {
+  company: "crm:read",
+  person: "crm:read",
+  lead: "crm:read",
+  deal: "deals:read",
+  meeting: "crm:read",
+  ticket: "tickets:read",
+  contract: "revenue:read",
+};
+const RECENT_LABELS: Record<string, string> = Object.fromEntries(
+  SEARCH_KINDS.map(([kind, label]) => [kind, label]),
+);
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/search",
+    auth: true,
+    handler: ({ query, headers }) => {
+      const q = String(query.q ?? "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 120);
+      if (q.length < 2) return refuse(400, "malformed_request", { q: "at least 2 characters" });
+      const only = String(query.kind ?? "").trim();
+      if (only && !SEARCH_KINDS.some(([kind]) => kind === only))
+        return refuse(400, "malformed_request", {
+          kind: SEARCH_KINDS.map(([kind]) => kind).join(", "),
+        });
+      const limit = Number(query.limit ?? 5);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 50)
+        return refuse(400, "malformed_request", { limit: "1 to 50" });
+      const groups = SEARCH_KINDS.filter(([, , needs]) => hasCap(headers, needs)).map(
+        ([kind, label]) => {
+          const hits = searchKind(kind, q).sort(
+            (a, b) => b.rank - a.rank || (b.at ?? "").localeCompare(a.at ?? ""),
+          );
+          const shown = !only || only === kind ? hits.slice(0, limit) : [];
+          return {
+            kind,
+            label,
+            count: hits.length,
+            more: hits.length >= SEARCH_CAP,
+            results: shown.map(({ rank, ...hit }) => {
+              void rank;
+              return hit;
+            }),
+          };
+        },
+      );
+      return ok({
+        q,
+        kind: only,
+        groups,
+        total: groups.reduce((sum, group) => sum + group.count, 0),
+      });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "hq/me/recent",
+    auth: true,
+    handler: ({ headers }) => {
+      const me = caller(headers)!.member;
+      const since = new Date(Date.now() - 90 * 86_400_000).toISOString();
+      const latest = new Map<string, { entity_type: string; entity_id: string; read_at: string }>();
+      for (const row of recordReads) {
+        if (row.staff_id !== me.id || row.read_at < since) continue;
+        const key = `${row.entity_type}\u0000${row.entity_id}`;
+        const seen = latest.get(key);
+        if (!seen || row.read_at > seen.read_at) latest.set(key, row);
+      }
+      const recent: Array<Record<string, string>> = [];
+      for (const row of [...latest.values()].sort((a, b) => b.read_at.localeCompare(a.read_at))) {
+        const needs = RECENT_KIND_CAPS[row.entity_type];
+        if (!needs || !hasCap(headers, needs)) continue;
+        const found = shareLabel(row.entity_type, row.entity_id);
+        if (!found) continue;
+        recent.push({
+          kind: row.entity_type,
+          id: row.entity_id,
+          title: found[0],
+          href: found[1],
+          label: RECENT_LABELS[row.entity_type] ?? "",
+          viewed_at: row.read_at,
+        });
+        if (recent.length >= 20) break;
+      }
+      return ok({ recent, days: 90 });
+    },
+  },
+);
+
 function resetWorld() {
   resetInbox();
   pendings.clear();

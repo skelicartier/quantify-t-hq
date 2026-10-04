@@ -5,19 +5,22 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { visibleNavLinks } from "@/components/shell/nav-links";
 import { SHORTCUTS_OPEN_EVENT, isTypingTarget, openPalette } from "@/components/shell/palette-bus";
+import { setSingleKeys, singleKeysOn, useSingleKeys } from "@/lib/prefs/single-keys";
 
 const SEQUENCE_WINDOW_MS = 900;
 
 /**
  * Global keys: `g` then a letter jumps to a surface; `?` opens this sheet. List keys
  * (`j`/`k`/`Enter`/`x`) live with the lists that own them. Nothing fires while the
- * person is typing in a field.
+ * person is typing in a field, and no single key fires at all once they switch them off
+ * here (WCAG 2.1.4).
  */
 export function Shortcuts({ capabilities }: { capabilities: readonly string[] }) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pendingG = useRef<number | null>(null);
   const links = visibleNavLinks(capabilities);
+  const singleKeys = useSingleKeys();
 
   const open = useCallback(() => {
     const dialog = dialogRef.current;
@@ -30,6 +33,7 @@ export function Shortcuts({ capabilities }: { capabilities: readonly string[] })
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (isTypingTarget(event.target)) return;
       if (document.querySelector("dialog[open]")) return;
+      if (!singleKeysOn()) return;
       const key = event.key;
       if (key === "?") {
         event.preventDefault();
@@ -78,6 +82,21 @@ export function Shortcuts({ capabilities }: { capabilities: readonly string[] })
             Close
           </button>
         </div>
+        <label className="shortcuts__switch">
+          <input
+            type="checkbox"
+            checked={singleKeys}
+            onChange={(event) => setSingleKeys(event.target.checked)}
+          />
+          <span>
+            <strong>Single-key shortcuts</strong>
+            <span className="shortcuts__switch-note">
+              {singleKeys
+                ? "On. The letters below act when you are not typing in a field. Turn them off if you use speech input or press keys by accident; ⌘K still opens search."
+                : "Off. Only ⌘K acts; open this sheet from the search box. Kept with your account."}
+            </span>
+          </span>
+        </label>
         <div className="shortcuts__cols">
           <section aria-labelledby="shortcuts-global">
             <h3 id="shortcuts-global">Anywhere</h3>

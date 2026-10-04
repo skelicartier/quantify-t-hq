@@ -176,6 +176,7 @@ export default async function TasksIndexPage({ searchParams }: TasksPageProps) {
                   returnPath="/tasks"
                   assignees={assignees}
                   selfId={context.me.staff.staff_id}
+                  autoFocus={parameters.new === "1"}
                 />
               </Card>
             </aside>

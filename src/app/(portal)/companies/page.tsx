@@ -145,7 +145,7 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
               </Link>
             )}
             {canWrite && (
-              <Popover label="New company" variant="primary">
+              <Popover label="New company" variant="primary" defaultOpen={parameters.new === "1"}>
                 <CompanyCreateForm
                   action={createCompanyAction}
                   extra={

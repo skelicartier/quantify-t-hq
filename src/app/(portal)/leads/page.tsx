@@ -146,7 +146,7 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
             <LeadTabs current="/leads" />
             <div className="pagebar__group">
               {canWrite && settings ? (
-                <Popover label="Add lead" variant="primary">
+                <Popover label="Add lead" variant="primary" defaultOpen={parameters.new === "1"}>
                   <LeadCreateForm
                     action={createLeadAction}
                     sources={settings.sources}

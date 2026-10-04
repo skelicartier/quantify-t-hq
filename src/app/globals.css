@@ -1132,6 +1132,8 @@
 
   .palette__input {
     display: flex;
+    /* A long list scrolls; it never squeezes the input or the footer. */
+    flex: 0 0 auto;
     align-items: center;
     gap: 10px;
     padding: 0 14px;
@@ -1158,6 +1160,7 @@
 
   .palette__list {
     flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     padding: 6px;
     scrollbar-width: thin;
@@ -1173,6 +1176,12 @@
     text-transform: uppercase;
   }
 
+  .palette__section {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
   .palette__item {
     display: flex;
     align-items: center;
@@ -1185,6 +1194,7 @@
     background: transparent;
     font-size: var(--fs-ui);
     text-align: left;
+    cursor: pointer;
   }
 
   .palette__item svg {
@@ -1237,6 +1247,7 @@
   }
 
   .palette__foot {
+    flex: 0 0 auto;
     display: flex;
     gap: 16px;
     padding: 8px 14px;
@@ -1264,6 +1275,31 @@
 
   .shortcuts__head h2 {
     font-size: 16px;
+  }
+
+  /* The switch that turns every single-key shortcut off (WCAG 2.1.4). */
+  .shortcuts__switch {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 0 0 14px;
+    border-bottom: 1px solid var(--line-soft);
+    cursor: pointer;
+  }
+
+  .shortcuts__switch input {
+    margin-top: 3px;
+  }
+
+  .shortcuts__switch > span {
+    display: grid;
+    gap: 2px;
+  }
+
+  .shortcuts__switch-note {
+    color: var(--muted);
+    font-size: 12.5px;
   }
 
   .shortcuts__cols {
@@ -5380,6 +5416,110 @@
     margin: 0;
     font-family: var(--font-mono);
     font-size: 20px;
+  }
+
+  /* --- Search: one box for every kind, a row of kinds with counts, plain result rows --- */
+  .search-page__form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px 12px;
+    max-width: 720px;
+    margin-bottom: 20px;
+  }
+
+  .search-page__form .field {
+    flex: 1 1 320px;
+    min-width: 0;
+  }
+
+  .search-kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .search-kinds a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12.5px;
+    text-decoration: none;
+  }
+
+  .search-kinds a:hover {
+    color: var(--text);
+  }
+
+  .search-kinds a[aria-current="page"] {
+    border-color: var(--accent);
+    background: var(--accent-wash);
+    color: var(--text);
+  }
+
+  .search-kinds .num {
+    color: var(--quiet);
+  }
+
+  .search-kinds a[aria-current="page"] .num {
+    color: inherit;
+  }
+
+  .search-results {
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line-soft);
+    list-style: none;
+  }
+
+  .search-result {
+    display: grid;
+    gap: 3px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .search-result__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    min-width: 0;
+  }
+
+  .search-result__title {
+    min-width: 0;
+    color: var(--text);
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+
+  .search-result__meta,
+  .search-result__snippet {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .search-result__meta {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .search-result__snippet {
+    color: var(--muted);
+  }
+
+  /* The query's words, marked by weight and a faint wash: text keeps its own colour. */
+  .search-mark {
+    padding: 0 1px;
+    background: var(--accent-wash);
+    color: inherit;
+    font-weight: 600;
   }
 
   /* The rows an import left out: the reason is what matters, so on a phone each row

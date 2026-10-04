@@ -29,7 +29,8 @@ type MeetingsIndexProps = {
 
 export default async function MeetingsIndexPage({ searchParams }: MeetingsIndexProps) {
   const context = await requireStaff("/meetings");
-  const requested = firstSearchValue((await searchParams).when) ?? "upcoming";
+  const parameters = await searchParams;
+  const requested = firstSearchValue(parameters.when) ?? "upcoming";
   const when = WINDOWS.some(([value]) => value === requested)
     ? (requested as (typeof WINDOWS)[number][0])
     : "upcoming";
@@ -72,7 +73,12 @@ export default async function MeetingsIndexPage({ searchParams }: MeetingsIndexP
               }))}
             />
             {canWrite && (
-              <Popover label="Log a meeting" variant="primary" width="wide">
+              <Popover
+                label="Log a meeting"
+                variant="primary"
+                width="wide"
+                defaultOpen={parameters.new === "1"}
+              >
                 <MeetingCreateForm action={createMeetingAction} companies={companies} />
               </Popover>
             )}

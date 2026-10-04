@@ -2,14 +2,23 @@
 
 import {
   ArrowRight,
+  BookOpen,
   Building2,
+  CalendarDays,
+  Clock,
   Contact,
+  FileSignature,
+  FileText,
   Handshake,
   Inbox,
   Keyboard,
   LifeBuoy,
+  ListChecks,
   Moon,
+  Plus,
+  Receipt,
   Search,
+  StickyNote,
   Sun,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -18,11 +27,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { visibleNavLinks } from "@/components/shell/nav-links";
 import { PALETTE_OPEN_EVENT, isTypingTarget, openShortcuts } from "@/components/shell/palette-bus";
 import { useHqTheme } from "@/components/shell/theme-scope";
-import type { SearchHit } from "@/app/(portal)/_actions/search";
+import type { SearchHit, ViewedHit } from "@/app/(portal)/_actions/search";
+import { setSingleKeys, singleKeysOn, useSingleKeys } from "@/lib/prefs/single-keys";
 
 type Command = {
   id: string;
-  group: "Recent" | "Go to" | "Records" | "Actions";
+  group: "Recent" | "Recently viewed" | "Records" | "Create" | "Go to" | "Actions";
   title: string;
   subtitle?: string | undefined;
   keys?: string | undefined;
@@ -39,6 +49,13 @@ const KIND_ICON: Record<SearchHit["kind"], typeof Search> = {
   lead: Inbox,
   deal: Handshake,
   ticket: LifeBuoy,
+  meeting: CalendarDays,
+  task: ListChecks,
+  note: StickyNote,
+  contract: FileSignature,
+  invoice: Receipt,
+  quote: FileText,
+  article: BookOpen,
 };
 
 const KIND_LABEL: Record<SearchHit["kind"], string> = {
@@ -47,7 +64,23 @@ const KIND_LABEL: Record<SearchHit["kind"], string> = {
   lead: "Lead",
   deal: "Deal",
   ticket: "Ticket",
+  meeting: "Meeting",
+  task: "Task",
+  note: "Note",
+  contract: "Contract",
+  invoice: "Invoice",
+  quote: "Quote",
+  article: "Help article",
 };
+
+/** What ⌘K can make, for a role that writes the CRM: each opens its page's own form. */
+const CREATE: Array<{ id: string; title: string; href: string; where: string }> = [
+  { id: "company", title: "New company", href: "/companies?new=1", where: "Companies" },
+  { id: "person", title: "New person", href: "/people?new=1", where: "People" },
+  { id: "lead", title: "New lead", href: "/leads?new=1", where: "Leads" },
+  { id: "meeting", title: "Log a meeting", href: "/meetings?new=1", where: "Meetings" },
+  { id: "task", title: "New task", href: "/tasks?new=1", where: "Tasks" },
+];
 
 function readRecents(): string[] {
   try {
@@ -71,14 +104,16 @@ function pushRecent(id: string) {
 type CommandPaletteProps = {
   capabilities: readonly string[];
   search: (query: string) => Promise<SearchHit[]>;
+  recent: () => Promise<ViewedHit[]>;
 };
 
 /**
- * ⌘K. Navigation, record search across every kind the role may read, and a few
- * actions. Opens 15% from the top, one input, grouped rows, keycaps on the right;
- * Backspace on an empty query closes nothing — Escape does.
+ * ⌘K. Before typing: what you opened lately, what you can make, where you can go. Typing:
+ * every kind of record the role reads — names, notes, tasks, meetings, money, help — with
+ * the full results page one row away. Opens 15% from the top, one input, grouped rows,
+ * keycaps on the right; Backspace on an empty query closes nothing — Escape does.
  */
-export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
+export function CommandPalette({ capabilities, search, recent }: CommandPaletteProps) {
   const router = useRouter();
   const { theme, setTheme } = useHqTheme();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -87,6 +122,8 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
   const [active, setActive] = useState(0);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [recents, setRecents] = useState<string[]>([]);
+  const [viewed, setViewed] = useState<ViewedHit[]>([]);
+  const singleKeys = useSingleKeys();
   const [searching, startSearch] = useTransition();
   const latestQuery = useRef("");
 
@@ -97,9 +134,13 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
     setHits([]);
     setActive(0);
     setRecents(readRecents());
+    // What they opened lately arrives a moment after the palette does; it never blocks it.
+    void recent()
+      .then(setViewed)
+      .catch(() => setViewed([]));
     dialog.showModal();
     window.requestAnimationFrame(() => inputRef.current?.focus());
-  }, []);
+  }, [recent]);
 
   const close = useCallback(() => {
     dialogRef.current?.close();
@@ -114,7 +155,12 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
         else open();
         return;
       }
-      if (event.key === "/" && !isTypingTarget(event.target) && !dialogRef.current?.open) {
+      if (
+        event.key === "/" &&
+        singleKeysOn() &&
+        !isTypingTarget(event.target) &&
+        !dialogRef.current?.open
+      ) {
         event.preventDefault();
         open();
       }
@@ -142,25 +188,28 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
     return () => window.clearTimeout(timer);
   }, [query, search]);
 
-  const navigation = useMemo(() => visibleNavLinks(capabilities), [capabilities]);
+  const navLinks = useMemo(() => visibleNavLinks(capabilities), [capabilities]);
+
+  const canCreate = capabilities.includes("crm:write");
+  const typed = query.trim();
 
   const commands = useMemo<Command[]>(() => {
     const go = (href: string) => () => {
       router.push(href);
     };
-    const list: Command[] = [];
-    for (const link of navigation) {
-      list.push({
-        id: `go:${link.href}`,
-        group: "Go to",
-        title: link.label,
-        keys: link.key ? `g ${link.key}` : undefined,
-        icon: link.icon,
-        run: go(link.href),
+    const records: Command[] = [];
+    if (typed.length >= 2) {
+      records.push({
+        id: `all:${typed}`,
+        group: "Records",
+        title: `See all results for “${typed}”`,
+        subtitle: "Notes, tasks, meetings, money and help as well",
+        icon: Search,
+        run: go(`/search?q=${encodeURIComponent(typed)}`),
       });
     }
     for (const hit of hits) {
-      list.push({
+      records.push({
         id: `rec:${hit.kind}:${hit.id}`,
         group: "Records",
         title: hit.title,
@@ -169,7 +218,36 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
         run: go(hit.href),
       });
     }
-    list.push(
+    const lately: Command[] =
+      typed.length >= 2
+        ? []
+        : viewed.slice(0, 5).map((hit) => ({
+            id: `viewed:${hit.kind}:${hit.id}`,
+            group: "Recently viewed" as const,
+            title: hit.title,
+            subtitle: KIND_LABEL[hit.kind],
+            icon: Clock,
+            run: go(hit.href),
+          }));
+    const create: Command[] = canCreate
+      ? CREATE.map((item) => ({
+          id: `new:${item.id}`,
+          group: "Create" as const,
+          title: item.title,
+          subtitle: `Opens the form on ${item.where}`,
+          icon: Plus,
+          run: go(item.href),
+        }))
+      : [];
+    const navigation: Command[] = navLinks.map((link) => ({
+      id: `go:${link.href}`,
+      group: "Go to" as const,
+      title: link.label,
+      keys: link.key && singleKeys ? `g ${link.key}` : undefined,
+      icon: link.icon,
+      run: go(link.href),
+    }));
+    const actions: Command[] = [
       {
         id: "act:theme",
         group: "Actions",
@@ -181,13 +259,24 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
         id: "act:shortcuts",
         group: "Actions",
         title: "Keyboard shortcuts",
-        keys: "?",
+        keys: singleKeys ? "?" : undefined,
         icon: Keyboard,
         run: () => openShortcuts(),
       },
-    );
-    return list;
-  }, [navigation, hits, theme, setTheme, router]);
+      {
+        id: "act:single-keys",
+        group: "Actions",
+        title: singleKeys ? "Turn single-key shortcuts off" : "Turn single-key shortcuts on",
+        subtitle: "For speech input, or keys pressed by accident; ⌘K always works",
+        icon: Keyboard,
+        run: () => setSingleKeys(!singleKeys),
+      },
+    ];
+    // Typing puts what was found first; before typing, what was opened lately.
+    return typed.length >= 2
+      ? [...records, ...navigation, ...create, ...actions]
+      : [...lately, ...create, ...navigation, ...actions];
+  }, [navLinks, hits, viewed, typed, canCreate, singleKeys, theme, setTheme, router]);
 
   const needle = query.trim().toLowerCase();
   const visible = useMemo(() => {
@@ -231,7 +320,15 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
     }
   };
 
-  let lastGroup: string | null = null;
+  // Consecutive commands of one group render as one group of options.
+  const sections: Array<{ name: string; items: Array<{ command: Command; index: number }> }> = [];
+  visible.forEach((command, index) => {
+    const last = sections[sections.length - 1];
+    if (last && last.name === command.group) last.items.push({ command, index });
+    else sections.push({ name: command.group, items: [{ command, index }] });
+  });
+  const listId = "palette-results";
+  const optionId = (index: number) => `palette-option-${index}`;
   return (
     <dialog
       ref={dialogRef}
@@ -247,14 +344,19 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-expanded={visible.length > 0}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={visible.length ? optionId(activeIndex) : undefined}
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
               setActive(0);
               if (event.target.value.trim().length < 2) setHits([]);
             }}
-            placeholder="Search records, or type where to go…"
-            aria-label="Search records and commands"
+            placeholder="Search everything, or type where to go…"
+            aria-label="Search everything and commands"
             autoComplete="off"
             spellCheck={false}
           />
@@ -262,53 +364,68 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
             esc
           </kbd>
         </div>
-        <ul className="palette__list" role="listbox" aria-label="Results">
-          {visible.length === 0 && (
-            <li className="palette__empty" aria-live="polite">
-              {searching
-                ? "Searching…"
-                : needle.length < 2
-                  ? "Type two letters to search records."
-                  : "Nothing matches. Try a name, an email or a firm."}
-            </li>
-          )}
-          {visible.map((command, index) => {
-            const heading = command.group !== lastGroup ? command.group : null;
-            lastGroup = command.group;
-            const Icon = command.icon ?? ArrowRight;
-            return (
-              <li key={command.id} className="palette__item-wrap">
-                {heading && <p className="palette__group">{heading}</p>}
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={index === activeIndex}
-                  className="palette__item"
-                  onMouseEnter={() => setActive(index)}
-                  onClick={() => run(command)}
+        {visible.length === 0 ? (
+          <p className="palette__empty" aria-live="polite">
+            {searching
+              ? "Searching…"
+              : needle.length < 2
+                ? "Type two letters to search records."
+                : "Nothing matches. Try a name, an address, a firm or words from a note."}
+          </p>
+        ) : (
+          // The grouped listbox of the WAI-ARIA practices: focus stays in the input, which
+          // moves the active option; a pointer picks one directly.
+          <div id={listId} role="listbox" aria-label="Results" className="palette__list">
+            {sections.map((section, sectionIndex) => (
+              <ul
+                key={`${section.name}-${sectionIndex}`}
+                role="group"
+                aria-labelledby={`palette-group-${sectionIndex}`}
+                className="palette__section"
+              >
+                <li
+                  role="presentation"
+                  id={`palette-group-${sectionIndex}`}
+                  className="palette__group"
                 >
-                  <Icon size={15} strokeWidth={1.8} aria-hidden="true" />
-                  <span className="palette__text">
-                    <span className="palette__title">{command.title}</span>
-                    {command.subtitle && (
-                      <span className="palette__subtitle">{command.subtitle}</span>
-                    )}
-                  </span>
-                  {command.keys && (
-                    <kbd className="keycap keycap--quiet" aria-hidden="true">
-                      {command.keys}
-                    </kbd>
-                  )}
-                </button>
-              </li>
-            );
-          })}
-          {searching && visible.length > 0 && (
-            <li className="palette__searching" aria-live="polite">
-              Searching records…
-            </li>
-          )}
-        </ul>
+                  {section.name}
+                </li>
+                {section.items.map(({ command, index }) => {
+                  const Icon = command.icon ?? ArrowRight;
+                  return (
+                    <li
+                      key={command.id}
+                      id={optionId(index)}
+                      role="option"
+                      aria-selected={index === activeIndex}
+                      className="palette__item"
+                      onMouseEnter={() => setActive(index)}
+                      onClick={() => run(command)}
+                    >
+                      <Icon size={15} strokeWidth={1.8} aria-hidden="true" />
+                      <span className="palette__text">
+                        <span className="palette__title">{command.title}</span>
+                        {command.subtitle && (
+                          <span className="palette__subtitle">{command.subtitle}</span>
+                        )}
+                      </span>
+                      {command.keys && (
+                        <kbd className="keycap keycap--quiet" aria-hidden="true">
+                          {command.keys}
+                        </kbd>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            ))}
+          </div>
+        )}
+        {searching && visible.length > 0 && (
+          <p className="palette__searching" aria-live="polite">
+            Searching records…
+          </p>
+        )}
         <div className="palette__foot">
           <span>
             <kbd className="keycap">↑</kbd>
@@ -317,9 +434,11 @@ export function CommandPalette({ capabilities, search }: CommandPaletteProps) {
           <span>
             <kbd className="keycap">↵</kbd> open
           </span>
-          <span>
-            <kbd className="keycap">g</kbd> then a letter jumps
-          </span>
+          {singleKeys && (
+            <span>
+              <kbd className="keycap">g</kbd> then a letter jumps
+            </span>
+          )}
         </div>
       </div>
     </dialog>

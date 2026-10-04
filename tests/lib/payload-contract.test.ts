@@ -85,6 +85,7 @@ import * as auth from "@/lib/api/auth";
 import * as archiveApi from "@/lib/api/archive";
 import * as backupApi from "@/lib/api/backup";
 import * as shareApi from "@/lib/api/share";
+import * as searchApi from "@/lib/api/search";
 import * as crm from "@/lib/api/crm";
 import * as dataQuality from "@/lib/api/data-quality";
 import * as reviewApi from "@/lib/api/review";
@@ -293,6 +294,8 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/leads", () => crm.readLeads(token)],
   ["hq/leads/{lead_id}", () => crm.readLead(token, ids.lead_id!)],
   ["hq/leads/imports", () => crm.readLeadImports(token)],
+  ["hq/search", () => searchApi.readSearch(token, "acme")],
+  ["hq/me/recent", () => searchApi.readRecent(token)],
   ["hq/companies/imports", () => crm.readCompanyImports(token)],
   ["hq/people/imports", () => crm.readPeopleImports(token)],
   [
