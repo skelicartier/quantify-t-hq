@@ -31,6 +31,7 @@ import { ActivityTimeline } from "@/components/crm/activity-timeline";
 import { RecordHistory } from "@/components/crm/record-history";
 import { DealCreateForm } from "@/components/crm/deal-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
+import { RecordEmail } from "@/components/mail/record-email";
 import { PersonCreateForm } from "@/components/crm/person-forms";
 import { DealFlags, DealStatusPill, DueChip, LifecyclePill } from "@/components/crm/pills";
 import { TaskList } from "@/components/crm/task-list";
@@ -295,6 +296,20 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
 
   const activity = (
     <RecordSection id="company-activity" title="Activity">
+      {canWrite && (
+        <RecordEmail
+          token={context.token}
+          staffId={context.me.staff.staff_id}
+          recipients={people
+            .filter((person) => person.email && !person.do_not_contact)
+            .map((person) => ({
+              value: `person:${person.person_id}`,
+              label: person.full_name ? `${person.full_name} · ${person.email}` : person.email,
+            }))}
+          returnPath={base}
+          idPrefix={`email-${company.company_id}`}
+        />
+      )}
       {canWrite && (
         <LogActivityForm
           action={logActivityAction}

@@ -782,6 +782,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureRepeatTaskFlows(page, folder);
   await captureDeskTeamFlows(page, folder);
   await captureReportFlows(page, folder);
+  await captureOneOffFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -4497,6 +4498,76 @@ async function captureReportFlows(page: Page, folder: string) {
     report(`${folder}/report-deleted`, "the deleted report is still on the dashboard");
 }
 
+/**
+ * An email from a record: with no mailbox of their own the person is told to connect one;
+ * given one (test-only mock route), they write to Jonas from his page, it says where it
+ * went, and his timeline shows it as theirs. From the deal, the primary person is the To.
+ */
+async function captureOneOffFlows(page: Page, folder: string) {
+  const person = "/people/p0000000-0000-4000-8000-000000000002";
+  await page.goto(`${BASE}${person}?tab=mail`, { waitUntil: "networkidle" });
+  const panel = page.locator("details.record-email-panel");
+  if (
+    (await panel.count()) === 0 &&
+    (await page.locator(".record-mail", { hasText: "connect your mailbox" }).count()) === 0
+  )
+    report(
+      `${folder}/email-no-mailbox`,
+      "the page neither offers an email nor says to connect a mailbox",
+    );
+  const given = await fetch("http://127.0.0.1:7071/api/v1/mock/give-mailbox", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "owner@hq.test" }),
+  });
+  if (!given.ok) {
+    report(`${folder}/email-from-record`, "the mock could not give the Owner a mailbox");
+    return;
+  }
+  const subject = `Your pilot (${Date.now().toString(36)})`;
+  await page.goto(`${BASE}${person}?tab=mail`, { waitUntil: "networkidle" });
+  await panel.locator("summary").click();
+  await panel.locator("input[name=subject]").fill(subject);
+  await panel
+    .locator("textarea[name=body]")
+    .fill(
+      "Hi Jonas,\n\nThe pilot starts on Monday; I will send the logins on Friday.\n\nThe Owner",
+    );
+  await shoot(page, `${folder}/email-from-record`);
+  await panel.getByRole("button", { name: "Send now" }).click();
+  // The Owner may have more than one mailbox by now (the mailboxes flow connects one):
+  // the email goes from the one the form chose, and the answer names it.
+  const chosenFrom =
+    (await panel
+      .locator("select[name=mailbox_id] option:checked")
+      .innerText()
+      .catch(() => "")) ||
+    (await panel
+      .locator(".record-email__from .mono")
+      .innerText()
+      .catch(() => ""));
+  const said = panel.locator(".form-sent", { hasText: `Sent from ${chosenFrom.trim()}` });
+  await said.waitFor({ timeout: 15_000 }).catch(() => undefined);
+  if ((await said.count()) === 0)
+    report(`${folder}/email-sent`, "sending did not say where it went");
+  await shoot(page, `${folder}/email-sent`);
+  await page.goto(`${BASE}${person}?tab=activity`, { waitUntil: "networkidle" });
+  if ((await page.locator("main", { hasText: `Email: “${subject}”` }).count()) === 0)
+    report(`${folder}/email-on-timeline`, "the email is not on the person's timeline");
+  await shoot(page, `${folder}/email-on-timeline`);
+
+  await page.goto(`${BASE}/deals/d0000000-0000-4000-8000-000000000001?tab=activity`, {
+    waitUntil: "networkidle",
+  });
+  const dealPanel = page.locator("details.record-email-panel");
+  if ((await dealPanel.count()) > 0) {
+    await dealPanel.locator("summary").click();
+    if ((await dealPanel.locator(".record-email__to, select[name=recipient]").count()) === 0)
+      report(`${folder}/email-from-deal`, "the deal's email names nobody to write to");
+  }
+  await shoot(page, `${folder}/email-from-deal`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4522,6 +4593,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   repeat: captureRepeatTaskFlows,
   deskteam: captureDeskTeamFlows,
   reports: captureReportFlows,
+  oneoff: captureOneOffFlows,
 };
 
 async function runPart(browser: Browser) {

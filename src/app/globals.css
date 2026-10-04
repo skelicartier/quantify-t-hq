@@ -5283,6 +5283,50 @@
     color: var(--muted);
   }
 
+  /* An email written on a record, from the reader's own mailbox. */
+  .record-email-panel {
+    margin: 4px 0 16px;
+  }
+
+  .record-email-panel summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--line-strong);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .record-email-panel summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .record-email-panel[open] summary {
+    margin-bottom: 12px;
+  }
+
+  .record-email {
+    display: grid;
+    gap: 12px;
+    max-width: 640px;
+  }
+
+  .record-email .btn {
+    justify-self: start;
+  }
+
+  .record-email__from,
+  .record-email__to {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
   .unsub {
     display: grid;
     gap: 16px;

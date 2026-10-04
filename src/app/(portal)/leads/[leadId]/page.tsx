@@ -237,6 +237,8 @@ export default async function LeadPage({ params }: LeadPageProps) {
                 canWrite={canWrite}
                 now={now}
                 full={false}
+                staffId={context.me.staff.staff_id}
+                name={anonymised ? "" : lead.full_name}
               />
             </RecordSection>
             <Properties title="Details">

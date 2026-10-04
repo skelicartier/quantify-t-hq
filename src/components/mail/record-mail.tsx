@@ -3,6 +3,7 @@ import Link from "next/link";
 import { enrolOneAction, setConsentAction } from "@/app/(portal)/mail/actions";
 import { MailForm } from "@/components/mail/mail-form";
 import { MessageStatePill } from "@/components/mail/pills";
+import { RecordEmail } from "@/components/mail/record-email";
 import { Callout } from "@/components/ui/callout";
 import { Checkbox, Field, Input, Select } from "@/components/ui/field";
 import { Timestamp } from "@/components/ui/timestamp";
@@ -33,7 +34,8 @@ async function orNull<T>(read: () => Promise<T>): Promise<T | null> {
 
 /**
  * Mail for one person or lead: what we sent and what came back, whether they may be
- * mailed and on what basis, and a way to put them in a sequence or a campaign.
+ * mailed and on what basis, a way to put them in a sequence or a campaign, and an email
+ * written here and sent from the reader's own mailbox.
  */
 export async function RecordMail({
   token,
@@ -44,8 +46,14 @@ export async function RecordMail({
   canWrite,
   now,
   full,
+  staffId,
+  name = "",
 }: {
   token: string;
+  /** The reader: an email written here goes from their own mailbox. */
+  staffId: string;
+  /** Who the record is, for the email's "To". */
+  name?: string;
   kind: "person" | "lead";
   contactId: string;
   email: string;
@@ -139,13 +147,28 @@ export async function RecordMail({
           </Link>
         </div>
       )}
+      {canWrite && stops.length === 0 && !consent.sales_stop && (
+        <RecordEmail
+          token={token}
+          staffId={staffId}
+          recipients={[
+            { value: `${kind}:${contactId}`, label: name ? `${name} · ${email}` : email },
+          ]}
+          returnPath={returnPath}
+          idPrefix={`email-${contactId}`}
+        />
+      )}
       <ol className="mail-history" aria-label="Mail sent">
         {history.messages.slice(0, full ? 50 : 5).map((message) => (
           <li key={message.message_id} className="mail-history__row">
             <MessageStatePill state={message.state} />
             <span className="mail-history__subject">
               {message.subject ||
-                (message.kind === "sequence" ? `Sequence step ${message.step_no}` : "Campaign")}
+                (message.kind === "sequence"
+                  ? `Sequence step ${message.step_no}`
+                  : message.kind === "one_off"
+                    ? "An email written here"
+                    : "Campaign")}
             </span>
             <span className="table-sub">
               <Timestamp

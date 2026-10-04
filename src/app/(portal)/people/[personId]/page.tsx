@@ -370,6 +370,8 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
               canWrite={canWrite}
               now={now}
               full
+              staffId={context.me.staff.staff_id}
+              name={person.full_name}
             />
           </RecordSection>
         )}

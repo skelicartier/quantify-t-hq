@@ -622,6 +622,38 @@ export function previewEnrolment(token: string, sequenceId: string, contacts: Co
   );
 }
 
+export const oneOffSentSchema = okEnvelope.extend({
+  sent: z.boolean(),
+  message_id: z.string(),
+  subject: z.string(),
+  /** The writer's own mailbox it went from. */
+  from: z.string(),
+  /** The recipient's address, masked. */
+  to: z.string(),
+  sent_at: z.string(),
+});
+export type OneOffSent = z.infer<typeof oneOffSentSchema>;
+
+/**
+ * An email written on a record, sent now from the signed-in person's own mailbox under
+ * every rule a send keeps. A refusal is a 400 whose detail says why in words (`mailbox`,
+ * `send`, `cap`, `mail`, `subject` or `body`).
+ */
+export function sendOneOff(
+  token: string,
+  input: {
+    contact_kind: "person" | "lead";
+    contact_id: string;
+    subject: string;
+    body: string;
+    deal_id?: string;
+    /** One of the writer's own sending mailboxes; without it the service picks one. */
+    mailbox_id?: string;
+  },
+) {
+  return postHqJson("hq/mail/one-off", oneOffSentSchema, { token, body: input });
+}
+
 export function enrol(token: string, sequenceId: string, contacts: Contact[]) {
   return postHqJson(
     `hq/mail/sequences/${sequenceId}/enrol`,

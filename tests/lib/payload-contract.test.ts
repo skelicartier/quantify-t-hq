@@ -466,6 +466,10 @@ describe("every portal read parses the service's own payload", () => {
       const crossed = tickets.crossedSchema.parse(held.error.details["crossed"]);
       expect([crossed.customer, crossed.excerpt]).toEqual([false, "Try reloading the chart."]);
     });
+    it("hq/mail/one-off", () => {
+      const sent = mail.oneOffSentSchema.parse(fixture!.results!["hq/mail/one-off"]);
+      expect([sent.sent, sent.from]).toEqual([true, "owner@quantifyterminal.co"]);
+    });
     it("hq/people/imports/{import_id}/rollback", () => {
       const taken = crm.RECORD_IMPORT_SCHEMAS.takeBack.parse(
         fixture!.results!["hq/people/imports/{import_id}/rollback"],

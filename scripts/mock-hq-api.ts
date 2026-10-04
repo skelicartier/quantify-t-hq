@@ -27419,7 +27419,8 @@ type MailCampaignRow = {
 };
 type MailMessageRow = {
   id: string;
-  kind: "campaign" | "sequence" | "test";
+  /** "one_off" (0075): an email written on a record and sent at once from a mailbox. */
+  kind: "campaign" | "sequence" | "test" | "one_off";
   campaign_id: string;
   enrolment_id: string;
   step_no: number | null;
@@ -27949,6 +27950,35 @@ function mailSalesVerdict(recipient: MailRecipient, senderId: string): MailVerdi
   if (MAIL_ROLE_LOCALS.has(norm.split("@")[0] ?? ""))
     return { allowed: false, reason: "ROLE_ADDRESS", detail: "" };
   return { allowed: true, reason: "", detail: "" };
+}
+
+// -- an email from a record (one_off_mail.py) ---------------------------------------------------
+const ONE_OFF_SUBJECT_LIMIT = 200;
+const ONE_OFF_BODY_LIMIT = 10_000;
+/** one_off_mail.REFUSALS: why a send is refused, in the words the writer reads. */
+const ONE_OFF_REFUSALS: Record<string, string> = {
+  NO_EMAIL: "There is no email address on the record.",
+  INVALID_EMAIL: "The address on the record is not a valid email address.",
+  BOUNCED: "Mail to this address bounced; it is on the stop list.",
+  COMPLAINED: "They reported an earlier email as spam.",
+  SALES_STOP: "They asked not to hear from sales.",
+  UNSUBSCRIBED: "They unsubscribed.",
+  FIRM_STOPPED: "Their firm is on the stop list.",
+  SUPPRESSED: "The address is on the stop list.",
+  DO_NOT_CONTACT: "This person is marked do not contact.",
+  ROLE_ADDRESS: "A shared role address (info@, sales@) is not written to from sales.",
+  ADDRESS_INVALID: "A verification said this address does not exist.",
+  NURTURED: "The lead is set aside",
+  NO_RULE_FOR_COUNTRY: "There is no cold-email rule for their country yet",
+  NO_CONSENT: "Their country needs their consent before a first email",
+  ROLE_LIKE_ADDRESS: "A shared role address (info@, sales@) is not written to cold.",
+  ADDRESS_RISKY: "A verification called the address risky",
+  NOT_VERIFIED: "The address has not been verified",
+};
+function oneOffWords(reason: string, detail: string): string {
+  const words = ONE_OFF_REFUSALS[reason] ?? `Not sent (${reason}).`;
+  if (detail.trim() && !words.endsWith(".")) return `${words}: ${detail.trim()}.`;
+  return words.endsWith(".") ? words : `${words}.`;
 }
 
 // -- segments and audiences -----------------------------------------------------------------
@@ -35927,6 +35957,170 @@ routes.push(
         events: mailEvents
           .filter((event) => event.message_id === row.id)
           .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at)),
+      });
+    },
+  },
+  {
+    // Mirrors one_off_mail.handle_send: from the writer's own mailbox, now, under every rule.
+    method: "POST",
+    pattern: "hq/mail/one-off",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ headers, body }) => {
+      const found = caller(headers)!;
+      const kind = String(body.contact_kind ?? "");
+      if (kind !== "person" && kind !== "lead")
+        return refuse(400, "malformed_request", { contact_kind: "a person or a lead" });
+      const contactId = String(body.contact_id ?? "").trim();
+      const dealId = String(body.deal_id ?? "").trim();
+      // The service refuses an id that is not a GUID first; the seeded people carry readable
+      // ids, so here an unknown contact is the not-found below.
+      if (badId(dealId)) return refuse(400, "malformed_request", { deal_id: "not an id" });
+      const subject = String(body.subject ?? "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .join(" ");
+      const text = String(body.body ?? "")
+        .replace(/\r\n/g, "\n")
+        .trim();
+      if (!subject)
+        return refuse(400, "malformed_request", { subject: "Give the email a subject." });
+      if (subject.length > ONE_OFF_SUBJECT_LIMIT)
+        return refuse(400, "malformed_request", {
+          subject: `At most ${ONE_OFF_SUBJECT_LIMIT} characters.`,
+        });
+      if (!text) return refuse(400, "malformed_request", { body: "Write the email first." });
+      if (text.length > ONE_OFF_BODY_LIMIT)
+        return refuse(400, "malformed_request", { body: "At most 10,000 characters." });
+      const person = kind === "person" ? people.find((row) => row.id === contactId) : undefined;
+      const lead = kind === "lead" ? leads.find((row) => row.id === contactId) : undefined;
+      const recipient =
+        person && !person.archived_at
+          ? mailPersonRecipient(person)
+          : lead
+            ? mailLeadRecipient(lead)
+            : null;
+      if (!recipient) return refuse(404, "not_found");
+      if (dealId && !deals.some((row) => row.id === dealId))
+        return refuse(400, "malformed_request", { deal_id: "That deal is no longer here." });
+      if (!mailSettings.sending_enabled)
+        return refuse(400, "malformed_request", {
+          mail: "Outbound mail is switched off under Settings, Mail; nothing leaves HQ until it is on again.",
+        });
+      // The mailbox the writer chose, if any: their own, and sending.
+      const asked = String(body.mailbox_id ?? "").trim();
+      let sender: MailSenderRow;
+      if (asked) {
+        const own = mailSenders.find(
+          (row) => row.id === asked && row.kind === "mailbox" && row.staff_id === found.member.id,
+        );
+        const ownBox = own ? mailboxRows.find((row) => row.sender_id === own.id) : undefined;
+        if (!own || !ownBox)
+          return refuse(400, "malformed_request", {
+            mailbox: "That mailbox is not yours to send from.",
+          });
+        const phase = mailboxPhase(ownBox);
+        if (phase !== "active" || own.paused_at || !own.active)
+          return refuse(400, "malformed_request", {
+            mailbox: `That mailbox cannot send just now (${phase === "active" ? "paused" : phase}).`,
+          });
+        sender = own;
+      } else {
+        const chosen = mailboxChoose(found.member.id, new Map());
+        if (!chosen.sender)
+          return refuse(400, "malformed_request", {
+            mailbox:
+              chosen.why === "no connected mailbox"
+                ? "Connect your mailbox first: an email from a record goes from your own address."
+                : `Your mailbox cannot send just now (${chosen.why}).`,
+          });
+        sender = chosen.sender;
+      }
+      const box = mailboxRows.find((row) => row.sender_id === sender.id)!;
+      let verdict = mailSalesVerdict(recipient, sender.id);
+      if (verdict.allowed && recipient.verified_state === "invalid")
+        verdict = { allowed: false, reason: "ADDRESS_INVALID", detail: "" };
+      let prefix = "";
+      if (verdict.allowed && recipient.origin === "prospect") {
+        verdict = coldJudge(recipient);
+        prefix = coldJurisdiction(recipient.country).subject_prefix;
+      }
+      if (!verdict.allowed)
+        return refuse(400, "malformed_request", {
+          rule: verdict.reason,
+          send: oneOffWords(verdict.reason, verdict.detail),
+        });
+      if (mailboxSentToday(sender.id) >= mailboxCapToday(box, sender))
+        return refuse(400, "malformed_request", {
+          cap: "Your mailbox has sent all it may today. It can go tomorrow.",
+        });
+      const at = now();
+      const id = randomUUID();
+      const labelled = prefix && !subject.startsWith(prefix) ? `${prefix} ${subject}` : subject;
+      mailMessages.push({
+        id,
+        kind: "one_off",
+        campaign_id: "",
+        enrolment_id: "",
+        step_no: null,
+        sender_id: sender.id,
+        topic: "sales",
+        contact_kind: kind,
+        contact_id: contactId,
+        company_id: recipient.company_id,
+        email: recipient.email,
+        email_norm: mailNorm(recipient.email),
+        variables: {},
+        template_id: "",
+        template_version: 0,
+        state: "sent",
+        scheduled_at: at,
+        sent_at: at,
+        delivered_at: null,
+        first_clicked_at: null,
+        first_opened_at: null,
+        bounced_at: null,
+        complained_at: null,
+        unsubscribed_at: null,
+        provider_message_id: `<${id}@${sender.from_email.split("@")[1] ?? "mail"}>`,
+        provider_status: "sent",
+        subject: labelled,
+        in_reply_to: "",
+        skip_reason: "",
+        last_error: "",
+        attempts: 1,
+        is_seed: false,
+      });
+      box.last_sent_at = at;
+      activities.unshift({
+        kind: "email_out",
+        at,
+        staff_id: found.member.id,
+        staff_name: found.member.display_name,
+        body: `Email: “${labelled}”\n\n${text.length > 4000 ? `${text.slice(0, 4000).trimEnd()}…` : text}`,
+        company_id: recipient.company_id,
+        person_id: kind === "person" ? contactId : "",
+        deal_id: dealId,
+        lead_id: kind === "lead" ? contactId : "",
+      });
+      if (person) person.last_contacted_at = at;
+      if (lead) {
+        if (!lead.first_replied_at) lead.first_replied_at = at;
+        if (lead.stage === "new") lead.stage = "attempting";
+        lead.updated_at = at;
+      }
+      audit("mail.one_off_sent", found.member.id, kind, contactId, "", {
+        message_id: id,
+        subject: labelled,
+        from: sender.from_email,
+      });
+      return ok({
+        sent: true,
+        message_id: id,
+        subject: labelled,
+        from: sender.from_email,
+        to: mailMask(recipient.email),
+        sent_at: at,
       });
     },
   },
@@ -55569,6 +55763,26 @@ function respond(
       audit("ticket.replied", member.id, "ticket", row.id);
     }
     return ok({ staff_id: member.id, name: member.display_name });
+  }
+  // Test-only, as above: a staff member's own mailbox, connected and past its warm-up, so
+  // a walk can write an email from a record without the connect flow's fresh code.
+  if (method === "POST" && route === "mock/give-mailbox") {
+    const member = staff.find((row) => row.email === String(body.email ?? ""));
+    if (!member) return refuse(404, "not_found");
+    const local = member.email.split("@")[0] ?? "someone";
+    const made = mailboxCreate(member, {
+      provider: "smtp",
+      address: `${local}@quantifyterminal.co`,
+      display_name: member.display_name,
+      smtp_host: "smtp.example.com",
+      smtp_port: 587,
+      imap_host: "imap.example.com",
+      imap_port: 993,
+      username: `${local}@quantifyterminal.co`,
+    });
+    if ("error" in made) return made.error;
+    made.box.ready_on = addDaysIso(todayIso(), -30);
+    return ok({ mailbox_id: made.sender.id, address: made.sender.from_email });
   }
   if (DEGRADED.has(route)) return refuse(503, "upstream_unavailable");
   const matched = matchRoute(method, route);

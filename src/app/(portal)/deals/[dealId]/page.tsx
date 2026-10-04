@@ -22,6 +22,7 @@ import { ActivityTimeline } from "@/components/crm/activity-timeline";
 import { RecordHistory } from "@/components/crm/record-history";
 import { DealCloseForm, DealStageForm, NextStepForm } from "@/components/crm/deal-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
+import { RecordEmail } from "@/components/mail/record-email";
 import { DealFlags, DealStatusPill, DueChip } from "@/components/crm/pills";
 import { StageRail } from "@/components/crm/stage-rail";
 import { DealCompetition } from "@/components/deals/deal-competition";
@@ -503,6 +504,27 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
         )}
         {tab === "activity" && (
           <RecordSection id="deal-activity" title="Activity">
+            {canWrite && (
+              <RecordEmail
+                token={context.token}
+                staffId={context.me.staff.staff_id}
+                recipients={
+                  person && person.email && !person.do_not_contact
+                    ? [
+                        {
+                          value: `person:${person.person_id}`,
+                          label: person.full_name
+                            ? `${person.full_name} · ${person.email}`
+                            : person.email,
+                        },
+                      ]
+                    : []
+                }
+                returnPath={base}
+                dealId={deal.deal_id}
+                idPrefix={`email-${deal.deal_id}`}
+              />
+            )}
             {canWrite && (
               <LogActivityForm
                 action={logActivityAction}

@@ -293,18 +293,19 @@ LACKS against the market's rating) and §3 the order below.
 | Audit and history               | The audit log searched as an auditor asks: between two days (both included) and for words found in the action, reason, record id, actor or detail, beside the existing person, action and record filters (`hq/audit?from=&to=&q=`). Task, meeting and support-conversation updates now record each change's value before and after, as companies, people, leads and deals did; the lead and meeting pages and a support conversation's side panel show their Changes to roles that read the audit log.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | service `staff_routes.handle_audit_search`, `read_hq_audit_events(since, until, text)`; portal `admin/audit`, `crm/record-history.tsx`                                               |
 | The desk as a team              | Migration 0073 (`hq_ticket_viewers`): a conversation's page says it is open every fifteen seconds while it is visible, and at once when its writer starts or stops; everyone else on it sees who has it open and who is writing, for 45 seconds after their last word. A heartbeat is not audited and its rows go after a day. A public reply carries the newest message its writer had on screen: one that would cross a colleague's reply or the customer's newer message is held back once with who wrote what, the text kept, and Send anyway sends it; a note never crosses anyone and nobody's own reply crosses them. The desk over time (the desk's "Over time", `/reports/desk`): conversations open at each day's end over 14, 30 or 90 days, what came in and what was resolved, first reply and resolution as the median and the slowest tenth, by priority, and how old the open ones are.                                                                                                                                                                                                                                                                                                                                                                                                         | service `desk_routes.py`, `ticket_routes._crossed`, 0073; portal `support/ticket-presence.tsx`, `support/composer.tsx`, `reports/desk/page.tsx`                                      |
 | Reports                         | Report builder (`/reports/builder`, any role, over the kinds its role reads): companies, leads, deals, support conversations or tasks; the list's own filters (`f=`), a grouping (stage, owner, source, status, priority, tag, the month opened or closed and more), a measure (how many, or the total or average of a figure: monthly value, MRR, seats, days in stage, wait for a first reply, messages), drawn as bars, a line over months (the empty months between drawn) or a table. Each figure links to the records behind it (`/reports/records`). It runs as whoever opens it: what their role cannot see is not counted, money is never summed for a role that does not read it (it counts instead and says so), and money adds up in one currency at a time with the rest left out and counted. A report is a saved view on a `report-<kind>` list: private, shared to open, or shared for the team to change its filters (0074 `team_edits`); renaming, sharing and deleting stay with its owner or an admin. Pinned to My dashboard (preference `hq-dashboard`, in the person's order, reports over the same records share one read), and mailed as a digest like a list view.                                                                                                                    | service `view_routes.py`, `digests.LISTS`, 0074; portal `lib/reports/builder.ts`, `reports/builder`, `reports/saved`, `reports/dashboard`, `reports/records`, `components/reports/*` |
+| Email from a record             | Migration 0075 (`one_off_mail.py`, `hq/mail/one-off`): "Write an email" on a person's or lead's mail panel, a company's activity (its people with an address) and a deal's (its primary person). It goes now from the writer's own connected, sending mailbox — the one the form names, chosen when they have several; never a colleague's — and keeps every rule a send keeps: do not contact, the stop list (unsubscribe, bounce, complaint, a firm-wide stop), a sales stop, an address a verification called dead, a prospect's cold rules and its country's subject label. It counts toward the mailbox's, the domain's and the pool's day, stops when outbound mail is switched off, and carries the opt-out line a sequence email does. It is a row in the same ledger (kind `one_off`), so a bounce, an unsubscribe and a reply find it. Sent, it is on the timeline as the writer's (a lead's first reply stops its clock, a new lead becomes Attempting); refused, the words say why and the text stays in the box; an unclear answer says it may have gone. It is tried once, never retried behind the writer's back.                                                                                                                                                                                | service `one_off_mail.py`, 0075; portal `mail/record-email.tsx`, `mail/record-email-form.tsx`, `mail/actions.ts` (`sendOneOffAction`)                                                |
 | Backup                          | Admin → Backup: an Owner asks with a reason after a fresh code; with another Owner it waits for them (approval kind `backup`, migration 0069) and the asker downloads it once within 48 hours; alone it is made at once (`sole_approver`). One zip: a CSV per export kind with custom fields, the timeline, comments, support threads (internal notes marked), stages, sources, the price list, field definitions, the staff directory, mailing lists, consent and suppressions, and a README with who, who approved, why, what is left out and each file's SHA-256. Outside the export quota (the approval is the control), in the ledger; no marker rows. The approval schema now parses every kind the service has (`write_off` was missing: a waiting write-off broke the request and the Approvals list).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | service `backup_routes.py`, `dual_control.py`; portal `admin/backup/*`, `documents/backup-zip.ts`                                                                                    |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
 **The table-stakes order** (`docs/RESEARCH-2026-10-03-TABLESTAKES.md` §3; exports of a
 view, the backup, a person's data file, archive, share, quote links, the outside-links
-register, imports of companies and people, find and create, handover, recurring tasks, audit search and history, the desk as a team, and reports are built, §4). Left from the archive item: undo on a single edit, and History
+register, imports of companies and people, find and create, handover, recurring tasks, audit search and history, the desk as a team, reports, and email from a record are built, §4). Left from the archive item: undo on a single edit, and History
 putting a previous value back (a deal already leaves the lists when it closes and a lead
 when it is disqualified, so those two kinds were not given an archive of their own).
 
-8. **Files on records** (needs the storage account decided with production), **email
-   from a record**, **hosted forms**, **times in the person's zone** — in that order.
+8. **Files on records** (needs the storage account decided with production), **hosted
+   forms**, **times in the person's zone** — in that order.
 
 **Prospects, still to do** (report sections in `docs/RESEARCH-2026-10-03-LEADS.md`):
 
@@ -365,7 +366,7 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0074 and publish → move the desk onto SQL → Vercel
+Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0075 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → link each staff
 member's Quantify Terminal account (Product) → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
@@ -390,7 +391,26 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of reports** (2026-10-04, fifth research pass).
+**As of email from a record** (2026-10-04, fifth research pass).
+
+- Service: migration 0075 (`hq_mail_messages` kind `one_off`; `template_id` and
+  `template_version` may be empty), `one_off_mail.py` reusing the worker's mailbox send,
+  verdicts, caps and opt-out links. Tests in `tests/test_hq_one_off_mail.py` (7).
+- Sending windows and the gap between automated sends are not applied: a person is
+  writing, now. Everything about who may be written to, and how much a mailbox sends
+  in a day, is.
+- A row never goes back to the queue: a refused or unclear send is closed (`bounced`,
+  `cancelled`, `failed` or `unknown`) so the worker cannot send it later.
+- `crm:write` sends, as connecting a mailbox needs: sales hold no `mail:send` (the
+  programmes), and an email to one person is ordinary sales work.
+- The mock's seeded people have readable ids the service would refuse as not GUIDs; its
+  one-off route answers not-found for an unknown contact instead of checking the shape.
+- The mock gives a walk a warm mailbox through a test-only route, `mock/give-mailbox`;
+  the harness part is `HQ_HARNESS_FLOW=oneoff`.
+- Service `d9a67b6`, local. Service suite 2,163 passed, 4 skipped, plus
+  `tests/test_hq_one_off_mail.py` (7), which the suite's file filter now finds.
+
+**Before that: reports** (2026-10-04, fifth research pass).
 
 - Service: migration 0074 (`hq_saved_views.team_edits`), `view_routes` (the team edits a
   shared view's filters, nothing else), `digests.LISTS` (the five report kinds). Tests in

@@ -1196,6 +1196,53 @@ export async function enrolOneAction(
   }
 }
 
+/** What a refused one-off says, in the service's own words. */
+const ONE_OFF_DETAILS = ["mailbox", "send", "cap", "mail", "subject", "body", "deal_id"] as const;
+
+/**
+ * An email written on a record, sent now from the writer's own mailbox. A refusal keeps
+ * the words in the box (the composer submits without a reset) and says why.
+ */
+export async function sendOneOffAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const returnPath = fieldValue(formData, "return_path", 200) || "/home";
+  const context = await requireStaff(returnPath);
+  if (!hasCapability(context, "crm:write")) return NOT_WRITER;
+  const recipient = fieldValue(formData, "recipient", 80);
+  const [kind = "", contactId = ""] = recipient.split(":");
+  if ((kind !== "person" && kind !== "lead") || !contactId)
+    return { status: "error", message: "Choose who it goes to." };
+  const subject = fieldValue(formData, "subject", 220).trim();
+  const body = fieldValue(formData, "body", 10_500);
+  if (!subject) return { status: "error", message: "Give the email a subject." };
+  if (!body.trim()) return { status: "error", message: "Write the email first." };
+  const dealId = fieldValue(formData, "deal_id", 64);
+  const mailboxId = fieldValue(formData, "mailbox_id", 64);
+  try {
+    const result = await mailApi.sendOneOff(context.token, {
+      contact_kind: kind,
+      contact_id: contactId,
+      subject,
+      body,
+      ...(dealId ? { deal_id: dealId } : {}),
+      ...(mailboxId ? { mailbox_id: mailboxId } : {}),
+    });
+    revalidatePath(returnPath);
+    return sent(`Sent from ${result.from} to ${result.to}. It is on the timeline.`);
+  } catch (error) {
+    if (error instanceof HqApiRequestError && error.status === 400) {
+      for (const key of ONE_OFF_DETAILS) {
+        const words = error.details[key];
+        if (typeof words === "string" && words) return { status: "error", message: words };
+      }
+    }
+    return crmRefusal(error);
+  }
+}
+
 // --- connected mailboxes ----------------------------------------------------------------
 
 const MAILBOXES = "/mail/mailboxes";
