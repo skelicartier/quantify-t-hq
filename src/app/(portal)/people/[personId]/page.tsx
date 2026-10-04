@@ -384,6 +384,7 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
               names={names}
               canRead={hasCapability(context, "audit:read")}
               now={now}
+              putBack={canWrite ? { returnPath: `${base}?tab=history` } : undefined}
             />
           </RecordSection>
         )}

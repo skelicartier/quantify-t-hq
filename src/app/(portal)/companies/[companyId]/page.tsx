@@ -903,6 +903,7 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
               names={names}
               canRead={hasCapability(context, "audit:read")}
               now={now}
+              putBack={canWrite ? { returnPath: `${base}?tab=history` } : undefined}
             />
           </RecordSection>
         )}

@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Pencil, X } from "lucide-react";
-import { useActionState, useEffect, useRef, useState } from "react";
+import { startTransition, useActionState, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { AttemptField } from "@/components/ui/attempt-field";
@@ -29,11 +29,17 @@ type InlineFieldProps = {
   extra?: Record<string, string>;
 };
 
+/** How long a saved change can be undone from where it was made. */
+const UNDO_SECONDS = 15;
+
 /**
  * A property that edits where it sits. Click the value (or press Enter on it) to get
  * the field; Enter saves, Escape cancels; the row says "Saved" for a moment and shows
  * the new value once the page re-renders from the service. One field per submission,
  * so nothing else on the record can be blanked by accident.
+ *
+ * For a few seconds after a change it can be undone: the value it had is saved back
+ * through the same action, so the record's history keeps both the change and its undo.
  */
 export function InlineField({
   action,
@@ -53,16 +59,61 @@ export function InlineField({
   const [editing, setEditing] = useState(false);
   const fieldRef = useRef<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(null);
   const seenSent = useRef<number | undefined>(undefined);
+  /** The value when editing began, and the one sent: what an undo puts back, and whether it changed. */
+  const before = useRef(value);
+  const submitted = useRef<string | null>(null);
+  const undoing = useRef(false);
+  const [undoable, setUndoable] = useState(false);
+  const [undoError, setUndoError] = useState("");
 
   // A success closes the editor; the effect only reacts to the action's answer.
   useEffect(() => {
     if (state.status === "sent" && state.sentAt !== seenSent.current) {
       seenSent.current = state.sentAt;
-      const timer = window.setTimeout(() => setEditing(false), 0);
-      return () => window.clearTimeout(timer);
+      const changed = submitted.current !== null && submitted.current !== before.current;
+      const offer = changed && !undoing.current;
+      undoing.current = false;
+      submitted.current = null;
+      const close = window.setTimeout(() => {
+        setEditing(false);
+        setUndoable(offer);
+      }, 0);
+      const expire = offer
+        ? window.setTimeout(() => setUndoable(false), UNDO_SECONDS * 1_000)
+        : undefined;
+      return () => {
+        window.clearTimeout(close);
+        if (expire !== undefined) window.clearTimeout(expire);
+      };
+    }
+    if (state.status === "error" && undoing.current) {
+      // An undo the service refused: said beside the value, which is still the new one.
+      undoing.current = false;
+      const shown = window.setTimeout(() => setUndoError(state.message ?? "Not undone."), 0);
+      return () => window.clearTimeout(shown);
     }
     return undefined;
   }, [state]);
+
+  function begin() {
+    setUndoError("");
+    before.current = value;
+    setUndoable(false);
+    setEditing(true);
+  }
+
+  function undo() {
+    const data = new FormData();
+    data.set("attempt", crypto.randomUUID());
+    data.set(idName, id);
+    for (const [key, val] of Object.entries(extra)) data.set(key, val);
+    data.set(name, before.current);
+    undoing.current = true;
+    submitted.current = before.current;
+    setUndoable(false);
+    setUndoError("");
+    startTransition(() => formAction(data));
+  }
 
   useEffect(() => {
     if (editing) fieldRef.current?.focus();
@@ -96,7 +147,7 @@ export function InlineField({
               <button
                 type="button"
                 className="prop__edit prop__edit--icon"
-                onClick={() => setEditing(true)}
+                onClick={begin}
                 aria-label={`Edit ${label}`}
               >
                 <Pencil size={12} strokeWidth={1.8} aria-hidden="true" />
@@ -106,7 +157,7 @@ export function InlineField({
             <button
               type="button"
               className="prop__edit"
-              onClick={() => setEditing(true)}
+              onClick={begin}
               aria-label={`Edit ${label}`}
             >
               <span className="prop__shown">{shown}</span>
@@ -116,6 +167,22 @@ export function InlineField({
           {state.status === "sent" && (
             <span className="prop__saved" role="status">
               Saved
+            </span>
+          )}
+          {undoable && (
+            <button
+              type="button"
+              className="prop__undo"
+              onClick={undo}
+              disabled={isPending}
+              aria-label={`Undo the change to ${label}`}
+            >
+              Undo
+            </button>
+          )}
+          {undoError && (
+            <span className="prop__error" role="alert">
+              {undoError}
             </span>
           )}
         </dd>
@@ -140,7 +207,13 @@ export function InlineField({
         <label htmlFor={fieldId}>{label}</label>
       </dt>
       <dd className="prop__value">
-        <form action={formAction} className="prop__form">
+        <form
+          action={formAction}
+          className="prop__form"
+          onSubmit={(event) => {
+            submitted.current = String(new FormData(event.currentTarget).get(name) ?? "");
+          }}
+        >
           <AttemptField state={state} />
           <input type="hidden" name={idName} value={id} />
           {Object.entries(extra).map(([key, val]) => (

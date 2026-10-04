@@ -706,6 +706,7 @@ export default async function LeadPage({ params }: LeadPageProps) {
                 names={names}
                 canRead
                 now={now}
+                putBack={canWrite ? { returnPath: `/leads/${lead.lead_id}` } : undefined}
               />
             </RecordSection>
           )}

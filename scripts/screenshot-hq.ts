@@ -783,6 +783,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureDeskTeamFlows(page, folder);
   await captureReportFlows(page, folder);
   await captureOneOffFlows(page, folder);
+  await captureUndoFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -4575,6 +4576,69 @@ async function captureOneOffFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/email-from-deal`);
 }
 
+/**
+ * Undo and put back: a company's country changed inline offers Undo, which brings the old
+ * value back; its type changed, then put back from History to what it was.
+ */
+async function captureUndoFlows(page: Page, folder: string) {
+  const company = "/companies/c0000000-0000-4000-8000-000000000002";
+  await page.goto(`${BASE}${company}`, { waitUntil: "networkidle" });
+  const country = page.locator(".prop", {
+    has: page.getByRole("button", { name: "Edit Country" }),
+  });
+  const before = (await country.locator(".prop__shown").innerText()).trim();
+  await page.getByRole("button", { name: "Edit Country" }).click();
+  await page.getByLabel("Country", { exact: true }).fill("Liechtenstein");
+  await page.getByLabel("Country", { exact: true }).press("Enter");
+  const undo = page.getByRole("button", { name: "Undo the change to Country" });
+  await undo.waitFor({ timeout: 15_000 }).catch(() => undefined);
+  if ((await undo.count()) === 0) report(`${folder}/inline-undo`, "a saved change offers no Undo");
+  await shoot(page, `${folder}/inline-undo`);
+  if ((await undo.count()) > 0) await undo.click();
+  await page
+    .locator(".prop", { hasText: before })
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .catch(() => undefined);
+  if ((await country.locator(".prop__shown").innerText()).trim() !== before)
+    report(
+      `${folder}/inline-undone`,
+      `Undo left the country as "${await country.locator(".prop__shown").innerText()}"`,
+    );
+  await shoot(page, `${folder}/inline-undone`);
+
+  // The type changed, then put back from History.
+  const type = page.locator(".prop", { has: page.getByRole("button", { name: "Edit Type" }) });
+  const typeBefore = (await type.locator(".prop__shown").innerText()).trim();
+  await page.getByRole("button", { name: "Edit Type" }).click();
+  const field = page.locator(".prop--editing select[name=firm_type]");
+  const options = await field.locator("option").allInnerTexts();
+  const other = options.find((label) => label.trim() !== typeBefore) ?? options[0]!;
+  await field.selectOption({ label: other.trim() });
+  await page.locator(".prop--editing button[aria-label='Save Type']").click();
+  await page
+    .getByRole("button", { name: "Undo the change to Type" })
+    .waitFor({ timeout: 15_000 })
+    .catch(() => undefined);
+  await page.goto(`${BASE}${company}?tab=history`, { waitUntil: "networkidle" });
+  const putBack = page
+    .getByRole("button", { name: "Put Type back to its value before this change" })
+    .first();
+  await putBack.waitFor({ timeout: 15_000 }).catch(() => undefined);
+  if ((await putBack.count()) === 0) {
+    report(`${folder}/history-put-back`, "History offers no Put back on the type's change");
+    return;
+  }
+  await shoot(page, `${folder}/history-put-back`);
+  await putBack.click();
+  await page.waitForTimeout(1_500);
+  await page.goto(`${BASE}${company}`, { waitUntil: "networkidle" });
+  if ((await type.locator(".prop__shown").innerText()).trim() !== typeBefore)
+    report(`${folder}/history-put-back-done`, "Put back did not restore the type");
+  await page.goto(`${BASE}${company}?tab=history`, { waitUntil: "networkidle" });
+  await shoot(page, `${folder}/history-put-back-done`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4602,6 +4666,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   reports: captureReportFlows,
   oneoff: captureOneOffFlows,
   privileged: capturePrivilegedFlows,
+  undo: captureUndoFlows,
 };
 
 async function runPart(browser: Browser) {

@@ -564,6 +564,11 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
               names={names}
               canRead={hasCapability(context, "audit:read")}
               now={now}
+              putBack={
+                hasCapability(context, "deals:write")
+                  ? { returnPath: `${base}?tab=changes` }
+                  : undefined
+              }
             />
           </RecordSection>
         )}

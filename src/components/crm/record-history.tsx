@@ -1,8 +1,11 @@
+import { putBackAction } from "@/app/(portal)/_actions/put-back";
+import { PutBackButton } from "@/components/crm/put-back-button";
 import { Callout } from "@/components/ui/callout";
 import { Timestamp } from "@/components/ui/timestamp";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { nameFor, searchAudit, type AuditEvent } from "@/lib/api/staff";
 import { LIFECYCLE_LABELS, LOSS_REASON_LABELS, TASK_REPEAT_LABELS } from "@/lib/crm/vocabulary";
+import { canPutBack } from "@/lib/crm/put-back";
 import { formatSentence } from "@/lib/format";
 
 /**
@@ -10,6 +13,9 @@ import { formatSentence } from "@/lib/format";
  * changed — the value before and the value after. Read from the audit log itself, so
  * what the tab shows is exactly what an auditor would be shown. Only a role that may
  * read the audit log sees it.
+ *
+ * With `putBack`, the newest change of each plain field (a name, a choice, an owner, a
+ * date, a count) can be put back to its value before, through the record's own update.
  */
 
 const FIELD_LABELS: Record<string, string> = {
@@ -101,6 +107,7 @@ export async function RecordHistory({
   names,
   canRead,
   now,
+  putBack,
 }: {
   token: string;
   entityType: string;
@@ -108,6 +115,8 @@ export async function RecordHistory({
   names: StaffDirectory | null;
   canRead: boolean;
   now: number;
+  /** Offer "Put back" (company, person, lead or deal) to a role that may change the record. */
+  putBack?: { returnPath: string } | undefined;
 }) {
   if (!canRead) {
     return (
@@ -139,6 +148,15 @@ export async function RecordHistory({
   if (events.length === 0) {
     return <p className="timeline-empty">Nothing recorded yet.</p>;
   }
+  // Only the newest change of a field is offered: putting back an older one would skip
+  // over what came after it.
+  const newest = new Map<string, number>();
+  events.forEach((event, index) => {
+    for (const field of Object.keys(
+      (event.detail["changes"] as Record<string, unknown> | undefined) ?? {},
+    ))
+      if (!newest.has(field)) newest.set(field, index);
+  });
   return (
     <ol className="timeline" aria-label="History">
       {events.map((event, index) => {
@@ -174,6 +192,20 @@ export async function RecordHistory({
                       <span className="history-changes__to">
                         {valueText(field, change.to, names)}
                       </span>
+                      {putBack &&
+                        newest.get(field) === index &&
+                        canPutBack(entityType, field, change.from) && (
+                          <PutBackButton
+                            action={putBackAction}
+                            kind={entityType}
+                            recordId={entityId}
+                            field={field}
+                            from={change.from}
+                            to={change.to}
+                            returnPath={putBack.returnPath}
+                            label={FIELD_LABELS[field] ?? formatSentence(field)}
+                          />
+                        )}
                     </li>
                   ))}
                 </ul>
