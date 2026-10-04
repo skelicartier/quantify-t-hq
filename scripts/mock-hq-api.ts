@@ -630,8 +630,58 @@ function scrubNote(found: string[], whose: string, at: string): Message {
 }
 
 const tickets: TicketRow[] = [];
+/** Mirrors hq_ticket_viewers: who last said they had a conversation open, and whether writing. */
+type TicketViewer = { ticketId: string; staffId: string; seenAt: number; composing: boolean };
+const ticketViewers: TicketViewer[] = [];
+/** Mirrors desk_routes.PRESENCE_WINDOW. */
+const PRESENCE_WINDOW_SECONDS = 45;
+
+function touchTicketViewer(ticketId: string, staffId: string, composing: boolean) {
+  const at = Date.now();
+  const existing = ticketViewers.find(
+    (row) => row.ticketId === ticketId && row.staffId === staffId,
+  );
+  if (existing) {
+    existing.seenAt = at;
+    existing.composing = composing;
+  } else ticketViewers.push({ ticketId, staffId, seenAt: at, composing });
+  // A day-old heartbeat is gone, as the SQL MERGE clears it.
+  for (let index = ticketViewers.length - 1; index >= 0; index -= 1)
+    if (ticketViewers[index]!.seenAt < at - 86_400_000) ticketViewers.splice(index, 1);
+}
+
+/**
+ * Mirrors ticket_routes._crossed: a public message the replier had not seen — a
+ * colleague's reply or the customer's newer message — after the message whose id they
+ * last had on screen. Their own replies never cross them; an id not in the thread holds
+ * nothing back.
+ */
+function crossedFor(row: TicketRow, seenThrough: string, staffId: string) {
+  const position = row.messages.findIndex((message) => message.id === seenThrough.trim());
+  if (position < 0) return null;
+  const later = row.messages
+    .slice(position + 1)
+    .filter(
+      (message) =>
+        message.visibility === "public" &&
+        (message.author === "staff" || message.author === "customer") &&
+        !(message.author === "staff" && message.author_id.toLowerCase() === staffId.toLowerCase()),
+    );
+  const last = later.at(-1);
+  if (!last) return null;
+  const customer = last.author === "customer";
+  return {
+    by: customer ? "the customer" : last.author_name || "a colleague",
+    customer,
+    at: last.at,
+    excerpt: last.body.slice(0, 160),
+    count: later.length,
+  };
+}
+
 function seedTickets() {
   tickets.length = 0;
+  ticketViewers.length = 0;
   ticketCounter = 0;
   messageCounter = 0;
   tickets.push(
@@ -1987,6 +2037,11 @@ const routes: Array<{
       const found = caller(headers)!;
       const row = tickets.find((ticket) => ticket.id === params.ticket_id);
       if (!row) return refuse(404, "not_found");
+      // Mirrors handle_reply: written against an older view, held back once with what it crosses.
+      if (body.seen_through && !body.send_anyway) {
+        const crossed = crossedFor(row, String(body.seen_through), found.member.id);
+        if (crossed) return refuse(409, "revision_conflict", { crossed });
+      }
       const scrubbed = scrubSecrets(String(body.body ?? "").trim());
       const text = scrubbed.text;
       if (!text) return refuse(400, "malformed_request");
@@ -2036,6 +2091,42 @@ const routes: Array<{
       row.updated_at = at;
       audit("ticket.noted", found.member.id, "ticket", row.id);
       return ok({ ticket: ticketView(row, found.member.id) });
+    },
+  },
+  {
+    // Mirrors desk_routes.handle_presence: a heartbeat, never audited.
+    method: "POST",
+    pattern: "hq/tickets/{ticket_id}/presence",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ headers, params, body }) => {
+      const found = caller(headers)!;
+      const row = tickets.find((ticket) => ticket.id === params.ticket_id);
+      if (!row) return refuse(404, "not_found");
+      touchTicketViewer(row.id, found.member.id, Boolean(body.composing));
+      const since = Date.now() - PRESENCE_WINDOW_SECONDS * 1000;
+      const others = ticketViewers
+        .filter(
+          (viewer) =>
+            viewer.ticketId === row.id &&
+            viewer.seenAt >= since &&
+            viewer.staffId.toLowerCase() !== found.member.id.toLowerCase(),
+        )
+        .map((viewer) => {
+          const member = staff.find((candidate) => candidate.id === viewer.staffId);
+          return {
+            staff_id: viewer.staffId.toLowerCase(),
+            name: member?.display_name || member?.email || "A colleague",
+            composing: viewer.composing,
+            seen_at: new Date(viewer.seenAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
+          };
+        })
+        .sort(
+          (a, b) =>
+            Number(!a.composing) - Number(!b.composing) ||
+            a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+        );
+      return ok({ others, window_seconds: PRESENCE_WINDOW_SECONDS });
     },
   },
   {
@@ -24359,6 +24450,111 @@ routes.push(
       });
       audit("mrr.adjusted", caller(headers)?.member.id ?? null, "company", company.id, reason);
       return ok({ adjusted: true });
+    },
+  },
+  {
+    // Mirrors desk_routes.handle_desk_report: the queue over a window of days.
+    method: "GET",
+    pattern: "hq/reports/desk",
+    auth: true,
+    capability: "tickets:read",
+    handler: ({ query }) => {
+      const days = Number(query.days || "30");
+      if (!Number.isInteger(days) || days < 7 || days > 90)
+        return refuse(400, "malformed_request", { days: "7 to 90" });
+      const median = (values: number[]) => {
+        const ordered = [...values].sort((a, b) => a - b);
+        const middle = Math.floor(ordered.length / 2);
+        return ordered.length % 2
+          ? ordered[middle]!
+          : (ordered[middle - 1]! + ordered[middle]!) / 2;
+      };
+      const slowestTenth = (values: number[]) => {
+        const ordered = [...values].sort((a, b) => a - b);
+        return ordered[
+          Math.min(ordered.length - 1, Math.max(0, Math.round(0.9 * (ordered.length - 1))))
+        ]!;
+      };
+      const nowMs = Date.now();
+      const dayMs = 86_400_000;
+      const todayStart = Math.floor(nowMs / dayMs) * dayMs;
+      const windowStart = todayStart - (days - 1) * dayMs;
+      const stamps = tickets.map((row) => ({
+        row,
+        created: Date.parse(row.created_at),
+        resolved: row.status === "resolved" && row.resolved_at ? Date.parse(row.resolved_at) : null,
+      }));
+      const series = Array.from({ length: days }, (_, offset) => {
+        const start = windowStart + offset * dayMs;
+        const end = start + dayMs;
+        return {
+          day: new Date(start).toISOString().slice(0, 10),
+          open: stamps.filter(
+            ({ created, resolved }) => created < end && (resolved === null || resolved >= end),
+          ).length,
+          opened: stamps.filter(({ created }) => created >= start && created < end).length,
+          resolved: stamps.filter(
+            ({ resolved }) => resolved !== null && resolved >= start && resolved < end,
+          ).length,
+        };
+      });
+      const firstWaits = stamps
+        .filter(({ row, created }) => {
+          const replied = row.first_replied_at ? Date.parse(row.first_replied_at) : NaN;
+          return created >= windowStart && replied >= created;
+        })
+        .map(({ row, created }) => (Date.parse(row.first_replied_at!) - created) / 60_000);
+      const resolutions = stamps
+        .filter(
+          ({ created, resolved }) =>
+            resolved !== null && resolved >= windowStart && resolved >= created,
+        )
+        .map(({ row, created, resolved }) => ({
+          hours: (resolved! - created) / 3_600_000,
+          priority: row.priority,
+        }));
+      const openNow = stamps.filter(({ resolved }) => resolved === null);
+      const ages = { under_a_day: 0, one_to_three_days: 0, three_to_seven_days: 0, over_a_week: 0 };
+      for (const { created } of openNow) {
+        const age = (nowMs - created) / dayMs;
+        if (age < 1) ages.under_a_day += 1;
+        else if (age < 3) ages.one_to_three_days += 1;
+        else if (age < 7) ages.three_to_seven_days += 1;
+        else ages.over_a_week += 1;
+      }
+      const byPriority = (["urgent", "high", "normal", "low"] as const).map((priority) => {
+        const hours = resolutions
+          .filter((row) => row.priority === priority)
+          .map((row) => row.hours);
+        return {
+          priority,
+          open: openNow.filter(({ row }) => row.priority === priority).length,
+          resolved: hours.length,
+          median_resolution_hours: hours.length ? Math.round(median(hours) * 10) / 10 : null,
+        };
+      });
+      const resolutionHours = resolutions.map((row) => row.hours);
+      return ok({
+        available: true,
+        days,
+        series,
+        first_reply: {
+          count: firstWaits.length,
+          median_minutes: firstWaits.length ? Math.round(median(firstWaits)) : null,
+          slowest_tenth_minutes: firstWaits.length ? Math.round(slowestTenth(firstWaits)) : null,
+        },
+        resolution: {
+          count: resolutionHours.length,
+          median_hours: resolutionHours.length
+            ? Math.round(median(resolutionHours) * 10) / 10
+            : null,
+          slowest_tenth_hours: resolutionHours.length
+            ? Math.round(slowestTenth(resolutionHours) * 10) / 10
+            : null,
+        },
+        open_ages: ages,
+        by_priority: byPriority,
+      });
     },
   },
   {
@@ -55287,6 +55483,32 @@ function respond(
       created_at: now(),
     });
     return ok({ staff_id: member.id, company: firm.name });
+  }
+  // Test-only, as above: a colleague with a conversation open — writing, and (with `reply`)
+  // answering it — so the desk walk sees presence and a reply that would cross theirs.
+  if (method === "POST" && route === "mock/desk-colleague") {
+    const member = staff.find((row) => row.email === String(body.email ?? ""));
+    const row = tickets.find((ticket) => ticket.id === String(body.ticket_id ?? ""));
+    if (!member || !row) return refuse(404, "not_found");
+    touchTicketViewer(row.id, member.id, body.composing !== false);
+    const reply = String(body.reply ?? "").trim();
+    if (reply) {
+      const at = now();
+      row.messages.push({
+        id: messageId(),
+        author: "staff",
+        author_id: member.id,
+        author_name: member.display_name,
+        visibility: "public",
+        body: reply,
+        at,
+      });
+      row.status = "pending";
+      row.updated_at = at;
+      if (!row.first_replied_at) row.first_replied_at = at;
+      audit("ticket.replied", member.id, "ticket", row.id);
+    }
+    return ok({ staff_id: member.id, name: member.display_name });
   }
   if (DEGRADED.has(route)) return refuse(503, "upstream_unavailable");
   const matched = matchRoute(method, route);

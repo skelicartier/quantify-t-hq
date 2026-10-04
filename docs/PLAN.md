@@ -291,22 +291,21 @@ LACKS against the market's rating) and §3 the order below.
 | Handover                        | `handover.py` (`hq/staff/{id}/handover`, `…/handover/run`, Owner/Admin with a fresh code): what a person is answerable for, by area — companies, leads, open deals and plan steps, running sequences, open tasks and support conversations, help articles, open feature requests and onboardings, open privacy requests and incidents they lead, risks, open findings, controls, questionnaire answers, records of processing, their direct reports, openings and interviews, vendors, scorecard measures and priorities. One act moves it to one colleague: only work in hand (a closed deal keeps who won it), each kind only to a role that works on it (the rest named and left for someone else), a sequence on the leaver's own identity carries on from the colleague's or ends `OWNER_LEFT` (never writes from the leaver's mailbox). One audit row, the colleague told once, the offboarding run's new step "Work handed over to a colleague" ticked with what moved. The page says the last handover after its form has gone.                                                                                                                                                                                                                                                                         | service `handover.py`, gateway `count_owned`/`reassign_owned`; portal `team/handover-section.tsx`, `team/[staffId]`                                       |
 | Recurring tasks and reminders   | Migration 0072 (`recurrence.py`): a task can repeat — every day, weekday, week, two weeks, month, quarter or year, until a last day or for ever. Done makes the next one (same title, notes, priority, assignee and record), dated from this one's due date and never into the past; a month-end series keeps its day (the 31st falls on the 30th, then the 31st again); cancelling ends the series. On the day a task falls due — or the first pass after, if it was already late — its assignee is reminded once in the inbox ("Due today" / "Overdue since"), and again only if the date moves; a leaver is not reminded. The watch runs where the first-reply warning does: Home, the inbox and the mail worker's pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | service `recurrence.py`, `crm_routes` task create/update, `inbox.task_due_watch`; portal `task-quick-add.tsx` (Repeats), `task-list.tsx`                  |
 | Audit and history               | The audit log searched as an auditor asks: between two days (both included) and for words found in the action, reason, record id, actor or detail, beside the existing person, action and record filters (`hq/audit?from=&to=&q=`). Task, meeting and support-conversation updates now record each change's value before and after, as companies, people, leads and deals did; the lead and meeting pages and a support conversation's side panel show their Changes to roles that read the audit log.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | service `staff_routes.handle_audit_search`, `read_hq_audit_events(since, until, text)`; portal `admin/audit`, `crm/record-history.tsx`                    |
+| The desk as a team              | Migration 0073 (`hq_ticket_viewers`): a conversation's page says it is open every fifteen seconds while it is visible, and at once when its writer starts or stops; everyone else on it sees who has it open and who is writing, for 45 seconds after their last word. A heartbeat is not audited and its rows go after a day. A public reply carries the newest message its writer had on screen: one that would cross a colleague's reply or the customer's newer message is held back once with who wrote what, the text kept, and Send anyway sends it; a note never crosses anyone and nobody's own reply crosses them. The desk over time (the desk's "Over time", `/reports/desk`): conversations open at each day's end over 14, 30 or 90 days, what came in and what was resolved, first reply and resolution as the median and the slowest tenth, by priority, and how old the open ones are.                                                                                                                                                                                                                                                                                                                                                                                                         | service `desk_routes.py`, `ticket_routes._crossed`, 0073; portal `support/ticket-presence.tsx`, `support/composer.tsx`, `reports/desk/page.tsx`           |
 | Backup                          | Admin → Backup: an Owner asks with a reason after a fresh code; with another Owner it waits for them (approval kind `backup`, migration 0069) and the asker downloads it once within 48 hours; alone it is made at once (`sole_approver`). One zip: a CSV per export kind with custom fields, the timeline, comments, support threads (internal notes marked), stages, sources, the price list, field definitions, the staff directory, mailing lists, consent and suppressions, and a README with who, who approved, why, what is left out and each file's SHA-256. Outside the export quota (the approval is the control), in the ledger; no marker rows. The approval schema now parses every kind the service has (`write_off` was missing: a waiting write-off broke the request and the Approvals list).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | service `backup_routes.py`, `dual_control.py`; portal `admin/backup/*`, `documents/backup-zip.ts`                                                         |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
 **The table-stakes order** (`docs/RESEARCH-2026-10-03-TABLESTAKES.md` §3; exports of a
 view, the backup, a person's data file, archive, share, quote links, the outside-links
-register, imports of companies and people, find and create, handover, recurring tasks, and audit search and history are built, §4). Left from the archive item: undo on a single edit, and History
+register, imports of companies and people, find and create, handover, recurring tasks, audit search and history, and the desk as a team are built, §4). Left from the archive item: undo on a single edit, and History
 putting a previous value back (a deal already leaves the lists when it closes and a lead
 when it is disqualified, so those two kinds were not given an archive of their own).
 
 8. **Reports**: a report builder, saved and shared, pinned to a personal dashboard, each
    figure a link to its records.
-9. **The desk**: presence and a crossed-reply warning; the backlog over time and time to
-   resolution.
-10. **Files on records** (needs the storage account decided with production), **email
-    from a record**, **hosted forms**, **times in the person's zone** — in that order.
+9. **Files on records** (needs the storage account decided with production), **email
+   from a record**, **hosted forms**, **times in the person's zone** — in that order.
 
 **Prospects, still to do** (report sections in `docs/RESEARCH-2026-10-03-LEADS.md`):
 
@@ -367,7 +366,7 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0072 and publish → move the desk onto SQL → Vercel
+Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0073 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → link each staff
 member's Quantify Terminal account (Product) → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
@@ -392,7 +391,46 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of recurring tasks** (2026-10-04, fifth research pass).
+**As of the desk as a team** (2026-10-04, fifth research pass).
+
+- Service: migration 0073 (`hq_ticket_viewers`), `desk_routes.py`
+  (`hq/tickets/{id}/presence`, `hq/reports/desk`), the crossed check in
+  `ticket_routes.handle_reply`, gateway `touch_ticket_viewer` / `list_ticket_viewers`.
+  Tests in `tests/test_hq_desk_team.py` (3).
+- Presence is a POST that writes and is not audited (a heartbeat is not an act on a
+  record); the structural audit test names it as an exemption.
+- Every call refreshed a session's idle clock, so a page that asks on a timer kept a
+  session alive with nobody there: Home, Mail, Leads, Deals, Meetings and the desk
+  (`LiveRefresh`) never reached the 30-minute (15 for Owner and Admin) idle sign-out
+  while left visible, and the heartbeat would have made a seventh. A route can now say it
+  does not count as the person being there (`HqRouteEntry.keeps_session`, False for
+  presence), and the portal's pollers stop asking after two minutes untouched
+  (`src/lib/activity.ts`), say so on the live control, and ask again at the first touch.
+- What a reply crosses is decided by the message's place in the thread (`seen_through` is
+  the id of the newest message on screen), not by time: support times are kept to the
+  second, and the first test of the time comparison let a colleague's reply in the same
+  second through.
+- A held-back reply keeps its text because the composer submits from `onSubmit`
+  (`submitWithoutReset`): a form action empties the box when it resolves.
+- No status history is kept per conversation, so the report counts one open from its
+  creation to its latest resolution; a conversation reopened and resolved again counts
+  from the latest only, and the page says so.
+- The mock plays a colleague through a test-only route, `mock/desk-colleague`; the
+  harness part is `HQ_HARNESS_FLOW=deskteam`, and `reports-desk` is a page.
+- Service `6a088e6`, local. Service suite 2,159 passed, 4 skipped.
+- The full desktop walk on `997ab13` stopped in the light pass's triage: its keys
+  never fired. A preference reaches the account 400 ms after it changes; the find flow
+  switches shortcuts back on and leaves the page sooner, so the account kept "off", and
+  the hydrator then overwrote the device's newer "on" on every later page. A change the
+  account has not confirmed is now marked on the device (`hq-pending:<key>`); the
+  hydrator keeps it and sends it again (`src/lib/prefs/sync.ts`,
+  `preferences-hydrator.tsx`). Any person who changed a setting and moved on quickly
+  had it silently undone the same way.
+- The trend chart names at most twelve periods (counted back from the latest), and a
+  label at either end spills inward: thirty days on a phone gave each day 10px and the
+  newest label pushed the page 6px wide.
+
+**Before that: recurring tasks** (2026-10-04, fifth research pass).
 
 - Service: migration 0072 (four columns on `hq_tasks`, a check on the rule, an index on
   status and due date), `recurrence.py`, the task routes, `inbox.task_due_watch`. Tests in

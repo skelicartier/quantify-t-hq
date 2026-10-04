@@ -141,8 +141,101 @@ export function readTicketContext(token: string, ticketId: string) {
   return fetchHqJson(`hq/tickets/${ticketId}/context`, contextSchema, { token });
 }
 
-export function replyToTicket(token: string, ticketId: string, body: string) {
-  return postHqJson(`hq/tickets/${ticketId}/reply`, ticketEnvelope, { token, body: { body } });
+/**
+ * A public reply. `seen_through` is the id of the newest message the replier had on
+ * screen: a reply that would cross a colleague's (or the customer's newer message) is
+ * refused once with what it crosses, unless `send_anyway`.
+ */
+export function replyToTicket(
+  token: string,
+  ticketId: string,
+  body: string,
+  options: { seen_through?: string; send_anyway?: boolean } = {},
+) {
+  return postHqJson(`hq/tickets/${ticketId}/reply`, ticketEnvelope, {
+    token,
+    body: { body, ...options },
+  });
+}
+
+/** What a held-back reply would have crossed. */
+export const crossedSchema = z.object({
+  by: z.string(),
+  customer: z.boolean(),
+  at: z.string(),
+  excerpt: z.string(),
+  count: z.number(),
+});
+export type CrossedReply = z.infer<typeof crossedSchema>;
+
+export const presenceSchema = okEnvelope.extend({
+  others: z.array(
+    z.object({
+      staff_id: z.string(),
+      name: z.string(),
+      composing: z.boolean(),
+      seen_at: z.string().nullable(),
+    }),
+  ),
+  window_seconds: z.number(),
+});
+export type TicketPresence = z.infer<typeof presenceSchema>;
+
+/** This person has the conversation open (and is, or is not, writing); who else has. */
+export function touchPresence(token: string, ticketId: string, composing: boolean) {
+  return postHqJson(`hq/tickets/${ticketId}/presence`, presenceSchema, {
+    token,
+    body: { composing },
+  });
+}
+
+const deskReportSchema = okEnvelope.extend({
+  available: z.boolean(),
+  reason: z.string().optional(),
+  days: z.number().optional(),
+  series: z
+    .array(
+      z.object({ day: z.string(), open: z.number(), opened: z.number(), resolved: z.number() }),
+    )
+    .optional(),
+  first_reply: z
+    .object({
+      count: z.number(),
+      median_minutes: z.number().nullable(),
+      slowest_tenth_minutes: z.number().nullable(),
+    })
+    .optional(),
+  resolution: z
+    .object({
+      count: z.number(),
+      median_hours: z.number().nullable(),
+      slowest_tenth_hours: z.number().nullable(),
+    })
+    .optional(),
+  open_ages: z
+    .object({
+      under_a_day: z.number(),
+      one_to_three_days: z.number(),
+      three_to_seven_days: z.number(),
+      over_a_week: z.number(),
+    })
+    .optional(),
+  by_priority: z
+    .array(
+      z.object({
+        priority: z.string(),
+        open: z.number(),
+        resolved: z.number(),
+        median_resolution_hours: z.number().nullable(),
+      }),
+    )
+    .optional(),
+});
+export type DeskReport = z.infer<typeof deskReportSchema>;
+
+/** The queue over a window of days, and how long first replies and resolutions took. */
+export function readDeskReport(token: string, days: number) {
+  return fetchHqJson("hq/reports/desk", deskReportSchema, { token, query: { days: String(days) } });
 }
 
 export function noteOnTicket(token: string, ticketId: string, body: string) {

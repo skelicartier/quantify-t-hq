@@ -51,7 +51,12 @@ export async function sendMessage(
     if (mode === "note") {
       await ticketsApi.noteOnTicket(context.token, ticketId, body);
     } else {
-      await ticketsApi.replyToTicket(context.token, ticketId, body);
+      await ticketsApi.replyToTicket(context.token, ticketId, body, {
+        ...(fieldValue(formData, "seen_through", 40)
+          ? { seen_through: fieldValue(formData, "seen_through", 40) }
+          : {}),
+        send_anyway: formData.get("send_anyway") === "on",
+      });
     }
     if (usedReplyId && hasCapability(context, "tickets:manage")) {
       // Best effort: a lost usage count must never fail a sent reply.
@@ -62,11 +67,45 @@ export async function sendMessage(
       }
     }
   } catch (error) {
+    // A reply that would cross another is held back once, with what it would cross.
+    if (error instanceof HqApiRequestError && error.status === 409) {
+      const crossed = ticketsApi.crossedSchema.safeParse(error.details["crossed"]);
+      if (crossed.success) {
+        revalidatePath(`/support/${ticketId}`);
+        return {
+          status: "error",
+          message: crossed.data.customer
+            ? "The customer wrote again while you were writing. Read it, then send yours anyway or change it."
+            : `${crossed.data.by} replied while you were writing. Read it, then send yours anyway or change it.`,
+          crossed: crossed.data,
+        };
+      }
+    }
     return deskRefusal(error);
   }
   revalidatePath(`/support/${ticketId}`);
   revalidatePath("/support");
   return { status: "sent", message: null, sentAt: Date.now() };
+}
+
+/**
+ * A heartbeat from an open conversation: this person is here (and is, or is not, writing).
+ * Answers who else is. A failure answers nobody rather than an error: it is a courtesy.
+ */
+export async function presenceAction(
+  ticketId: string,
+  composing: boolean,
+): Promise<{ name: string; composing: boolean }[]> {
+  await requireSameOriginServerAction();
+  const context = await requireStaff("/support");
+  if (!hasCapability(context, "tickets:read")) return [];
+  try {
+    const answer = await ticketsApi.touchPresence(context.token, ticketId.slice(0, 64), composing);
+    return answer.others.map((row) => ({ name: row.name, composing: row.composing }));
+  } catch (error) {
+    if (error instanceof HqApiRequestError || error instanceof HqApiUnavailableError) return [];
+    throw error;
+  }
 }
 
 export async function manageTicketAction(
@@ -109,6 +148,20 @@ export async function manageTicketAction(
   try {
     await ticketsApi.manageTicket(context.token, ticketId, changes);
   } catch (error) {
+    // A reply that would cross another is held back once, with what it would cross.
+    if (error instanceof HqApiRequestError && error.status === 409) {
+      const crossed = ticketsApi.crossedSchema.safeParse(error.details["crossed"]);
+      if (crossed.success) {
+        revalidatePath(`/support/${ticketId}`);
+        return {
+          status: "error",
+          message: crossed.data.customer
+            ? "The customer wrote again while you were writing. Read it, then send yours anyway or change it."
+            : `${crossed.data.by} replied while you were writing. Read it, then send yours anyway or change it.`,
+          crossed: crossed.data,
+        };
+      }
+    }
     return deskRefusal(error);
   }
   revalidatePath(`/support/${ticketId}`);
@@ -131,6 +184,20 @@ export async function followTicketAction(
   try {
     await ticketsApi.followTicket(context.token, ticketId, following);
   } catch (error) {
+    // A reply that would cross another is held back once, with what it would cross.
+    if (error instanceof HqApiRequestError && error.status === 409) {
+      const crossed = ticketsApi.crossedSchema.safeParse(error.details["crossed"]);
+      if (crossed.success) {
+        revalidatePath(`/support/${ticketId}`);
+        return {
+          status: "error",
+          message: crossed.data.customer
+            ? "The customer wrote again while you were writing. Read it, then send yours anyway or change it."
+            : `${crossed.data.by} replied while you were writing. Read it, then send yours anyway or change it.`,
+          crossed: crossed.data,
+        };
+      }
+    }
     return deskRefusal(error);
   }
   revalidatePath(`/support/${ticketId}`);

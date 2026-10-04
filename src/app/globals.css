@@ -5418,6 +5418,44 @@
     font-size: 20px;
   }
 
+  /* --- The desk as a team: who else is here, and a reply held back --------------------- */
+  .ticket-presence {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .ticket-presence__writing {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .desk-ages {
+    max-width: 420px;
+    margin-top: 16px;
+  }
+
+  .composer__crossed {
+    margin: 8px 12px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--line-strong);
+    background: var(--panel-soft);
+  }
+
+  .composer__crossed p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .composer__crossed-by {
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
   /* The audit filter's two days stay together when the strip wraps. */
   .audit-days {
     display: inline-flex;
@@ -9543,8 +9581,21 @@
 
   .trend__x li,
   .columns__x li {
+    display: flex;
+    justify-content: center;
     min-width: 0;
     white-space: nowrap;
+  }
+
+  /* A label wider than its period spills inward at the two ends, never past the chart. */
+  .trend__x li:first-child,
+  .columns__x li:first-child {
+    justify-content: flex-start;
+  }
+
+  .trend__x li:last-child,
+  .columns__x li:last-child {
+    justify-content: flex-end;
   }
 
   @media (max-width: 720px) {

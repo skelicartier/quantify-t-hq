@@ -8,7 +8,11 @@ import { Button } from "@/components/ui/button";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_DESK_STATE, type DeskActionState } from "@/lib/support/desk-state";
+import { submitWithoutReset } from "@/lib/forms/submit-without-reset";
 import type { SavedReply } from "@/lib/api/tickets";
+
+/** The composer says whether there is text in it, for the presence strip. */
+export const COMPOSING_EVENT = "hq-desk-composing";
 
 type ComposerProps = {
   ticketId: string;
@@ -16,6 +20,8 @@ type ComposerProps = {
   savedReplies: readonly SavedReply[];
   /** What `{{first_name}}`, `{{name}}`, `{{plan}}` and `{{me}}` become when a saved reply is inserted. */
   variables?: Readonly<Record<string, string>> | undefined;
+  /** The id of the newest message on screen: a reply written against an older thread is held back once. */
+  seenThrough?: string | undefined;
 };
 
 /**
@@ -39,7 +45,13 @@ export function fillVariables(body: string, variables: Readonly<Record<string, s
  * never leaves the desk. The toggle changes the send, the border colour and the
  * button wording together, so what is about to happen is never ambiguous.
  */
-export function Composer({ ticketId, action, savedReplies, variables = {} }: ComposerProps) {
+export function Composer({
+  ticketId,
+  action,
+  savedReplies,
+  variables = {},
+  seenThrough = "",
+}: ComposerProps) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_DESK_STATE);
   const [mode, setMode] = useState<"reply" | "note">("reply");
   const [usedReplyId, setUsedReplyId] = useState("");
@@ -80,15 +92,24 @@ export function Composer({ ticketId, action, savedReplies, variables = {} }: Com
     setUsedReplyId(replyId);
   }
 
+  // Sent: the box is empty again, so nobody is writing.
+  useEffect(() => {
+    if (state.sentAt) window.dispatchEvent(new CustomEvent(COMPOSING_EVENT, { detail: false }));
+  }, [state.sentAt]);
+
   const isNote = mode === "note";
+  const crossed = !isNote ? state.crossed : undefined;
   return (
     <form
       className={isNote ? "composer composer--note" : "composer"}
-      action={formAction}
+      // Sent from onSubmit: a reply held back keeps its text (a form action resets the box).
+      onSubmit={submitWithoutReset(formAction)}
       key={state.sentAt ?? "composer"}
     >
       <AttemptField state={state} />
       <input type="hidden" name="ticket_id" value={ticketId} />
+      <input type="hidden" name="seen_through" value={seenThrough} />
+      {crossed && <input type="hidden" name="send_anyway" value="on" />}
       <input type="hidden" name="mode" value={mode} />
       <input type="hidden" name="used_reply_id" value={usedReplyId} />
       <div className="composer__bar" aria-label="Message kind">
@@ -144,7 +165,23 @@ export function Composer({ ticketId, action, savedReplies, variables = {} }: Com
             : "The customer reads this, signed as Support Team."
         }
         aria-label={isNote ? "Internal note" : "Public reply"}
+        onInput={(event) =>
+          window.dispatchEvent(
+            new CustomEvent(COMPOSING_EVENT, {
+              detail: event.currentTarget.value.trim().length > 0,
+            }),
+          )
+        }
       />
+      {crossed && (
+        <blockquote className="composer__crossed">
+          <p className="composer__crossed-by">
+            {crossed.customer ? "The customer wrote" : `${crossed.by} replied`}
+            {crossed.count > 1 ? ` (and ${crossed.count - 1} more)` : ""}:
+          </p>
+          <p>{crossed.excerpt}</p>
+        </blockquote>
+      )}
       <div className="composer__foot">
         <span className="composer__hint">
           {isNote
@@ -152,7 +189,7 @@ export function Composer({ ticketId, action, savedReplies, variables = {} }: Com
             : "Sending marks the thread as waiting on the customer."}
         </span>
         <Button variant={isNote ? "default" : "primary"} type="submit" disabled={isPending}>
-          {isPending ? "Sending…" : isNote ? "Add note" : "Send reply"}
+          {isPending ? "Sending…" : isNote ? "Add note" : crossed ? "Send anyway" : "Send reply"}
         </Button>
       </div>
       <FormFeedback state={state} sentLabel={isNote ? "Note added." : "Reply sent."} />

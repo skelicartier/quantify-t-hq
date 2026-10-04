@@ -136,6 +136,8 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "targets-untouched", path: "/targets?untouched=1", ready: "main#main-content" },
   // Where leads come from: what they said against what their visit showed, on to won.
   { name: "reports-attribution", path: "/reports/attribution", ready: ".barlist" },
+  // The desk over time: the backlog, first replies and resolutions, by priority, day by day.
+  { name: "reports-desk", path: "/reports/desk", ready: ".stat-grid" },
   {
     name: "lead-went-on",
     path: "/leads/1e000000-0000-4000-8000-000000000006",
@@ -754,6 +756,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureFindFlows(page, folder);
   await captureHandoverFlows(page, folder);
   await captureRepeatTaskFlows(page, folder);
+  await captureDeskTeamFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -4314,6 +4317,62 @@ async function captureRepeatTaskFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/tasks-repeat-next`);
 }
 
+/**
+ * The desk as a team: a colleague (test-only mock route) has the conversation open and is
+ * writing, and the page says so. They answer while this person writes: sending is held
+ * back once with what it would cross, the text kept, and Send anyway sends it.
+ */
+async function captureDeskTeamFlows(page: Page, folder: string) {
+  const ticketId = "sup_00000000000000000004";
+  const colleague = (extra: Record<string, unknown>) =>
+    fetch("http://127.0.0.1:7071/api/v1/mock/desk-colleague", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "support@hq.test", ticket_id: ticketId, ...extra }),
+    });
+  const opened = await colleague({ composing: true });
+  if (!opened.ok) {
+    report(`${folder}/support-presence`, "the mock could not open the conversation as a colleague");
+    return;
+  }
+  const { name } = (await opened.json()) as { name: string };
+  await page.goto(`${BASE}/support/${ticketId}`, { waitUntil: "networkidle" });
+  const writing = page.locator(".ticket-presence__writing", {
+    hasText: `${name} is writing a reply.`,
+  });
+  await writing.waitFor({ timeout: 15_000 }).catch(() => undefined);
+  if ((await writing.count()) === 0)
+    report(`${folder}/support-presence`, "the page does not say the colleague is writing");
+  await shoot(page, `${folder}/support-presence`);
+  const text = `Clearing the chart cache fixes this (${Date.now().toString(36)}).`;
+  const composer = page.locator("form.composer");
+  await composer.locator("textarea[name=body]").fill(text);
+  const answered = await colleague({ reply: "Try reloading the chart while we look into it." });
+  if (!answered.ok) {
+    report(`${folder}/support-crossed`, "the mock could not answer as the colleague");
+    return;
+  }
+  await composer.getByRole("button", { name: "Send reply" }).click();
+  const crossed = composer.locator(".composer__crossed", { hasText: `${name} replied` });
+  await crossed.waitFor({ timeout: 15_000 }).catch(() => undefined);
+  if ((await crossed.count()) === 0)
+    report(`${folder}/support-crossed`, "the reply went out though a colleague's crossed it");
+  if ((await composer.locator("textarea[name=body]").inputValue()) !== text)
+    report(`${folder}/support-crossed`, "the held-back reply lost its text");
+  await shoot(page, `${folder}/support-crossed`);
+  await composer.getByRole("button", { name: "Send anyway" }).click();
+  const sent = page.locator(".thread", { hasText: text });
+  await sent
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .catch(() => undefined);
+  if ((await sent.count()) === 0)
+    report(`${folder}/support-sent-anyway`, "Send anyway did not send the reply");
+  if ((await composer.locator(".composer__crossed").count()) > 0)
+    report(`${folder}/support-sent-anyway`, "the crossed warning stayed after sending");
+  await shoot(page, `${folder}/support-sent-anyway`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4337,6 +4396,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   find: captureFindFlows,
   handover: captureHandoverFlows,
   repeat: captureRepeatTaskFlows,
+  deskteam: captureDeskTeamFlows,
 };
 
 async function runPart(browser: Browser) {

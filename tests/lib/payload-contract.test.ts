@@ -333,6 +333,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/revenue/mrr", () => revenue.readMrrBridge(token)],
   ["hq/reports/weekly", () => reports.readWeeklyReport(token, ids.week!)],
   ["hq/reports/attribution", () => reports.readAttribution(token, 90)],
+  ["hq/reports/desk", () => tickets.readDeskReport(token, 30)],
   ["hq/exports/companies/columns", () => reports.readExportColumns(token, "companies")],
   ["hq/backup", () => backupApi.readBackup(token)],
   ["hq/archive", () => archiveApi.readArchive(token)],
@@ -441,6 +442,18 @@ describe("every portal read parses the service's own payload", () => {
         fixture!.results!["hq/staff/{staff_id}/handover/run"],
       );
       expect(handed.moved.find((line) => line.key === "companies")?.count).toBe(1);
+    });
+    it("hq/tickets/{ticket_id}/presence, and a reply held back because one crossed it", () => {
+      const presence = tickets.presenceSchema.parse(
+        fixture!.results!["hq/tickets/{ticket_id}/presence"],
+      );
+      expect(presence.others.map((row) => row.composing)).toEqual([true]);
+      const held = fixture!.results!["hq/tickets/{ticket_id}/reply?crossed"] as {
+        error: { code: string; details: Record<string, unknown> };
+      };
+      expect(held.error.code).toBe("revision_conflict");
+      const crossed = tickets.crossedSchema.parse(held.error.details["crossed"]);
+      expect([crossed.customer, crossed.excerpt]).toEqual([false, "Try reloading the chart."]);
     });
     it("hq/people/imports/{import_id}/rollback", () => {
       const taken = crm.RECORD_IMPORT_SCHEMAS.takeBack.parse(

@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { isAway, onReturn, watchActivity } from "@/lib/activity";
+
 /**
  * Keeps a server-rendered page current without a reload.
  *
@@ -24,6 +26,9 @@ import { useEffect, useState } from "react";
  * 3. **It can be turned off.** Somebody reading a long thread does not want the ground
  *    moving under them, and a live view with no off switch is one people work around by
  *    closing the page.
+ * 4. **Nothing happens once nobody is there.** Each refresh counts as the person being
+ *    here, so a screen left on would never reach the session's idle sign-out. After two
+ *    minutes untouched it stops asking and says so; the first touch refreshes at once.
  */
 
 type LiveRefreshProps = {
@@ -47,15 +52,19 @@ function isTyping(): boolean {
 export function LiveRefresh({ intervalSeconds = 30, label }: LiveRefreshProps) {
   const router = useRouter();
   const [live, setLive] = useState(true);
+  const [away, setAway] = useState(false);
 
   // `live` is a dependency rather than something read through a ref: pausing tears the
   // timer and the listener down instead of leaving them running and throwing the result
   // away, so a paused indicator means nothing is scheduled at all.
   useEffect(() => {
     if (!live) return;
+    watchActivity();
 
     const refresh = () => {
-      if (document.hidden || isTyping()) return;
+      const unattended = isAway();
+      setAway(unattended);
+      if (document.hidden || isTyping() || unattended) return;
       router.refresh();
     };
     const seconds = Math.max(MIN_INTERVAL_SECONDS, intervalSeconds);
@@ -66,9 +75,11 @@ export function LiveRefresh({ intervalSeconds = 30, label }: LiveRefreshProps) {
       if (!document.hidden) refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
+    const stopReturn = onReturn(refresh);
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
+      stopReturn();
     };
   }, [intervalSeconds, live, router]);
 
@@ -81,12 +92,16 @@ export function LiveRefresh({ intervalSeconds = 30, label }: LiveRefreshProps) {
         onClick={() => setLive((current) => !current)}
       >
         <span
-          className={["live-refresh__dot", live ? "live-refresh__dot--on" : ""]
+          className={["live-refresh__dot", live && !away ? "live-refresh__dot--on" : ""]
             .filter(Boolean)
             .join(" ")}
           aria-hidden="true"
         />
-        {live ? `${label} updates automatically` : `${label} updates paused`}
+        {!live
+          ? `${label} updates paused`
+          : away
+            ? `${label} paused while nobody is here`
+            : `${label} updates automatically`}
       </button>
     </span>
   );

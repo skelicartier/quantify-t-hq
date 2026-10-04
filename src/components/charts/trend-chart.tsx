@@ -18,6 +18,8 @@ export type TrendPoint = {
 const WIDTH = 720;
 const HEIGHT = 200;
 const PAD = 6;
+/** The most period labels drawn under the axis; past it the labels thin out. */
+const MAX_LABELS = 12;
 
 export function TrendChart({
   points,
@@ -31,6 +33,7 @@ export function TrendChart({
   tone?: "accent" | "success" | "info" | undefined;
 }) {
   const count = Math.max(points.length, 1);
+  const labelStep = Math.max(1, Math.ceil(count / MAX_LABELS));
   const slot = WIDTH / count;
   const ceiling = niceCeiling(Math.max(0, ...points.map((point) => point.value)));
   const y = (value: number) => HEIGHT - PAD - (Math.max(value, 0) / ceiling) * (HEIGHT - PAD * 2);
@@ -105,7 +108,11 @@ export function TrendChart({
         aria-hidden="true"
       >
         {points.map((point, index) => (
-          <li key={`${point.label}-${index}`}>{point.label}</li>
+          // Every period keeps its slot; past a dozen only every so many is named,
+          // counted back from the latest so the newest is always one of them.
+          <li key={`${point.label}-${index}`}>
+            {(count - 1 - index) % labelStep === 0 ? point.label : ""}
+          </li>
         ))}
       </ol>
     </figure>

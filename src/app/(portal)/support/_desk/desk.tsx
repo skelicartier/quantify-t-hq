@@ -6,6 +6,7 @@ import {
   followTicketAction,
   manageTicketAction,
   mergeTicketAction,
+  presenceAction,
   sendMessage,
 } from "@/app/(portal)/support/[ticketId]/actions";
 import { DocumentTools } from "@/components/documents/document-tools";
@@ -18,6 +19,7 @@ import {
   triageAction,
 } from "@/app/(portal)/_actions/ai";
 import { Composer } from "@/components/support/composer";
+import { TicketPresence } from "@/components/support/ticket-presence";
 import { DeskKeys } from "@/components/support/desk-keys";
 import { MergeForm } from "@/components/support/merge-form";
 import { SlaChip } from "@/components/support/sla-chip";
@@ -307,6 +309,9 @@ export async function Desk({ context, filters, selected }: DeskProps) {
         </header>
         <div className="desk__queue-meta">
           <LiveRefresh intervalSeconds={30} label="Queue" />
+          <Link className="desk__replies-link" href="/reports/desk">
+            Over time
+          </Link>
           {canManage && (
             <Link className="desk__replies-link" href="/support/replies">
               Saved replies
@@ -568,11 +573,13 @@ export async function Desk({ context, filters, selected }: DeskProps) {
                       feedback={aiFeedbackAction}
                     />
                   )}
+                  <TicketPresence ticketId={ticket.id} action={presenceAction} />
                   <Composer
                     ticketId={ticket.id}
                     action={sendMessage}
                     savedReplies={savedReplies}
                     variables={replyVariables}
+                    seenThrough={ticket.messages[ticket.messages.length - 1]?.id ?? ""}
                   />
                 </>
               ) : (
