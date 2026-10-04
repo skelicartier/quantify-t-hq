@@ -67,6 +67,15 @@ import {
   type CrmSettings,
 } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
+import { colleaguesOf } from "@/lib/api/share";
+import {
+  archiveRecordAction,
+  restoreRecordAction,
+  shareRecordAction,
+} from "@/app/(portal)/_actions/share";
+import { ArchiveForm } from "@/components/crm/archive-forms";
+import { ArchivedBanner } from "@/components/crm/archived-banner";
+import { ShareMenu } from "@/components/crm/share-menu";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { TIER_LABELS, untouchedWords } from "@/lib/crm/targets";
 import {
@@ -392,9 +401,33 @@ export default async function CompanyPage({ params, searchParams }: CompanyPageP
                 />
               </Popover>
             )}
+            <ShareMenu
+              subjectType="company"
+              subjectId={company.company_id}
+              path={base}
+              colleagues={colleaguesOf(names, context.me.staff.staff_id)}
+              action={shareRecordAction}
+            />
+            {canWrite && !company.archived && (
+              <ArchiveForm
+                action={archiveRecordAction}
+                kind="companies"
+                recordId={company.company_id}
+                noun="company"
+              />
+            )}
           </>
         }
       />
+      {company.archived && (
+        <ArchivedBanner
+          kind="companies"
+          recordId={company.company_id}
+          archivedAt={company.archived_at}
+          canRestore={canWrite}
+          action={restoreRecordAction}
+        />
+      )}
       <RecordTabs
         base={base}
         tabs={[

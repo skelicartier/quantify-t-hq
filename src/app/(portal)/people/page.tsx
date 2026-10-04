@@ -73,6 +73,9 @@ export default async function PeoplePage({ searchParams }: PeoplePageProps) {
         description="One person per address. Leads become people when they are qualified."
         actions={
           <>
+            <Link className="btn btn--small btn--ghost" href="/archive?tab=people">
+              Archived
+            </Link>
             {canWrite ? (
               <Popover label="Add person" variant="primary">
                 <PersonCreateForm

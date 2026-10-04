@@ -36,7 +36,7 @@ const recordSchema = z.object(
 );
 export type CompanyRecord = z.infer<typeof recordSchema>;
 
-const letterheadSchema = z.object({
+export const letterheadSchema = z.object({
   brand: z.string(),
   name: z.string(),
   name_note: z.string(),

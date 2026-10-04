@@ -33,6 +33,8 @@ export const companySchema = z.object({
   notes: z.string(),
   customer_since: z.string().nullable(),
   archived: z.boolean(),
+  /** When it was archived; absent from an older service. */
+  archived_at: z.string().nullable().optional(),
   created_at: z.string().nullable(),
   updated_at: z.string().nullable(),
   /** The group this company belongs to, if any. */
@@ -74,6 +76,8 @@ export const personSchema = z.object({
   notes: z.string(),
   last_contacted_at: z.string().nullable(),
   created_at: z.string().nullable(),
+  /** Set while the person is archived: off every list, still read here. */
+  archived_at: z.string().nullable().optional(),
 });
 export type Person = z.infer<typeof personSchema>;
 

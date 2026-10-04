@@ -257,6 +257,9 @@ const SIGNED_IN_PAGES: Shot[] = [
   { name: "service-status", path: "/service-status", ready: ".status-components" },
   { name: "admin-privileged", path: "/admin/privileged", ready: "main#main-content" },
   { name: "admin-backup", path: "/admin/backup", ready: "main#main-content" },
+  { name: "admin-links", path: "/admin/links", ready: "main#main-content" },
+  { name: "archive", path: "/archive", ready: "main#main-content" },
+  { name: "archive-people", path: "/archive?tab=people", ready: "main#main-content" },
   { name: "admin-ai", path: "/admin/ai", ready: "main#main-content" },
   { name: "admin-rules", path: "/admin/rules", ready: "main#main-content" },
   { name: "admin-webhooks", path: "/admin/webhooks", ready: "main#main-content" },
@@ -730,6 +733,9 @@ async function captureInteractions(page: Page, folder: string) {
   await captureExportFlows(page, folder);
   await captureBackupFlows(page, folder);
   await captureDataFileFlows(page, folder);
+  await captureArchiveFlows(page, folder);
+  await captureShareFlows(page, folder);
+  await captureQuoteLinkFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -3902,6 +3908,104 @@ async function captureDataFileFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/privacy-data-file-recorded`);
 }
 
+/**
+ * Archive and put back: a prospect firm archived from its page with a reason leaves the
+ * Companies list and is under Archived with who and why; put back from there, it is on the
+ * list again and its page says nothing of an archive.
+ */
+async function captureArchiveFlows(page: Page, folder: string) {
+  const firm = "c0000000-0000-4000-8000-000000000181";
+  await page.goto(`${BASE}/companies/${firm}`, { waitUntil: "networkidle" });
+  const banner = page.locator(".archived-banner");
+  if ((await banner.count()) > 0) {
+    // Left archived by an earlier pass that stopped part-way: put it back first.
+    await banner.getByRole("button", { name: "Put back" }).click();
+    await banner.waitFor({ state: "detached", timeout: 15_000 });
+  }
+  await page.locator("details.archive-menu > summary").click();
+  await page.locator(`#archive-${firm}`).fill("Screenshot run: no longer a fit");
+  await page.locator("details.archive-menu button[type=submit]").click();
+  await banner.waitFor({ timeout: 15_000 });
+  await shoot(page, `${folder}/company-archived`);
+  await page.goto(`${BASE}/companies?q=Cerity`, { waitUntil: "networkidle" });
+  if ((await page.locator("tbody .table-title", { hasText: "Cerity Partners" }).count()) > 0)
+    report(`${folder}/company-archived`, "the archived company is still on the list");
+  await page.goto(`${BASE}/archive`, { waitUntil: "networkidle" });
+  const row = page.locator("tbody tr", { hasText: "Cerity Partners" });
+  if ((await row.filter({ hasText: "Screenshot run: no longer a fit" }).count()) === 0)
+    report(`${folder}/archive-listed`, "the archive does not say why the company was archived");
+  await shoot(page, `${folder}/archive-listed`);
+  await row.getByRole("button", { name: "Put back" }).click();
+  await row.waitFor({ state: "detached", timeout: 15_000 });
+  await page.goto(`${BASE}/companies/${firm}`, { waitUntil: "networkidle" });
+  if ((await banner.count()) > 0)
+    report(`${folder}/company-put-back`, "the company still reads as archived");
+  console.log(`  ✓ ${folder}/company-put-back`);
+}
+
+/**
+ * Share: a company's link copied, and the company sent to a colleague with a line, which
+ * the form says went.
+ */
+async function captureShareFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000004`, {
+    waitUntil: "networkidle",
+  });
+  const menu = page.locator("details.share-menu");
+  await menu.locator("summary").click();
+  await menu.getByRole("button", { name: "Copy link" }).waitFor({ timeout: 10_000 });
+  await menu.locator(".share-menu__person input").first().check();
+  await menu.locator("input[name=note]").fill("Worth a call before Thursday?");
+  await shoot(page, `${folder}/company-share-open`);
+  await menu.getByRole("button", { name: "Send", exact: true }).click();
+  await menu
+    .locator(".form-sent", { hasText: "Sent to one colleague" })
+    .waitFor({ timeout: 15_000 });
+  console.log(`  ✓ ${folder}/company-shared`);
+}
+
+/**
+ * A sent quote as its customer's link: made on the quote's page (the address shown once),
+ * opened without a session, accepted with a name and a tick; the quote's page then lists
+ * the link as accepted. Later passes find it signed and check the row.
+ */
+async function captureQuoteLinkFlows(page: Page, folder: string) {
+  const quotePath =
+    "/deals/d0000000-0000-4000-8000-000000000002/quotes/qa000002-0000-4000-8000-000000000000";
+  await page.goto(`${BASE}${quotePath}`, { waitUntil: "networkidle" });
+  const make = page.getByRole("button", { name: "Make a link for the customer" });
+  if ((await make.count()) > 0) {
+    await make.click();
+    const secret = page.locator(".quote-links .one-time-secret__value");
+    await secret.waitFor({ timeout: 15_000 });
+    const address = new URL((await secret.innerText()).trim());
+    await shoot(page, `${folder}/quote-link-made`);
+    const customer = await page
+      .context()
+      .browser()!
+      .newContext({ viewport: page.viewportSize() ?? { width: 1440, height: 900 } });
+    const view = await customer.newPage();
+    watchConsole(view);
+    await view.goto(`${BASE}${address.pathname}`, { waitUntil: "networkidle" });
+    await shoot(view, `${folder}/quote-public`);
+    await view.fill("#answer-name", "Dana Reyes");
+    await view.fill("#answer-email", "dana@example.org");
+    await view.locator(".quote-answer__agree input").check();
+    await view.getByRole("button", { name: "Accept the quote" }).click();
+    await view.locator(".status-banner", { hasText: "Accepted by Dana Reyes" }).waitFor({
+      timeout: 15_000,
+    });
+    await shoot(view, `${folder}/quote-public-accepted`);
+    await customer.close();
+    await page.goto(`${BASE}${quotePath}`, { waitUntil: "networkidle" });
+  }
+  if (
+    (await page.locator(".quote-links__row", { hasText: "accepted by Dana Reyes" }).count()) === 0
+  )
+    report(`${folder}/quote-link-answered`, "the quote's link does not say it was accepted");
+  await shoot(page, `${folder}/quote-link-answered`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -3918,6 +4022,9 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   exports: captureExportFlows,
   backup: captureBackupFlows,
   datafile: captureDataFileFlows,
+  archive: captureArchiveFlows,
+  share: captureShareFlows,
+  quotelink: captureQuoteLinkFlows,
 };
 
 async function runPart(browser: Browser) {

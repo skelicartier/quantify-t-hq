@@ -37,6 +37,15 @@ import { ViewedBy } from "@/components/security/viewed-by";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompanies, readPerson, type PersonDetail } from "@/lib/api/crm";
 import { directoryOrNull } from "@/lib/api/staff";
+import { colleaguesOf } from "@/lib/api/share";
+import {
+  archiveRecordAction,
+  restoreRecordAction,
+  shareRecordAction,
+} from "@/app/(portal)/_actions/share";
+import { ArchiveForm } from "@/components/crm/archive-forms";
+import { ArchivedBanner } from "@/components/crm/archived-banner";
+import { ShareMenu } from "@/components/crm/share-menu";
 import { isoDay } from "@/lib/crm/dates";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
@@ -185,9 +194,33 @@ export default async function PersonPage({ params, searchParams }: PersonPagePro
                 />
               </Popover>
             )}
+            <ShareMenu
+              subjectType="person"
+              subjectId={person.person_id}
+              path={base}
+              colleagues={colleaguesOf(names, context.me.staff.staff_id)}
+              action={shareRecordAction}
+            />
+            {canWrite && !person.archived_at && (
+              <ArchiveForm
+                action={archiveRecordAction}
+                kind="people"
+                recordId={person.person_id}
+                noun="person"
+              />
+            )}
           </>
         }
       />
+      {person.archived_at && (
+        <ArchivedBanner
+          kind="people"
+          recordId={person.person_id}
+          archivedAt={person.archived_at}
+          canRestore={canWrite}
+          action={restoreRecordAction}
+        />
+      )}
       {person.do_not_contact && (
         <Callout tone="danger" compact>
           This person asked not to be contacted. Log what you learn, but do not reach out.

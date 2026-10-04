@@ -136,6 +136,9 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
             <Link className="btn btn--small btn--ghost" href="/companies/duplicates">
               Duplicates
             </Link>
+            <Link className="btn btn--small btn--ghost" href="/archive">
+              Archived
+            </Link>
             {canWrite && (
               <Link className="btn btn--small" href="/companies/import">
                 Import

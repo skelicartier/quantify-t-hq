@@ -9,6 +9,8 @@ import {
 import { Letterhead } from "@/components/documents/letterhead";
 import { PrintButton } from "@/components/documents/print-button";
 import { QuoteLinesEditor } from "@/components/deals/quote-lines-editor";
+import { QuoteLinks } from "@/components/deals/quote-links";
+import { createQuoteLinkAction, revokeQuoteLinkAction } from "@/app/(portal)/_actions/share";
 import { QuoteStatePill } from "@/components/deals/quote-parts";
 import { PageHeader } from "@/components/shell/page-header";
 import { ActForm } from "@/components/ui/act-form";
@@ -302,6 +304,23 @@ export default async function QuotePage({ params }: { params: Params }) {
             </div>
           </article>
         </RecordSection>
+
+        {(Boolean(can.link) || (quote.links ?? []).length > 0) && (
+          <RecordSection id="customer-link" title="The customer's link">
+            <p className="page-note">
+              A link the customer opens to read this quote and accept or decline it. Accepting signs
+              it here, with their name, the moment and a fingerprint of what they read.
+            </p>
+            <QuoteLinks
+              createAction={createQuoteLinkAction}
+              revokeAction={revokeQuoteLinkAction}
+              dealId={dealId}
+              quoteId={quote.quote_id}
+              links={quote.links ?? []}
+              canLink={Boolean(can.link)}
+            />
+          </RecordSection>
+        )}
 
         {can.edit && (
           <RecordSection id="lines" title="Lines">

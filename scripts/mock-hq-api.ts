@@ -2372,6 +2372,8 @@ type CompanyRow = {
   notes: string;
   customer_since: string | null;
   archived: boolean;
+  /** When it was archived (archive_routes); absent on rows a merge archived. */
+  archived_at?: string | null;
   created_at: string;
   updated_at: string;
   parent_id?: string;
@@ -2391,6 +2393,7 @@ type PersonRow = {
   last_contacted_at: string | null;
   created_at: string;
   archived?: boolean;
+  archived_at?: string | null;
 };
 type MentionRow = {
   id: string;
@@ -6481,6 +6484,7 @@ const INBOX_REASONS: Record<string, [number, string]> = {
   late: [85, "First reply running late"],
   review: [80, "Waiting on you"],
   mention: [70, "Mentioned"],
+  shared: [65, "Shared with you"],
   assigned: [60, "Assigned"],
   signal: [55, "Sign of interest"],
   reply: [50, "Reply"],
@@ -6501,10 +6505,11 @@ const INBOX_PAGES: Record<string, string> = {
   task: "/tasks",
   privacy_request: "/privacy/requests/{id}",
   incident: "/privacy/incidents/{id}",
+  quote: "/deals/quotes",
 };
 const INBOX_SPECIFICITY = ["deal", "lead", "meeting", "person", "company"];
 /** What counts as Priority until a person says otherwise (inbox.PRIORITY_DEFAULT). */
-const PRIORITY_DEFAULT = ["security", "late", "review", "mention"];
+const PRIORITY_DEFAULT = ["security", "late", "review", "mention", "shared"];
 const notifications: NotificationRow[] = [];
 const inboxSubscriptions = new Map<
   string,
@@ -11398,6 +11403,7 @@ function companyView(row: CompanyRow) {
     notes: row.notes,
     customer_since: row.customer_since,
     archived: row.archived,
+    archived_at: row.archived ? (row.archived_at ?? row.updated_at ?? null) : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -11418,6 +11424,7 @@ function personView(row: PersonRow) {
     notes: row.notes,
     last_contacted_at: row.last_contacted_at,
     created_at: row.created_at,
+    archived_at: row.archived ? (row.archived_at ?? null) : null,
   };
 }
 
@@ -12336,9 +12343,12 @@ routes.push(
         return refuse(400, "malformed_request", {
           domain: "a personal mail domain cannot anchor a company",
         });
-      if (domain && companies.some((row) => row.domain === domain))
+      const holder = domain ? companies.find((row) => row.domain === domain) : undefined;
+      if (holder)
         return refuse(400, "malformed_request", {
-          domain: "another company already holds this domain",
+          domain: holder.archived
+            ? `${holder.name || "an archived company"} holds this domain and is archived: put it back from Archived`
+            : "another company already holds this domain",
         });
       const found = caller(headers);
       const row: CompanyRow = {
@@ -12888,8 +12898,13 @@ routes.push(
         return refuse(400, "malformed_request", { reason: "a name or an email is required" });
       const personSourceRefusal = sourceRefusal(String(body.source_key ?? ""));
       if (personSourceRefusal) return personSourceRefusal;
-      if (email && people.some((row) => row.email === email))
-        return refuse(400, "malformed_request", { email: "already a person" });
+      const held = email ? people.find((row) => row.email === email) : undefined;
+      if (held)
+        return refuse(400, "malformed_request", {
+          email: held.archived
+            ? `${held.full_name || "an archived person"} has this address and is archived: put them back from Archived`
+            : "already a person",
+        });
       const row: PersonRow = {
         id: randomUUID(),
         company_id: String(body.company_id ?? ""),
@@ -46368,9 +46383,702 @@ function qView(
     signature_ref: row.signature_ref,
     declined_reason: row.declined_reason,
     approvers: qApprovers(row).map((item) => item.name),
-    can: qAbilities(role, me, row, state, lines.length),
+    can: {
+      ...qAbilities(role, me, row, state, lines.length),
+      // A customer link can be made now (0070): sent, valid, and the role sells.
+      link: state === "published" && capsFor(role).includes("deals:write"),
+    },
+    links: qLinksFor(row.id),
   };
 }
+
+/** As quote_routes.after_accept: the deal's quote now, the others withdrawn, the deal valued. */
+function qAfterAccept(row: QuoteRow, lines: QuoteLineRow[], actorId: string | null): boolean {
+  for (const other of quoteRows) {
+    if (other.deal_id !== row.deal_id) continue;
+    other.is_primary = other.id === row.id;
+    if (other.id !== row.id && ![...Q_FINAL, "expired"].includes(qState(other))) {
+      other.status = "withdrawn";
+      other.updated_at = now();
+    }
+  }
+  const deal = deals.find((item) => item.id === row.deal_id);
+  const net = qTotals(lines, row.term_months).net_recurring;
+  if (
+    deal &&
+    deal.status === "open" &&
+    (deal.mrr_amount !== net || deal.currency !== row.currency)
+  ) {
+    Object.assign(deal, { mrr_amount: net, currency: row.currency });
+    audit("deal.updated", actorId, "deal", deal.id);
+    return true;
+  }
+  return false;
+}
+
+// --- customer links for a sent quote (mirrors quote_link_routes.py, 0070) -------------------
+type QuoteLinkRow = {
+  id: string;
+  quote_id: string;
+  token_hash: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  views: number;
+  first_viewed_at: string | null;
+  last_viewed_at: string | null;
+  answer: "" | "accepted" | "declined";
+  answered_at: string | null;
+  answer_name: string;
+  answer_email: string;
+};
+const quoteLinks: QuoteLinkRow[] = [];
+const QUOTE_TOKEN_PREFIX = "hqq_";
+const quoteTokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
+
+function qLinkState(row: QuoteLinkRow): string {
+  if (row.revoked_at) return "revoked";
+  if (row.answer) return row.answer;
+  return Date.parse(row.expires_at) <= Date.now() ? "expired" : "live";
+}
+
+function qLinkView(row: QuoteLinkRow) {
+  return {
+    link_id: row.id,
+    state: qLinkState(row),
+    created_by_name: nameOf(row.created_by),
+    created_at: row.created_at,
+    expires_at: row.expires_at,
+    views: row.views,
+    first_viewed_at: row.first_viewed_at,
+    last_viewed_at: row.last_viewed_at,
+    answer: row.answer,
+    answered_at: row.answered_at,
+    answer_name: row.answer_name,
+  };
+}
+
+const qLinksFor = (quoteId: string) =>
+  quoteLinks
+    .filter((row) => row.quote_id === quoteId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map(qLinkView);
+
+// --- archive and put back (mirrors archive_routes.py) ---------------------------------------
+function archiveCompanyRefusal(company: CompanyRow): string | null {
+  if (contracts.some((row) => row.company_id === company.id && row.status === "active"))
+    return "it has an active contract: a customer is ended by its contract, not archived";
+  const open = deals.filter((row) => row.company_id === company.id && row.status === "open").length;
+  if (open) return `it has ${open} open deal${open === 1 ? "" : "s"}: close or move them first`;
+  const children = companies.filter((row) => row.parent_id === company.id && !row.archived).length;
+  if (children)
+    return `${children} compan${children === 1 ? "y names" : "ies name"} it as their parent`;
+  return null;
+}
+
+const mergedInto = (action: string, id: string) =>
+  auditEvents.some((row) => row.action === action && row.entity_id === id);
+
+function restoreCompanyRefusal(company: CompanyRow): string | null {
+  if (mergedInto("company.merged_into", company.id))
+    return "it was merged into another company, which holds its history now";
+  if (
+    company.domain &&
+    companies.some((row) => row.id !== company.id && !row.archived && row.domain === company.domain)
+  )
+    return `another company now has the domain ${company.domain}`;
+  return null;
+}
+
+function restorePersonRefusal(person: PersonRow): string | null {
+  if (mergedInto("person.merged_into", person.id))
+    return "they were merged into another person, who holds their history now";
+  if (erasedPeople.has(person.id)) return "they were erased under a privacy request";
+  if (
+    person.email &&
+    people.some((row) => row.id !== person.id && !row.archived && row.email === person.email)
+  )
+    return `another person now has the address ${person.email}`;
+  return null;
+}
+
+function archiveNote(member: Staff, body: string, companyId: string, personId: string) {
+  activities.push({
+    kind: "system",
+    at: now(),
+    staff_id: member.id,
+    staff_name: member.display_name || member.email,
+    body,
+    company_id: companyId,
+    person_id: personId,
+    deal_id: "",
+    lead_id: "",
+  });
+}
+
+function lastArchived(action: string, id: string) {
+  return auditEvents.find((row) => row.action === action && row.entity_id === id);
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/archive",
+    auth: true,
+    capability: "crm:read",
+    handler: () => {
+      const who = (row: Record<string, unknown> | undefined) => ({
+        by: row ? nameOf(String(row.staff_id ?? "")) : "",
+        reason: row ? String(row.reason ?? "") : "",
+      });
+      return ok({
+        companies: companies
+          .filter((row) => row.archived)
+          .map((row) => {
+            const merged = mergedInto("company.merged_into", row.id);
+            const refusal = merged
+              ? "it was merged into another company, which holds its history now"
+              : restoreCompanyRefusal(row);
+            return {
+              company_id: row.id,
+              name: row.name,
+              domain: row.domain,
+              archived_at: row.archived_at ?? row.updated_at ?? null,
+              ...who(lastArchived("company.archived", row.id)),
+              merged,
+              can_restore: refusal === null,
+              why_not: refusal ?? "",
+            };
+          })
+          .sort((a, b) => String(b.archived_at ?? "").localeCompare(String(a.archived_at ?? ""))),
+        people: people
+          .filter((row) => row.archived)
+          .map((row) => {
+            const merged = mergedInto("person.merged_into", row.id);
+            const refusal = merged
+              ? "they were merged into another person, who holds their history now"
+              : restorePersonRefusal(row);
+            return {
+              person_id: row.id,
+              name: row.full_name,
+              email: row.email,
+              company: companyName(row.company_id),
+              archived_at: row.archived_at ?? null,
+              ...who(lastArchived("person.archived", row.id)),
+              merged,
+              can_restore: refusal === null,
+              why_not: refusal ?? "",
+            };
+          })
+          .sort((a, b) => String(b.archived_at ?? "").localeCompare(String(a.archived_at ?? ""))),
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/{company_id}/archive",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const company = companies.find((row) => row.id === String(params.company_id).toLowerCase());
+      if (!company) return refuse(404, "not_found");
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say why, in a few words" });
+      if (company.archived)
+        return refuse(400, "malformed_request", { archived: "it is archived already" });
+      const refusal = archiveCompanyRefusal(company);
+      if (refusal) return refuse(400, "malformed_request", { archived: refusal });
+      const member = caller(headers)!.member;
+      Object.assign(company, { archived: true, archived_at: now(), updated_at: now() });
+      archiveNote(member, `Archived: ${reason}`, company.id, "");
+      audit("company.archived", member.id, "company", company.id, reason, { name: company.name });
+      return ok({ archived: true, archived_at: company.archived_at });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/companies/{company_id}/restore",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, headers }) => {
+      const company = companies.find((row) => row.id === String(params.company_id).toLowerCase());
+      if (!company) return refuse(404, "not_found");
+      if (!company.archived)
+        return refuse(400, "malformed_request", { archived: "it is not archived" });
+      const refusal = restoreCompanyRefusal(company);
+      if (refusal) return refuse(400, "malformed_request", { archived: refusal });
+      const member = caller(headers)!.member;
+      Object.assign(company, { archived: false, archived_at: null, updated_at: now() });
+      archiveNote(member, "Put back from the archive.", company.id, "");
+      audit("company.restored", member.id, "company", company.id, "", { name: company.name });
+      return ok({ archived: false });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/people/{person_id}/archive",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, body, headers }) => {
+      const person = people.find((row) => row.id === String(params.person_id).toLowerCase());
+      if (!person) return refuse(404, "not_found");
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say why, in a few words" });
+      if (person.archived)
+        return refuse(400, "malformed_request", { archived: "they are archived already" });
+      if (erasedPeople.has(person.id))
+        return refuse(400, "malformed_request", {
+          archived: "they were erased under a privacy request; nothing is left to archive",
+        });
+      const member = caller(headers)!.member;
+      Object.assign(person, { archived: true, archived_at: now() });
+      let ended = 0;
+      for (const enrolment of mailEnrolments)
+        if (
+          enrolment.contact_kind === "person" &&
+          enrolment.contact_id === person.id &&
+          ["active", "paused"].includes(enrolment.state)
+        ) {
+          mailExit(enrolment, "ARCHIVED", "", member.id, "The person was archived.");
+          ended += 1;
+        }
+      archiveNote(
+        member,
+        `Archived: ${reason}${ended ? ` Ended ${ended} sequence${ended === 1 ? "" : "s"}.` : ""}`,
+        person.company_id,
+        person.id,
+      );
+      audit("person.archived", member.id, "person", person.id, reason, {
+        name: person.full_name,
+        sequences_ended: ended,
+      });
+      return ok({ archived: true, archived_at: person.archived_at, sequences_ended: ended });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/people/{person_id}/restore",
+    auth: true,
+    capability: "crm:write",
+    handler: ({ params, headers }) => {
+      const person = people.find((row) => row.id === String(params.person_id).toLowerCase());
+      if (!person) return refuse(404, "not_found");
+      if (!person.archived)
+        return refuse(400, "malformed_request", { archived: "they are not archived" });
+      const refusal = restorePersonRefusal(person);
+      if (refusal) return refuse(400, "malformed_request", { archived: refusal });
+      const member = caller(headers)!.member;
+      Object.assign(person, { archived: false, archived_at: null });
+      archiveNote(member, "Put back from the archive.", person.company_id, person.id);
+      audit("person.restored", member.id, "person", person.id, "", { name: person.full_name });
+      return ok({ archived: false });
+    },
+  },
+  {
+    // Mirrors share_routes.handle_share.
+    method: "POST",
+    pattern: "hq/share",
+    auth: true,
+    handler: ({ body, headers }) => {
+      const found = caller(headers)!;
+      const needs: Record<string, [string, string]> = {
+        company: ["crm:read", "company"],
+        person: ["crm:read", "person"],
+        lead: ["crm:read", "lead"],
+        deal: ["deals:read", "deal"],
+        meeting: ["crm:read", "meeting"],
+        ticket: ["tickets:read", "ticket"],
+        contract: ["revenue:read", "contract"],
+        quote: ["revenue:read", "quote"],
+      };
+      const subjectType = String(body.subject_type ?? "");
+      const rule = needs[subjectType];
+      if (!rule)
+        return refuse(400, "malformed_request", { subject_type: Object.keys(needs).join(", ") });
+      if (!capsFor(found.role).includes(rule[0]))
+        return refuse(403, "forbidden", { required_capability: rule[0] });
+      const subjectId = String(body.subject_id ?? "").toLowerCase();
+      const label = shareLabel(subjectType, subjectId);
+      if (!label) return refuse(404, "not_found");
+      const raw = Array.isArray(body.staff_ids) ? (body.staff_ids as unknown[]) : [];
+      const wanted = [...new Set(raw.map((item) => String(item).toLowerCase()).filter(Boolean))];
+      if (!wanted.length)
+        return refuse(400, "malformed_request", { staff_ids: "choose who to send it to" });
+      if (wanted.length > 10)
+        return refuse(400, "malformed_request", { staff_ids: "10 people at most" });
+      if (wanted.includes(found.member.id))
+        return refuse(400, "malformed_request", { staff_ids: "not to yourself" });
+      const active = new Map(staff.filter((row) => row.is_active).map((row) => [row.id, row]));
+      if (wanted.some((id) => !active.has(id)))
+        return refuse(400, "malformed_request", { staff_ids: "only active colleagues" });
+      const cannot = wanted
+        .map((id) => active.get(id)!)
+        .filter((row) => !capsFor(row.role).includes(rule[0]))
+        .map((row) => row.display_name || row.email);
+      if (cannot.length)
+        return refuse(400, "malformed_request", {
+          staff_ids: `${cannot.join(", ")} cannot open a ${rule[1]}`,
+        });
+      const note = String(body.note ?? "")
+        .trim()
+        .slice(0, 400);
+      const who = found.member.display_name || found.member.email;
+      inboxNotify({
+        recipients: wanted,
+        subject_type: subjectType,
+        subject_id: subjectId,
+        subject_label: label[0],
+        reason: "shared",
+        summary: `${who} shared this with you${note ? `: ${note}` : "."}`,
+        actor_id: found.member.id,
+        link_path: label[1],
+      });
+      audit("record.shared", found.member.id, subjectType, subjectId, note, {
+        to: wanted.map((id) => active.get(id)!.display_name || active.get(id)!.email),
+      });
+      return ok({ shared_with: wanted.length, link_path: label[1] });
+    },
+  },
+  {
+    // Mirrors share_routes.handle_external_links.
+    method: "GET",
+    pattern: "hq/external-links",
+    auth: true,
+    capability: "hq:admin",
+    handler: () => {
+      const since = Date.now() - 90 * 86_400_000;
+      const rows = [
+        ...auditorLinks.map((link) => ({
+          kind: "auditor" as const,
+          link_id: link.id,
+          label: link.label,
+          manage_path: "/trust/controls",
+          state: ctlLinkState(link),
+          created_by_name: nameOf(link.created_by),
+          created_at: link.created_at,
+          expires_at: link.expires_at,
+          views: link.views,
+          last_viewed_at: link.last_viewed_at,
+        })),
+        ...quoteLinks.map((link) => {
+          const quote = quoteRows.find((row) => row.id === link.quote_id);
+          return {
+            kind: "quote" as const,
+            link_id: link.id,
+            label: `${quote?.number ?? "A quote"} · ${quote?.title ?? ""}`.replace(/ · $/, ""),
+            manage_path: quote ? `/deals/${quote.deal_id}/quotes/${quote.id}` : "/deals/quotes",
+            state: qLinkState(link),
+            created_by_name: nameOf(link.created_by),
+            created_at: link.created_at,
+            expires_at: link.expires_at,
+            views: link.views,
+            last_viewed_at: link.last_viewed_at,
+          };
+        }),
+      ]
+        .filter((row) => row.state === "live" || Date.parse(row.created_at) >= since)
+        .sort(
+          (a, b) =>
+            Number(a.state !== "live") - Number(b.state !== "live") ||
+            b.created_at.localeCompare(a.created_at),
+        );
+      return ok({ links: rows, live: rows.filter((row) => row.state === "live").length });
+    },
+  },
+);
+
+/** A shared record's name and page, or null when there is no such record. */
+function shareLabel(subjectType: string, id: string): [string, string] | null {
+  switch (subjectType) {
+    case "company": {
+      const row = companies.find((item) => item.id === id);
+      return row ? [row.name, `/companies/${row.id}`] : null;
+    }
+    case "person": {
+      const row = people.find((item) => item.id === id);
+      return row ? [row.full_name || row.email || "A person", `/people/${row.id}`] : null;
+    }
+    case "lead": {
+      const row = leads.find((item) => item.id === id);
+      return row ? [row.full_name || row.email || "A lead", `/leads/${row.id}`] : null;
+    }
+    case "deal": {
+      const row = deals.find((item) => item.id === id);
+      return row ? [row.name, `/deals/${row.id}`] : null;
+    }
+    case "meeting": {
+      const row = meetings.find((item) => item.id === id);
+      return row ? [row.title, `/meetings/${row.id}`] : null;
+    }
+    case "ticket": {
+      const row = tickets.find((item) => item.id.toLowerCase() === id);
+      return row ? [row.subject, `/support/${row.id}`] : null;
+    }
+    case "contract": {
+      const row = contracts.find((item) => item.id === id);
+      return row
+        ? [
+            `${companyName(row.company_id) || "A customer"}'s contract`,
+            `/revenue/contracts/${row.id}`,
+          ]
+        : null;
+    }
+    case "quote": {
+      const row = quoteRows.find((item) => item.id === id);
+      return row
+        ? [`${row.number} · ${row.title || "Quote"}`, `/deals/${row.deal_id}/quotes/${row.id}`]
+        : null;
+    }
+    default:
+      return null;
+  }
+}
+
+function qLiveLink(token: string): { link: QuoteLinkRow; quote: QuoteRow } | null {
+  if (!token.startsWith(QUOTE_TOKEN_PREFIX) || token.length > 120) return null;
+  const link = quoteLinks.find((row) => row.token_hash === quoteTokenHash(token));
+  if (!link || link.revoked_at) return null;
+  // An answered link still shows its answer; an unanswered one ends at its date.
+  if (!link.answer && Date.parse(link.expires_at) <= Date.now()) return null;
+  const quote = quoteRows.find((row) => row.id === link.quote_id);
+  if (
+    !quote ||
+    ["draft", "pending_approval", "changes_requested", "approved", "withdrawn"].includes(
+      quote.status,
+    )
+  )
+    return null;
+  return { link, quote };
+}
+
+/** As quote_link_routes.customer_view: prices and totals, never the list price or approval. */
+function qCustomerView(quote: QuoteRow, link: QuoteLinkRow) {
+  const lines = qLinesOf(quote.id);
+  const figures = qTotals(lines, quote.term_months);
+  const deal = deals.find((item) => item.id === quote.deal_id);
+  const company = companies.find((item) => item.id === deal?.company_id);
+  const state = qState(quote);
+  const today = now().slice(0, 10);
+  return {
+    letterhead: companyLetterhead(companyRecord(), today),
+    quote: {
+      number: quote.number,
+      title: quote.title,
+      customer: company?.name ?? "",
+      currency: quote.currency,
+      term_months: quote.term_months,
+      valid_until: quote.valid_until,
+      terms: quote.terms,
+      lines: [...lines]
+        .sort((a, b) => a.position - b.position)
+        .map((line) => ({
+          description: line.description,
+          kind: line.kind,
+          quantity: line.quantity,
+          unit_price: line.unit_price,
+          total: qRound(line.unit_price * line.quantity),
+        })),
+      net_recurring: figures.net_recurring,
+      net_one_off: figures.net_one_off,
+      first_term_value: figures.first_term_value,
+    },
+    state: state === "published" && !link.answer ? "open" : link.answer || state,
+    signer_name: state === "accepted" ? quote.signer_name : "",
+    signed_on: state === "accepted" ? quote.signed_on : null,
+  };
+}
+
+function qTell(quote: QuoteRow, summary: string) {
+  const deal = deals.find((item) => item.id === quote.deal_id);
+  inboxNotify({
+    recipients: [quote.created_by, deal?.owner_staff_id ?? ""].filter(Boolean),
+    subject_type: "quote",
+    subject_id: quote.id,
+    subject_label: `${quote.number} · ${quote.title || "Quote"}`,
+    reason: "reply",
+    summary,
+    link_path: `/deals/${quote.deal_id}/quotes/${quote.id}`,
+  });
+}
+
+routes.push(
+  {
+    method: "POST",
+    pattern: "hq/quotes/{quote_id}/links/create",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ params, body, headers }) => {
+      const row = quoteRows.find((item) => item.id === params.quote_id);
+      if (!row) return refuse(404, "not_found");
+      const state = qState(row);
+      if (state !== "published")
+        return refuse(400, "malformed_request", {
+          status:
+            state === "expired"
+              ? "it has expired; revise it first"
+              : "a link is for a sent quote that is still valid",
+        });
+      const days = Number(String(body.days ?? 30).trim());
+      if (!Number.isInteger(days) || days < 1 || days > 60)
+        return refuse(400, "malformed_request", { days: "1 to 60" });
+      let expires = Date.now() + days * 86_400_000;
+      if (row.valid_until)
+        expires = Math.min(expires, Date.parse(`${row.valid_until}T00:00:00Z`) + 86_400_000);
+      const token = `${QUOTE_TOKEN_PREFIX}${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "").slice(0, 11)}`;
+      const me = caller(headers)!.member.id;
+      const link: QuoteLinkRow = {
+        id: randomUUID(),
+        quote_id: row.id,
+        token_hash: quoteTokenHash(token),
+        created_by: me,
+        created_at: now(),
+        expires_at: new Date(expires).toISOString().replace(/\.\d{3}Z$/, "Z"),
+        revoked_at: null,
+        views: 0,
+        first_viewed_at: null,
+        last_viewed_at: null,
+        answer: "",
+        answered_at: null,
+        answer_name: "",
+        answer_email: "",
+      };
+      quoteLinks.push(link);
+      audit("quote.link_created", me, "quote", row.id, "", {
+        number: row.number,
+        link_id: link.id,
+      });
+      return ok({ link: qLinkView(link), url: `${PORTAL_ORIGIN}/q/${token}` });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/quotes/{quote_id}/links/{link_id}/revoke",
+    auth: true,
+    capability: "deals:write",
+    handler: ({ params, headers }) => {
+      const row = quoteRows.find((item) => item.id === params.quote_id);
+      if (!row) return refuse(404, "not_found");
+      const link = quoteLinks.find(
+        (item) => item.quote_id === row.id && item.id === String(params.link_id).toLowerCase(),
+      );
+      if (!link) return refuse(404, "not_found");
+      if (qLinkState(link) !== "live")
+        return refuse(400, "malformed_request", { state: `it is ${qLinkState(link)} already` });
+      link.revoked_at = now();
+      audit("quote.link_revoked", caller(headers)!.member.id, "quote", row.id, "", {
+        number: row.number,
+        link_id: link.id,
+      });
+      return ok({ links: qLinksFor(row.id) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: "public/quotes/{token}",
+    handler: ({ params }) => {
+      const found = qLiveLink(String(params.token));
+      if (!found) return refuse(404, "not_found");
+      const { link, quote } = found;
+      const first = link.first_viewed_at === null;
+      link.views += 1;
+      link.last_viewed_at = now();
+      if (first) link.first_viewed_at = now();
+      if (first && !link.answer) qTell(quote, `The customer opened ${quote.number} from its link.`);
+      return ok(qCustomerView(quote, link));
+    },
+  },
+  {
+    method: "POST",
+    pattern: "public/quotes/{token}/accept",
+    handler: ({ params, body }) => {
+      const found = qLiveLink(String(params.token));
+      if (!found) return refuse(404, "not_found");
+      const { link, quote } = found;
+      if (link.answer || qState(quote) !== "published")
+        return refuse(400, "malformed_request", {
+          state: "this quote has been answered or is past its date",
+        });
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 160);
+      const email = String(body.email ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 254);
+      const errors: Record<string, string> = {};
+      if (name.length < 2) errors.name = "your full name, as you sign";
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) errors.email = "your email address";
+      if (body.agree !== true) errors.agree = "tick to accept the quote and its terms";
+      if (Object.keys(errors).length) return refuse(400, "malformed_request", errors);
+      const shown = qCustomerView(quote, link);
+      const fingerprint = createHash("sha256")
+        .update(JSON.stringify({ letterhead: shown.letterhead, quote: shown.quote }))
+        .digest("hex");
+      Object.assign(quote, {
+        status: "accepted",
+        accepted_at: now(),
+        signer_name: name,
+        signer_email: email,
+        signed_on: todayIso(),
+        signature_ref: `Accepted online through link ${link.id.slice(0, 8)} at ${now()}; document SHA-256 ${fingerprint}`,
+        updated_at: now(),
+      });
+      const withdrewDealUpdated = qAfterAccept(quote, qLinesOf(quote.id), null);
+      Object.assign(link, {
+        answer: "accepted",
+        answered_at: now(),
+        answer_name: name,
+        answer_email: email,
+        first_viewed_at: link.first_viewed_at ?? now(),
+      });
+      audit("quote.accept", null, "quote", quote.id, "", {
+        signer: name,
+        online: true,
+        link_id: link.id,
+        deal_updated: withdrewDealUpdated,
+      });
+      qTell(quote, `${name} accepted ${quote.number} online.`);
+      return ok(qCustomerView(quote, link));
+    },
+  },
+  {
+    method: "POST",
+    pattern: "public/quotes/{token}/decline",
+    handler: ({ params, body }) => {
+      const found = qLiveLink(String(params.token));
+      if (!found) return refuse(404, "not_found");
+      const { link, quote } = found;
+      if (link.answer || qState(quote) !== "published")
+        return refuse(400, "malformed_request", {
+          state: "this quote has been answered or is past its date",
+        });
+      const why = String(body.reason ?? "")
+        .trim()
+        .slice(0, 300);
+      const name = String(body.name ?? "")
+        .trim()
+        .slice(0, 160);
+      const reason = `Declined online${name ? ` by ${name}` : ""}${why ? `: ${why}` : "."}`;
+      Object.assign(quote, { status: "declined", declined_reason: reason, updated_at: now() });
+      Object.assign(link, {
+        answer: "declined",
+        answered_at: now(),
+        answer_name: name,
+        first_viewed_at: link.first_viewed_at ?? now(),
+      });
+      audit("quote.decline", null, "quote", quote.id, reason, { online: true, link_id: link.id });
+      qTell(quote, reason);
+      return ok(qCustomerView(quote, link));
+    },
+  },
+);
 
 const qPlanChoices = () =>
   plans
@@ -47065,25 +47773,7 @@ routes.push(
             .trim()
             .slice(0, 400),
         });
-        for (const other of quoteRows) {
-          if (other.deal_id !== row.deal_id) continue;
-          other.is_primary = other.id === row.id;
-          if (other.id !== row.id && ![...Q_FINAL, "expired"].includes(qState(other))) {
-            other.status = "withdrawn";
-            other.updated_at = now();
-          }
-        }
-        const net = qTotals(lines, row.term_months).net_recurring;
-        extra.deal_updated = false;
-        if (
-          deal &&
-          deal.status === "open" &&
-          (deal.mrr_amount !== net || deal.currency !== row.currency)
-        ) {
-          Object.assign(deal, { mrr_amount: net, currency: row.currency });
-          audit("deal.updated", me || null, "deal", deal.id);
-          extra.deal_updated = true;
-        }
+        extra.deal_updated = qAfterAccept(row, lines, me || null);
       } else if (action === "decline") {
         const reason = String(body.reason ?? "")
           .trim()

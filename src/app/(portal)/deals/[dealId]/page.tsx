@@ -50,6 +50,9 @@ import { readDeal, type DealDetail } from "@/lib/api/deals";
 import { readContracts } from "@/lib/api/revenue";
 import { readCrmSettings, type Plan } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
+import { colleaguesOf } from "@/lib/api/share";
+import { shareRecordAction } from "@/app/(portal)/_actions/share";
+import { ShareMenu } from "@/components/crm/share-menu";
 import { isoDay, isoDayPlus } from "@/lib/crm/dates";
 import { LOSS_REASON_LABELS, sourceLabel, stageLabel } from "@/lib/crm/vocabulary";
 import { formatDate as formatDay, formatMoney, formatMrr } from "@/lib/format";
@@ -225,6 +228,13 @@ export default async function DealPage({ params, searchParams }: DealPageProps) 
               subjectId={deal.deal_id}
               label={deal.name}
               path={`/deals/${deal.deal_id}`}
+            />
+            <ShareMenu
+              subjectType="deal"
+              subjectId={deal.deal_id}
+              path={base}
+              colleagues={colleaguesOf(names, context.me.staff.staff_id)}
+              action={shareRecordAction}
             />
             {open && canDeal && (
               <>

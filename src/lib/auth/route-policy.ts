@@ -26,7 +26,8 @@ const PUBLIC_EXACT = new Set([
 // "/report/": "this wasn't me" from a security mail — the person may be locked out.
 // "/status": the public status page, and the confirm and stop links its mails carry.
 // "/audit/": an auditor's expiring read of the control map; the token is the key.
-const PUBLIC_PREFIXES = ["/verify/", "/u/", "/report/", "/status/", "/audit/"];
+// "/q/": a customer's quote, to read and accept or decline; the token is the key.
+const PUBLIC_PREFIXES = ["/verify/", "/u/", "/report/", "/status/", "/audit/", "/q/"];
 
 export function isPublicPath(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;

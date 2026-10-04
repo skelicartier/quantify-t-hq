@@ -540,6 +540,7 @@ export const EXIT_REASON_LABELS: Record<string, string> = {
   COMPANY_ENGAGED: "Colleague engaged",
   COMPLETED: "All steps sent",
   DO_NOT_CONTACT: "Do not contact",
+  ARCHIVED: "Person archived",
 };
 
 export const MESSAGE_STATE_LABELS: Record<string, string> = {

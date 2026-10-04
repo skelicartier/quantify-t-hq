@@ -80,7 +80,9 @@ vi.mock("@/lib/api/core", async (importOriginal) => {
 });
 
 import * as auth from "@/lib/api/auth";
+import * as archiveApi from "@/lib/api/archive";
 import * as backupApi from "@/lib/api/backup";
+import * as shareApi from "@/lib/api/share";
 import * as crm from "@/lib/api/crm";
 import * as dataQuality from "@/lib/api/data-quality";
 import * as reviewApi from "@/lib/api/review";
@@ -317,6 +319,8 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/reports/attribution", () => reports.readAttribution(token, 90)],
   ["hq/exports/companies/columns", () => reports.readExportColumns(token, "companies")],
   ["hq/backup", () => backupApi.readBackup(token)],
+  ["hq/archive", () => archiveApi.readArchive(token)],
+  ["hq/external-links", () => shareApi.readExternalLinks(token)],
   ["hq/targets", () => targetsApi.readTargets(token)],
   ["hq/signals", () => signalsApi.readSignals(token)],
   ["hq/push", () => pushApi.readPush(token)],
@@ -370,6 +374,12 @@ describe("every portal read parses the service's own payload", () => {
     it("public/mail/unsubscribe/{token}", async () => {
       shared.role = "anonymous";
       await expect(mail.readUnsubscribe(ids.unsubscribe_token!)).resolves.toBeTruthy();
+    });
+    it("public/quotes/{token}", async () => {
+      shared.role = "anonymous";
+      const quote = await quotesApi.readPublicQuote(ids.quote_token!);
+      // The customer never reads the list price, the approval or who approved it.
+      expect(JSON.stringify(quote)).not.toMatch(/list_unit|approv|discount/);
     });
     it("public/audit/{token}", async () => {
       shared.role = "anonymous";

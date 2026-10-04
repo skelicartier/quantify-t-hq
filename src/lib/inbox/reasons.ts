@@ -20,6 +20,11 @@ export const INBOX_REASONS: readonly { reason: string; label: string; hint: stri
     hint: "An approval, or anything else that cannot move without you.",
   },
   { reason: "mention", label: "Mentioned", hint: "Someone named you in a note or a thread." },
+  {
+    reason: "shared",
+    label: "Shared with you",
+    hint: "A colleague sent you a record to look at, with a line.",
+  },
   { reason: "assigned", label: "Assigned", hint: "A record or a task given to you." },
   {
     reason: "signal",
@@ -36,4 +41,10 @@ export const INBOX_REASONS: readonly { reason: string; label: string; hint: stri
   { reason: "activity", label: "Activity", hint: "Notes, calls and edits on what you follow." },
 ];
 
-export const PRIORITY_DEFAULT: readonly string[] = ["security", "late", "review", "mention"];
+export const PRIORITY_DEFAULT: readonly string[] = [
+  "security",
+  "late",
+  "review",
+  "mention",
+  "shared",
+];

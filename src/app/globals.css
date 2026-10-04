@@ -11206,6 +11206,12 @@
     font-weight: 700;
   }
 
+  .order-form__title {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: var(--fs-body);
+  }
+
   .order-form__meta {
     display: flex;
     flex-wrap: wrap;
@@ -11284,8 +11290,10 @@
     border-top: 1px solid var(--line-soft);
   }
 
+  /* The signed copy's reference ends in a document fingerprint with no spaces in it. */
   .order-form__sign p {
     margin: 0;
+    overflow-wrap: anywhere;
   }
 
   .order-form__line {
@@ -11778,6 +11786,152 @@
     overflow-wrap: anywhere;
   }
 
+  /* Copy a page's link: the button, then what happened. */
+  .copy-link,
+  .copy-answer {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Share on a record: copy the link, or send it to colleagues with a line. */
+  .share-menu__copy {
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .share-menu__people {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .share-menu__legend {
+    margin-bottom: 6px;
+    padding: 0;
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+
+  .share-menu__person {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    font-size: var(--fs-ui);
+    cursor: pointer;
+  }
+
+  .share-menu__person input {
+    margin: 0;
+    accent-color: var(--accent);
+  }
+
+  .archived-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+  }
+
+  /* A quote's customer links: make one, then each with its views and answer. */
+  .quote-links {
+    display: grid;
+    gap: 16px;
+  }
+
+  .quote-links__make {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+  }
+
+  .quote-links__make .field {
+    min-width: 160px;
+  }
+
+  .quote-links__list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .quote-links__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .quote-links__main {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    color: var(--text);
+    font-size: var(--fs-ui);
+  }
+
+  .quote-links__main .status-pill {
+    justify-self: start;
+  }
+
+  /* The customer's quote: the order form, then their answer. */
+  .quote-public .order-form {
+    margin: 0;
+  }
+
+  .quote-answer {
+    display: grid;
+    gap: 16px;
+    padding: 20px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .quote-answer__title {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-heading);
+    font-size: 17px;
+    font-weight: 600;
+  }
+
+  .quote-answer__agree {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: var(--text);
+    font-size: var(--fs-body);
+    cursor: pointer;
+  }
+
+  .quote-answer__agree input {
+    margin: 4px 0 0;
+    accent-color: var(--accent);
+  }
+
+  .quote-answer__decline > summary {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+    cursor: pointer;
+  }
+
+  .quote-answer__decline[open] > summary {
+    margin-bottom: 12px;
+  }
+
   /* What a file holds, one line each: the words, then the file's own name. */
   .file-list {
     display: grid;
@@ -12257,6 +12411,21 @@
     }
 
     .pagebar__actions .popover > .popover__panel {
+      right: 0;
+      left: 0;
+      width: auto;
+    }
+
+    /* And for a record's header: Share sits after Follow and Archive there. */
+    .rhead {
+      position: relative;
+    }
+
+    .rhead__actions .popover {
+      position: static;
+    }
+
+    .rhead__actions .popover > .popover__panel {
       right: 0;
       left: 0;
       width: auto;

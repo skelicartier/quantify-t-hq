@@ -17,6 +17,7 @@ describe("default-deny route policy", () => {
       "/status",
       "/status/confirm/czE3sK2x",
       "/status/stop/czE3sK2x",
+      "/q/hqq_dTEBfb56jBDzRbafTujEGstXyZ",
     ]) {
       expect(isPublicPath(path)).toBe(true);
     }
@@ -38,6 +39,8 @@ describe("default-deny route policy", () => {
       "/service-status",
       "/service-status/incidents/abc",
       "/statusx",
+      "/q",
+      "/quotes",
     ]) {
       expect(isPublicPath(path)).toBe(false);
     }

@@ -41,6 +41,9 @@ import { RecordFollow } from "@/components/inbox/record-follow";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCrmSettings, readLead, type CrmSettings, type LeadDetail } from "@/lib/api/crm";
 import { directoryOrNull, nameFor } from "@/lib/api/staff";
+import { colleaguesOf } from "@/lib/api/share";
+import { shareRecordAction } from "@/app/(portal)/_actions/share";
+import { ShareMenu } from "@/components/crm/share-menu";
 import { channelLabel, referrerHost, visitTags } from "@/lib/crm/attribution";
 import { isoDayPlus } from "@/lib/crm/dates";
 import {
@@ -184,6 +187,15 @@ export default async function LeadPage({ params }: LeadPageProps) {
               <a className="btn btn--small" href={`mailto:${lead.email}`}>
                 Email
               </a>
+            )}
+            {!anonymised && (
+              <ShareMenu
+                subjectType="lead"
+                subjectId={lead.lead_id}
+                path={`/leads/${lead.lead_id}`}
+                colleagues={colleaguesOf(names, context.me.staff.staff_id)}
+                action={shareRecordAction}
+              />
             )}
           </>
         }

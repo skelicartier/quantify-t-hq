@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { letterheadSchema } from "@/lib/api/company";
 import { fetchHqJson, postHqJson } from "@/lib/api/core";
 
 const okEnvelope = z.object({ ok: z.literal(true) });
@@ -71,6 +72,22 @@ const lineSchema = z.object({
 });
 export type QuoteLine = z.infer<typeof lineSchema>;
 
+/** A link its customer opens to read the quote and accept or decline it (0070). */
+const quoteLinkSchema = z.object({
+  link_id: z.string(),
+  state: z.enum(["live", "expired", "revoked", "accepted", "declined"]),
+  created_by_name: z.string(),
+  created_at: z.string().nullable(),
+  expires_at: z.string().nullable(),
+  views: z.number(),
+  first_viewed_at: z.string().nullable(),
+  last_viewed_at: z.string().nullable(),
+  answer: z.string(),
+  answered_at: z.string().nullable(),
+  answer_name: z.string(),
+});
+export type QuoteLink = z.infer<typeof quoteLinkSchema>;
+
 const quoteSchema = summarySchema.extend({
   terms: z.string(),
   lines: z.array(lineSchema),
@@ -102,7 +119,10 @@ const quoteSchema = summarySchema.extend({
     withdraw: z.boolean(),
     make_primary: z.boolean(),
     revise: z.boolean(),
+    /** A customer link can be made now: the quote is sent and valid, and the role sells. */
+    link: z.boolean().optional(),
   }),
+  links: z.array(quoteLinkSchema).optional(),
 });
 export type Quote = z.infer<typeof quoteSchema>;
 
@@ -217,4 +237,74 @@ export function readDealPlan(token: string, dealId: string) {
 
 export function actOnDealPlan(token: string, dealId: string, body: Record<string, string>) {
   return postHqJson(`hq/deals/${dealId}/plan/act`, planSchema, { token, body });
+}
+
+// --- the customer's link ------------------------------------------------------------------
+
+export const QUOTE_TOKEN = /^hqq_[A-Za-z0-9_-]{20,80}$/;
+
+/** A link for the customer; the address leaves once, here, as the thing to send. */
+export function createQuoteLink(token: string, quoteId: string, days: number) {
+  return postHqJson(
+    `hq/quotes/${quoteId}/links/create`,
+    okEnvelope.extend({ link: quoteLinkSchema, url: z.string() }),
+    { token, body: { days } },
+  );
+}
+
+export function revokeQuoteLink(token: string, quoteId: string, linkId: string) {
+  return postHqJson(
+    `hq/quotes/${quoteId}/links/${linkId}/revoke`,
+    okEnvelope.extend({ links: z.array(quoteLinkSchema) }),
+    { token, body: {} },
+  );
+}
+
+const publicQuoteSchema = okEnvelope.extend({
+  letterhead: letterheadSchema,
+  quote: z.object({
+    number: z.string(),
+    title: z.string(),
+    customer: z.string(),
+    currency: z.string(),
+    term_months: z.number(),
+    valid_until: z.string().nullable(),
+    terms: z.string(),
+    lines: z.array(
+      z.object({
+        description: z.string(),
+        kind: z.enum(["recurring", "one_off"]),
+        quantity: z.number(),
+        unit_price: z.number(),
+        total: z.number(),
+      }),
+    ),
+    net_recurring: z.number(),
+    net_one_off: z.number(),
+    first_term_value: z.number(),
+  }),
+  /** open: it can be answered here; accepted / declined: answered; expired: past its date. */
+  state: z.enum(["open", "accepted", "declined", "expired", "withdrawn", "published"]),
+  signer_name: z.string(),
+  signed_on: z.string().nullable(),
+});
+export type PublicQuote = z.infer<typeof publicQuoteSchema>;
+
+/** The customer's view, read with the token alone. */
+export function readPublicQuote(quoteToken: string) {
+  const safeToken = encodeURIComponent(quoteToken);
+  return fetchHqJson(`public/quotes/${safeToken}`, publicQuoteSchema);
+}
+
+export function acceptPublicQuote(
+  quoteToken: string,
+  body: { name: string; email: string; agree: boolean },
+) {
+  const safeToken = encodeURIComponent(quoteToken);
+  return postHqJson(`public/quotes/${safeToken}/accept`, publicQuoteSchema, { body });
+}
+
+export function declinePublicQuote(quoteToken: string, body: { name: string; reason: string }) {
+  const safeToken = encodeURIComponent(quoteToken);
+  return postHqJson(`public/quotes/${safeToken}/decline`, publicQuoteSchema, { body });
 }
