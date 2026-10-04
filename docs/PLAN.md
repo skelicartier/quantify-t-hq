@@ -288,25 +288,24 @@ LACKS against the market's rating) and §3 the order below.
 | Outside links                   | Admin → Outside links: every link that lets someone outside HQ read something inside it — auditor views of the control map and customer quote links — who made it, when it ends, how often it was opened, where it is revoked. Live first, then the last ninety days.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | service `share_routes.handle_external_links`; portal `admin/links/page.tsx`                                                                               |
 | Imports of companies and people | Migration 0071 (`record_imports.py`): CRM → Companies → Import and People → Import to the leads' standard. A file in parts under one run is one line in a ledger; every row accounted for (added, filled in, already here, left out with the reason), first as a rehearsal that writes nothing. Matched by the record's ID (an HQ export comes back in), then by domain or address; a company with no domain sharing only a name is a look-alike, left out; an archived match is left out. "Fill in" fills blanks, only ticked columns are replaced, an empty cell never wipes, names/domains/addresses never change, a "do not contact" is always honoured and never removed. A company's owner by the colleague's address, else the default chosen; the answer names unknown owners and firms. Custom fields typed as the field is (a choice by its label too). The rows left out download as the file's own columns with the reason last. Taking a file back (fresh code, reason) removes what nobody has edited, archived, linked to or written about since and puts back each field still holding the file's value; the rest stays, counted. A record names the file it came in with. Automations do not run on imported rows; validation rules and required fields do not apply (bulk writes never have). | service `record_imports.py`, 0071; portal `crm/record-import.tsx`, `crm/record-import-history.tsx`, `lib/crm/record-import-actions.ts`                    |
 | Find and create                 | `hq/search` (`search_routes.py`): one search across companies, people, leads, deals, tickets, meetings, tasks, notes and calls, contracts, invoices, quotes and help articles — each kind only for a role whose own list reads it; ranked whole field, start, word start, anywhere, a title over a note, archived last and marked; every word of a several-word search must appear; at most 200 matches a kind ("200+"); notes and leads searched in SQL, not by reading the table; a list of matches opens no record. `hq/me/recent`: the person's own read log (90 days), one row a record, only what their role can still open. Portal: ⌘K searches everything with "See all results" to `/search` (kinds with counts, one kind up to 50, the query marked in titles and notes); before typing it shows Recently viewed and Create (New company, person, lead, Log a meeting, New task — each opens its page's form via `?new=1`); favourites kept with the account (preference `hq-favourites`); single-key shortcuts switchable off in the sheet or from ⌘K (`hq-single-keys`, WCAG 2.1.4), ⌘K always works.                                                                                                                                                                                               | service `search_routes.py`; portal `search/page.tsx`, `shell/command-palette.tsx`, `lib/prefs/single-keys.ts`, `shell/favourites.tsx`                     |
+| Handover                        | `handover.py` (`hq/staff/{id}/handover`, `…/handover/run`, Owner/Admin with a fresh code): what a person is answerable for, by area — companies, leads, open deals and plan steps, running sequences, open tasks and support conversations, help articles, open feature requests and onboardings, open privacy requests and incidents they lead, risks, open findings, controls, questionnaire answers, records of processing, their direct reports, openings and interviews, vendors, scorecard measures and priorities. One act moves it to one colleague: only work in hand (a closed deal keeps who won it), each kind only to a role that works on it (the rest named and left for someone else), a sequence on the leaver's own identity carries on from the colleague's or ends `OWNER_LEFT` (never writes from the leaver's mailbox). One audit row, the colleague told once, the offboarding run's new step "Work handed over to a colleague" ticked with what moved. The page says the last handover after its form has gone.                                                                                                                                                                                                                                                                         | service `handover.py`, gateway `count_owned`/`reassign_owned`; portal `team/handover-section.tsx`, `team/[staffId]`                                       |
+| Recurring tasks and reminders   | Migration 0072 (`recurrence.py`): a task can repeat — every day, weekday, week, two weeks, month, quarter or year, until a last day or for ever. Done makes the next one (same title, notes, priority, assignee and record), dated from this one's due date and never into the past; a month-end series keeps its day (the 31st falls on the 30th, then the 31st again); cancelling ends the series. On the day a task falls due — or the first pass after, if it was already late — its assignee is reminded once in the inbox ("Due today" / "Overdue since"), and again only if the date moves; a leaver is not reminded. The watch runs where the first-reply warning does: Home, the inbox and the mail worker's pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | service `recurrence.py`, `crm_routes` task create/update, `inbox.task_due_watch`; portal `task-quick-add.tsx` (Repeats), `task-list.tsx`                  |
+| Audit and history               | The audit log searched as an auditor asks: between two days (both included) and for words found in the action, reason, record id, actor or detail, beside the existing person, action and record filters (`hq/audit?from=&to=&q=`). Task, meeting and support-conversation updates now record each change's value before and after, as companies, people, leads and deals did; the lead and meeting pages and a support conversation's side panel show their Changes to roles that read the audit log.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | service `staff_routes.handle_audit_search`, `read_hq_audit_events(since, until, text)`; portal `admin/audit`, `crm/record-history.tsx`                    |
 | Backup                          | Admin → Backup: an Owner asks with a reason after a fresh code; with another Owner it waits for them (approval kind `backup`, migration 0069) and the asker downloads it once within 48 hours; alone it is made at once (`sole_approver`). One zip: a CSV per export kind with custom fields, the timeline, comments, support threads (internal notes marked), stages, sources, the price list, field definitions, the staff directory, mailing lists, consent and suppressions, and a README with who, who approved, why, what is left out and each file's SHA-256. Outside the export quota (the approval is the control), in the ledger; no marker rows. The approval schema now parses every kind the service has (`write_off` was missing: a waiting write-off broke the request and the Approvals list).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | service `backup_routes.py`, `dual_control.py`; portal `admin/backup/*`, `documents/backup-zip.ts`                                                         |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
 **The table-stakes order** (`docs/RESEARCH-2026-10-03-TABLESTAKES.md` §3; exports of a
 view, the backup, a person's data file, archive, share, quote links, the outside-links
-register, imports of companies and people, and find and create are built, §4). Left from the archive item: undo on a single edit, and History
+register, imports of companies and people, find and create, handover, recurring tasks, and audit search and history are built, §4). Left from the archive item: undo on a single edit, and History
 putting a previous value back (a deal already leaves the lists when it closes and a lead
 when it is disqualified, so those two kinds were not given an archive of their own).
 
-6. **Handover**: the offboarding run moves everything a leaver owns to a named colleague.
-7. **Tasks**: recurring tasks and a due-day reminder.
 8. **Reports**: a report builder, saved and shared, pinned to a personal dashboard, each
    figure a link to its records.
-9. **Audit and history**: audit search by date and text; history on leads, tickets,
-   meetings and tasks.
-10. **The desk**: presence and a crossed-reply warning; the backlog over time and time to
-    resolution.
-11. **Files on records** (needs the storage account decided with production), **email
+9. **The desk**: presence and a crossed-reply warning; the backlog over time and time to
+   resolution.
+10. **Files on records** (needs the storage account decided with production), **email
     from a record**, **hosted forms**, **times in the person's zone** — in that order.
 
 **Prospects, still to do** (report sections in `docs/RESEARCH-2026-10-03-LEADS.md`):
@@ -368,7 +367,7 @@ storing pay, IP allow-lists, whole-mailbox OAuth sync as step one, native mobile
 ## 6. Blocked on the founder (production) — `docs/HQ_GO_LIVE.md` in the product repo
 
 Azure subscription upgrade and cost fix → service settings (`QT_HQ_*`, portal key pair,
-Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0071 and publish → move the desk onto SQL → Vercel
+Turnstile, `QT_UPDATE_DEPLOY_URL` on HQ) → apply migrations 0006–0072 and publish → move the desk onto SQL → Vercel
 import + `hq.quantifyterminal.com` → bootstrap the first owner → link each staff
 member's Quantify Terminal account (Product) → run
 `scripts/hq_go_live_check.py` → website form key → retire the console desk. GitHub
@@ -393,7 +392,35 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of find and create** (2026-10-04, fifth research pass).
+**As of recurring tasks** (2026-10-04, fifth research pass).
+
+- Service: migration 0072 (four columns on `hq_tasks`, a check on the rule, an index on
+  status and due date), `recurrence.py`, the task routes, `inbox.task_due_watch`. Tests in
+  `tests/test_hq_recurring_tasks.py` (4).
+- A reminder folds into the task's open inbox row (often its "gave you a task" row), as
+  every notice on one subject does; read a task's notice by subject, not by reason.
+- The first pass after deploying reminds once about every open task already past due:
+  honest, and once only (the reminded date is kept).
+- Harness part `HQ_HARNESS_FLOW=repeat`.
+
+**Before that: handover** (2026-10-04, fifth research pass).
+
+- Service: `handover.py`, gateway `count_owned` / `reassign_owned` (one UPDATE per kind in
+  one transaction, from a fixed list of tables and owner columns; names checked as
+  identifiers, values bound), the offboarding checklist's new step, the exit reason
+  `OWNER_LEFT`. Tests in `tests/test_hq_handover.py` (4). No migration.
+- Deactivating someone never moved their work, and a running sequence keeps its own
+  sending identity: moving only an enrolment's owner would have gone on writing to
+  prospects from the leaver's mailbox. The handover swaps the identity or ends the
+  sequence.
+- The mock's offboarding steps had drifted from the service's (it lacked the intake-key
+  rotation step); both lists now match, with the handover step second.
+- The harness reaches a leaver with work through a test-only mock route,
+  `mock/give-work` (beside `mock/reset`), and the part is `HQ_HARNESS_FLOW=handover`.
+- The team member page already shows a fresh-code gate to admins at the top; the
+  handover section uses it rather than a second gate (one `#sudo-code` per page).
+
+**Before that: find and create** (2026-10-04, fifth research pass).
 
 - Service: `search_routes.py` (`hq/search`, `hq/me/recent`), gateway `search_activities`,
   `search_leads` and `list_recent_reads`; no migration (the read log is 0030's). Tests in

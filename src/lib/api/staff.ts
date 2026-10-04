@@ -190,7 +190,10 @@ export function exportAudit(token: string, input: { from: string; to: string; re
 
 export function searchAudit(
   token: string,
-  filters: Partial<Record<"staff_id" | "action" | "entity_type" | "entity_id", string>>,
+  /** `from`/`to` are days (both included); `q` is found in the action, reason, record and detail. */
+  filters: Partial<
+    Record<"staff_id" | "action" | "entity_type" | "entity_id" | "q" | "from" | "to", string>
+  >,
   page: { limit: number; offset: number },
 ) {
   const query: Record<string, string> = {

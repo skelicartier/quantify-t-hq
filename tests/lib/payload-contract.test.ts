@@ -294,6 +294,7 @@ const OWNER_READS: Array<[string, () => Promise<unknown>]> = [
   ["hq/leads", () => crm.readLeads(token)],
   ["hq/leads/{lead_id}", () => crm.readLead(token, ids.lead_id!)],
   ["hq/leads/imports", () => crm.readLeadImports(token)],
+  ["hq/staff/{staff_id}/handover", () => team.readHandover(token, ids.leaver_id!)],
   ["hq/search", () => searchApi.readSearch(token, "acme")],
   ["hq/me/recent", () => searchApi.readRecent(token)],
   ["hq/companies/imports", () => crm.readCompanyImports(token)],
@@ -434,6 +435,12 @@ describe("every portal read parses the service's own payload", () => {
         fixture!.results!["hq/companies/import?dry_run"],
       );
       expect([rehearsal.dry_run, rehearsal.import_id]).toEqual([true, ""]);
+    });
+    it("hq/staff/{staff_id}/handover/run", () => {
+      const handed = team.handoverResultSchema.parse(
+        fixture!.results!["hq/staff/{staff_id}/handover/run"],
+      );
+      expect(handed.moved.find((line) => line.key === "companies")?.count).toBe(1);
     });
     it("hq/people/imports/{import_id}/rollback", () => {
       const taken = crm.RECORD_IMPORT_SCHEMAS.takeBack.parse(

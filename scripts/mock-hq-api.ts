@@ -2047,6 +2047,7 @@ const routes: Array<{
       const found = caller(headers)!;
       const row = tickets.find((ticket) => ticket.id === params.ticket_id);
       if (!row) return refuse(404, "not_found");
+      const before: Record<string, unknown> = { ...row };
       if ("assignee_staff_id" in body) {
         const assignee = String(body.assignee_staff_id ?? "").trim();
         if (assignee) {
@@ -2116,7 +2117,16 @@ const routes: Array<{
         row.linked_issue_url = raw;
       }
       row.updated_at = now();
-      audit("ticket.managed", found.member.id, "ticket", row.id);
+      audit("ticket.managed", found.member.id, "ticket", row.id, "", {
+        changes: changesBetween(before, {
+          status: row.status,
+          priority: row.priority,
+          tags: row.tags,
+          snoozed_until: row.snoozed_until,
+          linked_issue_url: row.linked_issue_url,
+          assignee_name: row.assignee_name,
+        }),
+      });
       return ok({ ticket: ticketView(row, found.member.id) });
     },
   },
@@ -2247,8 +2257,34 @@ const routes: Array<{
       const filters = (["staff_id", "action", "entity_type", "entity_id"] as const).filter(
         (name) => query[name],
       );
-      const rows = auditEvents.filter((row) =>
-        filters.every((name) => String(row[name] ?? "") === query[name]),
+      // Days, both included, and words found in the action, reason, record or detail.
+      const day = /^\d{4}-\d{2}-\d{2}$/;
+      if (query.from && !day.test(query.from))
+        return refuse(400, "malformed_request", { from: "a day, YYYY-MM-DD" });
+      if (query.to && !day.test(query.to))
+        return refuse(400, "malformed_request", { to: "a day, YYYY-MM-DD" });
+      if (query.from && query.to && query.to < query.from)
+        return refuse(400, "malformed_request", { to: "on or after the first day" });
+      const needle = String(query.q ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 100);
+      const rows = auditEvents.filter(
+        (row) =>
+          filters.every((name) => String(row[name] ?? "") === query[name]) &&
+          (!query.from || String(row.occurred_at) >= `${query.from}T00:00:00`) &&
+          (!query.to || String(row.occurred_at) < `${query.to}T24:00:00`) &&
+          (!needle ||
+            [
+              row.action,
+              row.reason,
+              row.entity_id,
+              row.actor_label,
+              JSON.stringify(row.detail ?? {}),
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(needle)),
       );
       return ok({ events: rows.slice(offset, offset + limit), limit, offset });
     },
@@ -2701,6 +2737,11 @@ type TaskRow = {
   created_at: string;
   /** 0062: "metric:<key>", "priority:<id>" or "review" for an action from the review. */
   review_ref?: string;
+  /** 0072: how often it comes back once done, until when, its series, the date reminded. */
+  repeat_rule?: string;
+  repeat_until?: string | null;
+  series_id?: string;
+  reminded_on?: string | null;
 };
 type ApiKeyRow = {
   key_id: string;
@@ -11742,7 +11783,114 @@ function taskView(row: TaskRow, withLabel = false) {
     completed_at: row.completed_at,
     created_at: row.created_at,
     review_ref: row.review_ref ?? "",
+    repeat_rule: row.repeat_rule ?? "",
+    repeat_until: row.repeat_until ?? null,
+    series_id: row.series_id ?? "",
   };
+}
+
+// --- 0072: tasks that come round again — mirrors recurrence.py ----------------------------
+const TASK_REPEAT_RULES = [
+  "daily",
+  "weekdays",
+  "weekly",
+  "fortnightly",
+  "monthly",
+  "quarterly",
+  "yearly",
+];
+
+function repeatStep(rule: string, day: Date, anchor: number): Date {
+  const next = new Date(day.getTime());
+  const months = rule === "monthly" ? 1 : rule === "quarterly" ? 3 : rule === "yearly" ? 12 : 0;
+  if (months) {
+    const index = day.getUTCMonth() + months;
+    const year = day.getUTCFullYear() + Math.floor(index / 12);
+    const month = index % 12;
+    const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    return new Date(Date.UTC(year, month, Math.min(anchor, last)));
+  }
+  if (rule === "weekdays") {
+    do next.setUTCDate(next.getUTCDate() + 1);
+    while (next.getUTCDay() === 0 || next.getUTCDay() === 6);
+    return next;
+  }
+  next.setUTCDate(next.getUTCDate() + (rule === "daily" ? 1 : rule === "weekly" ? 7 : 14));
+  return next;
+}
+
+function repeatNextDue(
+  rule: string,
+  dueOn: string,
+  until: string | null,
+  anchorDay: number | null,
+): string | null {
+  const today = now().slice(0, 10);
+  const start = new Date(`${dueOn || today}T00:00:00Z`);
+  const anchor = anchorDay ?? start.getUTCDate();
+  let following = repeatStep(rule, start, anchor);
+  for (let guard = 0; following.toISOString().slice(0, 10) < today && guard < 2000; guard += 1)
+    following = repeatStep(rule, following, anchor);
+  const day = following.toISOString().slice(0, 10);
+  return until && day > until ? null : day;
+}
+
+/** A repeating task done: the next one, due one period on and never in the past. */
+function repeatNextTask(row: TaskRow, actor: Staff | undefined): TaskRow | null {
+  if (!row.repeat_rule) return null;
+  const seriesId = row.series_id || row.id;
+  const root = tasks.find((task) => task.id === seriesId) ?? row;
+  const anchor = root.due_on ? new Date(`${root.due_on}T00:00:00Z`).getUTCDate() : null;
+  const due = repeatNextDue(row.repeat_rule, row.due_on, row.repeat_until ?? null, anchor);
+  if (!due) return null;
+  const next: TaskRow = {
+    ...row,
+    id: randomUUID(),
+    status: "open",
+    due_on: due,
+    origin: "repeat",
+    completed_at: null,
+    created_at: now(),
+    series_id: seriesId,
+    reminded_on: null,
+  };
+  tasks.push(next);
+  inboxAssigned(
+    next.assignee_staff_id,
+    "task",
+    next.id,
+    actor,
+    `${next.title} comes round again, due ${due}`,
+    next.title,
+    "/tasks",
+  );
+  return next;
+}
+
+/** Remind each assignee once per due date of an open task that falls due. */
+function taskDueWatch(): number {
+  const today = now().slice(0, 10);
+  let reminded = 0;
+  for (const row of tasks) {
+    if (row.status !== "open" || !row.due_on || row.due_on > today) continue;
+    if (row.reminded_on && row.reminded_on >= row.due_on) continue;
+    if (!staff.some((member) => member.id === row.assignee_staff_id && member.is_active)) continue;
+    const due = new Date(`${row.due_on}T00:00:00Z`);
+    const words = `${due.getUTCDate()} ${due.toLocaleString("en-GB", { month: "short", timeZone: "UTC" })}`;
+    inboxNotify({
+      recipients: [row.assignee_staff_id],
+      subject_type: "task",
+      subject_id: row.id,
+      subject_label: row.title,
+      reason: "reminder",
+      summary:
+        row.due_on === today ? `Due today: ${row.title}` : `Overdue since ${words}: ${row.title}`,
+      link_path: "/tasks",
+    });
+    row.reminded_on = row.due_on;
+    reminded += 1;
+  }
+  return reminded;
 }
 
 function activityViews(
@@ -12111,6 +12259,7 @@ routes.push(
       };
       inboxFireReminders(found.member.id);
       firstReplyWatch();
+      taskDueWatch();
       const unreadRows = notifications
         .filter((row) => row.recipient_id === found.member.id && inboxState(row) === "unread")
         .sort((a, b) => b.last_at.localeCompare(a.last_at))
@@ -15473,7 +15622,21 @@ routes.push(
         origin: "manual",
         completed_at: null,
         created_at: now(),
+        repeat_rule: String(body.repeat_rule ?? ""),
+        repeat_until: String(body.repeat_until ?? "") || null,
+        series_id: "",
+        reminded_on: null,
       };
+      if (row.repeat_rule && !TASK_REPEAT_RULES.includes(row.repeat_rule))
+        return refuse(400, "malformed_request", { repeat_rule: TASK_REPEAT_RULES.join(", ") });
+      if (row.repeat_until && !row.repeat_rule)
+        return refuse(400, "malformed_request", {
+          repeat_until: "only a repeating task has a last day",
+        });
+      if (row.repeat_until && row.due_on && row.repeat_until < row.due_on)
+        return refuse(400, "malformed_request", {
+          repeat_until: "on or after the task's own due date",
+        });
       tasks.push(row);
       inboxAssigned(
         row.assignee_staff_id,
@@ -15496,7 +15659,16 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = tasks.find((task) => task.id === params.task_id);
       if (!row) return refuse(404, "not_found");
+      const before: Record<string, unknown> = { ...row };
       const status = String(body.status ?? "");
+      if ("repeat_rule" in body) {
+        const rule = String(body.repeat_rule ?? "");
+        if (rule && !TASK_REPEAT_RULES.includes(rule))
+          return refuse(400, "malformed_request", { repeat_rule: TASK_REPEAT_RULES.join(", ") });
+        row.repeat_rule = rule;
+      }
+      if ("repeat_until" in body) row.repeat_until = String(body.repeat_until ?? "") || null;
+      const newlyDone = status === "done" && row.status !== "done";
       if (status) {
         if (!["open", "done", "canceled"].includes(status))
           return refuse(400, "malformed_request", { status: "open, done or canceled" });
@@ -15526,8 +15698,17 @@ routes.push(
           );
         row.assignee_staff_id = next;
       }
-      audit("task.updated", caller(headers)?.member.id ?? null, "task", row.id);
-      return ok({ task: taskView(row) });
+      audit("task.updated", caller(headers)?.member.id ?? null, "task", row.id, "", {
+        changes: changesBetween(before, {
+          title: row.title,
+          status: row.status,
+          due_on: row.due_on,
+          assignee_staff_id: row.assignee_staff_id,
+          repeat_rule: row.repeat_rule ?? "",
+        }),
+      });
+      const next = newlyDone ? repeatNextTask(row, caller(headers)?.member) : null;
+      return ok({ task: taskView(row), next_task: next ? taskView(next) : null });
     },
   },
   {
@@ -19640,6 +19821,7 @@ routes.push(
       const viewer = caller(headers)!.member;
       inboxFireReminders(viewer.id);
       firstReplyWatch();
+      taskDueWatch();
       const view = query.view || "inbox";
       if (!["inbox", "snoozed", "done"].includes(view))
         return refuse(400, "malformed_request", { view: "inbox, snoozed or done" });
@@ -20942,6 +21124,7 @@ routes.push(
     handler: ({ params, body, headers }) => {
       const row = meetings.find((meeting) => meeting.id === params.meeting_id);
       if (!row) return refuse(404, "not_found");
+      const before: Record<string, unknown> = { ...row };
       if ("status" in body || "outcome" in body)
         return refuse(400, "malformed_request", { reason: "record outcomes via /outcome" });
       const synced = Boolean(row.google_event_id);
@@ -20976,7 +21159,16 @@ routes.push(
           if (meetingAttendees[index]!.meeting_id === row.id) meetingAttendees.splice(index, 1);
         meetingAttendees.push(...matched);
       }
-      audit("meeting.updated", caller(headers)?.member.id ?? null, "meeting", row.id);
+      audit("meeting.updated", caller(headers)?.member.id ?? null, "meeting", row.id, "", {
+        changes: changesBetween(before, {
+          title: row.title,
+          kind: row.kind,
+          prep_notes: row.prep_notes,
+          recording_url: row.recording_url,
+          starts_at: row.starts_at,
+          ends_at: row.ends_at,
+        }),
+      });
       return ok({ meeting: meetingView(row) });
     },
   },
@@ -26184,7 +26376,9 @@ const CHECKLIST_TEMPLATES: Record<string, string[]> = {
   ],
   offboarding: [
     "Access removed from every system in the register",
+    "Work handed over to a colleague",
     "HQ access deactivated",
+    "Intake API keys the leaver could have read rotated (Admin → Integrations)",
     "Devices and materials returned",
     "Handover notes written",
     "Exit conversation held",
@@ -54493,6 +54687,482 @@ routes.push(
   },
 );
 
+// --- handover: a leaver's work in hand to one colleague — mirrors handover.py --------------
+
+type HandoverTarget = {
+  key: string;
+  label: string;
+  area: string;
+  needs: string | null;
+  rows: () => Array<Record<string, unknown>>;
+  column: string;
+  live: (row: Record<string, unknown>) => boolean;
+};
+
+const HANDOVER_STEP = "Work handed over to a colleague";
+const HANDOVER_WORDS: Record<string, string> = {
+  "crm:write": "the CRM",
+  "deals:write": "deals",
+  "tickets:write": "the support desk",
+  "privacy:write": "the privacy desk",
+  "hq:admin": "HQ's administration",
+  "hr:write": "hiring",
+  "revenue:write": "money",
+};
+const HANDOVER_KEPT = [
+  "Their connected mailbox stays theirs: disconnect it from Mail → Mailboxes.",
+  "Their saved views, digests and preferences stop with them.",
+  "Closed deals keep them as owner, and done or closed work keeps its history.",
+  "Their documents, assets, check-ins and certificates are their record and stay on their page.",
+];
+const LIVE_APPLICANT_STAGES = ["applied", "screen", "interview", "task", "offer"];
+const asRows = (rows: unknown[]) => rows as Array<Record<string, unknown>>;
+const always = () => true;
+
+const HANDOVER_TARGETS: HandoverTarget[] = [
+  {
+    key: "companies",
+    label: "Companies they own",
+    area: "Customers and pipeline",
+    needs: "crm:write",
+    rows: () => asRows(companies),
+    column: "owner_staff_id",
+    live: always,
+  },
+  {
+    key: "leads",
+    label: "Leads and prospects they own",
+    area: "Customers and pipeline",
+    needs: "crm:write",
+    rows: () => asRows(leads),
+    column: "owner_staff_id",
+    live: (row) => !row.anonymised_at,
+  },
+  {
+    key: "deals",
+    label: "Open deals",
+    area: "Customers and pipeline",
+    needs: "deals:write",
+    rows: () => asRows(deals),
+    column: "owner_staff_id",
+    live: (row) => row.status === "open",
+  },
+  {
+    key: "plan_steps",
+    label: "Open steps on deal plans",
+    area: "Customers and pipeline",
+    needs: "deals:write",
+    rows: () => asRows(planSteps),
+    column: "owner_staff_id",
+    live: (row) => !row.done_at,
+  },
+  {
+    key: "enrolments",
+    label: "Sequences still running",
+    area: "Customers and pipeline",
+    needs: "crm:write",
+    rows: () => asRows(mailEnrolments),
+    column: "owner_staff_id",
+    live: (row) => row.state === "active" || row.state === "paused",
+  },
+  {
+    key: "tasks",
+    label: "Open tasks",
+    area: "Work in hand",
+    needs: "crm:write",
+    rows: () => asRows(tasks),
+    column: "assignee_staff_id",
+    live: (row) => row.status === "open",
+  },
+  {
+    key: "tickets",
+    label: "Support conversations not resolved",
+    area: "Work in hand",
+    needs: "tickets:write",
+    rows: () => asRows(tickets),
+    column: "assignee_staff_id",
+    live: (row) => row.status !== "resolved",
+  },
+  {
+    key: "articles",
+    label: "Help articles",
+    area: "Work in hand",
+    needs: "tickets:write",
+    rows: () => asRows(helpArticles),
+    column: "owner_staff_id",
+    live: (row) => row.status !== "archived",
+  },
+  {
+    key: "feature_requests",
+    label: "Feature requests still open",
+    area: "Work in hand",
+    needs: "crm:write",
+    rows: () => asRows(featureRequests),
+    column: "owner_staff_id",
+    live: (row) => ["open", "planned", "building"].includes(String(row.status)),
+  },
+  {
+    key: "onboardings",
+    label: "Customer onboardings under way",
+    area: "Work in hand",
+    needs: "crm:write",
+    rows: () => asRows(onboardings),
+    column: "owner_staff_id",
+    live: (row) => ["active", "stalled"].includes(String(row.status)),
+  },
+  {
+    key: "privacy_requests",
+    label: "Open privacy requests",
+    area: "Trust and privacy",
+    needs: "privacy:write",
+    rows: () => asRows(privacyRequests),
+    column: "assignee_staff_id",
+    live: (row) => !["responded", "refused", "withdrawn"].includes(String(row.status)),
+  },
+  {
+    key: "incidents",
+    label: "Incidents they lead",
+    area: "Trust and privacy",
+    needs: "privacy:write",
+    rows: () => asRows(incidents),
+    column: "lead_staff_id",
+    live: (row) => ["open", "contained"].includes(String(row.status)),
+  },
+  {
+    key: "risks",
+    label: "Risks",
+    area: "Trust and privacy",
+    needs: "hq:admin",
+    rows: () => asRows(risks),
+    column: "owner_staff_id",
+    live: (row) => row.status !== "closed",
+  },
+  {
+    key: "findings",
+    label: "Open findings",
+    area: "Trust and privacy",
+    needs: "hq:admin",
+    rows: () => asRows(trustFindings),
+    column: "owner_staff_id",
+    live: (row) => ["open", "in_progress"].includes(String(row.status)),
+  },
+  {
+    key: "controls",
+    label: "Controls",
+    area: "Trust and privacy",
+    needs: "hq:admin",
+    rows: () => asRows(controls),
+    column: "owner_staff_id",
+    live: always,
+  },
+  {
+    key: "answers",
+    label: "Security questionnaire answers",
+    area: "Trust and privacy",
+    needs: "crm:write",
+    rows: () => asRows(answers),
+    column: "owner_staff_id",
+    live: always,
+  },
+  {
+    key: "processing",
+    label: "Records of processing",
+    area: "Trust and privacy",
+    needs: "privacy:write",
+    rows: () => asRows(processing),
+    column: "owner_staff_id",
+    live: always,
+  },
+  {
+    key: "reports",
+    label: "People who report to them",
+    area: "Team and money",
+    needs: null,
+    rows: () => asRows(staff),
+    column: "manager_id",
+    live: (row) => Boolean(row.is_active),
+  },
+  {
+    key: "openings",
+    label: "Openings they hire for",
+    area: "Team and money",
+    needs: "hr:write",
+    rows: () => asRows(openings),
+    column: "owner_staff_id",
+    live: (row) => ["open", "paused"].includes(String(row.status)),
+  },
+  {
+    key: "interviews",
+    label: "Interviews they are down for",
+    area: "Team and money",
+    needs: "hr:write",
+    rows: () => asRows(applicants),
+    column: "interviewers",
+    live: (row) => LIVE_APPLICANT_STAGES.includes(String(row.stage)),
+  },
+  {
+    key: "vendors",
+    label: "Vendors",
+    area: "Team and money",
+    needs: "revenue:write",
+    rows: () => asRows(vendorsStore),
+    column: "owner_staff_id",
+    live: always,
+  },
+  {
+    key: "metrics",
+    label: "Scorecard measures",
+    area: "Team and money",
+    needs: null,
+    rows: () => asRows(weeklyMetrics),
+    column: "owner_staff_id",
+    live: always,
+  },
+  {
+    key: "priorities",
+    label: "Quarter priorities",
+    area: "Team and money",
+    needs: null,
+    rows: () => asRows(weeklyPriorities),
+    column: "owner_staff_id",
+    live: always,
+  },
+];
+
+function handoverOwns(
+  target: HandoverTarget,
+  row: Record<string, unknown>,
+  staffId: string,
+): boolean {
+  const value = row[target.column];
+  const named = Array.isArray(value)
+    ? value.map((item) => String(item).toLowerCase()).includes(staffId)
+    : String(value ?? "").toLowerCase() === staffId;
+  return named && target.live(row);
+}
+
+function handoverCounts(staffId: string): Record<string, number> {
+  return Object.fromEntries(
+    HANDOVER_TARGETS.map((target) => [
+      target.key,
+      target.rows().filter((row) => handoverOwns(target, row, staffId)).length,
+    ]),
+  );
+}
+
+routes.push(
+  {
+    method: "GET",
+    pattern: "hq/staff/{staff_id}/handover",
+    auth: true,
+    capability: "hq:admin",
+    handler: ({ params }) => {
+      const member = staff.find((row) => row.id === String(params.staff_id ?? "").toLowerCase());
+      if (!member) return refuse(404, "not_found");
+      const found = handoverCounts(member.id);
+      const last = auditEvents.find(
+        (event) => event.action === "staff.handover" && event.entity_id === member.id,
+      );
+      const detail = (last?.detail ?? {}) as Record<string, unknown>;
+      return ok({
+        last: last
+          ? {
+              at: last.occurred_at,
+              by_name: last.staff_id ? nameOf(String(last.staff_id)) : "",
+              to_name: String(detail.to_name ?? ""),
+              total: Object.values((detail.moved ?? {}) as Record<string, number>).reduce(
+                (sum, value) => sum + Number(value || 0),
+                0,
+              ),
+              sequences_ended: Number(detail.sequences_ended ?? 0),
+            }
+          : null,
+        staff_id: member.id,
+        name: member.display_name || member.email,
+        is_active: member.is_active,
+        items: HANDOVER_TARGETS.map((target) => ({
+          key: target.key,
+          label: target.label,
+          area: target.area,
+          count: found[target.key] ?? 0,
+          needs: target.needs ?? "",
+          needs_words: target.needs ? (HANDOVER_WORDS[target.needs] ?? "") : "",
+        })),
+        total: Object.values(found).reduce((sum, value) => sum + value, 0),
+        kept: HANDOVER_KEPT,
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: "hq/staff/{staff_id}/handover/run",
+    auth: true,
+    capability: "hq:admin",
+    sudo: true,
+    handler: ({ params, body, headers }) => {
+      const actor = caller(headers)!.member;
+      const member = staff.find((row) => row.id === String(params.staff_id ?? "").toLowerCase());
+      if (!member) return refuse(404, "not_found");
+      const leaver = member.id;
+      const receiverId = String(body.to_staff_id ?? "")
+        .trim()
+        .toLowerCase();
+      if (!receiverId)
+        return refuse(400, "malformed_request", {
+          to_staff_id: "the colleague taking the work on",
+        });
+      if (receiverId === leaver)
+        return refuse(400, "malformed_request", {
+          to_staff_id: "a colleague, not the person leaving",
+        });
+      const colleague = staff.find((row) => row.id === receiverId && row.is_active);
+      if (!colleague)
+        return refuse(400, "malformed_request", { to_staff_id: "an active colleague" });
+      const reason = String(body.reason ?? "")
+        .trim()
+        .slice(0, 400);
+      if (reason.length < 4)
+        return refuse(400, "malformed_request", { reason: "say why: who is leaving, and when" });
+      const asked = body.keys;
+      if (
+        asked !== undefined &&
+        (!Array.isArray(asked) ||
+          asked.some((key) => !HANDOVER_TARGETS.some((target) => target.key === key)))
+      )
+        return refuse(400, "malformed_request", {
+          keys: HANDOVER_TARGETS.map((target) => target.key).join(", "),
+        });
+      const found = handoverCounts(leaver);
+      const wantedKeys =
+        (asked as string[] | undefined) ?? HANDOVER_TARGETS.map((target) => target.key);
+      const wanted = HANDOVER_TARGETS.filter(
+        (target) => wantedKeys.includes(target.key) && found[target.key]! > 0,
+      );
+      const theirCaps = capsFor(colleague.role);
+      const movable = wanted.filter((target) => !target.needs || theirCaps.includes(target.needs));
+      const skipped = wanted
+        .filter((target) => !movable.includes(target))
+        .map((target) => ({
+          key: target.key,
+          label: target.label,
+          count: found[target.key] ?? 0,
+          why: `${colleague.display_name || "They"} cannot work on ${HANDOVER_WORDS[target.needs ?? ""] ?? "it"}`,
+        }));
+      if (!movable.length)
+        return refuse(400, "malformed_request", {
+          keys: skipped.length
+            ? `${colleague.display_name || "This colleague"}'s role cannot take any of it`
+            : "nothing to hand over to this colleague",
+        });
+      const moved: Record<string, number> = {};
+      let ended = 0;
+      for (const target of movable) {
+        const rows = target.rows().filter((row) => handoverOwns(target, row, leaver));
+        if (target.key === "enrolments") {
+          let carried = 0;
+          for (const row of rows) {
+            const enrolment = row as unknown as MailEnrolmentRow;
+            const sender = mailSenders.find((item) => item.id === enrolment.sender_id);
+            if (!sender || String(sender.staff_id ?? "") !== leaver) {
+              enrolment.owner_staff_id = receiverId;
+              carried += 1;
+              continue;
+            }
+            const theirs = mailSenders.find(
+              (item) =>
+                item.kind === sender.kind &&
+                String(item.staff_id ?? "") === receiverId &&
+                item.active,
+            );
+            if (!theirs) {
+              mailExit(
+                enrolment,
+                "OWNER_LEFT",
+                "",
+                actor.id,
+                "its owner left and the colleague taking it on has no identity of their own to send it from",
+              );
+              ended += 1;
+              continue;
+            }
+            enrolment.owner_staff_id = receiverId;
+            enrolment.sender_id = theirs.id;
+            carried += 1;
+          }
+          moved[target.key] = carried;
+          continue;
+        }
+        for (const row of rows) {
+          if (target.key === "interviews") {
+            const people = (row.interviewers as string[]).map((item) =>
+              String(item).toLowerCase() === leaver ? receiverId : item,
+            );
+            row.interviewers = [...new Set(people)];
+          } else {
+            row[target.column] = receiverId;
+            if (target.key === "tickets")
+              row.assignee_name = colleague.display_name || colleague.email;
+          }
+        }
+        moved[target.key] = rows.length;
+      }
+      const lines = movable.map((target) => ({
+        key: target.key,
+        label: target.label,
+        count: moved[target.key] ?? 0,
+      }));
+      const total = lines.reduce((sum, line) => sum + line.count, 0);
+      const receiverName = colleague.display_name || colleague.email;
+      const leaverName = member.display_name || member.email;
+      audit("staff.handover", actor.id, "staff", leaver, reason, {
+        to: receiverId,
+        to_name: receiverName,
+        moved: Object.fromEntries(lines.map((line) => [line.key, line.count])),
+        sequences_ended: ended,
+        left: Object.fromEntries(skipped.map((line) => [line.key, line.count])),
+      });
+      const named = lines
+        .filter((line) => line.count)
+        .slice(0, 4)
+        .map((line) => `${line.count} ${line.label.toLowerCase()}`);
+      inboxNotify({
+        recipients: [receiverId],
+        subject_type: "staff",
+        subject_id: leaver,
+        subject_label: leaverName,
+        reason: "assigned",
+        actor_id: actor.id,
+        link_path: `/team/${leaver}`,
+        summary: `${leaverName}'s work is now yours: ${named.join(", ") || "nothing open"}.`,
+      });
+      let ticked = false;
+      const run = checklistRuns.find(
+        (item) => item.staff_id === leaver && item.kind === "offboarding" && !item.completed_at,
+      );
+      const step = run
+        ? checklistSteps.find(
+            (item) => item.run_id === run.id && item.title === HANDOVER_STEP && !item.done_at,
+          )
+        : undefined;
+      if (run && step) {
+        step.done_at = now();
+        step.note = `${total} items to ${receiverName}`.slice(0, 400);
+        ticked = true;
+        if (checklistSteps.filter((item) => item.run_id === run.id).every((item) => item.done_at))
+          run.completed_at = now();
+      }
+      return ok({
+        moved: lines,
+        total,
+        sequences_ended: ended,
+        skipped,
+        to_name: receiverName,
+        offboarding_ticked: ticked,
+      });
+    },
+  },
+);
+
 function resetWorld() {
   resetInbox();
   pendings.clear();
@@ -54591,6 +55261,32 @@ function respond(
       executed: false,
     });
     return ok({ approval: approvalView(row) });
+  }
+  // Test-only, as above: give a colleague a firm and an open task, so the handover walk has
+  // someone with work in hand to hand over. Returns their id.
+  if (method === "POST" && route === "mock/give-work") {
+    const member = staff.find((row) => row.email === String(body.email ?? ""));
+    const firm = companies.find((row) => !row.archived && row.lifecycle === "prospect");
+    if (!member || !firm) return refuse(404, "not_found");
+    firm.owner_staff_id = member.id;
+    tasks.push({
+      id: randomUUID(),
+      title: `Call ${firm.name} back`,
+      body: "",
+      status: "open",
+      priority: "medium",
+      due_on: "",
+      assignee_staff_id: member.id,
+      company_id: firm.id,
+      person_id: "",
+      deal_id: "",
+      lead_id: "",
+      ticket_id: "",
+      origin: "manual",
+      completed_at: null,
+      created_at: now(),
+    });
+    return ok({ staff_id: member.id, company: firm.name });
   }
   if (DEGRADED.has(route)) return refuse(503, "upstream_unavailable");
   const matched = matchRoute(method, route);

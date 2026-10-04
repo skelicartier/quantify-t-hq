@@ -5,7 +5,7 @@ import { RowAction } from "@/components/ui/row-action";
 import { StatusPill } from "@/components/ui/status-pill";
 import type { Task } from "@/lib/api/crm";
 import { nameFor, type DirectoryEntry } from "@/lib/api/staff";
-import { TASK_PRIORITY_LABELS, taskPriorityTone } from "@/lib/crm/vocabulary";
+import { TASK_PRIORITY_LABELS, TASK_REPEAT_LABELS, taskPriorityTone } from "@/lib/crm/vocabulary";
 import type { ActionState } from "@/lib/forms/action-state";
 
 type TaskListProps = {
@@ -83,6 +83,11 @@ export function TaskList({
                     label={TASK_PRIORITY_LABELS[task.priority] ?? task.priority}
                     tone={taskPriorityTone(task.priority)}
                   />
+                )}
+                {task.repeat_rule && (
+                  <span className="task__repeat">
+                    {TASK_REPEAT_LABELS[task.repeat_rule] ?? task.repeat_rule}
+                  </span>
                 )}
                 <span className="task__who">{assignee}</span>
                 {link && (

@@ -541,6 +541,7 @@ export const EXIT_REASON_LABELS: Record<string, string> = {
   COMPLETED: "All steps sent",
   DO_NOT_CONTACT: "Do not contact",
   ARCHIVED: "Person archived",
+  OWNER_LEFT: "Owner left; no identity to send it from",
 };
 
 export const MESSAGE_STATE_LABELS: Record<string, string> = {

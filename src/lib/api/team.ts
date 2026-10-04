@@ -553,3 +553,66 @@ export function updatePolicy(token: string, input: Record<string, unknown>) {
     { token, body: input },
   );
 }
+
+// -- handover: a leaver's work in hand to one colleague -----------------------------------
+
+const handoverItemSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  area: z.string(),
+  count: z.number(),
+  /** The capability a colleague's role needs to take it; "" for anyone active. */
+  needs: z.string(),
+  needs_words: z.string(),
+});
+
+const handoverSchema = okEnvelope.extend({
+  /** The last handover of this person's work, so the page says it after its form has gone. */
+  last: z
+    .object({
+      at: z.string().nullable(),
+      by_name: z.string(),
+      to_name: z.string(),
+      total: z.number(),
+      sequences_ended: z.number(),
+    })
+    .nullable(),
+  staff_id: z.string(),
+  name: z.string(),
+  is_active: z.boolean(),
+  items: z.array(handoverItemSchema),
+  total: z.number(),
+  /** What never moves, and what happens to it instead. */
+  kept: z.array(z.string()),
+});
+export type Handover = z.infer<typeof handoverSchema>;
+
+/** What a person is answerable for now, by kind: what a handover would move. */
+export function readHandover(token: string, staffId: string) {
+  return fetchHqJson(`hq/staff/${staffId}/handover`, handoverSchema, { token });
+}
+
+const handoverLineSchema = z.object({ key: z.string(), label: z.string(), count: z.number() });
+
+export const handoverResultSchema = okEnvelope.extend({
+  moved: z.array(handoverLineSchema),
+  total: z.number(),
+  /** Sequences that ended: the colleague had no identity of their own to send them from. */
+  sequences_ended: z.number(),
+  /** Kinds the colleague's role cannot take, left with the leaver, with the reason. */
+  skipped: z.array(handoverLineSchema.extend({ why: z.string() })),
+  to_name: z.string(),
+  offboarding_ticked: z.boolean(),
+});
+export type HandoverResult = z.infer<typeof handoverResultSchema>;
+
+export function runHandover(
+  token: string,
+  staffId: string,
+  input: { to_staff_id: string; reason: string; keys: string[] },
+) {
+  return postHqJson(`hq/staff/${staffId}/handover/run`, handoverResultSchema, {
+    token,
+    body: input,
+  });
+}

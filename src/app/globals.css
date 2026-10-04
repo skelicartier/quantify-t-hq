@@ -5418,6 +5418,88 @@
     font-size: 20px;
   }
 
+  /* The audit filter's two days stay together when the strip wraps. */
+  .audit-days {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+  }
+
+  /* An audit filter's day: its word beside the date, on one line in the strip. */
+  .audit-day {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  /* --- Handover: what a person is answerable for, by area, and the form that moves it --- */
+  .handover-areas {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px 28px;
+    margin: 12px 0 18px;
+  }
+
+  .handover-area__title {
+    margin: 0 0 6px;
+    color: var(--quiet);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .handover-list {
+    margin: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .handover-list > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .handover-list dt {
+    min-width: 0;
+    color: var(--muted);
+  }
+
+  .handover-list dd {
+    margin: 0;
+  }
+
+  .handover-form {
+    max-width: 640px;
+  }
+
+  .handover-form__kinds {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .handover-last {
+    margin: 0 0 10px;
+  }
+
+  .handover-kept {
+    display: grid;
+    gap: 4px;
+    margin: 16px 0 0;
+    padding: 12px 0 0 18px;
+    border-top: 1px solid var(--line-soft);
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
   /* --- Search: one box for every kind, a row of kinds with counts, plain result rows --- */
   .search-page__form {
     display: flex;

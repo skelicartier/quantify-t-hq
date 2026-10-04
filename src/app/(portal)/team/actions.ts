@@ -540,3 +540,56 @@ export async function revealFieldAction(
   revalidatePath(`/team/${staffId}`);
   return { status: "sent", message: null, sentAt: Date.now(), secret: value };
 }
+
+function count(value: number, one: string, many: string): string {
+  return `${value.toLocaleString("en-GB")} ${value === 1 ? one : many}`;
+}
+
+/**
+ * Hand a leaver's work in hand to one colleague. The service moves each kind only to a
+ * role that works on it and says what it left; the message says both.
+ */
+export async function handoverAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireSameOriginServerAction(formData);
+  const context = await requireStaff("/team");
+  if (!hasCapability(context, "hq:admin"))
+    return { status: "error", message: "Only those who manage HQ hand work over." };
+  const staffId = fieldValue(formData, "staff_id", 64);
+  const keys = formData
+    .getAll("keys")
+    .map((value) => String(value).slice(0, 40))
+    .filter(Boolean);
+  if (!keys.length) return { status: "error", message: "Tick what should move." };
+  try {
+    const result = await teamApi.runHandover(context.token, staffId, {
+      to_staff_id: fieldValue(formData, "to_staff_id", 64),
+      reason: fieldValue(formData, "reason", 400).trim(),
+      keys,
+    });
+    refreshPerson(staffId);
+    const moved = result.moved
+      .filter((line) => line.count > 0)
+      .map((line) => `${line.count.toLocaleString("en-GB")} ${line.label.toLowerCase()}`);
+    const parts = [`Moved to ${result.to_name}: ${moved.join(", ") || "nothing"}.`];
+    if (result.sequences_ended)
+      parts.push(
+        `${count(result.sequences_ended, "sequence", "sequences")} ended: ${result.to_name} has no identity of their own to send from.`,
+      );
+    if (result.skipped.length)
+      parts.push(
+        `Left for someone else: ${result.skipped
+          .map(
+            (line) =>
+              `${line.count.toLocaleString("en-GB")} ${line.label.toLowerCase()} (${line.why})`,
+          )
+          .join("; ")}.`,
+      );
+    if (result.offboarding_ticked) parts.push("The offboarding step is ticked.");
+    return { status: "sent", message: parts.join(" "), sentAt: Date.now() };
+  } catch (error) {
+    return crmRefusal(error);
+  }
+}

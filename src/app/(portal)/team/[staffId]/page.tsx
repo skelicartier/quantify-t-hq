@@ -13,6 +13,7 @@ import {
   revealFieldAction,
   toggleActionItemAction,
   updateProfileAction,
+  handoverAction,
 } from "@/app/(portal)/team/actions";
 import { confirmSudoAction } from "@/app/(portal)/admin/actions";
 import { SudoGate } from "@/components/admin/sudo-gate";
@@ -41,12 +42,19 @@ import {
 import { Callout } from "@/components/ui/callout";
 import { Popover } from "@/components/ui/popover";
 import { RowAction } from "@/components/ui/row-action";
+import { HandoverSection } from "@/components/team/handover-section";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, requireStaff } from "@/lib/access/core";
 import { kindLabel, roleLabel } from "@/lib/access/role-labels";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { readTeam, readTeamMember, type TeamMember } from "@/lib/api/team";
+import {
+  readHandover,
+  readTeam,
+  readTeamMember,
+  type Handover,
+  type TeamMember,
+} from "@/lib/api/team";
 import { formatAbsolute, formatDate } from "@/lib/format";
 import { DOCUMENT_LABELS } from "@/lib/team/vocabulary";
 import { requestNow } from "@/lib/request-time";
@@ -121,6 +129,17 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
           staff_id: member.staff_id,
           display_name: member.display_name || member.email,
         }));
+    } catch (error) {
+      if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+        throw error;
+    }
+  }
+  // What they are answerable for, for those who can hand it over.
+  const canHandover = hasCapability(context, "hq:admin");
+  let handover: Handover | null = null;
+  if (canHandover) {
+    try {
+      handover = await readHandover(context.token, person.staff_id);
     } catch (error) {
       if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
         throw error;
@@ -531,7 +550,7 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
               : null
           }
           returnPath={base}
-          purpose="Recording documents and system access, and revealing a hidden detail, need a fresh code from your authenticator app."
+          purpose="Recording documents and system access, revealing a hidden detail, and handing their work over need a fresh code from your authenticator app."
         />
       )}
       <RecordTabs base={base} tabs={tabs} current={tab} label="Team member sections" />
@@ -775,6 +794,14 @@ export default async function TeamMemberPage({ params, searchParams }: TeamMembe
           <>
             {documentsSection}
             {accessSection}
+            {canHandover && (
+              <HandoverSection
+                handover={handover}
+                colleagues={colleagues}
+                action={handoverAction}
+                now={now}
+              />
+            )}
             {assetsSection}
             {trainingSection}
           </>

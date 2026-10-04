@@ -6,6 +6,7 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import * as crmApi from "@/lib/api/crm";
 import { fieldValue } from "@/lib/auth/forms";
 import { crmRefusal } from "@/lib/crm/refusal";
+import { formatDate } from "@/lib/format";
 import { safeReturnPath } from "@/lib/crm/return-path";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
@@ -74,6 +75,8 @@ export async function createTaskAction(
   if (priority) input.priority = priority;
   const assignee = fieldValue(formData, "assignee_staff_id", 64);
   if (assignee) input.assignee_staff_id = assignee;
+  const repeat = fieldValue(formData, "repeat_rule", 12);
+  if (repeat) input.repeat_rule = repeat;
   try {
     await crmApi.createTask(context.token, input);
   } catch (error) {
@@ -96,12 +99,19 @@ export async function setTaskStatusAction(
   }
   const taskId = fieldValue(formData, "task_id", 64);
   const status = fieldValue(formData, "status", 12) === "open" ? "open" : "done";
+  let nextDue: string | null = null;
   try {
-    await crmApi.updateTask(context.token, taskId, { status });
+    const result = await crmApi.updateTask(context.token, taskId, { status });
+    nextDue = result.next_task?.due_on?.slice(0, 10) ?? null;
   } catch (error) {
     return crmRefusal(error);
   }
   refresh(formData);
   revalidatePath("/tasks");
-  return { status: "sent", message: null, sentAt: Date.now() };
+  // A repeating task done says when it comes round again.
+  return {
+    status: "sent",
+    message: nextDue ? `Done. The next one is due ${formatDate(nextDue)}.` : null,
+    sentAt: Date.now(),
+  };
 }

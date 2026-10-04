@@ -125,6 +125,10 @@ export const taskSchema = z.object({
   created_at: z.string().nullable(),
   /** An action from the weekly review: "metric:<key>", "priority:<id>" or "review". */
   review_ref: z.string().default(""),
+  /** 0072: how often it comes back once done ("" never), until when, and its series. */
+  repeat_rule: z.string().default(""),
+  repeat_until: z.string().nullable().default(null),
+  series_id: z.string().default(""),
 });
 export type Task = z.infer<typeof taskSchema>;
 
@@ -957,7 +961,11 @@ export function readTasks(token: string, filters: { scope?: string; status?: str
   return fetchHqJson("hq/tasks", tasksSchema, { token, query });
 }
 
-const taskEnvelope = okEnvelope.extend({ task: taskSchema });
+const taskEnvelope = okEnvelope.extend({
+  task: taskSchema,
+  /** A repeating task marked done: the one it made. */
+  next_task: taskSchema.nullable().default(null),
+});
 
 export function createTask(token: string, input: Record<string, unknown>) {
   return postHqJson("hq/tasks/create", taskEnvelope, { token, body: input });

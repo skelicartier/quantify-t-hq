@@ -34,6 +34,8 @@ import {
 } from "@/components/ui/record-shell";
 import { StatusPill } from "@/components/ui/status-pill";
 import { hasCapability, requireStaff } from "@/lib/access/core";
+import { directoryOrNull } from "@/lib/api/staff";
+import { RecordHistory } from "@/components/crm/record-history";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readCompanies } from "@/lib/api/crm";
 import { readMeeting, type MeetingDetail } from "@/lib/api/meetings";
@@ -55,6 +57,7 @@ export const dynamic = "force-dynamic";
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "activity", label: "Activity" },
+  { key: "changes", label: "Changes" },
 ] as const;
 
 type MeetingPageProps = {
@@ -96,7 +99,8 @@ export default async function MeetingPage({ params, searchParams }: MeetingPageP
         throw error;
     }
   }
-  const tabs = [TABS[0], { ...TABS[1], count: activities.length }];
+  const canAudit = hasCapability(context, "audit:read");
+  const tabs = [TABS[0], { ...TABS[1], count: activities.length }, ...(canAudit ? [TABS[2]] : [])];
   const tab = currentTab(firstSearchValue((await searchParams).tab), tabs);
   const base = `/meetings/${meeting.meeting_id}`;
   const inline = {
@@ -364,6 +368,18 @@ export default async function MeetingPage({ params, searchParams }: MeetingPageP
           </>
         )}
         {tab === "activity" && activity}
+        {tab === "changes" && canAudit && (
+          <RecordSection id="meeting-changes" title="Changes">
+            <RecordHistory
+              token={context.token}
+              entityType="meeting"
+              entityId={meeting.meeting_id}
+              names={await directoryOrNull(context.token)}
+              canRead
+              now={now}
+            />
+          </RecordSection>
+        )}
       </RecordGrid>
     </>
   );

@@ -2,7 +2,7 @@ import { Callout } from "@/components/ui/callout";
 import { Timestamp } from "@/components/ui/timestamp";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { nameFor, searchAudit, type AuditEvent } from "@/lib/api/staff";
-import { LIFECYCLE_LABELS, LOSS_REASON_LABELS } from "@/lib/crm/vocabulary";
+import { LIFECYCLE_LABELS, LOSS_REASON_LABELS, TASK_REPEAT_LABELS } from "@/lib/crm/vocabulary";
 import { formatSentence } from "@/lib/format";
 
 /**
@@ -52,6 +52,23 @@ const FIELD_LABELS: Record<string, string> = {
   renewal_note: "Renewal note",
   customer_since: "Customer since",
   archived_at: "Archived",
+  // Tasks, meetings, support conversations and leads.
+  due_on: "Due",
+  repeat_rule: "Repeats",
+  repeat_until: "Repeats until",
+  priority: "Priority",
+  tags: "Tags",
+  snoozed_until: "Snoozed until",
+  linked_issue_url: "Linked issue",
+  assignee_name: "Assigned to",
+  starts_at: "Starts",
+  ends_at: "Ends",
+  prep_notes: "Prep notes",
+  recording_url: "Recording",
+  stage: "Stage",
+  disqualify_reason: "Disqualified because",
+  company_name: "Firm",
+  body: "Notes",
 };
 
 type Change = { from: string; to: string };
@@ -71,6 +88,7 @@ function valueText(field: string, value: string, names: StaffDirectory | null): 
   if (field.endsWith("_staff_id")) return nameFor(names, value);
   if (field === "lifecycle") return LIFECYCLE_LABELS[value] ?? value;
   if (field === "loss_reason") return LOSS_REASON_LABELS[value] ?? value;
+  if (field === "repeat_rule") return TASK_REPEAT_LABELS[value] ?? value;
   if (value === "True" || value === "true") return "Yes";
   if (value === "False" || value === "false") return "No";
   return value;

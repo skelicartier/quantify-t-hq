@@ -19,6 +19,7 @@ import { ActForm } from "@/components/ui/act-form";
 import { Field, Input } from "@/components/ui/field";
 import { RowAction } from "@/components/ui/row-action";
 import { ActivityTimeline } from "@/components/crm/activity-timeline";
+import { RecordHistory } from "@/components/crm/record-history";
 import { SignalList } from "@/components/crm/signal-list";
 import { ConvertLeadForm, LeadStageForm } from "@/components/crm/lead-forms";
 import { LogActivityForm } from "@/components/crm/log-activity-form";
@@ -694,6 +695,18 @@ export default async function LeadPage({ params }: LeadPageProps) {
             )}
             <ActivityTimeline activities={activities} now={now} stageLabels={stageNames} />
           </RecordSection>
+          {hasCapability(context, "audit:read") && (
+            <RecordSection id="lead-changes" title="Changes">
+              <RecordHistory
+                token={context.token}
+                entityType="lead"
+                entityId={lead.lead_id}
+                names={names}
+                canRead
+                now={now}
+              />
+            </RecordSection>
+          )}
         </>
       </RecordGrid>
     </>

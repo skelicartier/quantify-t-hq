@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
-import { TASK_PRIORITIES, TASK_PRIORITY_LABELS } from "@/lib/crm/vocabulary";
+import { TASK_PRIORITIES, TASK_PRIORITY_LABELS, TASK_REPEAT_LABELS } from "@/lib/crm/vocabulary";
 
 type Links = Partial<Record<"company_id" | "person_id" | "deal_id" | "lead_id", string>>;
 
@@ -64,6 +64,17 @@ export function TaskQuickAdd({
             {TASK_PRIORITIES.map((priority) => (
               <option key={priority} value={priority}>
                 {TASK_PRIORITY_LABELS[priority]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="task-add__field">
+          <span className="task-add__label">Repeats</span>
+          <select className="select" name="repeat_rule" defaultValue="" disabled={isPending}>
+            <option value="">Never</option>
+            {Object.entries(TASK_REPEAT_LABELS).map(([rule, label]) => (
+              <option key={rule} value={rule}>
+                {label}
               </option>
             ))}
           </select>

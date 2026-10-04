@@ -99,6 +99,9 @@ export default async function AuditIndexPage({ searchParams }: AuditPageProps) {
     entity_type: firstSearchValue(parameters.entity_type) ?? "",
     entity_id: firstSearchValue(parameters.entity_id) ?? "",
     staff_id: firstSearchValue(parameters.staff_id) ?? "",
+    q: (firstSearchValue(parameters.q) ?? "").slice(0, 100),
+    from: firstSearchValue(parameters.from) ?? "",
+    to: firstSearchValue(parameters.to) ?? "",
   };
   const offset = Math.max(0, Number(firstSearchValue(parameters.offset) ?? 0) || 0);
   const now = requestNow();
@@ -183,6 +186,42 @@ export default async function AuditIndexPage({ searchParams }: AuditPageProps) {
             </option>
           ))}
         </select>
+        <label className="sr-only" htmlFor="audit-q">
+          Words
+        </label>
+        <input
+          id="audit-q"
+          className="input input--small"
+          name="q"
+          type="search"
+          defaultValue={filters.q}
+          placeholder="Words in the reason or detail"
+          maxLength={100}
+        />
+        <span className="audit-days">
+          <label className="audit-day" htmlFor="audit-search-from">
+            <span>From</span>
+            <input
+              id="audit-search-from"
+              className="input input--small"
+              type="date"
+              name="from"
+              defaultValue={filters.from}
+              max={today}
+            />
+          </label>
+          <label className="audit-day" htmlFor="audit-search-to">
+            <span>To</span>
+            <input
+              id="audit-search-to"
+              className="input input--small"
+              type="date"
+              name="to"
+              defaultValue={filters.to}
+              max={today}
+            />
+          </label>
+        </span>
         {filters.entity_id && <input type="hidden" name="entity_id" value={filters.entity_id} />}
         <button className="btn btn--small" type="submit">
           Apply

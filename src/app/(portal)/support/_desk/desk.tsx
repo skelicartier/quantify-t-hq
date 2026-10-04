@@ -29,8 +29,9 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { TableKeys } from "@/components/ui/table-keys";
 import { Timestamp } from "@/components/ui/timestamp";
 import { hasCapability, type StaffContext } from "@/lib/access/core";
+import { RecordHistory } from "@/components/crm/record-history";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { listStaff } from "@/lib/api/staff";
+import { directoryOrNull, listStaff } from "@/lib/api/staff";
 import {
   listSavedReplies,
   readQueue,
@@ -657,6 +658,19 @@ export async function Desk({ context, filters, selected }: DeskProps) {
             <h2 className="props__title">Answered with</h2>
             <TicketArticles token={context.token} ticketId={ticket.id} canWrite={canWrite} />
           </section>
+          {hasCapability(context, "audit:read") && (
+            <section className="props" aria-label="Changes">
+              <h2 className="props__title">Changes</h2>
+              <RecordHistory
+                token={context.token}
+                entityType="ticket"
+                entityId={ticket.id}
+                names={await directoryOrNull(context.token)}
+                canRead
+                now={requestNow()}
+              />
+            </section>
+          )}
           {canManage && (
             <section className="props" aria-label="Manage">
               <h2 className="props__title">Manage</h2>

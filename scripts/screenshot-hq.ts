@@ -186,6 +186,11 @@ const SIGNED_IN_PAGES: Shot[] = [
     path: "/meetings/ee100000-0000-4000-8000-000000000001",
     ready: ".record-layout",
   },
+  {
+    name: "meeting-changes",
+    path: "/meetings/ee100000-0000-4000-8000-000000000001?tab=changes",
+    ready: "section[aria-labelledby='meeting-changes']",
+  },
   { name: "revenue-contracts", path: "/revenue/contracts", ready: ".data-table" },
   {
     name: "revenue-contract",
@@ -468,6 +473,12 @@ const SIGNED_IN_PAGES: Shot[] = [
     ready: ".record-layout",
   },
   { name: "admin-audit", path: "/admin/audit", ready: "main#main-content" },
+  // Words and days: everything about tasks since the start of the year.
+  {
+    name: "admin-audit-search",
+    path: `/admin/audit?q=task&from=${new Date().getUTCFullYear()}-01-01`,
+    ready: "main#main-content",
+  },
   { name: "me-security", path: "/me/security", ready: "main#main-content" },
   // Product: the product's administration, run as the staff member's linked account. Each
   // waits for what only a successful read draws, so a broken link or an unreachable
@@ -741,6 +752,8 @@ async function captureInteractions(page: Page, folder: string) {
   await captureQuoteLinkFlows(page, folder);
   await captureRecordImportFlows(page, folder);
   await captureFindFlows(page, folder);
+  await captureHandoverFlows(page, folder);
+  await captureRepeatTaskFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -4229,6 +4242,78 @@ async function captureFindFlows(page: Page, folder: string) {
   await page.waitForTimeout(1_200);
 }
 
+/**
+ * Handover: a colleague is given a firm and an open task (test-only mock route); their
+ * team page counts it under Their work; it is handed to Sales Person after a fresh code;
+ * the page then says when, by whom and to whom, and nothing open is theirs.
+ */
+async function captureHandoverFlows(page: Page, folder: string) {
+  const given = await fetch("http://127.0.0.1:7071/api/v1/mock/give-work", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "newbie2@hq.test" }),
+  });
+  if (!given.ok) {
+    report(`${folder}/team-handover`, "the mock could not give the colleague any work");
+    return;
+  }
+  const { staff_id: staffId } = (await given.json()) as { staff_id: string };
+  await page.goto(`${BASE}/team/${staffId}`, { waitUntil: "networkidle" });
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
+    await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  }
+  const section = page.locator("section[aria-labelledby='team-handover']");
+  await section.waitFor({ timeout: 15_000 });
+  if ((await section.locator(".handover-list dt", { hasText: "Companies they own" }).count()) === 0)
+    report(`${folder}/team-handover`, "the firm they own is not counted under Their work");
+  await shoot(page, `${folder}/team-handover`);
+  await section.locator("#handover-to").selectOption({ label: "Sales Person" });
+  await section.locator("#handover-reason").fill("Screenshot run: leaving on Friday");
+  await section.getByRole("button", { name: "Hand it over" }).click();
+  // The form goes with the work: the page says what happened instead. (A second pass
+  // finds the first pass's line already there, so it waits for the work to leave.)
+  // One list per area: wait on the first (a locator naming two refuses to wait at all).
+  await section
+    .locator(".handover-list")
+    .first()
+    .waitFor({ state: "detached", timeout: 15_000 })
+    .catch(() => undefined);
+  if ((await section.locator(".handover-list").count()) > 0)
+    report(`${folder}/team-handover-done`, "work is still counted as theirs after the handover");
+  if ((await section.locator(".handover-last", { hasText: "to Sales Person" }).count()) === 0)
+    report(`${folder}/team-handover-done`, "the page does not say who took the work");
+  await shoot(page, `${folder}/team-handover-done`);
+}
+
+/**
+ * Tasks that come round again: a weekly task due today is reminded about in the inbox,
+ * and marking it done brings the next one, a week on, marked as repeating.
+ */
+async function captureRepeatTaskFlows(page: Page, folder: string) {
+  const title = `Weekly numbers ${Date.now().toString(36)}`;
+  const today = new Date().toISOString().slice(0, 10);
+  await page.goto(`${BASE}/tasks`, { waitUntil: "networkidle" });
+  const form = page.locator("form.task-add").first();
+  await form.locator("input[name=title]").fill(title);
+  await form.locator("input[name=due_on]").fill(today);
+  await form.locator("select[name=repeat_rule]").selectOption("weekly");
+  await form.getByRole("button", { name: "Add task" }).click();
+  const row = page.locator("li.task", { hasText: title });
+  await row.first().waitFor({ timeout: 15_000 });
+  await shoot(page, `${folder}/tasks-repeat-added`);
+  await page.goto(`${BASE}/inbox`, { waitUntil: "networkidle" });
+  if ((await page.locator("main", { hasText: `Due today: ${title}` }).count()) === 0)
+    report(`${folder}/inbox-task-due`, "the inbox has no reminder for the task due today");
+  await shoot(page, `${folder}/inbox-task-due`);
+  await page.goto(`${BASE}/tasks`, { waitUntil: "networkidle" });
+  await row.first().locator("button.task__check").click();
+  const next = page.locator("li.task:not(.task--done)", { hasText: title });
+  await next.locator(".task__repeat", { hasText: "Every week" }).waitFor({ timeout: 15_000 });
+  await shoot(page, `${folder}/tasks-repeat-next`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4250,6 +4335,8 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   quotelink: captureQuoteLinkFlows,
   crmimport: captureRecordImportFlows,
   find: captureFindFlows,
+  handover: captureHandoverFlows,
+  repeat: captureRepeatTaskFlows,
 };
 
 async function runPart(browser: Browser) {

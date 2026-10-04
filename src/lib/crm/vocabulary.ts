@@ -110,6 +110,17 @@ export const LOGGABLE_KINDS = ["note", "call", "email_out", "email_in"] as const
 
 export const TASK_PRIORITIES = ["low", "medium", "high", "urgent"] as const;
 
+/** How often a task comes back once it is done (recurrence.RULES in the service). */
+export const TASK_REPEAT_LABELS: Record<string, string> = {
+  daily: "Every day",
+  weekdays: "Every weekday",
+  weekly: "Every week",
+  fortnightly: "Every two weeks",
+  monthly: "Every month",
+  quarterly: "Every quarter",
+  yearly: "Every year",
+};
+
 export const TASK_PRIORITY_LABELS: Record<string, string> = {
   low: "Low",
   medium: "Medium",
