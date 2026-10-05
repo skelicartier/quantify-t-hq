@@ -418,6 +418,15 @@ and app password without either).
   the same way); the printed page's footer stamped UTC beside a thread in IST (it takes
   the page's zone now); a document's cells said "08:02" with no zone (they say "08:02
   UTC": a file is shared across zones).
+- Service `e98fdd4`, HQ `6e468aa` (both local until the walks pass). Chromium reports a
+  device in Kolkata as `Asia/Calcutta`; a browser's older names are read as the current
+  ones (`canonicalZone`) before they are saved or shown.
+- Found on the way: Home's inbox panel reused the meetings list's grid, whose 76px
+  first column never wraps, so "First reply running late" ran under the name beside it;
+  the panel's list now has a wider, wrapping label column (`agenda--labelled`, `8bb02ae`).
+- The dev server and `next build` write the same `.next/types` files; run together they
+  leave " 2"/" 3" duplicates that fail typecheck, and once left the dev server unable to
+  open its cache. Stop the dev server before `npm run validate`, start it after.
 - Every harness context runs in UTC, so screenshots never depend on the Mac's zone; the
   `timezone` part signs in from a second context in Kolkata to prove the device's zone is
   taken, then reads IST from the UTC context (the account's zone, not the device's), and
