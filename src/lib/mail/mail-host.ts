@@ -59,6 +59,34 @@ export function classifyExchanges(exchanges: readonly string[]): MailHost {
   return { kind: "server", exchange: names[0]!, servers: null };
 }
 
+/** The big consumer mailboxes: where their mail lives is known without asking DNS. */
+const KNOWN_HOSTS: Record<string, MailHost> = {
+  "gmail.com": { kind: "google" },
+  "googlemail.com": { kind: "google" },
+  "outlook.com": { kind: "microsoft" },
+  "hotmail.com": { kind: "microsoft" },
+  "live.com": { kind: "microsoft" },
+  "msn.com": { kind: "microsoft" },
+};
+
+/**
+ * How long a lookup may take in all. The resolver's own timeout is per server and per
+ * try, so a network that has gone quiet could hold "Connect" for twenty seconds; past
+ * this the host is "unknown" and the person is sent to the server form instead.
+ */
+export const LOOKUP_DEADLINE_MS = 4_000;
+
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(Object.assign(new Error("lookup timed out"), { code: "ETIMEOUT" })),
+      ms,
+    );
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
 async function lookupMx(domain: string): Promise<string[]> {
   const resolver = new Resolver({ timeout: 3000, tries: 2 });
   const records = await resolver.resolveMx(domain);
@@ -80,11 +108,14 @@ export function domainOf(address: string): string {
 export async function mailHostOf(
   address: string,
   lookup: (domain: string) => Promise<string[]> = lookupMx,
+  deadlineMs = LOOKUP_DEADLINE_MS,
 ): Promise<MailHost> {
   const domain = domainOf(address);
   if (!domain) return { kind: "none" };
+  const known = KNOWN_HOSTS[domain];
+  if (known) return known;
   try {
-    return classifyExchanges(await lookup(domain));
+    return classifyExchanges(await withDeadline(lookup(domain), deadlineMs));
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : "";
     if (code === "ENODATA" || code === "ENOTFOUND") return { kind: "none" };

@@ -2087,10 +2087,21 @@ async function setProviderCampaigns(page: Page, on: boolean, name: string) {
 async function captureMailboxFlows(page: Page, folder: string) {
   const consent = "harness.desk@gmail.com";
   const server = "harness.desk@quantifyterminal.com";
-  await page.goto(`${BASE}/mail/mailboxes`, { waitUntil: "networkidle" });
-  await page.fill("#connect-address", consent);
-  await page.locator("button", { hasText: /^Connect$/ }).click();
-  await page.waitForURL("**/mail/mailboxes?connected=*", { timeout: 30_000 });
+  // The one step here that leaves the machine (the team's own host is looked up over
+  // DNS further down): tried twice, since a network that blinks for fifteen seconds is
+  // not what the walk is checking.
+  for (let attempt = 1; ; attempt += 1) {
+    await page.goto(`${BASE}/mail/mailboxes`, { waitUntil: "networkidle" });
+    await page.fill("#connect-address", consent);
+    await page.locator("button", { hasText: /^Connect$/ }).click();
+    try {
+      await page.waitForURL("**/mail/mailboxes?connected=*", { timeout: 30_000 });
+      break;
+    } catch (error) {
+      if (attempt === 2) throw error;
+      console.log(`  … the consent round trip did not come back in 30s; trying once more`);
+    }
+  }
   if (!page.url().includes("connected=connected"))
     report(`${folder}/mail-mailbox-connected`, `the consent round trip came back as ${page.url()}`);
   const consentRow = page.locator("tr", { hasText: consent });

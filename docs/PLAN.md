@@ -424,6 +424,11 @@ and app password without either).
 - Found on the way: Home's inbox panel reused the meetings list's grid, whose 76px
   first column never wraps, so "First reply running late" ran under the name beside it;
   the panel's list now has a wider, wrapping label column (`agenda--labelled`, `8bb02ae`).
+- "Connect" a mailbox looked up the address's mail servers with the resolver's own
+  timeouts (per server, per try): a network gone quiet held it for eighteen seconds, and
+  twice held a walk with it. The lookup now has a four-second deadline (past it the
+  person is sent to the server form), the big consumer hosts are known without DNS, and
+  the harness tries the one step that leaves the machine twice.
 - The dev server and `next build` write the same `.next/types` files; run together they
   leave " 2"/" 3" duplicates that fail typecheck, and once left the dev server unable to
   open its cache. Stop the dev server before `npm run validate`, start it after.

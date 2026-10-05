@@ -54,6 +54,16 @@ describe("where an address's mail lives", () => {
     expect(await mailHostOf("no-at-sign", async () => ["mx.zoho.in"])).toEqual({ kind: "none" });
   });
 
+  it("knows the big consumer hosts without asking DNS, and gives up on a lookup that hangs", async () => {
+    const never = () => new Promise<string[]>(() => undefined);
+    expect(await mailHostOf("a@gmail.com", never)).toEqual({ kind: "google" });
+    expect(await mailHostOf("a@hotmail.com", never)).toEqual({ kind: "microsoft" });
+    // A network gone quiet: "unknown" within the deadline, not a twenty-second hold.
+    const started = Date.now();
+    expect(await mailHostOf("a@fund.example", never, 20)).toEqual({ kind: "unknown" });
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it("reads the domain after the last @", () => {
     expect(domainOf("Ravi@QuantifyTerminal.IN ")).toBe("quantifyterminal.in");
     expect(domainOf("odd@name@team.example")).toBe("team.example");
