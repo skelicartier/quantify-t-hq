@@ -2,8 +2,6 @@
 
 import { useActionState, useState } from "react";
 
-import { TzOffsetField } from "@/components/ui/act-form";
-
 import { AttemptField } from "@/components/ui/attempt-field";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
@@ -251,7 +249,6 @@ export function LogIncidentForm({ action }: { action: Action }) {
   return (
     <form className="stack-form" action={formAction}>
       <AttemptField state={state} />
-      <TzOffsetField />
       <Field id="incident-title" label="What happened, in a line">
         <Input id="incident-title" name="title" maxLength={200} required disabled={isPending} />
       </Field>

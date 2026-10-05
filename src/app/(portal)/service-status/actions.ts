@@ -9,6 +9,7 @@ import * as statusApi from "@/lib/api/status";
 import { fieldValue, refusalMessage } from "@/lib/auth/forms";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
+import { typedInstant } from "@/lib/time-zone";
 
 const NOT_DESK: ActionState = {
   status: "error",
@@ -38,11 +39,9 @@ function impacts(formData: FormData): Array<{ component_id: string; impact: stri
   return found;
 }
 
-function moment(formData: FormData, name: string): string {
-  const value = fieldValue(formData, name, 20).trim();
-  if (!value) return "";
-  const offset = fieldValue(formData, "tz_offset", 8).trim();
-  return /^[+-]\d{2}:\d{2}$/.test(offset) ? `${value}${offset}` : value;
+/** A time typed into a form, read in the person's zone and sent as the instant it means. */
+function moment(formData: FormData, name: string, zone: string): string {
+  return typedInstant(fieldValue(formData, name, 40), zone);
 }
 
 function refresh() {
@@ -115,8 +114,8 @@ export async function scheduleMaintenanceAction(
     await statusApi.scheduleMaintenance(context.token, {
       title: fieldValue(formData, "title", 200).trim(),
       body: fieldValue(formData, "body", 2000).trim(),
-      starts_at: moment(formData, "starts_at"),
-      ends_at: moment(formData, "ends_at"),
+      starts_at: moment(formData, "starts_at", context.me.time_zone),
+      ends_at: moment(formData, "ends_at", context.me.time_zone),
       component_ids: formData.getAll("component_ids").map(String).slice(0, 50),
       notify: formData.get("notify") === "on",
     });

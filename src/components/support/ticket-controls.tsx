@@ -2,12 +2,14 @@
 
 import { useActionState } from "react";
 
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { Button } from "@/components/ui/button";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { Field, Input, Select } from "@/components/ui/field";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { INITIAL_DESK_STATE, type DeskActionState } from "@/lib/support/desk-state";
 import type { Ticket } from "@/lib/api/tickets";
+import { wallClockInZone } from "@/lib/time-zone";
 
 type Teammate = { staff_id: string; display_name: string };
 
@@ -21,6 +23,7 @@ type TicketControlsProps = {
 
 export function TicketControls({ ticket, action, teammates, self }: TicketControlsProps) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_DESK_STATE);
+  const zone = useTimeZone();
   const options = teammates.length > 0 ? teammates : [self];
   return (
     <form className="stack-form" action={formAction}>
@@ -77,15 +80,17 @@ export function TicketControls({ ticket, action, teammates, self }: TicketContro
       </Field>
       <Field
         id="ticket-snooze"
-        label="Snooze until (UTC)"
-        hint="Pauses the reply timer; when the snooze ends it starts again from then. A customer reply ends it early. Clear the field to wake it."
+        label="Snooze until"
+        hint="In your time zone. Pauses the reply timer; when the snooze ends it starts again from then. A customer reply ends it early. Clear the field to wake it."
       >
         <Input
           id="ticket-snooze"
           name="snoozed_until"
           type="datetime-local"
           defaultValue={
-            ticket.snoozed && ticket.snoozed_until ? ticket.snoozed_until.slice(0, 16) : ""
+            ticket.snoozed && ticket.snoozed_until
+              ? wallClockInZone(new Date(ticket.snoozed_until), zone)
+              : ""
           }
           disabled={isPending}
         />

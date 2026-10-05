@@ -9,6 +9,7 @@ import * as pv from "@/lib/api/privacy";
 import { fieldValue, refusalMessage } from "@/lib/auth/forms";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
+import { typedInstant } from "@/lib/time-zone";
 
 const NOT_WRITER: ActionState = {
   status: "error",
@@ -40,11 +41,9 @@ function collect(formData: FormData, fields: ReadonlyArray<readonly [string, num
 }
 
 /** A local date-and-time from a form, sent with the viewer's offset so it means one moment. */
-function moment(formData: FormData, name: string): string {
-  const value = fieldValue(formData, name, 20).trim();
-  if (!value) return "";
-  const offset = fieldValue(formData, "tz_offset", 8).trim();
-  return /^[+-]\d{2}:\d{2}$/.test(offset) ? `${value}${offset}` : value;
+/** A time typed into a form, read in the person's zone and sent as the instant it means. */
+function moment(formData: FormData, name: string, zone: string): string {
+  return typedInstant(fieldValue(formData, name, 40), zone);
 }
 
 function refreshRequest(requestId?: string, companyId?: string) {
@@ -217,7 +216,7 @@ export async function logIncidentAction(
   ]);
   body.personal_data = formData.get("personal_data") === "on";
   for (const name of ["detected_at", "aware_at", "occurred_at"]) {
-    const value = moment(formData, name);
+    const value = moment(formData, name, context.me.time_zone);
     if (value) body[name] = value;
   }
   let incidentId = "";
@@ -270,10 +269,10 @@ export async function actOnIncidentAction(
       ["severity", 10],
     ]),
   };
-  const at = moment(formData, "at");
+  const at = moment(formData, "at", context.me.time_zone);
   if (at) body.at = at;
   if (action === "update") {
-    const aware = moment(formData, "aware_at");
+    const aware = moment(formData, "aware_at", context.me.time_zone);
     if (aware) body.aware_at = aware;
     body.personal_data = formData.get("personal_data") === "on";
   }

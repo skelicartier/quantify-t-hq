@@ -10,6 +10,7 @@ import { fieldValue } from "@/lib/auth/forms";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
 
 import type { DeskActionState } from "@/lib/support/desk-state";
+import { typedInstant } from "@/lib/time-zone";
 
 function deskRefusal(error: unknown): DeskActionState {
   if (error instanceof HqApiRequestError) {
@@ -137,7 +138,11 @@ export async function manageTicketAction(
       .filter(Boolean);
   }
   if (formData.has("snoozed_until")) {
-    changes.snoozed_until = fieldValue(formData, "snoozed_until", 40);
+    // Typed as a wall clock in the person's zone; the desk's "Snooze a day" sends an instant.
+    changes.snoozed_until = typedInstant(
+      fieldValue(formData, "snoozed_until", 40),
+      context.me.time_zone,
+    );
   }
   if (formData.has("linked_issue_url")) {
     changes.linked_issue_url = fieldValue(formData, "linked_issue_url", 400).trim();

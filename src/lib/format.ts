@@ -10,7 +10,13 @@
 
 import { cache } from "react";
 
-import { MONTHS, dateInZone, dateTimeInZone } from "@/lib/time-zone";
+import {
+  MONTHS,
+  dateInZone,
+  dateTimeInZone,
+  instantFromWallClock,
+  wallClockInZone,
+} from "@/lib/time-zone";
 
 const ACRONYMS = new Set([
   "api",
@@ -259,38 +265,28 @@ export function formatAbsolute(
 }
 
 /**
- * The value a `datetime-local` input should show for a stored instant.
+ * The value a `datetime-local` input should show for a stored instant, in the zone.
  *
- * A `datetime-local` input has no timezone: it shows and returns a wall clock, and the
- * browser means the viewer's own. So a stored UTC instant has to be shifted into local time
- * before it goes in, and shifted back out again on the way to storage — see
- * {@link localInputToIso}.
+ * A `datetime-local` input has no timezone: it shows and returns a wall clock. The wall
+ * clock HQ means is the person's own zone — the one every timestamp on the page is printed
+ * in — not the device's (someone who chose a zone other than their laptop's would type in
+ * one and read in the other) and not UTC. A client component passes `useTimeZone()`.
  *
- * Getting this wrong is not cosmetic. The two halves used to cancel out on screen, so an
- * operator saw back exactly what they typed while the instant recorded was out by their UTC
- * offset. A notice published "now" from India was stored five and a half hours ahead and sat
- * there reading SCHEDULED, because the status check compares the stored instant against the
- * real clock rather than against the field.
+ * Getting this wrong is not cosmetic. Two halves that disagree cancel out on screen, so an
+ * operator sees back exactly what they typed while the instant recorded is out by an
+ * offset: a notice published "now" from India was once stored five and a half hours ahead
+ * and sat there reading SCHEDULED.
  */
-export function isoToLocalInput(value: string | null | undefined): string {
+export function isoToLocalInput(value: string | null | undefined, zone: string): string {
   if (!value) return "";
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+  return Number.isFinite(date.getTime()) ? wallClockInZone(date, zone) : "";
 }
 
-/**
- * The instant a `datetime-local` value means, as an ISO string in UTC.
- *
- * `new Date("2026-09-13T03:58")` parses as local time, which is exactly what the input
- * meant, so the conversion is the parse itself. Appending a "Z" instead — which is what this
- * replaces — relabels the operator's wall clock as UTC and moves the instant.
- */
-export function localInputToIso(value: string | null | undefined): string {
+/** The instant a `datetime-local` value typed in the zone means, as an ISO string in UTC; "" when it is not a time. */
+export function localInputToIso(value: string | null | undefined, zone: string): string {
   if (!value) return "";
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : "";
+  return instantFromWallClock(value, zone)?.toISOString() ?? "";
 }
 
 /**

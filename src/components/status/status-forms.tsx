@@ -2,7 +2,6 @@
 
 import { useActionState, useState } from "react";
 
-import { TzOffsetField } from "@/components/ui/act-form";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
@@ -85,7 +84,6 @@ export function OpenIncidentForm({
   return (
     <form className="stack-form" action={formAction}>
       <AttemptField state={state} />
-      <TzOffsetField />
       <Field id="status-title" label="What customers see, in a line">
         <Input id="status-title" name="title" maxLength={200} required disabled={isPending} />
       </Field>
@@ -192,12 +190,11 @@ export function MaintenanceForm({
   return (
     <form className="stack-form" action={formAction}>
       <AttemptField state={state} />
-      <TzOffsetField />
       <Field id="maintenance-title" label="What is being done">
         <Input id="maintenance-title" name="title" maxLength={200} required disabled={isPending} />
       </Field>
       <div className="form-grid">
-        <Field id="maintenance-starts" label="Starts" hint="Your local time.">
+        <Field id="maintenance-starts" label="Starts" hint="In your time zone.">
           <Input
             id="maintenance-starts"
             name="starts_at"
@@ -206,7 +203,7 @@ export function MaintenanceForm({
             disabled={isPending}
           />
         </Field>
-        <Field id="maintenance-ends" label="Ends" hint="Your local time.">
+        <Field id="maintenance-ends" label="Ends" hint="In your time zone.">
           <Input
             id="maintenance-ends"
             name="ends_at"

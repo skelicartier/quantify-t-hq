@@ -9,6 +9,7 @@ import * as trust from "@/lib/api/trust";
 import { fieldValue, refusalMessage } from "@/lib/auth/forms";
 import type { ActionState } from "@/lib/forms/action-state";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
+import { typedInstant } from "@/lib/time-zone";
 
 type Fields = ReadonlyArray<readonly [string, number]>;
 
@@ -216,11 +217,9 @@ function collect(formData: FormData, fields: Fields): Record<string, string> {
 }
 
 /** A local date-and-time from a form, sent with the viewer's offset so it means one moment. */
-function moment(formData: FormData, name: string): string {
-  const value = fieldValue(formData, name, 20).trim();
-  if (!value) return "";
-  const offset = fieldValue(formData, "tz_offset", 8).trim();
-  return /^[+-]\d{2}:\d{2}$/.test(offset) ? `${value}${offset}` : value;
+/** A time typed into a form, read in the person's zone and sent as the instant it means. */
+function moment(formData: FormData, name: string, zone: string): string {
+  return typedInstant(fieldValue(formData, name, 40), zone);
 }
 
 function registerOf(formData: FormData): Register | null {
@@ -286,7 +285,8 @@ export async function createTrustRecordAction(
   const { context, allowed } = await writer(formData, spec.path, spec.capability);
   if (!allowed) return { status: "error", message: NOT_ALLOWED[spec.capability] ?? "Not allowed." };
   const body = collect(formData, spec.create);
-  if (register === "change") body.happened_at = moment(formData, "happened_at");
+  if (register === "change")
+    body.happened_at = moment(formData, "happened_at", context.me.time_zone);
   let recordId = "";
   try {
     recordId = await create(register, context, body);

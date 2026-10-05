@@ -2,10 +2,12 @@
 
 import { useActionState, useState } from "react";
 
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { Field, Input } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
+import { instantFromWallClock, tomorrowAt } from "@/lib/time-zone";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
 
@@ -53,18 +55,10 @@ export function FollowButton({
   );
 }
 
-/** Local "YYYY-MM-DDTHH:mm" for tomorrow at nine, the value a datetime-local field takes. */
-function tomorrowNine(): string {
-  const at = new Date();
-  at.setDate(at.getDate() + 1);
-  at.setHours(9, 0, 0, 0);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T09:00`;
-}
-
 /**
- * "Remind me" on any record: at the time chosen (in this browser's zone, sent as an exact
- * instant) it lands in your inbox with your note and a link back here.
+ * "Remind me" on any record: at the time chosen (in the person's own zone, the one every
+ * time on the page is printed in, sent as an exact instant) it lands in your inbox with
+ * your note and a link back here. Tomorrow at nine, in that zone, is offered first.
  */
 export function RemindMe({
   action,
@@ -80,11 +74,9 @@ export function RemindMe({
   linkPath: string;
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
-  const [local, setLocal] = useState(tomorrowNine);
-  const instant = (() => {
-    const parsed = new Date(local);
-    return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
-  })();
+  const zone = useTimeZone();
+  const [local, setLocal] = useState(() => tomorrowAt(9, zone));
+  const instant = instantFromWallClock(local, zone)?.toISOString() ?? "";
   return (
     <details className="popover popover--start">
       <summary className="btn btn--small btn--ghost popover__trigger">Remind me</summary>

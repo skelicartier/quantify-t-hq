@@ -4,6 +4,7 @@ import { Send } from "lucide-react";
 import { useActionState, useState } from "react";
 
 import { RecipientPicker, type RecipientAccount } from "@/components/product/recipient-picker";
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Section } from "@/components/ui/card";
@@ -83,6 +84,7 @@ function JobDetail({
 }
 
 export function AdminEmailManager({ queue, action, now }: Props) {
+  const zone = useTimeZone();
   const [email, setEmail] = useState(blank);
   const [accounts, setAccounts] = useState<RecipientAccount[]>([]);
   const [emails, setEmails] = useState("");
@@ -154,18 +156,22 @@ export function AdminEmailManager({ queue, action, now }: Props) {
                 </select>
               </label>
               <label className="field">
-                <span className="field__label">Schedule (UTC)</span>
+                <span className="field__label">Schedule</span>
                 <input
                   className="input"
                   type="datetime-local"
-                  value={isoToLocalInput(email.scheduled_at)}
+                  aria-describedby="email-schedule-hint"
+                  value={isoToLocalInput(email.scheduled_at, zone)}
                   onChange={(event) =>
                     set(
                       "scheduled_at",
-                      event.target.value ? localInputToIso(event.target.value) : "",
+                      event.target.value ? localInputToIso(event.target.value, zone) : "",
                     )
                   }
                 />
+                <span id="email-schedule-hint" className="field__hint">
+                  In your time zone. Empty: sent on the next pass.
+                </span>
               </label>
               {email.target.mode === "selected" && (
                 <>

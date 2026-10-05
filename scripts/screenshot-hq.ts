@@ -663,14 +663,44 @@ async function assertAccessible(page: Page, name: string) {
   }
 }
 
+/**
+ * Whether an error is the machine stalling under the walk, not the page: a navigation or
+ * ready wait that ran out of time (a laptop on battery compiling beside the walk has
+ * served a page in 39 s that takes 0.6 s otherwise) or the network stack suspended under
+ * the headless browser. A page that is wrong fails the same way twice.
+ */
+function isStall(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    (error instanceof Error && error.name === "TimeoutError") ||
+    /Timeout \d+ms exceeded|ERR_NETWORK_IO_SUSPENDED/.test(message)
+  );
+}
+
+/** Open the page and wait until it is ready; once more after a stall, with it said. */
+async function open(page: Page, folder: string, shot: Shot) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const response = await page.goto(`${BASE}${shot.path}`, { waitUntil: "networkidle" });
+      if (shot.ready && response && response.status() === 200)
+        await page.waitForSelector(shot.ready, { timeout: 10_000 });
+      return response;
+    } catch (error) {
+      if (attempt > 1 || !isStall(error)) throw error;
+      const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+      console.log(`  ↻ ${folder}/${shot.name}: retried after a stall (${reason})`);
+      await page.waitForTimeout(3_000);
+    }
+  }
+}
+
 async function capture(page: Page, folder: string, shot: Shot) {
   consoleErrors.length = 0;
-  const response = await page.goto(`${BASE}${shot.path}`, { waitUntil: "networkidle" });
+  const response = await open(page, folder, shot);
   if (!response || response.status() !== 200) {
     report(shot.name, `status ${response?.status() ?? "none"}`);
     return;
   }
-  if (shot.ready) await page.waitForSelector(shot.ready, { timeout: 10_000 });
   await assertNoOverflow(page, `${folder}/${shot.name}`);
   await assertAccessible(page, `${folder}/${shot.name}`);
   for (const error of consoleErrors) report(`${folder}/${shot.name}`, `console: ${error}`);
@@ -2787,16 +2817,31 @@ async function captureProspectFlows(page: Page, folder: string) {
 
   await page.goto(`${BASE}/leads/import`, { waitUntil: "networkidle" });
   const row = page.locator("tr", { hasText: `harness-${stamp}.csv` });
+  // What a take-back keeps is what was already worked or written to. The mock's worker
+  // mails these rows inside its sending windows, so by day a few have been written to by
+  // now and by night none have: the count expected is read from the row, never pinned to
+  // one hour of the day (23 removed was the night's answer and failed every morning).
+  const since = (await row.innerText()).replace(/\s+/g, " ");
+  const written = Number(/(\d+) written to/.exec(since)?.[1] ?? "0");
+  const stopped = Number(/(\d+) stopped/.exec(since)?.[1] ?? "0");
   await row.locator("summary", { hasText: "Take back" }).click();
   await row.locator("input[name=reason]").fill("The harness's rows, taken back");
   await row.locator("button", { hasText: "Take this file back" }).click();
   // The act removes its own form: the row itself says what happened, and what stayed.
-  await page.waitForSelector(
-    `tr:has-text("harness-${stamp}.csv"):has-text("Taken back · 23 removed")`,
-    {
-      timeout: 15_000,
-    },
-  );
+  await row.locator("text=/Taken back · \\d+ removed/").waitFor({ timeout: 15_000 });
+  const after = (await row.innerText()).replace(/\s+/g, " ");
+  const removed = Number(/Taken back · (\d+) removed/.exec(after)?.[1] ?? "-1");
+  const stillHere = Number((await row.locator("td").nth(6).innerText()).trim());
+  if (removed > 24 - 1 || removed < 24 - written - stopped)
+    report(
+      `${folder}/lead-import-taken-back`,
+      `${removed} removed of 24 added with "${since}" beforehand: the rows written to or stopped should stay`,
+    );
+  else if (stillHere !== 24 - removed)
+    report(
+      `${folder}/lead-import-taken-back`,
+      `${removed} removed but ${stillHere} still here of 24 added`,
+    );
   await shoot(page, `${folder}/lead-import-taken-back`);
 
   // A feed: the intro sequence takes up to two a day from "Leads this month" — checked
@@ -4725,6 +4770,68 @@ async function captureTimeZoneFlows(page: Page, folder: string) {
   if (!/IST$/.test(await clockText()))
     report(`${folder}/times-in-zone`, `the clock reads "${await clockText()}", not IST`);
   await shoot(page, `${folder}/times-in-zone`);
+  // A time typed into a form is a wall clock in the account's zone, and the instant kept
+  // is the one it means there. This context's device is UTC, the account is in Kolkata:
+  // "Remind me" offers tomorrow at nine on Kolkata's calendar, and the inbox then shows
+  // the reminder at 09:00 IST with 03:30 UTC on hover. A ticket's snooze typed the same
+  // way reads back as the wall clock it was typed as.
+  const kolkataDay = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const [year, month, day] = kolkataDay.split("-").map(Number) as [number, number, number];
+  const nineTomorrow = `${new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10)}T09:00`;
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002`, {
+    waitUntil: "networkidle",
+  });
+  const remind = page.locator("details.popover:has(input[name=remind_at])").first();
+  await remind.locator("summary").click();
+  const offered = await remind.locator("input[type=datetime-local]").inputValue();
+  if (offered !== nineTomorrow)
+    report(
+      `${folder}/typed-time-in-zone`,
+      `Remind me offered "${offered}", not tomorrow at nine in the account's zone (${nineTomorrow})`,
+    );
+  await remind.getByRole("button", { name: "Set reminder" }).click();
+  await remind
+    .locator(".form-sent")
+    .waitFor({ timeout: 15_000 })
+    .catch(() => report(`${folder}/typed-time-in-zone`, "the reminder was not set"));
+  await page.goto(`${BASE}/inbox`, { waitUntil: "networkidle" });
+  const reminderTime = page.locator(".record-layout__side time", { hasText: /09:00 IST$/ }).first();
+  await reminderTime.waitFor({ timeout: 15_000 }).catch(() => undefined);
+  if ((await reminderTime.count()) === 0)
+    report(`${folder}/typed-time-in-zone`, "the inbox does not show the reminder at 09:00 IST");
+  else if (!/03:30 UTC$/.test((await reminderTime.getAttribute("title")) ?? ""))
+    report(
+      `${folder}/typed-time-in-zone`,
+      `the reminder's instant is "${await reminderTime.getAttribute("title")}", not 03:30 UTC`,
+    );
+  await shoot(page, `${folder}/typed-time-in-zone`);
+  await page.goto(`${BASE}/support/sup_00000000000000000004`, { waitUntil: "networkidle" });
+  const snooze = page.locator("#ticket-snooze");
+  await snooze.fill(nineTomorrow);
+  const controls = page.locator("form:has(#ticket-snooze)");
+  await controls.locator("button[type=submit]").first().click();
+  await controls
+    .locator(".form-sent")
+    .waitFor({ timeout: 15_000 })
+    .catch(() => report(`${folder}/typed-time-in-zone`, "the snooze was not saved"));
+  await page.goto(`${BASE}/support/sup_00000000000000000004`, { waitUntil: "networkidle" });
+  if ((await snooze.inputValue()) !== nineTomorrow)
+    report(
+      `${folder}/typed-time-in-zone`,
+      `the snooze reads back "${await snooze.inputValue()}", not "${nineTomorrow}"`,
+    );
+  // Wake the ticket again so the desk is as the other parts expect it.
+  await snooze.fill("");
+  await controls.locator("button[type=submit]").first().click();
+  await controls
+    .locator(".form-sent")
+    .waitFor({ timeout: 15_000 })
+    .catch(() => undefined);
   // Back to the device's zone, which in these contexts is UTC.
   await page.goto(`${BASE}/me/notifications`, { waitUntil: "networkidle" });
   await page.selectOption("#prefs-zone", "");

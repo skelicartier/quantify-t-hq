@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useSyncExternalStore } from "react";
+import { useActionState } from "react";
 
 import { AttemptField } from "@/components/ui/attempt-field";
 import { Button } from "@/components/ui/button";
@@ -9,26 +9,11 @@ import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
 
-// Nothing to subscribe to: the store only tells the server render from the browser's,
-// the one place the viewer's offset is knowable.
-const subscribe = () => () => {};
-function browserOffset(): string {
-  const minutes = -new Date().getTimezoneOffset();
-  const sign = minutes >= 0 ? "+" : "-";
-  const abs = Math.abs(minutes);
-  return `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
-}
-
 /**
- * The viewer's UTC offset, so a date and time typed into a form means the moment they
- * meant. Empty on the server render; the service reads a missing offset as UTC.
+ * One act on a record: hidden ids, the act, optional fields, one button. A date and
+ * time typed into one of its fields is a wall clock in the person's zone; the action
+ * reads it there (`typedInstant`), so no offset travels with the form.
  */
-export function TzOffsetField() {
-  const offset = useSyncExternalStore(subscribe, browserOffset, () => "");
-  return <input type="hidden" name="tz_offset" value={offset} />;
-}
-
-/** One act on a record: hidden ids, the act, optional fields, one button. */
 export function ActForm({
   action,
   hidden,
@@ -58,7 +43,6 @@ export function ActForm({
         <input key={name} type="hidden" name={name} value={value} />
       ))}
       <input type="hidden" name="action" value={act} />
-      <TzOffsetField />
       {children}
       <Button
         type="submit"

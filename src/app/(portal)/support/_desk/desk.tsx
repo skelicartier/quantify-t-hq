@@ -205,7 +205,8 @@ export async function Desk({ context, filters, selected }: DeskProps) {
     plan: firmContext?.account?.plan ?? "",
     me: self.display_name,
   };
-  const inADay = new Date(now + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  // An exact instant: a wall clock here would be read in the person's zone.
+  const inADay = new Date(now + 24 * 60 * 60 * 1000).toISOString();
 
   return (
     <div className={ticket ? "desk desk--open" : "desk"}>

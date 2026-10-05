@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from "react";
 
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
@@ -22,8 +23,8 @@ const DURATIONS: ReadonlyArray<[number, string]> = [
 ];
 
 /**
- * Log a meeting by hand. The time is typed as the reader's own wall clock and sent
- * as a UTC instant: only the browser knows which zone "3 pm" meant.
+ * Log a meeting by hand. The time is typed as a wall clock in the person's own zone, the
+ * one every time on the page is printed in, and sent as a UTC instant.
  */
 export function MeetingCreateForm({
   action,
@@ -35,9 +36,10 @@ export function MeetingCreateForm({
   fixedCompanyId?: string;
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
+  const zone = useTimeZone();
   const [localStart, setLocalStart] = useState("");
   const [minutes, setMinutes] = useState(30);
-  const startsIso = localInputToIso(localStart);
+  const startsIso = localInputToIso(localStart, zone);
   const endsIso = startsIso ? new Date(Date.parse(startsIso) + minutes * 60_000).toISOString() : "";
   return (
     <form className="stack-form stack-form--tight" action={formAction}>
@@ -79,7 +81,7 @@ export function MeetingCreateForm({
           </Select>
         </Field>
       </div>
-      <Field id="meeting-start" label="Starts" hint="Your local time.">
+      <Field id="meeting-start" label="Starts" hint="In your time zone.">
         <Input
           id="meeting-start"
           type="datetime-local"

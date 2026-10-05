@@ -13,6 +13,7 @@ import { formatDate, pluralize } from "@/lib/format";
 import type { ActionState } from "@/lib/forms/action-state";
 import { domainOf, mailHostOf } from "@/lib/mail/mail-host";
 import { requireSameOriginServerAction } from "@/lib/security/action-origin";
+import { instantFromWallClock } from "@/lib/time-zone";
 
 const NOT_WRITER: ActionState = {
   status: "error",
@@ -705,7 +706,8 @@ export async function scheduleCampaignAction(
   const when = fieldValue(formData, "scheduled_at", 40).trim();
   let iso = "";
   if (when) {
-    const parsed = new Date(when);
+    // The field gives a wall clock, read in the person's zone, never the server's.
+    const parsed = instantFromWallClock(when, context.me.time_zone) ?? new Date(when);
     if (Number.isNaN(parsed.getTime()))
       return { status: "error", message: "Pick a date and time." };
     iso = parsed.toISOString();

@@ -4,6 +4,7 @@ import { Copy, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import { useActionState, useState } from "react";
 
 import { RecipientPicker, type RecipientAccount } from "@/components/product/recipient-picker";
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Section } from "@/components/ui/card";
@@ -95,6 +96,7 @@ function NotificationEditor({
   action: Props["action"];
   onClose: () => void;
 }) {
+  const zone = useTimeZone();
   const [note, setNote] = useState(initial);
   // Ids saved on an existing notice come back without names; the picker shows them as ids.
   const [accounts, setAccounts] = useState<RecipientAccount[]>(() =>
@@ -185,24 +187,35 @@ function NotificationEditor({
             </select>
           </label>
           <label className="field">
-            <span className="field__label">Starts (UTC)</span>
+            <span className="field__label">Starts</span>
             <input
               className="input"
               type="datetime-local"
-              value={isoToLocalInput(note.starts_at)}
+              aria-describedby="notice-times-hint"
+              value={isoToLocalInput(note.starts_at, zone)}
               onChange={(event) =>
-                set("starts_at", event.target.value ? localInputToIso(event.target.value) : "")
+                set(
+                  "starts_at",
+                  event.target.value ? localInputToIso(event.target.value, zone) : "",
+                )
               }
             />
+            <span id="notice-times-hint" className="field__hint">
+              In your time zone.
+            </span>
           </label>
           <label className="field">
-            <span className="field__label">Expires (UTC)</span>
+            <span className="field__label">Expires</span>
             <input
               className="input"
               type="datetime-local"
-              value={isoToLocalInput(note.expires_at)}
+              aria-describedby="notice-times-hint"
+              value={isoToLocalInput(note.expires_at, zone)}
               onChange={(event) =>
-                set("expires_at", event.target.value ? localInputToIso(event.target.value) : "")
+                set(
+                  "expires_at",
+                  event.target.value ? localInputToIso(event.target.value, zone) : "",
+                )
               }
             />
           </label>
