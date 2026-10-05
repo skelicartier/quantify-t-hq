@@ -429,6 +429,10 @@ and app password without either).
   twice held a walk with it. The lookup now has a four-second deadline (past it the
   person is sent to the server form), the big consumer hosts are known without DNS, and
   the harness tries the one step that leaves the machine twice.
+- Walks on this set: desktop 875 ✓ with one ✗ (`privacy-data-file-recorded`: the check
+  counted the timeline's rows before "Data file made" was there, while the screenshot
+  taken a moment later shows it); the data-file part alone passes in both themes. A
+  check that fails once and passes alone is read as the flaky class, not a regression.
 - The dev server and `next build` write the same `.next/types` files; run together they
   leave " 2"/" 3" duplicates that fail typecheck, and once left the dev server unable to
   open its cache. Stop the dev server before `npm run validate`, start it after.
