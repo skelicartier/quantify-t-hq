@@ -309,7 +309,7 @@ export default async function HomePage() {
                   {home.inbox.items.length === 0 ? (
                     <p className="briefing__clear">Nothing unread waits for you.</p>
                   ) : (
-                    <ol className="agenda">
+                    <ol className="agenda agenda--labelled">
                       {home.inbox.items.map((item) => (
                         <li key={item.notification_id} className="agenda__row">
                           <span className="agenda__time">{item.reason_label}</span>
