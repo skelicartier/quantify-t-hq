@@ -7,6 +7,7 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { grantSudo, readMe, type HqMe } from "@/lib/api/auth";
 import { devAutologinPersona, isDevPersona } from "@/lib/auth/dev-bypass";
 import { readSessionToken } from "@/lib/auth/session";
+import { setRequestTimeZone } from "@/lib/format";
 
 /**
  * The one identity read per request. Every layout, page and loader goes through
@@ -38,6 +39,8 @@ export const currentStaff = cache(
             throw error;
         }
       }
+      // Every time this request renders is printed in the person's zone from here on.
+      setRequestTimeZone(me.time_zone);
       return { token, me };
     } catch (error) {
       if (error instanceof HqApiRequestError && (error.status === 401 || error.status === 403)) {

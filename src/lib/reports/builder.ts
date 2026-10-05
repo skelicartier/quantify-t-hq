@@ -18,6 +18,7 @@ import {
   companyFilterFields,
   dealFilterFields,
   leadFilterFields,
+  mainCurrency,
   readCompanyField,
   readDealField,
   readLeadField,
@@ -233,10 +234,11 @@ function companiesSource(
   names: Names,
   sourceNames: ReadonlyMap<string, string>,
 ): Source<CompanyListRow> {
+  const currency = mainCurrency(page.companies);
   return {
     rows: page.companies,
-    fields: companyFilterFields(page),
-    readField: (row, field) => readCompanyField(row, field, names),
+    fields: companyFilterFields(page, currency),
+    readField: (row, field) => readCompanyField(row, field, names, currency),
     groupings: [
       {
         key: "lifecycle",

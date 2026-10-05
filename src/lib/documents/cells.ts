@@ -1,4 +1,5 @@
 import type { ExportColumnType } from "@/lib/exports";
+import { dateTimeInZone } from "@/lib/time-zone";
 
 export type Cell = string | number | boolean | null;
 
@@ -18,7 +19,10 @@ export function formatMoney(value: number): string {
   return value.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/** How a cell reads in a document: dates spelled out, times in UTC, yes and no for a flag. */
+/**
+ * How a cell reads in a document: dates spelled out, times in UTC and said so (a file is
+ * shared across zones; the screen that made it may read in another), yes and no for a flag.
+ */
 export function displayCell(value: Cell, type: ExportColumnType): string {
   if (value === null || value === "") return "";
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -30,7 +34,7 @@ export function displayCell(value: Cell, type: ExportColumnType): string {
     if (!at) return value;
     const day = `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}`;
     const dateOnly = type === "date" || /^\d{4}-\d{2}-\d{2}$/.test(value);
-    return dateOnly ? day : `${day}, ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())}`;
+    return dateOnly ? day : `${day}, ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC`;
   }
   return String(value);
 }
@@ -46,12 +50,12 @@ export function spreadsheetSerial(value: string, type: ExportColumnType): number
   return type === "date" || /^\d{4}-\d{2}-\d{2}$/.test(value) ? Math.floor(days) : days;
 }
 
-/** "1 Oct 2026, 08:02 UTC" for the line that says when a file was made. */
-export function stampLabel(iso: string): string {
-  const at = parseInstant(iso) ?? new Date();
-  return `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]} ${at.getUTCFullYear()}, ${pad(at.getUTCHours())}:${pad(
-    at.getUTCMinutes(),
-  )} UTC`;
+/**
+ * "1 Oct 2026, 08:02 UTC" for the line that says when a file was made — in the reader's
+ * zone when one is given ("13:32 IST"), as the printed page's footer is.
+ */
+export function stampLabel(iso: string, zone = ""): string {
+  return dateTimeInZone(parseInstant(iso) ?? new Date(), zone);
 }
 
 export function isNumericType(type: ExportColumnType): boolean {

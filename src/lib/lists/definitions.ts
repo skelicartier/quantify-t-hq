@@ -16,11 +16,41 @@ import type { FilterField } from "@/lib/lists/filters";
 type Names = ReadonlyMap<string, DirectoryEntry> | null;
 
 export type CompanyListRow = CompaniesPage["companies"][number];
+
+/**
+ * The currency most of a page's companies pay in; "" when none pays. A money filter or
+ * sort compares in this one currency and never adds currencies together: a company
+ * paying in another is "no MRR" to the filter, and the column still shows every amount.
+ */
+export function mainCurrency(
+  rows: ReadonlyArray<{ mrr: Readonly<Record<string, number>> | null }>,
+): string {
+  const tally = new Map<string, number>();
+  for (const row of rows)
+    for (const [code, amount] of Object.entries(row.mrr ?? {}))
+      if (amount) tally.set(code, (tally.get(code) ?? 0) + 1);
+  return [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? "";
+}
+
+/**
+ * A company's MRR in one currency: the one given, else its only one; never a sum. A
+ * company that pays nothing is 0; one paying only in other currencies, or whose money
+ * this role may not read, has no figure (null), which no comparison matches.
+ */
+export function companyMrrIn(row: CompanyListRow, currency: string): number | null {
+  if (!row.mrr) return null;
+  const codes = Object.keys(row.mrr);
+  if (codes.length === 0) return 0;
+  const code = currency || (codes.length === 1 ? codes[0]! : "");
+  return code ? (row.mrr[code] ?? null) : null;
+}
 export type LeadListRow = LeadsPage["leads"][number];
 export type DealListRow = DealsBoard["columns"][number]["deals"][number];
 
 export function companyFilterFields(
   page: Pick<CompaniesPage, "custom_fields"> | null,
+  /** The currency the MRR field compares in (`mainCurrency`); labelled so. */
+  currency = "",
 ): FilterField[] {
   return [
     {
@@ -35,7 +65,7 @@ export function companyFilterFields(
     { key: "owner", label: "Owner", kind: "text" },
     { key: "people", label: "People", kind: "number" },
     { key: "deals", label: "Open deals", kind: "number" },
-    { key: "mrr", label: "MRR", kind: "number" },
+    { key: "mrr", label: currency ? `MRR (${currency})` : "MRR", kind: "number" },
     ...customFilterFields(page?.custom_fields ?? []),
   ];
 }
@@ -44,6 +74,7 @@ export function readCompanyField(
   row: CompanyListRow,
   field: string,
   names: Names,
+  currency = "",
 ): string | number | null {
   switch (field) {
     case "lifecycle":
@@ -61,7 +92,7 @@ export function readCompanyField(
     case "deals":
       return row.open_deals;
     case "mrr":
-      return row.mrr ? Object.values(row.mrr).reduce((sum, amount) => sum + amount, 0) : null;
+      return companyMrrIn(row, currency);
     default:
       return readCustom(row.custom, field) ?? null;
   }

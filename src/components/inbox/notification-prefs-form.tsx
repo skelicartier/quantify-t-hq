@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
+import { OFFERED_ZONES, zoneLabel } from "@/lib/time-zone";
 import { submitWithoutReset } from "@/lib/forms/submit-without-reset";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -27,18 +28,7 @@ const MODES = [
 ] as const;
 
 const DELAYS = [5, 15, 30, 60, 120, 240];
-const ZONES = [
-  "UTC",
-  "Europe/London",
-  "Europe/Zurich",
-  "Europe/Paris",
-  "Asia/Kolkata",
-  "Asia/Singapore",
-  "Asia/Dubai",
-  "America/New_York",
-  "America/Chicago",
-  "America/Los_Angeles",
-];
+const ZONES: readonly string[] = OFFERED_ZONES;
 
 function hourLabel(hour: number): string {
   return `${String(hour).padStart(2, "0")}:00`;
@@ -59,7 +49,8 @@ export function NotificationPrefsForm({
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   const [mode, setMode] = useState(prefs.email_mode);
-  const zones = ZONES.includes(prefs.time_zone) ? ZONES : [prefs.time_zone, ...ZONES];
+  const zones =
+    !prefs.time_zone || ZONES.includes(prefs.time_zone) ? ZONES : [prefs.time_zone, ...ZONES];
   return (
     // The mode is a controlled choice: a reset after saving would show the old one.
     <form className="stack-form" onSubmit={submitWithoutReset(formAction)}>
@@ -135,16 +126,21 @@ export function NotificationPrefsForm({
           </Select>
         </Field>
       </div>
-      <Field id="prefs-zone" label="Your time zone" hint="Quiet hours are read in this zone.">
+      <Field
+        id="prefs-zone"
+        label="Your time zone"
+        hint="Every time HQ shows you is in this zone, and quiet hours are read in it. Your device's is taken when you sign in until you choose one here."
+      >
         <Select
           id="prefs-zone"
           name="time_zone"
           defaultValue={prefs.time_zone}
           disabled={isPending}
         >
+          <option value="">Your device&rsquo;s zone</option>
           {zones.map((zone) => (
             <option key={zone} value={zone}>
-              {zone.replace(/_/g, " ")}
+              {zoneLabel(zone)}
             </option>
           ))}
         </Select>

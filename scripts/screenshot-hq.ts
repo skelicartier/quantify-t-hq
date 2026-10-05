@@ -784,6 +784,7 @@ async function captureInteractions(page: Page, folder: string) {
   await captureReportFlows(page, folder);
   await captureOneOffFlows(page, folder);
   await captureUndoFlows(page, folder);
+  await captureTimeZoneFlows(page, folder);
   await captureAutomationFlows(page, folder);
   await captureDigestFlows(page, folder);
   await captureFinanceFlows(page, folder);
@@ -3135,7 +3136,10 @@ async function captureSecurityFlows(page: Page, folder: string) {
 
   const browser = page.context().browser();
   if (!browser) return;
-  const other = await browser.newContext({ viewport: page.viewportSize() ?? null });
+  const other = await browser.newContext({
+    timezoneId: "UTC",
+    viewport: page.viewportSize() ?? null,
+  });
   try {
     const person = await other.newPage();
     watchConsole(person);
@@ -3400,7 +3404,7 @@ async function captureReport(page: Page, folder: string) {
  * product had passed. A warm route is the product; a cold compile is the tool.
  */
 async function warmRoutes(browser: Browser) {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ timezoneId: "UTC" });
   try {
     for (const path of [
       "/login",
@@ -3420,6 +3424,7 @@ async function run(browser: Browser) {
   await warmRoutes(browser);
   for (const viewport of WIDTHS) {
     const context = await browser.newContext({
+      timezoneId: "UTC",
       viewport: { width: viewport.width, height: viewport.height },
     });
     const page = await context.newPage();
@@ -3494,6 +3499,7 @@ async function run(browser: Browser) {
     // The intern reads the pipeline with every money figure blanked: the four pages
     // that carry deal money must render the dash, not a crash or a zero.
     const internContext = await browser.newContext({
+      timezoneId: "UTC",
       viewport: { width: viewport.width, height: viewport.height },
     });
     const intern = await internContext.newPage();
@@ -3545,6 +3551,7 @@ async function run(browser: Browser) {
 
     // First-run enrollment with the un-enrolled persona, in a fresh context.
     const enrollContext = await browser.newContext({
+      timezoneId: "UTC",
       viewport: { width: viewport.width, height: viewport.height },
     });
     const enrollPage = await enrollContext.newPage();
@@ -4038,7 +4045,10 @@ async function captureQuoteLinkFlows(page: Page, folder: string) {
     const customer = await page
       .context()
       .browser()!
-      .newContext({ viewport: page.viewportSize() ?? { width: 1440, height: 900 } });
+      .newContext({
+        timezoneId: "UTC",
+        viewport: page.viewportSize() ?? { width: 1440, height: 900 },
+      });
     const view = await customer.newPage();
     watchConsole(view);
     await view.goto(`${BASE}${address.pathname}`, { waitUntil: "networkidle" });
@@ -4639,6 +4649,79 @@ async function captureUndoFlows(page: Page, folder: string) {
   await shoot(page, `${folder}/history-put-back-done`);
 }
 
+/**
+ * Times in the person's zone. Every context here runs in UTC, so a second context in
+ * Kolkata signs in as the same person: with no zone on the account, the page takes the
+ * device's and saves it, and the clock reads IST. Back in the UTC context the account's
+ * zone is what counts: the conversation's thread and the clock read IST too, each time
+ * keeping the UTC form on hover. Choosing "your device's zone" unsets it, so the pages
+ * after read as before.
+ */
+async function captureTimeZoneFlows(page: Page, folder: string) {
+  const browser = page.context().browser();
+  if (browser) {
+    const kolkata = await browser.newContext({
+      timezoneId: "Asia/Kolkata",
+      viewport: page.viewportSize() ?? { width: 1440, height: 900 },
+    });
+    const device = await kolkata.newPage();
+    await device.goto(`${BASE}/login?form=1`, { waitUntil: "networkidle" });
+    await device.fill("#email", "owner@hq.test");
+    await device.fill("#password", "password-123");
+    await device.click("button[type=submit]");
+    await device.waitForURL("**/login/verify**", { timeout: 30_000 });
+    await device.fill("#totp-code", "000000");
+    await device.click("button[type=submit]");
+    await device.waitForURL("**/home", { timeout: 30_000 });
+    // The clock is read by its text: at phone width the status line is folded away.
+    const clockReads = (pattern: RegExp) => (page: Page) =>
+      page
+        .waitForFunction(
+          (source) =>
+            new RegExp(source).test(
+              (document.querySelector(".sidebar__clock")?.textContent ?? "").trim(),
+            ),
+          pattern.source,
+          { timeout: 20_000 },
+        )
+        .then(() => true)
+        .catch(() => false);
+    if (!(await clockReads(/IST$/)(device)))
+      report(`${folder}/zone-adopted`, "a device in Kolkata did not give the account its zone");
+    await device.screenshot({ path: `${OUT}/${folder}/zone-adopted.png`, fullPage: false });
+    console.log(`  ✓ ${folder}/zone-adopted`);
+    await kolkata.close();
+  }
+  await page.goto(`${BASE}/me/notifications`, { waitUntil: "networkidle" });
+  if ((await page.locator("#prefs-zone").inputValue()) !== "Asia/Kolkata")
+    report(`${folder}/settings-zone`, "the settings do not show the zone the device gave");
+  await shoot(page, `${folder}/settings-zone`);
+  await page.goto(`${BASE}/support/sup_00000000000000000004`, { waitUntil: "networkidle" });
+  const stamped = page.locator(".thread time", { hasText: "IST" }).first();
+  await stamped.waitFor({ timeout: 15_000 }).catch(() => undefined);
+  if ((await stamped.count()) === 0)
+    report(`${folder}/times-in-zone`, "the thread's times are not in the account's zone");
+  else if (!/UTC$/.test((await stamped.getAttribute("title")) ?? ""))
+    report(`${folder}/times-in-zone`, "a time in the zone does not keep the UTC form on hover");
+  const clockText = async () =>
+    (
+      (await page
+        .locator(".sidebar__clock")
+        .textContent()
+        .catch(() => "")) ?? ""
+    ).trim();
+  await page.waitForTimeout(1_200);
+  if (!/IST$/.test(await clockText()))
+    report(`${folder}/times-in-zone`, `the clock reads "${await clockText()}", not IST`);
+  await shoot(page, `${folder}/times-in-zone`);
+  // Back to the device's zone, which in these contexts is UTC.
+  await page.goto(`${BASE}/me/notifications`, { waitUntil: "networkidle" });
+  await page.selectOption("#prefs-zone", "");
+  const form = page.locator("form:has(#prefs-zone)");
+  await form.locator("button[type=submit]").click();
+  await form.locator(".form-sent").waitFor({ timeout: 15_000 });
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4667,6 +4750,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   oneoff: captureOneOffFlows,
   privileged: capturePrivilegedFlows,
   undo: captureUndoFlows,
+  timezone: captureTimeZoneFlows,
 };
 
 async function runPart(browser: Browser) {
@@ -4677,6 +4761,7 @@ async function runPart(browser: Browser) {
   }
   for (const viewport of WIDTHS) {
     const context = await browser.newContext({
+      timezoneId: "UTC",
       viewport: { width: viewport.width, height: viewport.height },
     });
     const page = await context.newPage();

@@ -1,3 +1,6 @@
+"use client";
+
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { formatDateTime } from "@/lib/format";
 
 type TimestampProps = {
@@ -10,8 +13,10 @@ type TimestampProps = {
 };
 
 /**
- * `<time>` with a machine-readable `dateTime`, a UTC `title`, and a relative form when the
- * page supplies `now`. Never reads the clock itself, so server and client output match.
+ * `<time>` with a machine-readable `dateTime`, the person's own zone for what it shows,
+ * the UTC form as its title so one shared instant can still be quoted, and a relative
+ * form when the page supplies `now`. Never reads the clock itself, so server and client
+ * output match; the zone comes from the provider on both sides.
  */
 export function Timestamp({
   value,
@@ -20,7 +25,12 @@ export function Timestamp({
   prefix,
   fallback = "Not available",
 }: TimestampProps) {
-  const formatted = formatDateTime(value, { now, style: mode === "date" ? "date" : "datetime" });
+  const zone = useTimeZone();
+  const formatted = formatDateTime(value, {
+    now,
+    style: mode === "date" ? "date" : "datetime",
+    zone,
+  });
   if (!formatted.valid) return <span className="quiet">{fallback}</span>;
 
   const hasRelative = formatted.relative !== "";
@@ -31,7 +41,7 @@ export function Timestamp({
   const secondary = mode === "both" && hasRelative ? formatted.absolute : null;
 
   return (
-    <time className="timestamp" dateTime={formatted.iso} title={formatted.absolute}>
+    <time className="timestamp" dateTime={formatted.iso} title={formatted.utc}>
       {prefix ? `${prefix} ` : ""}
       {primary}
       {secondary && <span className="timestamp__secondary">{secondary}</span>}

@@ -1,4 +1,4 @@
-import { companyFilterFields } from "@/lib/lists/definitions";
+import { companyFilterFields, mainCurrency } from "@/lib/lists/definitions";
 import { COMPANY_GROUPS, companiesView, companyGroupLabel } from "@/lib/lists/views";
 import { CustomFieldInputs } from "@/components/platform/custom-field-inputs";
 import type { CustomField } from "@/lib/api/fields";
@@ -99,7 +99,10 @@ export default async function CompaniesPage({ searchParams }: CompaniesPageProps
   }
   const names = await directoryOrNull(context.token);
   const canWrite = hasCapability(context, "crm:write");
-  const filterFields = companyFilterFields({ custom_fields: customFields });
+  const filterFields = companyFilterFields(
+    { custom_fields: customFields },
+    mainCurrency(companies ?? []),
+  );
   const conditions = parseFilters(filterParams, filterFields);
   // The same rows, in the same order, as an export of this view writes.
   const { rows: visible, ordered: grouped } = companiesView(

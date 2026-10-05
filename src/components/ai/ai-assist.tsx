@@ -10,6 +10,7 @@ import { Callout } from "@/components/ui/callout";
 import { Field, Input } from "@/components/ui/field";
 import { FormFeedback } from "@/components/ui/form-feedback";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { formatAbsolute, formatDate } from "@/lib/format";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -250,6 +251,7 @@ export function AiBrief({
   action: Action;
   feedback: Action;
 }) {
+  const zone = useTimeZone();
   const [state, formAction, isPending] = useActionState(action, INITIAL_ACTION_STATE);
   const [closed, setClosed] = useState(0);
   const answer = answerOf(state);
@@ -270,8 +272,8 @@ export function AiBrief({
         <div className="ai-panel__body">
           <p className="ai-panel__text">{String(answer.brief ?? "")}</p>
           <p className="field__hint">
-            As of {formatAbsolute(String(answer.as_of ?? ""))}, from {facts.length} facts on record.
-            Every figure is taken from them.
+            As of {formatAbsolute(String(answer.as_of ?? ""), "Not available", zone)}, from{" "}
+            {facts.length} facts on record. Every figure is taken from them.
           </p>
           <details className="disclosure">
             <summary>What it was given</summary>

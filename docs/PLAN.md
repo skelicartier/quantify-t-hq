@@ -295,18 +295,19 @@ LACKS against the market's rating) and §3 the order below.
 | Reports                         | Report builder (`/reports/builder`, any role, over the kinds its role reads): companies, leads, deals, support conversations or tasks; the list's own filters (`f=`), a grouping (stage, owner, source, status, priority, tag, the month opened or closed and more), a measure (how many, or the total or average of a figure: monthly value, MRR, seats, days in stage, wait for a first reply, messages), drawn as bars, a line over months (the empty months between drawn) or a table. Each figure links to the records behind it (`/reports/records`). It runs as whoever opens it: what their role cannot see is not counted, money is never summed for a role that does not read it (it counts instead and says so), and money adds up in one currency at a time with the rest left out and counted. A report is a saved view on a `report-<kind>` list: private, shared to open, or shared for the team to change its filters (0074 `team_edits`); renaming, sharing and deleting stay with its owner or an admin. Pinned to My dashboard (preference `hq-dashboard`, in the person's order, reports over the same records share one read), and mailed as a digest like a list view.                                                                                                                    | service `view_routes.py`, `digests.LISTS`, 0074; portal `lib/reports/builder.ts`, `reports/builder`, `reports/saved`, `reports/dashboard`, `reports/records`, `components/reports/*` |
 | Email from a record             | Migration 0075 (`one_off_mail.py`, `hq/mail/one-off`): "Write an email" on a person's or lead's mail panel, a company's activity (its people with an address) and a deal's (its primary person). It goes now from the writer's own connected, sending mailbox — the one the form names, chosen when they have several; never a colleague's — and keeps every rule a send keeps: do not contact, the stop list (unsubscribe, bounce, complaint, a firm-wide stop), a sales stop, an address a verification called dead, a prospect's cold rules and its country's subject label. It counts toward the mailbox's, the domain's and the pool's day, stops when outbound mail is switched off, and carries the opt-out line a sequence email does. It is a row in the same ledger (kind `one_off`), so a bounce, an unsubscribe and a reply find it. Sent, it is on the timeline as the writer's (a lead's first reply stops its clock, a new lead becomes Attempting); refused, the words say why and the text stays in the box; an unclear answer says it may have gone. It is tried once, never retried behind the writer's back.                                                                                                                                                                                | service `one_off_mail.py`, 0075; portal `mail/record-email.tsx`, `mail/record-email-form.tsx`, `mail/actions.ts` (`sendOneOffAction`)                                                |
 | Undo and put back               | An inline edit on a record offers Undo for fifteen seconds: the value it had goes back through the same update, so History keeps the change and its undo (an undo is not itself undoable; a refused undo says why beside the value). History puts a field back to its value before a change — the newest change of each plain field (a company's name, domain, type, team size, country, lifecycle and owner; a person's name, address, title, role, phone, company and do-not-contact; a lead's owner; a deal's name, expected close, owner, seats and currency) — through the record's own update, so the service checks it as any edit, and only over the value that change made; a value the audit row cut at 200 characters, a stage, a status or a next step is moved where it lives.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | portal `ui/inline-field.tsx`, `crm/record-history.tsx`, `crm/put-back-button.tsx`, `_actions/put-back.ts`, `lib/crm/put-back.ts`                                                     |
+| Times in the person's zone      | Every time HQ shows is in the person's own zone: `hq/me` carries the zone on their notification preferences ("Your time zone" under Mail from your inbox, which quiet hours already read), "" until set; a person with none is given their device's zone on first sign-in, saved once. The server prints from a per-request zone set as soon as the person is known; client components take the same zone from a provider, so hydration never disagrees; a time keeps its UTC form on hover; a calendar date (a due date, a close date) is never shifted; the status line's clock ticks in the zone. The numeric parts come from Intl and the zone's name (IST, BST, CEST, EDT…) from HQ's own table, so the server and the browser print the same string; a zone outside the table reads by its offset (UTC+5:45). Documents, exports and CSV cells stay UTC and say so; the printed page's footer stamps the page's zone; a `datetime-local` field is still typed in the device's zone. The Companies list's MRR filter and sort compare in the page's main currency ("MRR (USD)"), never a sum across currencies; a company paying in another is "no MRR" to the comparison while the column shows every amount.                                                                                             | service `auth_routes.handle_me`; portal `lib/time-zone.ts`, `lib/format.ts`, `shell/time-zone-context.tsx`, `_actions/time-zone.ts`, `ui/timestamp.tsx`, `lists/definitions.ts`      |
 | Backup                          | Admin → Backup: an Owner asks with a reason after a fresh code; with another Owner it waits for them (approval kind `backup`, migration 0069) and the asker downloads it once within 48 hours; alone it is made at once (`sole_approver`). One zip: a CSV per export kind with custom fields, the timeline, comments, support threads (internal notes marked), stages, sources, the price list, field definitions, the staff directory, mailing lists, consent and suppressions, and a README with who, who approved, why, what is left out and each file's SHA-256. Outside the export quota (the approval is the control), in the ledger; no marker rows. The approval schema now parses every kind the service has (`write_off` was missing: a waiting write-off broke the request and the Approvals list).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | service `backup_routes.py`, `dual_control.py`; portal `admin/backup/*`, `documents/backup-zip.ts`                                                                                    |
 
 ## 5. Next, in order (from the research; each is a full wave: service + test + mock + portal + harness + commit)
 
 **The table-stakes order** (`docs/RESEARCH-2026-10-03-TABLESTAKES.md` §3; exports of a
 view, the backup, a person's data file, archive, share, quote links, the outside-links
-register, imports of companies and people, find and create, handover, recurring tasks, audit search and history, the desk as a team, reports, and email from a record are built, §4). Undo on a single edit and History putting a value back are built too (a deal already leaves
+register, imports of companies and people, find and create, handover, recurring tasks, audit search and history, the desk as a team, reports, email from a record, and times in the person's zone are built, §4). Undo on a single edit and History putting a value back are built too (a deal already leaves
 the lists when it closes and a lead when it is disqualified, so those two kinds were not
 given an archive of their own).
 
-8. **Files on records** (needs the storage account decided with production), **hosted
-   forms**, **times in the person's zone** — in that order.
+8. **Files on records** (needs the storage account decided with production) and **hosted
+   forms** — taken up when asked.
 
 **Prospects, still to do** (report sections in `docs/RESEARCH-2026-10-03-LEADS.md`):
 
@@ -392,7 +393,37 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of undo and put back** (2026-10-04, fifth research pass).
+**As of times in the person's zone** (2026-10-05, fifth research pass).
+
+- Service: `hq/me.time_zone` from the notification preferences, "" until set. Test
+  `tests/test_hq_time_zone.py`. No migration (0024's column).
+- `formatDateTime` reads the request's zone from a React `cache` store set in
+  `currentStaff`; in the browser `cache` memoises nothing, so client components pass the
+  zone from `useTimeZone()` — `Timestamp` and `LocalTime` are client components for that
+  reason. A client component that formats a time itself (quote links, the AI brief, the
+  clock) asks the hook.
+- The zone's name is HQ's own table, not Intl's: `en-US` says "GMT+5:30" where `en-IN`
+  says "IST", and a server and a browser on different ICU builds would hydrate apart.
+- A date-only value never moves: `2026-10-07` is 7 Oct in Los Angeles too. A datetime
+  shown as a date is the date in the zone.
+- Left: a `datetime-local` field converts in the device's zone (`isoToLocalInput`), so
+  someone who chose a zone other than their device's types times in one and reads them
+  in the other; documents and exports print UTC by design.
+- "" is "not set" everywhere: the preferences, `hq/me` and the mock. The form offers
+  "Your device's zone" as the first choice, so saving the mail form before the device's
+  zone has been taken never pins UTC as a choice; choosing it again unsets the zone.
+- A review before the first run found: `applyFilters` compared "less than" with
+  `Number("")`, so a company paying only in rupees matched "MRR (USD) < 100" — no figure
+  now matches no comparison, on every list and report (a hidden figure matched "< 100"
+  the same way); the printed page's footer stamped UTC beside a thread in IST (it takes
+  the page's zone now); a document's cells said "08:02" with no zone (they say "08:02
+  UTC": a file is shared across zones).
+- Every harness context runs in UTC, so screenshots never depend on the Mac's zone; the
+  `timezone` part signs in from a second context in Kolkata to prove the device's zone is
+  taken, then reads IST from the UTC context (the account's zone, not the device's), and
+  puts "your device's zone" back.
+
+**Before that: undo and put back** (2026-10-04, fifth research pass).
 
 - Portal only: no service change and no migration. Undo and put back write through the
   records' own update routes, which validate and audit as any edit does.
@@ -450,9 +481,9 @@ and app password without either).
   refuse.
 - Service `200ee32`, local. A report's table passes `minWidth={320}`: the data table's
   720px floor put a dashboard card's counts off the right of its scroll frame.
-- Left: the companies list's MRR filter and sort add a company's currencies together
-  (`readCompanyField`, `companyMrr`); a report over companies filtered on MRR inherits
-  it. It wants one currency per comparison, like the report's money measures.
+- The companies list's MRR filter and sort added a company's currencies together
+  (`readCompanyField`, `companyMrr`); fixed with the time-zone wave on 2026-10-05: they
+  compare in the page's main currency, labelled so.
 
 **Before that: the desk as a team** (2026-10-04, fifth research pass).
 

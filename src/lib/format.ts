@@ -8,6 +8,10 @@
  * so server and client renders cannot disagree.
  */
 
+import { cache } from "react";
+
+import { MONTHS, dateInZone, dateTimeInZone } from "@/lib/time-zone";
+
 const ACRONYMS = new Set([
   "api",
   "cors",
@@ -155,24 +159,35 @@ export function formatDurationSeconds(value: number | null | undefined): string 
 
 export type FormattedDateTime = {
   iso: string;
+  /** In the zone asked for, else the request's: "5 Sep 2026, 09:35 IST". */
   absolute: string;
+  /** The same instant in UTC, for a tooltip that quotes one shared time. */
+  utc: string;
   relative: string;
   valid: boolean;
+  /** The zone `absolute` is in; "" is UTC. */
+  zone: string;
 };
 
-// Assembled by hand rather than through Intl so the output cannot drift between ICU
-// builds ("Sep" vs "Sept") or between the server and the browser.
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/**
+ * The zone this request prints times in. Set once the signed-in person is known
+ * (`currentStaff`) and read by every time a server component renders in the same
+ * request: React's `cache` keeps one object per request on the server. In the browser
+ * `cache` memoises nothing, so a client component passes the zone `useTimeZone()` gives
+ * it, and one that passes nothing prints UTC.
+ */
+const requestZone = cache((): { value: string } => ({ value: "" }));
 
-function absoluteDate(date: Date): string {
-  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+export function setRequestTimeZone(zone: string): void {
+  requestZone().value = zone;
 }
 
-function absoluteDateTime(date: Date): string {
-  const hours = String(date.getUTCHours()).padStart(2, "0");
-  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${absoluteDate(date)}, ${hours}:${minutes} UTC`;
+export function requestTimeZone(): string {
+  return requestZone().value;
 }
+
+/** A calendar date with no time: never shifted into a zone. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 const RELATIVE = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 
@@ -201,20 +216,29 @@ function relativeTo(timestamp: number, now: number): string {
  */
 export function formatDateTime(
   value: string | null | undefined,
-  options: { now?: number | undefined; style?: "date" | "datetime" | undefined } = {},
+  options: {
+    now?: number | undefined;
+    style?: "date" | "datetime" | undefined;
+    /** The zone to print in; omitted, the request's (UTC in the browser). */
+    zone?: string | undefined;
+  } = {},
 ): FormattedDateTime {
   const raw = String(value ?? "").trim();
   const timestamp = raw ? Date.parse(raw) : Number.NaN;
   if (!raw || Number.isNaN(timestamp)) {
-    return { iso: "", absolute: "", relative: "", valid: false };
+    return { iso: "", absolute: "", utc: "", relative: "", valid: false, zone: "" };
   }
   const date = new Date(timestamp);
-  const absolute = options.style === "date" ? absoluteDate(date) : absoluteDateTime(date);
+  const asked = options.zone ?? requestTimeZone();
+  const zone = DATE_ONLY.test(raw) || asked === "UTC" ? "" : asked;
+  const absolute = options.style === "date" ? dateInZone(date, zone) : dateTimeInZone(date, zone);
   return {
     iso: date.toISOString(),
     absolute,
+    utc: options.style === "date" ? dateInZone(date, "") : dateTimeInZone(date, ""),
     relative: typeof options.now === "number" ? relativeTo(timestamp, options.now) : "",
     valid: true,
+    zone,
   };
 }
 
@@ -224,12 +248,13 @@ export function formatDate(value: string | null | undefined, fallback = "Not ava
   return formatted.valid ? formatted.absolute : fallback;
 }
 
-/** "5 Sep 2026, 04:05 UTC" or the fallback. */
+/** "5 Sep 2026, 09:35 IST" in the zone (the request's when none is given), or the fallback. */
 export function formatAbsolute(
   value: string | null | undefined,
   fallback = "Not available",
+  zone?: string,
 ): string {
-  const formatted = formatDateTime(value);
+  const formatted = formatDateTime(value, { zone });
   return formatted.valid ? formatted.absolute : fallback;
 }
 

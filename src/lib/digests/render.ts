@@ -10,6 +10,7 @@ import {
   companyFilterFields,
   dealFilterFields,
   leadFilterFields,
+  mainCurrency,
   readCompanyField,
   readDealField,
   readLeadField,
@@ -59,10 +60,11 @@ export async function renderDigest(
   if (listKey === "companies") {
     const page = await readCompanies(token, params.get("q") ?? "");
     const lifecycle = params.get("lifecycle") ?? "";
+    const currency = mainCurrency(page.companies);
     const matched = applyFilters(
       page.companies.filter((row) => !lifecycle || row.lifecycle === lifecycle),
-      parseFilters(filters, companyFilterFields(page)),
-      (row, field) => readCompanyField(row, field, names),
+      parseFilters(filters, companyFilterFields(page, currency)),
+      (row, field) => readCompanyField(row, field, names, currency),
     );
     return {
       columns: ["Company", "Lifecycle", "Owner", "Open deals"],

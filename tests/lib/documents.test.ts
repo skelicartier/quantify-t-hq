@@ -91,7 +91,7 @@ describe("the spreadsheet", () => {
 describe("cells as a document prints them", () => {
   it("spells dates out, keeps times in UTC and groups money", () => {
     expect(displayCell("2026-11-01", "date")).toBe("1 Nov 2026");
-    expect(displayCell("2026-10-01T08:02:00Z", "datetime")).toBe("1 Oct 2026, 08:02");
+    expect(displayCell("2026-10-01T08:02:00Z", "datetime")).toBe("1 Oct 2026, 08:02 UTC");
     expect(displayCell(1200.5, "money")).toBe("1,200.50");
     expect(displayCell(12.5, "percent")).toBe("12.5%");
     expect(displayCell(true, "bool")).toBe("Yes");

@@ -4,6 +4,7 @@ import { signOutAction } from "@/app/login/actions";
 import { setHqTheme } from "@/app/(portal)/actions";
 import { AppDevice } from "@/components/shell/app-device";
 import { HqShell } from "@/components/shell/hq-shell";
+import { TimeZoneProvider } from "@/components/shell/time-zone-context";
 import { roleLabel } from "@/lib/access/role-labels";
 import { requireStaff } from "@/lib/access/core";
 import { FALLBACK_LETTERHEAD, readCompany, type Letterhead } from "@/lib/api/company";
@@ -11,6 +12,7 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readPreferences } from "@/lib/api/views";
 import { DEV_PERSONAS, devAutologinPersona } from "@/lib/auth/dev-bypass";
 import { readHqTheme } from "@/lib/dal/theme";
+import { setTimeZoneAction } from "@/app/(portal)/_actions/time-zone";
 import { formatAbsolute } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -43,33 +45,37 @@ export default async function PortalLayout({ children }: Readonly<{ children: Re
   if (companyRead.status === "fulfilled") letterhead = companyRead.value.letterhead;
   else tolerated(companyRead.reason);
   return (
-    <HqShell
-      preferences={preferences}
-      inboxUnread={me.inbox_unread}
-      identity={{
-        email: me.staff.email,
-        displayName: me.staff.display_name || me.staff.email,
-        initials: initialsOf(me.staff.display_name, me.staff.email),
-        role: me.role,
-        environment: me.environment,
-        devPersonas: devAutologinPersona() ? DEV_PERSONAS : undefined,
-      }}
-      capabilities={me.capabilities}
-      elevation={
-        me.elevation
-          ? {
-              roleLabel: roleLabel(me.elevation.role),
-              endsLabel: me.elevation.ends_at ? formatAbsolute(me.elevation.ends_at) : "it ends",
-            }
-          : undefined
-      }
-      signOutAction={signOutAction}
-      print={{ letterhead, printedBy: me.staff.display_name || me.staff.email }}
-      theme={theme}
-      themeAction={setHqTheme}
-    >
-      {children}
-      <AppDevice unread={me.inbox_unread ?? 0} />
-    </HqShell>
+    // The zone comes first, so every time a client component prints is in it; a person
+    // with none yet gets their device's, saved once.
+    <TimeZoneProvider zone={me.time_zone} adopt={setTimeZoneAction}>
+      <HqShell
+        preferences={preferences}
+        inboxUnread={me.inbox_unread}
+        identity={{
+          email: me.staff.email,
+          displayName: me.staff.display_name || me.staff.email,
+          initials: initialsOf(me.staff.display_name, me.staff.email),
+          role: me.role,
+          environment: me.environment,
+          devPersonas: devAutologinPersona() ? DEV_PERSONAS : undefined,
+        }}
+        capabilities={me.capabilities}
+        elevation={
+          me.elevation
+            ? {
+                roleLabel: roleLabel(me.elevation.role),
+                endsLabel: me.elevation.ends_at ? formatAbsolute(me.elevation.ends_at) : "it ends",
+              }
+            : undefined
+        }
+        signOutAction={signOutAction}
+        print={{ letterhead, printedBy: me.staff.display_name || me.staff.email }}
+        theme={theme}
+        themeAction={setHqTheme}
+      >
+        {children}
+        <AppDevice unread={me.inbox_unread ?? 0} />
+      </HqShell>
+    </TimeZoneProvider>
   );
 }

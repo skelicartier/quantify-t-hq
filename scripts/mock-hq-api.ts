@@ -1345,6 +1345,8 @@ const routes: Array<{
           absolute_hours: 12,
         },
         environment: "mock",
+        // "" until set by hand or from the device, as the service reports it.
+        time_zone: notificationPrefs.get(found.member.id)?.time_zone ?? "",
         inbox_unread: inboxUnread(found.member.id),
         ai: aiStatus(found.role),
       });
@@ -6924,7 +6926,8 @@ function notificationPrefsFor(staffId: string) {
     delay_minutes: 15,
     quiet_from: null,
     quiet_to: null,
-    time_zone: "UTC",
+    // "" until set by hand or from the device; quiet hours read UTC meanwhile.
+    time_zone: "",
   };
   const raw = stored.priority_reasons ?? null;
   // As inbox.parse_priority: the named reasons in weight order, unknown words dropped.
@@ -20349,11 +20352,13 @@ routes.push(
         return refuse(400, "malformed_request", {
           quiet_to: "set both ends of the quiet hours, or neither",
         });
-      const zone = String(body.time_zone ?? current.time_zone) || "UTC";
-      try {
-        new Intl.DateTimeFormat("en-GB", { timeZone: zone });
-      } catch {
-        return refuse(400, "malformed_request", { time_zone: "a zone such as Europe/London" });
+      const zone = String(body.time_zone ?? current.time_zone);
+      if (zone) {
+        try {
+          new Intl.DateTimeFormat("en-GB", { timeZone: zone });
+        } catch {
+          return refuse(400, "malformed_request", { time_zone: "a zone such as Europe/London" });
+        }
       }
       notificationPrefs.set(viewer.id, {
         email_mode: mode,

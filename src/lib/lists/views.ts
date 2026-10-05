@@ -19,8 +19,10 @@ import {
 } from "@/lib/crm/vocabulary";
 import {
   companyFilterFields,
+  companyMrrIn,
   dealFilterFields,
   leadFilterFields,
+  mainCurrency,
   readCompanyField,
   readDealField,
   readLeadField,
@@ -80,18 +82,18 @@ export const COMPANY_GROUPS: Record<string, string> = {
   country: "Country",
 };
 
-function companyMrr(row: CompanyListRow): number | null {
-  return row.mrr ? Object.values(row.mrr).reduce((sum, amount) => sum + amount, 0) : null;
-}
-
-export function companySorts(names: Names): Record<string, SortAccessor<CompanyListRow>> {
+/** `currency` is the page's main one (`mainCurrency`): MRR sorts in it, never summed. */
+export function companySorts(
+  names: Names,
+  currency = "",
+): Record<string, SortAccessor<CompanyListRow>> {
   return {
     company: (row) => row.name,
     lifecycle: (row) => LIFECYCLE_LABELS[row.lifecycle] ?? row.lifecycle,
     type: (row) => row.firm_type,
     people: (row) => row.people_count,
     deals: (row) => row.open_deals,
-    mrr: companyMrr,
+    mrr: (row) => companyMrrIn(row, currency),
     owner: (row) => (row.owner_staff_id ? nameFor(names, row.owner_staff_id) : null),
     updated: (row) => row.updated_at,
   };
@@ -121,14 +123,15 @@ export function companiesView(
   const lifecycle = first(params, "lifecycle");
   const sort = parseSort(first(params, "sort") || undefined, COMPANY_SORT_KEYS);
   const group = COMPANY_GROUPS[first(params, "group")] ? first(params, "group") : "";
+  const currency = mainCurrency(page.companies);
   const rows = sortRows(
     applyFilters(
       page.companies.filter((row) => !lifecycle || row.lifecycle === lifecycle),
-      parseFilters(params.f, companyFilterFields(page)),
-      (row, field) => readCompanyField(row, field, names),
+      parseFilters(params.f, companyFilterFields(page, currency)),
+      (row, field) => readCompanyField(row, field, names, currency),
     ),
     sort,
-    companySorts(names),
+    companySorts(names, currency),
   );
   return { rows, ordered: grouped(rows, group, (row) => companyGroupLabel(row, group, names)) };
 }

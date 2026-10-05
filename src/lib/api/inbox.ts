@@ -154,6 +154,14 @@ export function readNotificationPrefs(token: string) {
   return fetchHqJson("hq/me/notifications", okEnvelope.extend({ prefs: prefsSchema }), { token });
 }
 
+/** The zone alone: the service keeps every other preference as it was. */
+export function setNotificationTimeZone(token: string, timeZone: string) {
+  return postHqJson("hq/me/notifications/update", okEnvelope.extend({ prefs: prefsSchema }), {
+    token,
+    body: { time_zone: timeZone },
+  });
+}
+
 export function updateNotificationPrefs(
   token: string,
   input: {

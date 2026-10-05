@@ -116,6 +116,9 @@ export function applyFilters<Row>(
           return !listed(condition.value).includes(text.toLowerCase());
         case "gt":
         case "lt": {
+          // No figure is neither more nor less than one: a company paying in another
+          // currency, or money this role may not read, never matches "less than 100".
+          if (value === null || value === undefined || text === "") return false;
           const left = typeof value === "number" ? value : Number(text);
           const right = Number(condition.value);
           if (Number.isNaN(left) || Number.isNaN(right)) return false;

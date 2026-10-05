@@ -50,6 +50,14 @@ describe("filter conditions in the URL", () => {
       "A",
       "C",
     ]);
+    // No figure is neither more nor less than one.
+    expect(
+      applyFilters(
+        [{ people: null }, { people: 3 }],
+        [{ field: "people", op: "lt", value: "10" }],
+        (row, field) => (field === "people" ? row.people : null),
+      ),
+    ).toEqual([{ people: 3 }]);
     expect(names(applyFilters(ROWS, [{ field: "people", op: "lt", value: "10" }], read))).toEqual([
       "A",
       "B",

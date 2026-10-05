@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { formatDateTime } from "@/lib/format";
 
 type LocalTimeProps = {
@@ -15,22 +16,22 @@ type LocalTimeProps = {
 
 // Nothing to subscribe to: the store exists only to distinguish "rendered on the server
 // or during hydration" from "running in the browser", which is the one moment the
-// reader's timezone becomes knowable.
+// device's timezone becomes knowable.
 const subscribe = () => () => {};
 const onClient = () => true;
 const onServer = () => false;
 
 /**
- * An absolute instant rendered in the reader's own timezone.
+ * An absolute instant in the reader's own zone.
  *
  * The API sends quota resets as instants rather than as "midnight" precisely so the
- * client can say when that is where the reader lives: a daily allowance that rolls over
+ * page can say when that is where the reader lives: a daily allowance that rolls over
  * at 05:30 in India is confusing enough without the console also making them convert.
  *
- * The server render and the hydration render are both the console's UTC form, so the
- * markup matches exactly; the local form replaces it on the first browser render. The
- * UTC form stays as the tooltip either way, so a support conversation can still quote
- * one shared instant.
+ * With a zone on the account it is printed in that zone on the server and the client
+ * alike. Before one is set, the server render and the hydration render are both UTC, so
+ * the markup matches exactly, and the device's form replaces it on the first browser
+ * render. The UTC form stays as the tooltip either way.
  */
 export function LocalTime({
   value,
@@ -38,15 +39,16 @@ export function LocalTime({
   prefix,
   mode = "datetime",
 }: LocalTimeProps) {
+  const zone = useTimeZone();
   const hydrated = useSyncExternalStore(subscribe, onClient, onServer);
-  const formatted = formatDateTime(value);
+  const formatted = formatDateTime(value, { zone });
   if (!formatted.valid) return <span className="quiet">{fallback}</span>;
 
   let local =
     mode === "time"
       ? (formatted.absolute.split(", ")[1] ?? formatted.absolute)
       : formatted.absolute;
-  if (hydrated) {
+  if (!zone && hydrated) {
     try {
       local = new Intl.DateTimeFormat(
         undefined,
@@ -60,7 +62,7 @@ export function LocalTime({
   }
 
   return (
-    <time className="timestamp" dateTime={formatted.iso} title={`${formatted.absolute} (UTC)`}>
+    <time className="timestamp" dateTime={formatted.iso} title={formatted.utc}>
       {prefix ? `${prefix} ` : ""}
       {local}
     </time>

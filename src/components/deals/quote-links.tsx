@@ -10,6 +10,7 @@ import { RowAction } from "@/components/ui/row-action";
 import { StatusPill, type PillTone } from "@/components/ui/status-pill";
 import type { QuoteLink } from "@/lib/api/quotes";
 import { INITIAL_ACTION_STATE, type ActionState } from "@/lib/forms/action-state";
+import { useTimeZone } from "@/components/shell/time-zone-context";
 import { formatAbsolute } from "@/lib/format";
 
 type Action = (previous: ActionState, formData: FormData) => Promise<ActionState>;
@@ -43,6 +44,7 @@ export function QuoteLinks({
   canLink: boolean;
 }) {
   const [state, formAction, isPending] = useActionState(createAction, INITIAL_ACTION_STATE);
+  const zone = useTimeZone();
   return (
     <div className="quote-links">
       {canLink && (
@@ -92,16 +94,16 @@ export function QuoteLinks({
                 />
                 <span>
                   Made by {link.created_by_name || "a colleague"}{" "}
-                  {formatAbsolute(link.created_at, "")} ·{" "}
+                  {formatAbsolute(link.created_at, "", zone)} ·{" "}
                   {link.state === "live" ? "open until" : "ran to"}{" "}
-                  {formatAbsolute(link.expires_at, "—")}
+                  {formatAbsolute(link.expires_at, "—", zone)}
                 </span>
                 <span className="quiet">
                   {link.views === 0
                     ? "Not opened yet"
-                    : `Opened ${link.views === 1 ? "once" : `${link.views} times`}, last ${formatAbsolute(link.last_viewed_at, "—")}`}
+                    : `Opened ${link.views === 1 ? "once" : `${link.views} times`}, last ${formatAbsolute(link.last_viewed_at, "—", zone)}`}
                   {link.answer &&
-                    ` · ${link.answer === "accepted" ? "accepted" : "declined"} by ${link.answer_name || "the customer"} ${formatAbsolute(link.answered_at, "")}`}
+                    ` · ${link.answer === "accepted" ? "accepted" : "declined"} by ${link.answer_name || "the customer"} ${formatAbsolute(link.answered_at, "", zone)}`}
                 </span>
               </div>
               {link.state === "live" && canLink && (

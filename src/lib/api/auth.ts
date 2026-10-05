@@ -57,6 +57,8 @@ export const meSchema = okEnvelope.extend({
   recovery_codes_remaining: z.number().optional(),
   /** How long this role's session may sit idle, and its absolute life. */
   session_policy: z.object({ idle_minutes: z.number(), absolute_hours: z.number() }).optional(),
+  /** The zone this person reads times in; "" until set by hand or from their device. */
+  time_zone: z.string().default(""),
   environment: z.string(),
   /** Unread inbox rows, counted as this page rendered; absent from an older service. */
   inbox_unread: z.number().optional(),
