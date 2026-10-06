@@ -4840,6 +4840,105 @@ async function captureTimeZoneFlows(page: Page, folder: string) {
   await form.locator(".form-sent").waitFor({ timeout: 15_000 });
 }
 
+/**
+ * The busiest screens, shaped for one hand. At phone width Home's owed rows keep every
+ * word of their titles with the status under them and the keyboard shortcuts are not
+ * shown; a record opens on its notes (the activity section first in its column); the
+ * peek is the whole screen with a close a thumb can land on; a strip of three figures
+ * stays one row with wrapped labels and no bar down a figure's side. At a desk nothing
+ * has moved, and the same checks assert the desk's order.
+ */
+async function capturePhoneFlows(page: Page, folder: string) {
+  const viewport = page.viewportSize()?.width ?? 1440;
+  const phone = viewport <= 720;
+
+  await page.goto(`${BASE}/home`, { waitUntil: "networkidle" });
+  const cut = await page.evaluate(
+    () =>
+      [...document.querySelectorAll(".owed__title, .owed__sub, .agenda__title")].filter(
+        (el) => el.scrollWidth > el.clientWidth + 1,
+      ).length,
+  );
+  if (phone && cut > 0) report(`${folder}/one-hand-home`, `${cut} Home lines are cut short`);
+  const squeezed = await page.evaluate(
+    () =>
+      [...document.querySelectorAll(".owed__row")].filter(
+        (row) => (row.querySelector(".owed__main")?.getBoundingClientRect().width ?? 999) < 160,
+      ).length,
+  );
+  if (phone && squeezed > 0)
+    report(`${folder}/one-hand-home`, `${squeezed} owed rows squeeze their title under 160px`);
+  const keysShown = await page.locator(".briefing__block--keys").isVisible();
+  if (keysShown === phone)
+    report(
+      `${folder}/one-hand-home`,
+      phone
+        ? "keyboard shortcuts are shown on a phone"
+        : "keyboard shortcuts are missing at a desk",
+    );
+  await shoot(page, `${folder}/one-hand-home`);
+
+  await page.goto(`${BASE}/companies/c0000000-0000-4000-8000-000000000002`, {
+    waitUntil: "networkidle",
+  });
+  // No named inner function inside `evaluate`: tsx's keep-names helper (`__name`) does
+  // not exist in the page, and the call fails with "__name is not defined".
+  const order = await page.evaluate(() => ({
+    activity: document.querySelector("#company-activity")?.getBoundingClientRect().top ?? null,
+    deals: document.querySelector("#company-deals")?.getBoundingClientRect().top ?? null,
+  }));
+  if (order.activity === null || order.deals === null)
+    report(`${folder}/one-hand-record`, "the record's activity or deals section is missing");
+  else if (phone ? order.activity > order.deals : order.activity < order.deals)
+    report(
+      `${folder}/one-hand-record`,
+      phone
+        ? "a record does not open on its notes at phone width"
+        : "a desk's record opens on its notes instead of its deals",
+    );
+  await shoot(page, `${folder}/one-hand-record`);
+
+  await page.goto(`${BASE}/companies?peek=c0000000-0000-4000-8000-0000000000fe`, {
+    waitUntil: "networkidle",
+  });
+  const peek = page.locator(".peek");
+  await peek.waitFor({ timeout: 15_000 });
+  const peekWidth = Math.round((await peek.boundingBox())?.width ?? 0);
+  if (phone ? peekWidth !== viewport : peekWidth > 380)
+    report(`${folder}/one-hand-peek`, `the peek is ${peekWidth}px wide on a ${viewport}px screen`);
+  const close = await page.locator(".peek__close").boundingBox();
+  if (phone && close && (close.width < 44 || close.height < 44))
+    report(
+      `${folder}/one-hand-peek`,
+      `the peek's close is ${Math.round(close.width)}×${Math.round(close.height)}px, under a thumb's 44px`,
+    );
+  await shoot(page, `${folder}/one-hand-peek`);
+
+  await page.goto(`${BASE}/admin/approvals`, { waitUntil: "networkidle" });
+  const strip = await page.evaluate(() => {
+    const grid = document.querySelector(".stat-grid--3");
+    if (!grid) return null;
+    const stats = [...grid.querySelectorAll(".stat")];
+    const left = Math.round(grid.getBoundingClientRect().left);
+    return {
+      rows: new Set(stats.map((stat) => Math.round(stat.getBoundingClientRect().top))).size,
+      barred: stats.filter(
+        (stat) =>
+          Math.round(stat.getBoundingClientRect().left) === left &&
+          getComputedStyle(stat).borderLeftWidth !== "0px",
+      ).length,
+    };
+  });
+  if (!strip) report(`${folder}/one-hand-approvals`, "the approvals figures are missing");
+  else {
+    if (strip.rows !== 1)
+      report(`${folder}/one-hand-approvals`, `the three figures take ${strip.rows} rows`);
+    if (strip.barred > 0)
+      report(`${folder}/one-hand-approvals`, `${strip.barred} figure(s) carry a bar down the left`);
+  }
+  await shoot(page, `${folder}/one-hand-approvals`);
+}
+
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   prospects: captureProspectFlows,
   mail: captureMailFlows,
@@ -4869,6 +4968,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   privileged: capturePrivilegedFlows,
   undo: captureUndoFlows,
   timezone: captureTimeZoneFlows,
+  phone: capturePhoneFlows,
 };
 
 async function runPart(browser: Browser) {

@@ -152,7 +152,7 @@ export function RecordSection({
   children: ReactNode;
 }) {
   return (
-    <section className="rsection" aria-labelledby={id}>
+    <section className="rsection" aria-labelledby={id} data-section={id}>
       <div className="rsection__head">
         <h2 className="rsection__title" id={id}>
           {title}

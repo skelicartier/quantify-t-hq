@@ -3402,9 +3402,33 @@
       padding-top: 11px;
     }
 
-    .stat-grid--3,
+    /* A strip of two or three figures stays one row on a phone: the labels wrap instead,
+       and the hairline between figures stays a divider between neighbours (stacked, it
+       read as a bar down the second figure's side). */
+    .stat-grid--3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
     .stat-grid--2 {
-      grid-template-columns: 1fr;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .stat-grid--3 .stat,
+    .stat-grid--2 .stat {
+      padding-right: 10px;
+    }
+
+    .stat-grid--3 .stat + .stat,
+    .stat-grid--2 .stat + .stat {
+      padding-left: 10px;
+      border-left: 1px solid var(--line-soft);
+    }
+
+    .stat-grid--3 .stat__label,
+    .stat-grid--3 .stat__hint {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
     }
 
     .card {
@@ -4193,6 +4217,26 @@
     font-size: 17px;
     letter-spacing: -0.015em;
     overflow-wrap: anywhere;
+  }
+
+  /* On a phone the peek is the screen: no sliver of list behind it, and a close that a
+     thumb can land on. */
+  @media (max-width: 720px) {
+    .peek {
+      width: 100vw;
+      border-left: 0;
+      box-shadow: none;
+    }
+
+    .peek__close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 44px;
+      min-height: 44px;
+      margin: -10px -10px -10px 0;
+      padding: 0;
+    }
   }
 
   .views__shared {
@@ -7408,6 +7452,15 @@
     }
   }
 
+  /* On a phone a record opens on its notes: the quick log (note, call, email) and the
+     timeline come first in the column, where a thumb reaches them, and the sections a
+     desk reads first follow. Nothing moves at a desk. */
+  @media (max-width: 720px) {
+    .record-layout__main > [data-section$="-activity"] {
+      order: -1;
+    }
+  }
+
   .record-section {
     display: flex;
     flex-direction: column;
@@ -8769,12 +8822,41 @@
     font-size: 12.5px;
   }
 
+  /* One hand, one column. A row's title keeps every word (beside a wide status pill it
+     was squeezed to a sliver, "Bluecrest Family Office" to nothing) and its status sits
+     under it; the inbox panel's lines wrap; the keyboard shortcuts are not shown to a
+     screen with no keyboard. */
   @media (max-width: 720px) {
     .owed__row {
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 6px;
+      align-items: start;
+      padding: 10px 0;
     }
 
     .owed__kind {
+      display: none;
+    }
+
+    .owed__title,
+    .owed__sub {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
+
+    .owed__status,
+    .owed__status .flag-list {
+      justify-content: flex-start;
+    }
+
+    .agenda__title {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
+
+    .briefing__block--keys {
       display: none;
     }
   }

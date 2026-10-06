@@ -463,7 +463,10 @@ export default async function HomePage() {
                   )}
                 </section>
               )}
-              <section className="briefing__block" aria-labelledby="keys-title">
+              <section
+                className="briefing__block briefing__block--keys"
+                aria-labelledby="keys-title"
+              >
                 <div className="briefing__head">
                   <h2 id="keys-title">Move fast</h2>
                 </div>
