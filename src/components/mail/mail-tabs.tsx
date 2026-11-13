@@ -14,12 +14,21 @@ const TABS = [
   { href: "/mail/settings", label: "Settings" },
 ] as const;
 
+/** There only where a sender is set up beside the portal (`lib/merge/api.ts`). */
+const MERGE = { href: "/mail/merge", label: "Mail merge" } as const;
+
+type MailSection = (typeof TABS)[number]["href"] | typeof MERGE.href;
+
 /** Mail's own sections; the sidebar has one Mail entry for all of it. */
-export function MailTabs({ current }: { current: (typeof TABS)[number]["href"] }) {
+export function MailTabs({ current }: { current: MailSection }) {
+  const merge = (process.env.HQ_MAIL_MERGE_SOCKET ?? "").trim().startsWith("/");
   return (
     <SegmentedLinks
       label="Mail sections"
-      items={TABS.map((tab) => ({ ...tab, current: tab.href === current }))}
+      items={[...TABS, ...(merge ? [MERGE] : [])].map((tab) => ({
+        ...tab,
+        current: tab.href === current,
+      }))}
     />
   );
 }

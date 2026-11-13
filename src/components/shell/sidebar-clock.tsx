@@ -5,20 +5,35 @@ import { useSyncExternalStore } from "react";
 import { useTimeZone } from "@/components/shell/time-zone-context";
 import { partsInZone, zoneName } from "@/lib/time-zone";
 
+/**
+ * The second the clock shows, in seconds since the epoch; 0 until a clock is on screen.
+ *
+ * It moves only when the tick moves it, never when it is read. React reads a store twice
+ * in a row to see that it holds still, and a read that asked the system clock each time
+ * gave two answers whenever a second turned over between the two: "The result of
+ * getSnapshot should be cached", once in some thousands of page loads, on any screen.
+ */
+let second = 0;
+
 function subscribe(onTick: () => void) {
-  const id = window.setInterval(onTick, 1000);
+  second = Math.floor(Date.now() / 1000);
+  const id = window.setInterval(() => {
+    second = Math.floor(Date.now() / 1000);
+    onTick();
+  }, 1000);
   return () => window.clearInterval(id);
+}
+
+function readSecond(): number {
+  return second;
 }
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
-function readClock(zone: string): string {
-  const now = new Date();
-  const parts = partsInZone(now, zone);
-  const name = zone && zone !== "UTC" ? zoneName(zone, now, parts.offset) : "UTC";
-  return `${pad(parts.hour)}:${pad(parts.minute)}:${pad(now.getUTCSeconds())} ${name}`;
+function nameOf(zone: string, moment: Date): string {
+  return zone && zone !== "UTC" ? zoneName(zone, moment, partsInZone(moment, zone).offset) : "UTC";
 }
 
 /**
@@ -28,11 +43,15 @@ function readClock(zone: string): string {
  */
 export function SidebarClock() {
   const zone = useTimeZone();
-  const clock = useSyncExternalStore(
-    subscribe,
-    () => readClock(zone),
-    () =>
-      `--:--:-- ${zone && zone !== "UTC" ? zoneName(zone, new Date(), partsInZone(new Date(), zone).offset) : "UTC"}`,
+  const shown = useSyncExternalStore(subscribe, readSecond, () => 0);
+  if (shown === 0) {
+    return <span className="sidebar__clock">{`--:--:-- ${nameOf(zone, new Date())}`}</span>;
+  }
+  const moment = new Date(shown * 1000);
+  const parts = partsInZone(moment, zone);
+  return (
+    <span className="sidebar__clock">
+      {`${pad(parts.hour)}:${pad(parts.minute)}:${pad(moment.getUTCSeconds())} ${nameOf(zone, moment)}`}
+    </span>
   );
-  return <span className="sidebar__clock">{clock}</span>;
 }

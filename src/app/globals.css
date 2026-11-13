@@ -1509,6 +1509,28 @@
     flex: 0 0 auto;
   }
 
+  /* On a phone a button is pressed by a thumb, not a pointer. It keeps its drawn size, so
+     a table row and a toolbar are as tight as they were, and the area that takes the
+     press reaches 6px past it above and below: 44px for a button, 40px for a small one.
+     Six and no more, because six is the least that rows of buttons stand apart when
+     they wrap. A reach longer than the gap lands on the row above, where the button
+     later in the page takes the press from the bottom of the earlier one: at 8px it
+     took the lowest 2px of every button over a wrapped row, and a quarter of one where
+     two touched. Only upwards and downwards: an area that reached sideways would take a
+     neighbour's press, or push a page wider than its screen. A compact table's cell
+     leaves 4px. Nothing changes at a desk. */
+  @media (max-width: 720px) {
+    .btn::before {
+      position: absolute;
+      inset: -6px 0;
+      content: "";
+    }
+
+    html[data-density="compact"] .data-table td .btn::before {
+      inset: -4px 0;
+    }
+  }
+
   /* fields */
   .field {
     display: flex;
@@ -5267,6 +5289,137 @@
     overflow-wrap: anywhere;
   }
 
+  /* --- Mail merge --------------------------------------------------------------------- */
+  .merge-field {
+    display: inline-block;
+    padding: 2px 6px;
+    border: 1px solid var(--line);
+    color: var(--text);
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .merge-field--button {
+    cursor: pointer;
+  }
+
+  .merge-field--button:hover {
+    border-color: var(--muted);
+    background: var(--panel-raised);
+  }
+
+  .merge-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px 16px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .merge-fields li {
+    display: grid;
+    justify-items: start;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .merge-lists {
+    display: grid;
+    gap: 8px;
+  }
+
+  .merge-insert {
+    display: grid;
+    gap: 6px;
+  }
+
+  .merge-insert__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .merge-preview-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    margin: 0 0 8px;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .merge-search {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 0 0 8px;
+  }
+
+  .merge-search .input {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 420px;
+  }
+
+  /* On the Mail merge page the find box sits in the Mailings heading row and wraps under
+     the heading when the row is too narrow for both. */
+  .rsection__head:has(> .rsection__actions > .merge-search) {
+    flex-wrap: wrap;
+  }
+
+  .rsection__actions:has(> .merge-search) {
+    flex: 1 1 320px;
+    justify-content: flex-end;
+  }
+
+  .rsection__actions > .merge-search {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    margin: 0;
+  }
+
+  .merge-find-count {
+    margin: 8px 0;
+  }
+
+  .merge-pick {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+  }
+
+  .merge-row-acts {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .merge-command {
+    margin: 8px 0 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .merge-go {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 24px;
+    align-items: start;
+  }
+
+  .merge-go__step {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
   .outcome-row {
     display: flex;
     flex-wrap: nowrap;
@@ -6998,6 +7151,33 @@
   .side-quiet {
     color: var(--quiet, #8f897e);
     font-size: 12.5px;
+  }
+
+  /* A page whose figures are the local demo service's says so on paper (print and its PDF),
+     not on screen: the founder reads these pages alone, on this machine. */
+  .demo-figures {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  @media print {
+    .demo-figures {
+      display: flex;
+    }
+  }
+
+  .demo-figures__dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
   }
 
   .attention-list {
@@ -12171,6 +12351,14 @@
     white-space: nowrap;
   }
 
+  /* The logo is drawn, not set in type: its height follows the size's font size. */
+  .wordmark__logo {
+    display: inline-block;
+    width: auto;
+    height: 1.25em;
+    vertical-align: middle;
+  }
+
   .wordmark--small {
     font-size: 16px;
   }
@@ -12780,9 +12968,12 @@
     text-decoration: none !important;
   }
 
-  /* Tables print whole: no scrolling box, the heading on every page, no row cut in two. */
+  /* Tables print whole: no scrolling box, the heading on every page, no row cut in two.
+     .table-frame is DataTable's own box, capped at a screenful on screen; released here so
+     a long list prints every row rather than its first screenful. */
   .table-wrap,
   .table-scroll,
+  .table-frame,
   .order-form__scroll,
   [class*="__scroll"] {
     max-height: none !important;
@@ -13083,6 +13274,20 @@
       right: 0;
       left: 0;
       width: auto;
+    }
+
+    /* The one row of tools whose lines wrapped 4px apart, closer than a button's press
+       reaches on a phone (6px, in the ui layer): Export sat under Change the whole view
+       and took the press from its lower edge. */
+    .list-tools__group {
+      row-gap: 6px;
+    }
+
+    /* Replies: the three outcomes beside More. At a desk they are one row; here the cell
+       has room for one a line, as it always had, and now 6px stands between them (they
+       stood one on another, touching). */
+    .outcome-row > .outcome-row {
+      flex-wrap: wrap;
     }
 
     /* And for a record's header: Share sits after Follow and Archive there. */

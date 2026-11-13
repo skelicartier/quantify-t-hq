@@ -17,12 +17,19 @@
  *
  * MOCK_DEGRADE="hq/staff,hq/sessions" makes the named routes answer 503, which is how
  * the degraded screenshots are produced.
+ *
+ * MOCK_EMPTY_MAIL=1 (here or in `.env.local`) starts the Mail section empty.
+ *
+ * The release deploy function is served here too, under /api (release_history,
+ * deploy_update): QT_UPDATE_DEPLOY_URL=http://127.0.0.1:7071 in `.env.local` gives the
+ * Releases screen its catalogue.
  */
 
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 
-const PORT = 7071;
+const PORT = Number.parseInt(process.env.MOCK_PORT ?? "7071", 10) || 7071;
 const PREFIX = "/api/v1/";
 const DEGRADED = new Set(
   (process.env.MOCK_DEGRADE ?? "")
@@ -21710,6 +21717,49 @@ type BookCustomer = {
   renewal?: [RenewalStatus, number, string, number?];
 };
 
+/**
+ * Local demo only: `MOCK_REVENUE_SCALE` (a whole number from 1 to 100) multiplies the book's
+ * seats and dollars and the finance seed's money, to see the screens at another size. The
+ * portal says on every revenue and finance page that these figures are invented. Unset, it
+ * is 1, so the tests, the harness and the payload samples see the book as written. Seats ×
+ * rate still reconciles: both are multiplied by the same whole number.
+ */
+const REVENUE_SCALE = (() => {
+  const value = Number.parseInt(process.env.MOCK_REVENUE_SCALE ?? "1", 10);
+  return Number.isInteger(value) && value >= 1 && value <= 100 ? value : 1;
+})();
+const scaleSeatWords = (text: string) =>
+  REVENUE_SCALE === 1
+    ? text
+    : text.replace(
+        /\b(\d+)(\s+seats?\b)/g,
+        (_, count: string, rest: string) => `${Number(count) * REVENUE_SCALE}${rest}`,
+      );
+
+function scaledBook(): BookCustomer[] {
+  if (REVENUE_SCALE === 1) return BOOK;
+  return BOOK.map((firm) => {
+    const scaled: BookCustomer = {
+      ...firm,
+      seats: firm.seats * REVENUE_SCALE,
+      mrr: firm.mrr * REVENUE_SCALE,
+    };
+    if (firm.changes)
+      scaled.changes = firm.changes.map(([days, dollars, note]): [number, number, string] => [
+        days,
+        dollars * REVENUE_SCALE,
+        scaleSeatWords(note),
+      ]);
+    const renewal = firm.renewal;
+    if (renewal)
+      scaled.renewal =
+        renewal[3] === undefined
+          ? [renewal[0], renewal[1], scaleSeatWords(renewal[2])]
+          : [renewal[0], renewal[1], scaleSeatWords(renewal[2]), renewal[3] * REVENUE_SCALE];
+    return scaled;
+  });
+}
+
 const BOOK: BookCustomer[] = [
   // --- Enterprise desk, $149 a seat, annual ---------------------------------------
   {
@@ -23195,7 +23245,7 @@ function seedBook() {
     });
   };
 
-  for (const firm of BOOK) {
+  for (const firm of scaledBook()) {
     const startsOn = dayOffset(-firm.start);
     const companyId = bookCompanyId(firm.n);
     const personId = bookPersonId(firm.n);
@@ -26610,6 +26660,250 @@ async function forwardProduct(
   } catch {
     return refuse(503, "upstream_unavailable", { dependency: "product-mock" });
   }
+}
+
+// =====================================================================================
+// The release deploy function: a second service, served from this process on purpose, as
+// the console's mock serves it. Releases is the one Product screen that does not go
+// through hq/product/<rest>: the portal calls the function at QT_UPDATE_DEPLOY_URL with the
+// staff member's own hq_ token, and the function asks hq/product/whoami who that is
+// (update_deploy_function/function_app.py: _require_active_user, _require_admin,
+// _require_release_publisher). Its routes live under /api, not /api/v1, and its envelope
+// is its own, {ok, error: "text"}, not the Account API's {error: {code, message}}. Point
+// QT_UPDATE_DEPLOY_URL at this mock's origin (http://127.0.0.1:7071) and the portal's
+// real client meets the real shapes; without it Releases can only say it is not set up.
+//
+// MOCK_RELEASE_SIGNING=unconfigured answers as a deployment with no signing key does.
+// =====================================================================================
+const RELEASE_PREFIX = "/api/";
+const RELEASE_ROUTES = new Set(["release_history", "deploy_update"]);
+/** The blobs the function names in its answer (its defaults). */
+const RELEASE_BLOBS = {
+  manifest_blob: "updates/latest.json",
+  download_page_blob: "download/index.html",
+  history_blob: "updates/history.json",
+};
+type MockRelease = Record<string, unknown>;
+let releaseCatalogue: MockRelease[] = [];
+let releaseCurrentVersion = "";
+function seedReleases() {
+  releaseCatalogue = [
+    {
+      name: "Quantify Terminal",
+      title: "Faster charts",
+      version: "1.4.0",
+      description: "Chart rendering is roughly twice as fast on large books.",
+      features: ["Faster charts", "New geopolitics layers"],
+      severity: "recommended",
+      download_page_url: "https://www.quantifyterminal.com/download",
+      windows_url: "https://releases.example.test/quantify-terminal-1.4.0.exe",
+      mac_url: "https://releases.example.test/quantify-terminal-1.4.0.dmg",
+      linux_appimage_url: "",
+      linux_deb_url: "",
+      linux_rpm_url: "",
+      release_notes_url: "",
+      force_update: false,
+      min_supported_version: "",
+      banner_image_url: "",
+      channel: "stable",
+      disabled: false,
+      checksums: { windows: "a".repeat(64), mac: "b".repeat(64) },
+      signature: "ff".repeat(32),
+      created_at: "2026-09-10T09:00:00Z",
+    },
+    {
+      name: "Quantify Terminal",
+      title: "Pulse severity tuning",
+      version: "1.3.0",
+      description: "Pulse suppression no longer hides a second move on the same symbol.",
+      features: ["Pulse suppression fix"],
+      severity: "low",
+      download_page_url: "https://www.quantifyterminal.com/download",
+      windows_url: "https://releases.example.test/quantify-terminal-1.3.0.exe",
+      mac_url: "",
+      linux_appimage_url: "",
+      linux_deb_url: "",
+      linux_rpm_url: "",
+      release_notes_url: "",
+      force_update: false,
+      min_supported_version: "",
+      banner_image_url: "",
+      channel: "stable",
+      disabled: false,
+      checksums: { windows: "c".repeat(64) },
+      signature: "ee".repeat(32),
+      created_at: "2026-08-22T09:00:00Z",
+    },
+  ];
+  releaseCurrentVersion = "1.4.0";
+}
+seedReleases();
+
+function releaseAnswer(status: number, body: Record<string, unknown>) {
+  return { status, body };
+}
+function releaseFail(status: number, error: string) {
+  return releaseAnswer(status, { ok: false, error });
+}
+/** Python's `str(value or "").strip()`: anything falsy is the empty string. */
+function releaseText(value: unknown): string {
+  return value ? String(value).trim() : "";
+}
+
+/** Mirrors `_normalize_manifest`: the function keeps its own fields and signs the result. */
+function normalizeRelease(payload: Record<string, unknown>): MockRelease {
+  let features: string[] = [];
+  if (typeof payload.features === "string") {
+    features = payload.features
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } else if (Array.isArray(payload.features)) {
+    features = payload.features.map((item) => String(item).trim()).filter(Boolean);
+  }
+  let severity = (releaseText(payload.severity) || "recommended").toLowerCase();
+  if (!["low", "recommended", "critical"].includes(severity)) severity = "recommended";
+  const checksums: Record<string, string> = {};
+  if (
+    payload.checksums &&
+    typeof payload.checksums === "object" &&
+    !Array.isArray(payload.checksums)
+  ) {
+    for (const [key, value] of Object.entries(payload.checksums as Record<string, unknown>)) {
+      const sum = String(value).trim();
+      if (sum) checksums[key] = sum;
+    }
+  }
+  const name = releaseText(payload.name);
+  return {
+    name,
+    title: releaseText(payload.title) || name,
+    version: releaseText(payload.version),
+    description: releaseText(payload.description),
+    features,
+    severity,
+    download_page_url: releaseText(payload.download_page_url),
+    windows_url: releaseText(payload.windows_url),
+    mac_url: releaseText(payload.mac_url),
+    linux_appimage_url: releaseText(payload.linux_appimage_url),
+    linux_deb_url: releaseText(payload.linux_deb_url),
+    linux_rpm_url: releaseText(payload.linux_rpm_url),
+    release_notes_url: releaseText(payload.release_notes_url),
+    force_update: Boolean(payload.force_update),
+    min_supported_version: releaseText(payload.min_supported_version),
+    banner_image_url: releaseText(payload.banner_image_url),
+    channel: releaseText(payload.channel) || "stable",
+    disabled: Boolean(payload.disabled),
+    checksums,
+    // Whatever signature the caller sent is discarded: the function signs what it stores.
+    signature: "ff".repeat(32),
+    created_at: releaseText(payload.created_at) || `${new Date().toISOString().slice(0, 19)}Z`,
+  };
+}
+
+/** Mirrors `_validate_manifest`. */
+function releaseRefusal(manifest: MockRelease): string {
+  for (const field of ["name", "version", "description", "download_page_url"]) {
+    if (!releaseText(manifest[field])) return `${field} is required.`;
+  }
+  const platforms = [
+    "windows_url",
+    "mac_url",
+    "linux_appimage_url",
+    "linux_deb_url",
+    "linux_rpm_url",
+  ];
+  if (!platforms.some((field) => releaseText(manifest[field])))
+    return "At least one platform download URL is required.";
+  return "";
+}
+
+/**
+ * Who is calling, as `_require_active_user` resolves an HQ session: through
+ * hq/product/whoami, so the caller is the staff member's linked account with the role the
+ * product gives it. No session, no link, or a link to an account that is not product staff
+ * are all "Invalid or expired session": the function only ever hears HQ's yes or no.
+ */
+async function releaseCaller(
+  headers: Record<string, string | string[] | undefined>,
+): Promise<{ role: string; sudoFresh: boolean } | { status: number; error: string }> {
+  const authorization = String(headers.authorization ?? "");
+  const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  if (!token.startsWith("hq_")) return { status: 401, error: "Invalid or expired session." };
+  const first = respond("GET", "hq/product/whoami", {}, {}, headers);
+  const answer =
+    first.status === FORWARD ? await forwardProduct(first.body as Record<string, unknown>) : first;
+  if (answer.status === 401 || answer.status === 403)
+    return { status: 401, error: "Invalid or expired session." };
+  if (answer.status !== 200) return { status: 503, error: "Account service is unavailable." };
+  const body = answer.body as {
+    linked?: boolean;
+    account?: { role?: string } | null;
+    sudo_fresh?: boolean;
+  };
+  if (body.linked !== true || !body.account)
+    return { status: 401, error: "Invalid or expired session." };
+  return {
+    role: String(body.account.role ?? "").toLowerCase(),
+    sudoFresh: body.sudo_fresh === true,
+  };
+}
+
+async function releaseFunction(
+  route: string,
+  method: string,
+  rawBody: Buffer,
+  headers: Record<string, string | string[] | undefined>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const expected = route === "release_history" ? "GET" : "POST";
+  if (method !== expected) return releaseFail(405, "Method not allowed.");
+  const who = await releaseCaller(headers);
+  if ("error" in who) return releaseFail(who.status, who.error);
+  if (who.role !== "owner" && who.role !== "admin")
+    return releaseFail(403, "Administrator access required.");
+
+  if (route === "release_history") {
+    return releaseAnswer(200, {
+      ok: true,
+      signing_configured: process.env.MOCK_RELEASE_SIGNING !== "unconfigured",
+      current_version: releaseCurrentVersion,
+      // `_release_summary`: the whole manifest less its signature, and whether it had one.
+      releases: releaseCatalogue.slice(0, 50).map((entry) => {
+        const { signature, ...rest } = entry;
+        return { ...rest, signed: Boolean(releaseText(signature)) };
+      }),
+    });
+  }
+
+  // Owner-only, mirroring PUBLISH_RELEASE; and a change made from HQ needs a fresh code.
+  if (who.role !== "owner")
+    return releaseFail(403, "Publishing a release requires an Owner account.");
+  if (!who.sudoFresh)
+    return releaseFail(403, "Confirm it's you in HQ with a fresh code, then try again.");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody.toString("utf8"));
+  } catch {
+    return releaseFail(400, "Request body must be JSON.");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return releaseFail(400, "Manifest must be a JSON object.");
+  const manifest = normalizeRelease(payload as Record<string, unknown>);
+  const refusal = releaseRefusal(manifest);
+  if (refusal) return releaseFail(400, refusal);
+  if (process.env.MOCK_RELEASE_SIGNING === "unconfigured")
+    return releaseFail(503, "Release signing is not configured on this deployment.");
+
+  const version = String(manifest.version);
+  releaseCatalogue = [
+    manifest,
+    ...releaseCatalogue.filter((entry) => String(entry.version ?? "") !== version),
+  ].slice(0, 50);
+  // A release published already-disabled is staged, not served; turning off the one
+  // clients are taking has to reach the live manifest, so that one is still written.
+  const serving = manifest.disabled !== true || releaseCurrentVersion === version;
+  if (serving) releaseCurrentVersion = version;
+  return releaseAnswer(200, { ok: true, ...RELEASE_BLOBS, version, serving });
 }
 
 // =====================================================================================
@@ -31283,7 +31577,8 @@ function mailSeedCampaignTimes(campaign: MailCampaignRow, finished: "completed" 
   if (finished === "paused") campaign.paused_at = mailIsoMs(last + 60_000);
   campaign.updated_at = mailIsoMs(last + 60_000);
 }
-function seedMail() {
+/** Everything the Mail section shows, gone: no campaigns, senders, lists or stops. */
+function clearMail() {
   mailSenders.length = 0;
   mailTemplates.length = 0;
   mailVersions.length = 0;
@@ -31303,6 +31598,12 @@ function seedMail() {
   mailboxEvents.length = 0;
   Object.assign(mailboxSettings, MAILBOX_DEFAULTS);
   mailEvents.length = 0;
+  mailLists.length = 0;
+  mailListMembers.length = 0;
+}
+
+function seedMail() {
+  clearMail();
   Object.assign(mailSettings, {
     ...MAIL_SETTINGS_SEED,
     seed_addresses: [...MAIL_SETTINGS_SEED.seed_addresses],
@@ -46105,6 +46406,12 @@ function seedFinance() {
     finalised_at: null,
     updated_at: agoIso(18),
   });
+  // Local demo only: see REVENUE_SCALE. Cash, vendors and claims move with the book.
+  if (REVENUE_SCALE !== 1) {
+    for (const row of cashBalances) row.amount *= REVENUE_SCALE;
+    for (const row of vendorsStore) row.amount *= REVENUE_SCALE;
+    for (const row of expenseClaims) row.amount *= REVENUE_SCALE;
+  }
 }
 
 const finBad = (details: Record<string, string>) => refuse(400, "malformed_request", details);
@@ -51106,6 +51413,14 @@ function seedPlanning() {
   line("data", "USD", 3000, null);
   line("office", "GBP", 650, 650);
   line("travel", "GBP", 900, 1280);
+  // Local demo only: see REVENUE_SCALE. Budgets and purchases move with the book.
+  if (REVENUE_SCALE !== 1) {
+    for (const row of purchases) row.amount *= REVENUE_SCALE;
+    for (const row of budgetLines) {
+      row.budget *= REVENUE_SCALE;
+      if (row.actual !== null) row.actual *= REVENUE_SCALE;
+    }
+  }
 }
 
 routes.push(
@@ -52271,6 +52586,25 @@ function matchRoute(method: string, route: string) {
 
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${PORT}`);
+  const releaseRoute = url.pathname.startsWith(RELEASE_PREFIX)
+    ? url.pathname.slice(RELEASE_PREFIX.length).replace(/\/+$/, "")
+    : "";
+  if (RELEASE_ROUTES.has(releaseRoute)) {
+    const parts: Buffer[] = [];
+    request.on("data", (part: Buffer) => parts.push(part));
+    request.on("end", () => {
+      const method = request.method ?? "GET";
+      void releaseFunction(releaseRoute, method, Buffer.concat(parts), request.headers).then(
+        (answer) => {
+          response
+            .writeHead(answer.status, { "content-type": "application/json" })
+            .end(JSON.stringify(answer.body));
+          console.log(`[mock-hq] ${method} /${releaseRoute} -> ${answer.status} (release)`);
+        },
+      );
+    });
+    return;
+  }
   if (!url.pathname.startsWith(PREFIX)) {
     response.writeHead(404).end();
     return;
@@ -55620,6 +55954,7 @@ routes.push(
 
 function resetWorld() {
   resetInbox();
+  seedReleases();
   pendings.clear();
   sessions.clear();
   invites.clear();
@@ -55827,6 +56162,22 @@ function respond(
   }
   return entry.handler({ method, route, params, query, body, headers });
 }
+
+/**
+ * MOCK_EMPTY_MAIL=1, in the environment or in `.env.local`: the Mail section starts empty,
+ * for a laptop where Mail merge is the real thing and made-up campaigns are only in the
+ * way. Read when the mock starts and not by `mock/reset`, so the harness, which begins
+ * with a reset, still has the demo mail it walks. Restart the mock after a walk.
+ */
+function wantsEmptyMail(): boolean {
+  if (process.env.MOCK_EMPTY_MAIL === "1") return true;
+  try {
+    return /^MOCK_EMPTY_MAIL=1\s*$/m.test(readFileSync(".env.local", "utf8"));
+  } catch {
+    return false;
+  }
+}
+if (wantsEmptyMail()) clearMail();
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`[mock-hq] serving http://127.0.0.1:${PORT}${PREFIX}`);

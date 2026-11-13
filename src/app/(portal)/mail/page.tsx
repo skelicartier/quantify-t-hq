@@ -18,6 +18,7 @@ import {
   type MailCampaign,
   type MailOverview,
 } from "@/lib/api/mail";
+import { mergeConfigured } from "@/lib/merge/api";
 import { requestNow } from "@/lib/request-time";
 
 export const metadata = { title: "Mail" };
@@ -96,11 +97,18 @@ export default async function MailOverviewPage() {
               it is switched back on under <Link href="/mail/settings">Settings</Link>.
             </Callout>
           )}
-          {setupGaps.length > 0 && (
-            <Callout tone="attention" title="Before the first campaign">
-              Still missing: {setupGaps.join(", ")}.{" "}
-              <Link href="/mail/settings">Open settings</Link>
+          {mergeConfigured() ? (
+            <Callout tone="neutral" title="Sending from this computer">
+              Campaigns and sequences run on the service, so nothing here sends from this computer.{" "}
+              <Link href="/mail/merge">Mail merge</Link> is where mail goes out.
             </Callout>
+          ) : (
+            setupGaps.length > 0 && (
+              <Callout tone="attention" title="Before the first campaign">
+                Still missing: {setupGaps.join(", ")}.{" "}
+                <Link href="/mail/settings">Open settings</Link>
+              </Callout>
+            )
           )}
           <StatGrid columns={6} label="Mail today">
             <Stat

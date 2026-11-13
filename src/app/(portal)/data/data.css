@@ -1,0 +1,118 @@
+/* Data: the overview's due list, its two columns, the week table and the download page.
+   Tokens only; phone rules at 720px; no side bars anywhere. Prefixed hqdata- because
+   .data-table is already the shell's. */
+@layer pages {
+  .hqdata-due {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .hqdata-due--empty {
+    border-top: 0;
+  }
+
+  .hqdata-due__row {
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: baseline;
+    min-height: var(--row-2);
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-due__kind {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .hqdata-due__what {
+    display: grid;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-due__when {
+    white-space: nowrap;
+  }
+
+  /* Two columns at desk width, one on a phone; each child may hold a table that scrolls. */
+  .hqdata-two {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .hqdata-two > * {
+    min-width: 0;
+  }
+
+  /* The reply form's answer buttons wrap with the press gap a thumb needs. */
+  .hqdata-outcomes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    row-gap: 6px;
+  }
+
+  /* A line that exists only on paper: the filters a printed page was narrowed by. */
+  .hqdata-print-only {
+    display: none;
+  }
+
+  .hqdata-sending {
+    margin: 0 0 12px;
+    font-size: var(--fs-body);
+  }
+
+  .hqdata-readouts {
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-readouts a {
+    color: inherit;
+  }
+
+  .hqdata-download {
+    display: grid;
+    gap: 12px;
+    justify-items: start;
+  }
+
+  .hqdata-download__progress {
+    margin: 0;
+    font-size: var(--fs-body);
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-two {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-due__row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .hqdata-due__kind {
+      grid-column: 1 / -1;
+    }
+  }
+}
+
+/* Printed, the overview is a one-page daily sheet: the tiles, the Due list and This week. */
+@media print {
+  .hqdata-print-only {
+    display: block;
+  }
+
+  .hqdata-print-hide {
+    display: none !important;
+  }
+}

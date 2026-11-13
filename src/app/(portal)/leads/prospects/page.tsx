@@ -6,6 +6,7 @@ import { bulkProspectsAction, saveViewSegmentAction } from "@/app/(portal)/leads
 import { FacetPanel } from "@/components/crm/facet-panel";
 import { LeadJobsBanner } from "@/components/crm/lead-jobs";
 import { LeadTabs } from "@/components/crm/lead-tabs";
+import { AllLeadsCallout } from "@/components/data/leads/all-leads-callout";
 import { LeadStagePill } from "@/components/crm/pills";
 import { AddressKind, FitPill } from "@/components/crm/prospect-pills";
 import { BulkViewForm, SaveSegmentForm } from "@/components/crm/prospect-tools";
@@ -244,6 +245,7 @@ export default async function ProspectsPage({ searchParams }: ProspectsPageProps
           </>
         }
       />
+      <AllLeadsCallout context={context} />
       <LeadJobsBanner
         jobs={jobs}
         ended={ended}

@@ -26,6 +26,23 @@ function pass(request: NextRequest): NextResponse {
 }
 
 /**
+ * Data's file view (`/data/files/<id>/view`): a stored PDF or picture handed to the
+ * browser to show, in the page's own preview frame or a tab of its own. It is a document,
+ * not a page, so it gets a policy of its own in place of the page policy: nothing may run,
+ * the browser's viewer may draw it, and only this portal may frame it. Every other path
+ * keeps the page policy and `frame-ancestors 'none'`.
+ */
+export const FILE_VIEW_PATH = /^\/data\/files\/[0-9a-f-]{36}\/view$/;
+export const FILE_VIEW_POLICY =
+  "default-src 'none'; object-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'";
+
+function passFile(): NextResponse {
+  const response = NextResponse.next();
+  response.headers.set("Content-Security-Policy", FILE_VIEW_POLICY);
+  return response;
+}
+
+/**
  * Default-deny at the edge: no session cookie, no page, except the short public
  * allow-list. This is presence-only on purpose — the real verdict on a token belongs
  * to the service, and every loader gets it on its first read, redirecting to sign-in
@@ -38,7 +55,7 @@ export function proxy(request: NextRequest): NextResponse {
   if (bypass && pathname === "/dev/signin") return pass(request);
   if (isPublicPath(pathname)) return pass(request);
   const token = request.cookies.get(HQ_SESSION_COOKIE)?.value ?? "";
-  if (token.startsWith("hq_")) return pass(request);
+  if (token.startsWith("hq_")) return FILE_VIEW_PATH.test(pathname) ? passFile() : pass(request);
   if (bypass) {
     // Development only: straight in as the configured persona, back to this page.
     const target = new URL("/dev/signin", request.nextUrl.origin);

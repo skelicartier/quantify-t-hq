@@ -1,0 +1,86 @@
+/* Replies: the reply form and its two revealed groups, their words as a quote. Tokens
+   only; phone rules at 720px; a quote is a tint and a full thin border, never a side rule. */
+@layer pages {
+  .hqdata-reply-form {
+    display: grid;
+    gap: 12px;
+    max-width: 760px;
+  }
+
+  .hqdata-reply-form__later,
+  .hqdata-reply-form__named {
+    display: grid;
+    gap: 10px;
+  }
+
+  .hqdata-reply-form__later[hidden],
+  .hqdata-reply-form__named[hidden] {
+    display: none;
+  }
+
+  .hqdata-reply-form__link {
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-quote {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    background: var(--panel-soft);
+    font-size: var(--fs-body);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-reply {
+    display: grid;
+    gap: 8px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-reply:first-of-type {
+    border-top: 1px solid var(--line);
+  }
+
+  .hqdata-reply__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-reply__meta {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-reply__did {
+    margin: 0;
+    padding: 0 0 0 16px;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-followup-acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-reply-form {
+      max-width: none;
+    }
+
+    .hqdata-reply-form .form-actions,
+    .hqdata-followup-acts {
+      row-gap: 6px;
+    }
+  }
+}

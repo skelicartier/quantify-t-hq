@@ -33,4 +33,46 @@ describe("capability-filtered navigation", () => {
     expect(hrefs).toContain("/home");
     expect(hrefs).toContain("/me/security");
   });
+
+  it("the Data group is absent without local:data", () => {
+    // Even an Owner's real capabilities do not show it: the layout adds the made-up one
+    // only where the local service is set up.
+    const groups = visibleNavGroups(["mail:send", "hq:admin", "crm:read", "crm:write"]);
+    expect(groups.map((group) => group.label)).not.toContain("Data");
+    // (`/data-health` is CRM's and stays; only `/data` and `/data/…` are the group's.)
+    expect(
+      groups
+        .flatMap((group) => group.links)
+        .some((link) => link.href === "/data" || link.href.startsWith("/data/")),
+    ).toBe(false);
+  });
+
+  it("an Owner with local:data sees seven Data links in order, right after Command", () => {
+    const everything = NAV_GROUPS.flatMap((group) => group.links)
+      .map((link) => link.capability)
+      .filter((capability): capability is string => Boolean(capability));
+    const groups = visibleNavGroups([...new Set([...everything, "local:data"])]);
+    expect(groups[1]?.label).toBe("Data");
+    const data = groups.find((group) => group.label === "Data");
+    expect(data?.links.map((link) => link.href)).toEqual([
+      "/data",
+      "/data/files",
+      "/data/leads",
+      "/data/replies",
+      "/data/waitlist",
+      "/data/investors",
+      "/data/dates",
+    ]);
+    expect(data?.links.map((link) => link.label)).toEqual([
+      "Data",
+      "Files",
+      "All leads",
+      "Replies",
+      "Waitlist",
+      "Investors",
+      "Key dates",
+    ]);
+    expect(data?.links.find((link) => link.href === "/data/files")?.key).toBe("f");
+    expect(data?.links.find((link) => link.href === "/data")?.activePrefix).toBeUndefined();
+  });
 });

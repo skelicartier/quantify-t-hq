@@ -41,11 +41,17 @@ export const metadata: Metadata = {
     template: "%s | Quantify Terminal HQ",
   },
   description: "The staff portal for Quantify Terminal.",
-  // Installable on a phone or a desk: the Quantify symbol, as the console and the website.
+  // Installable on a phone or a desk: the Quantify symbol, the November 2026 logo in its
+  // light form (white square, black Q, violet dot). The tab takes the favicon; a desk or
+  // phone, the app icon.
   manifest: "/manifest.webmanifest",
   icons: {
-    icon: [{ url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
-    apple: [{ url: "/icons/apple-icon.png", sizes: "180x180", type: "image/png" }],
+    icon: [
+      { url: "/icons/favicon-light.ico", sizes: "48x48 32x32 16x16" },
+      { url: "/icons/favicon-light.svg", type: "image/svg+xml" },
+      { url: "/icons/hq-icon-white-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/hq-apple-icon-light.png", sizes: "180x180", type: "image/png" }],
   },
   robots: {
     index: false,

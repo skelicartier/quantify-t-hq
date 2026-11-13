@@ -239,14 +239,19 @@ function ReplyItem({
 export default async function RepliesPage() {
   const context = await requireStaff("/mail/replies");
   const now = requestNow();
-  let page: MailRepliesPage | null = null;
-  try {
-    page = await readReplies(context.token);
-  } catch (error) {
-    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
-      throw error;
-  }
+  // Reading replies is a part of working a lead: the service keeps it to those who may
+  // write the CRM. For anyone else the read is not asked for, and the page says who it is
+  // for rather than that the read failed, which it did not.
   const canWrite = hasCapability(context, "crm:write");
+  let page: MailRepliesPage | null = null;
+  if (canWrite) {
+    try {
+      page = await readReplies(context.token);
+    } catch (error) {
+      if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+        throw error;
+    }
+  }
   const rows = page?.enrolments ?? [];
   const outcomes = page?.outcomes ?? [];
   const labels = Object.fromEntries(outcomes.map((outcome) => [outcome.key, outcome.label]));
@@ -263,7 +268,11 @@ export default async function RepliesPage() {
         actions={<MailTabs current="/mail/replies" />}
       />
       <div className="page-content">
-        {page === null ? (
+        {!canWrite ? (
+          <Callout tone="neutral">
+            Replies are for Owners, Admins and Sales: saying what a reply was moves its lead.
+          </Callout>
+        ) : page === null ? (
           <Callout tone="danger" role="alert">
             The replies could not be read just now.
           </Callout>
@@ -338,6 +347,7 @@ export default async function RepliesPage() {
                         <div className="outcome-row">
                           <RowAction
                             action={outcomeAction}
+                            className="outcome-row"
                             fields={{ enrolment_id: row.enrolment_id }}
                             buttons={[
                               {

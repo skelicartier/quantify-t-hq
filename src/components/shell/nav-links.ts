@@ -47,6 +47,13 @@ import {
   UserCheck,
   Stethoscope,
   ListChecks,
+  Briefcase,
+  FolderOpen,
+  BookUser,
+  Reply,
+  ClipboardCheck,
+  HandCoins,
+  CalendarDays,
   type LucideIcon,
 } from "lucide-react";
 
@@ -81,6 +88,59 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       { href: "/inbox", label: "Inbox", icon: Bell, key: "i" },
       // Everyone's: the reports they pinned, over whatever their role reads.
       { href: "/reports/dashboard", label: "My dashboard", icon: PanelsTopLeft },
+    ],
+  },
+  {
+    // The founder's real work, kept on his own computer: the papers, every lead and what
+    // Mail merge sent them, the replies, the waitlist, the investors and the dates. The
+    // capability is made up by the layout where the local service is set up (Owners and
+    // Admins only); every page checks `mail:send` for itself.
+    label: "Data",
+    links: [
+      { href: "/data", label: "Data", icon: Briefcase, capability: "local:data" },
+      {
+        href: "/data/files",
+        label: "Files",
+        icon: FolderOpen,
+        activePrefix: "/data/files/",
+        capability: "local:data",
+        key: "f",
+      },
+      {
+        href: "/data/leads",
+        label: "All leads",
+        icon: BookUser,
+        activePrefix: "/data/leads/",
+        capability: "local:data",
+      },
+      {
+        href: "/data/replies",
+        label: "Replies",
+        icon: Reply,
+        activePrefix: "/data/replies/",
+        capability: "local:data",
+      },
+      {
+        href: "/data/waitlist",
+        label: "Waitlist",
+        icon: ClipboardCheck,
+        activePrefix: "/data/waitlist/",
+        capability: "local:data",
+      },
+      {
+        href: "/data/investors",
+        label: "Investors",
+        icon: HandCoins,
+        activePrefix: "/data/investors/",
+        capability: "local:data",
+      },
+      {
+        href: "/data/dates",
+        label: "Key dates",
+        icon: CalendarDays,
+        activePrefix: "/data/dates/",
+        capability: "local:data",
+      },
     ],
   },
   {

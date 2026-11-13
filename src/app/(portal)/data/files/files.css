@@ -1,0 +1,420 @@
+/* Data › Files: the folder column beside the list, the drop zone and the tray, and one
+   file's preview. Tokens only; phone rules at 720px; no side bars (the drop zone is a full
+   thin border, dashed while something is dragged over it). */
+@layer pages {
+  .hqdata-files {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+
+  .hqdata-files__main {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hqdata-files__main > * {
+    min-width: 0;
+  }
+
+  /* ---- the folder column */
+  .hqdata-folders__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .hqdata-folders__list li[data-depth="2"] {
+    padding-inline-start: 14px;
+  }
+
+  .hqdata-folders__list li[data-depth="3"] {
+    padding-inline-start: 28px;
+  }
+
+  .hqdata-folders__list li[data-depth="4"] {
+    padding-inline-start: 42px;
+  }
+
+  .hqdata-folders__item {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--text);
+    font-size: var(--fs-ui);
+    text-decoration: none;
+  }
+
+  .hqdata-folders__item:hover {
+    background: var(--panel-soft);
+  }
+
+  .hqdata-folders__item[aria-current="page"] {
+    background: var(--accent-wash);
+    font-weight: 600;
+  }
+
+  .hqdata-folders__name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-folders__count {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .hqdata-folder-select {
+    display: none;
+  }
+
+  .hqdata-folder-select__row {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .hqdata-folder-select .select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .hqdata-crumb {
+    font-size: var(--fs-ui);
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-crumb a {
+    color: inherit;
+  }
+
+  .hqdata-search {
+    margin: 0;
+    flex-wrap: wrap;
+  }
+
+  .hqdata-find-count,
+  .hqdata-jobs {
+    margin: 0;
+  }
+
+  /* The words found: full text colour and weight on the quiet line, no tint (a tint
+     under quiet text falls below 4.5:1). */
+  .hqdata-snippet mark {
+    background: none;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .hqdata-subfolders {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .hqdata-subfolders li {
+    display: grid;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-row-acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    row-gap: 6px;
+    align-items: center;
+  }
+
+  .hqdata-more {
+    display: grid;
+    gap: 12px;
+    justify-items: start;
+  }
+
+  .hqdata-more > form {
+    width: 100%;
+  }
+
+  .hqdata-confirm__title {
+    margin: 0 0 6px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-to {
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- the drop zone and the tray */
+  .hqdata-drop {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .hqdata-drop[data-dragging] {
+    border-style: dashed;
+    border-color: var(--accent);
+    background: var(--accent-wash);
+  }
+
+  .hqdata-drop__text {
+    margin: 0;
+    font-size: var(--fs-body);
+  }
+
+  .hqdata-drop__phone {
+    display: none;
+  }
+
+  .hqdata-drop__buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    row-gap: 6px;
+  }
+
+  .hqdata-tray {
+    display: grid;
+    gap: 8px;
+  }
+
+  .hqdata-tray__notice {
+    margin: 0;
+    color: var(--danger);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-tray__rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .hqdata-tray__row {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) auto minmax(120px, 160px) minmax(0, 3fr);
+    gap: 4px 12px;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-tray__name {
+    display: grid;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-tray__size {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    white-space: nowrap;
+  }
+
+  .hqdata-tray__bar {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+  }
+
+  .hqdata-tray__bar progress {
+    width: 100%;
+    min-width: 60px;
+    accent-color: var(--accent);
+  }
+
+  .hqdata-tray__outcome {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-tray__choices {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    row-gap: 6px;
+  }
+
+  .hqdata-tray__summary {
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  /* ---- one file */
+  .hqdata-preview {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .hqdata-preview__frame {
+    width: 100%;
+    height: min(80vh, 1100px);
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .hqdata-preview__open {
+    display: none;
+    margin: 0;
+  }
+
+  .hqdata-preview__heading {
+    margin: 4px 0 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-preview__image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--line-soft);
+  }
+
+  .hqdata-preview__count {
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-preview__scroll {
+    margin: 0;
+    max-height: 60vh;
+    overflow: auto;
+    padding: 10px 12px;
+    border: 1px solid var(--line-soft);
+    background: var(--panel-soft);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-activity {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .hqdata-activity li {
+    display: grid;
+    gap: 2px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-share {
+    max-width: 640px;
+  }
+
+  .hqdata-share__from,
+  .hqdata-share__line {
+    margin: 0;
+  }
+
+  .hqdata-share__sheet {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    row-gap: 6px;
+    align-items: center;
+    margin-top: 12px;
+  }
+
+  .hqdata-fingerprint {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+  }
+
+  .hqdata-used {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 4px;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-files {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-files__side {
+      display: none;
+    }
+
+    .hqdata-folder-select {
+      display: block;
+    }
+
+    .hqdata-drop__desk,
+    .hqdata-drop__folder {
+      display: none;
+    }
+
+    .hqdata-drop__phone {
+      display: inline;
+    }
+
+    .hqdata-tray__row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .hqdata-tray__bar,
+    .hqdata-tray__outcome {
+      grid-column: 1 / -1;
+    }
+
+    .hqdata-preview__frame {
+      display: none;
+    }
+
+    .hqdata-preview__open {
+      display: block;
+    }
+  }
+}
+
+/* On paper: the open folder's table, one file's details and versions; never the frame. */
+@media print {
+  .hqdata-preview__frame,
+  .hqdata-tray,
+  .hqdata-files__side,
+  .hqdata-folder-select,
+  .hqdata-share {
+    display: none !important;
+  }
+
+  .hqdata-files {
+    display: block;
+  }
+
+  .hqdata-preview__scroll {
+    max-height: none;
+    overflow: visible;
+  }
+}

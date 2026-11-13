@@ -1,0 +1,54 @@
+/* Investors: the list, the first visit's list chooser, money per currency, and the record.
+   Tokens only; phone rules at 720px; no side bars, no bars of any kind. Prefixed hqdata-. */
+@layer pages {
+  .hqdata-investors {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-investors__setup {
+    max-width: 520px;
+  }
+
+  .hqdata-investors__more {
+    display: grid;
+    gap: 16px;
+  }
+
+  .hqdata-investors__more h3 {
+    margin: 0 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-investors__lists {
+    display: grid;
+    gap: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  /* An amount in its own currency: figures in tabular type, one per currency, never summed across. */
+  .hqdata-money {
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-investor {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-investors__setup {
+      max-width: none;
+    }
+
+    .hqdata-investors .filter-strip__search {
+      flex-wrap: wrap;
+      row-gap: 6px;
+    }
+  }
+}

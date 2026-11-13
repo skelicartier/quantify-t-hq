@@ -12,6 +12,7 @@ import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readPreferences } from "@/lib/api/views";
 import { DEV_PERSONAS, devAutologinPersona } from "@/lib/auth/dev-bypass";
 import { readHqTheme } from "@/lib/dal/theme";
+import { withDataNav } from "@/lib/data/access";
 import { setTimeZoneAction } from "@/app/(portal)/_actions/time-zone";
 import { formatAbsolute } from "@/lib/format";
 
@@ -59,7 +60,9 @@ export default async function PortalLayout({ children }: Readonly<{ children: Re
           environment: me.environment,
           devPersonas: devAutologinPersona() ? DEV_PERSONAS : undefined,
         }}
-        capabilities={me.capabilities}
+        // Plus the made-up `local:data` where the local service is set up, so the rail
+        // shows the Data group only on the one computer that has it.
+        capabilities={withDataNav(me.capabilities)}
         elevation={
           me.elevation
             ? {

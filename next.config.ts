@@ -46,6 +46,12 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
+      // Data's file view is the one response the portal's own pages may frame (the PDF
+      // preview): a later entry for the same key on the same path wins (spec §3.10).
+      {
+        source: "/data/files/:fileId/view",
+        headers: [{ key: "X-Frame-Options", value: "SAMEORIGIN" }],
+      },
       { source: "/", headers: noStore },
       { source: "/login", headers: noStore },
       { source: "/login/:path*", headers: noStore },
@@ -54,6 +60,9 @@ const nextConfig: NextConfig = {
       { source: "/home", headers: noStore },
       { source: "/me/:path*", headers: noStore },
       { source: "/admin/:path*", headers: noStore },
+      // Data is real papers and real people: nothing of it is kept by a browser's cache.
+      { source: "/data", headers: noStore },
+      { source: "/data/:path*", headers: noStore },
     ];
   },
 };

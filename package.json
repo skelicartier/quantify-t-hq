@@ -22,8 +22,11 @@
     "test:e2e": "playwright test",
     "validate": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
     "mock:hq": "tsx scripts/mock-hq-api.ts",
+    "mail-merge": "tsx scripts/mail-merge-service.ts",
     "check:hq-ui": "tsx scripts/screenshot-hq.ts",
-    "check:passkeys": "tsx scripts/e2e-passkeys.ts"
+    "check:passkeys": "tsx scripts/e2e-passkeys.ts",
+    "check:mail-merge": "tsx scripts/e2e-mail-merge.ts",
+    "check:data": "tsx scripts/e2e-data.ts"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "1.1.1",
@@ -32,6 +35,7 @@
     "pdf-lib": "1.17.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "unpdf": "2.1.0",
     "zod": "4.5.4"
   },
   "devDependencies": {

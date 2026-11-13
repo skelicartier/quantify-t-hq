@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { markMentionSeenAction } from "@/app/(portal)/_actions/mentions";
 import { DealFlags, DueChip, FirstReplyClock } from "@/components/crm/pills";
+import { DataHomeBlock, dataOwedRows, mailLine, readDataHome } from "@/components/data/home-block";
 import { RowAction } from "@/components/ui/row-action";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
@@ -10,7 +11,7 @@ import { Callout } from "@/components/ui/callout";
 import { LocalTime } from "@/components/ui/local-time";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { Timestamp } from "@/components/ui/timestamp";
-import { requireStaff } from "@/lib/access/core";
+import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { readHome, type HomeAggregate } from "@/lib/api/home";
 import { isoDay } from "@/lib/crm/dates";
@@ -50,7 +51,17 @@ export const dynamic = "force-dynamic";
 
 type OwedRow = {
   key: string;
-  kind: "Lead" | "Ticket" | "Task" | "Meeting" | "Deal" | "Renewal" | "Mail";
+  kind:
+    | "Lead"
+    | "Ticket"
+    | "Task"
+    | "Meeting"
+    | "Deal"
+    | "Renewal"
+    | "Mail"
+    | "Follow-up"
+    | "Waitlist"
+    | "Investor";
   href: string;
   title: string;
   sub: string;
@@ -69,15 +80,29 @@ export default async function HomePage() {
   const now = requestNow();
   const today = isoDay(now);
 
-  let home: HomeAggregate | null = null;
-  try {
-    home = await readHome(context.token);
-  } catch (error) {
-    if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
-      throw error;
-  }
+  // Data (the service on this Mac) is read beside Home's own read, never after it, and its
+  // failure is one sentence in its own block; it never stops Home from drawing.
+  const [home, data] = await Promise.all([
+    readHome(context.token).catch((error: unknown): HomeAggregate | null => {
+      if (!(error instanceof HqApiUnavailableError || error instanceof HqApiRequestError))
+        throw error;
+      return null;
+    }),
+    readDataHome(hasCapability(context, "mail:send")),
+  ]);
 
   const owed: OwedRow[] = [];
+  if (data?.state === "ok")
+    for (const row of dataOwedRows(data.overview))
+      owed.push({
+        key: row.key,
+        kind: row.kind,
+        href: row.href,
+        title: row.title,
+        sub: row.sub,
+        status: <DueChip due={row.due_on} today={data.overview.today} />,
+        urgency: row.urgency,
+      });
   if (home) {
     const target = home.leads?.first_reply_target_minutes ?? 60;
     for (const lead of home.leads?.leads ?? []) {
@@ -191,8 +216,8 @@ export default async function HomePage() {
         urgency: 2,
       });
     }
-    owed.sort((a, b) => a.urgency - b.urgency);
   }
+  owed.sort((a, b) => a.urgency - b.urgency);
 
   return (
     <>
@@ -202,9 +227,16 @@ export default async function HomePage() {
         description="Everything owed to somebody outside the team, most urgent first, beside the day's figures and meetings. Each row is one keystroke from its record."
       />
       {home === null ? (
-        <Callout tone="danger" role="alert" title="Today could not be read">
-          This is a read failure, not a quiet day. It retries on the next refresh.
-        </Callout>
+        <>
+          <Callout tone="danger" role="alert" title="Today could not be read">
+            This is a read failure, not a quiet day. It retries on the next refresh.
+          </Callout>
+          {data && (
+            <aside className="briefing__side">
+              <DataHomeBlock data={data} />
+            </aside>
+          )}
+        </>
       ) : (
         <>
           <StatGrid label="At a glance">
@@ -268,8 +300,9 @@ export default async function HomePage() {
               </div>
               {owed.length === 0 ? (
                 <p className="briefing__clear">
-                  Nothing is owed. Every lead has been answered, every timer is inside its target,
-                  and no task is due.
+                  {data?.state === "ok"
+                    ? "Nothing is owed. Every lead has been answered, every timer is inside its target, no task is due, and no follow-up is due."
+                    : "Nothing is owed. Every lead has been answered, every timer is inside its target, and no task is due."}
                 </p>
               ) : (
                 <ol className="owed">
@@ -290,6 +323,7 @@ export default async function HomePage() {
             </section>
 
             <aside className="briefing__side">
+              <DataHomeBlock data={data} />
               {home.inbox?.available && (
                 <section className="briefing__block" aria-labelledby="inbox-title">
                   <div className="briefing__head">
@@ -388,21 +422,41 @@ export default async function HomePage() {
                   )}
                 </section>
               )}
-              {home.mail && (
+              {data ? (
+                // Mail merge on this Mac is the sender: its own figures, not the mock's.
                 <section className="briefing__block" aria-labelledby="mail-title">
                   <div className="briefing__head">
                     <h2 id="mail-title">Mail</h2>
-                    <Link className="briefing__more" href="/mail">
-                      Open mail
+                    <Link className="briefing__more" href="/mail/merge">
+                      Open Mail merge
                     </Link>
                   </div>
                   <p className="briefing__clear">
-                    {home.mail.sending_enabled
-                      ? `${home.mail.sent_today} of ${home.mail.daily_cap} sent today; ${home.mail.running} ${home.mail.running === 1 ? "campaign" : "campaigns"} sending.`
-                      : "Sending is switched off."}
-                    {home.mail.paused > 0 && ` ${home.mail.paused} paused.`}
+                    {data.mail
+                      ? mailLine(
+                          data.mail,
+                          data.state === "ok" ? data.overview.sent_today : undefined,
+                        )
+                      : "Mail merge is not answering."}
                   </p>
                 </section>
+              ) : (
+                home.mail && (
+                  <section className="briefing__block" aria-labelledby="mail-title">
+                    <div className="briefing__head">
+                      <h2 id="mail-title">Mail</h2>
+                      <Link className="briefing__more" href="/mail">
+                        Open mail
+                      </Link>
+                    </div>
+                    <p className="briefing__clear">
+                      {home.mail.sending_enabled
+                        ? `${home.mail.sent_today} of ${home.mail.daily_cap} sent today; ${home.mail.running} ${home.mail.running === 1 ? "campaign" : "campaigns"} sending.`
+                        : "Sending is switched off."}
+                      {home.mail.paused > 0 && ` ${home.mail.paused} paused.`}
+                    </p>
+                  </section>
+                )
               )}
               {home.security && (
                 <section className="briefing__block" aria-labelledby="security-title">

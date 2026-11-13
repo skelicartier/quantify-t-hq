@@ -4,6 +4,7 @@ import { hasCapability, requireStaff } from "@/lib/access/core";
 import { FALLBACK_LETTERHEAD, readCompany, type Letterhead } from "@/lib/api/company";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import { createExport, type ExportFile } from "@/lib/api/reports";
+import { onDemoService } from "@/lib/demo-figures";
 import { loadDocumentAssets } from "@/lib/documents/assets";
 import { stampLabel } from "@/lib/documents/cells";
 import { buildTablePdf } from "@/lib/documents/pdf";
@@ -121,6 +122,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     if (error instanceof HqApiUnavailableError) return back("failed");
     throw error;
+  }
+
+  // Records from the demo service on this machine leave marked as demo data, in the file's
+  // name and title, so an export cannot pass for the company's own.
+  if (onDemoService()) {
+    exported = {
+      ...exported,
+      title: `${exported.title} (demo data)`,
+      filename: exported.filename.replace(/(\.[a-z0-9]+)?$/i, "-demo-data$1"),
+    };
   }
 
   if (exported.format === "csv") {

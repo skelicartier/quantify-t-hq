@@ -1,0 +1,58 @@
+/* Key dates: the list grouped Overdue and then by month, each row's acts, the edit form,
+   and the suggestions with the AGM date they are worked out from. Tokens only; phone rules
+   at 720px; no side bars. Prefixed hqdata-. Printed, it is the list: the sheet for the CA. */
+@layer pages {
+  .hqdata-dates {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-dates__month {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .hqdata-dates__heading {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 600;
+  }
+
+  .hqdata-dates__acts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-dates__edit {
+    display: grid;
+    gap: 12px;
+    max-width: 560px;
+  }
+
+  .hqdata-dates__facts {
+    max-width: 320px;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-dates__acts {
+      justify-content: flex-start;
+      row-gap: 6px;
+    }
+
+    .hqdata-dates__edit,
+    .hqdata-dates__facts {
+      max-width: none;
+    }
+  }
+}
+
+@media print {
+  .hqdata-dates__acts {
+    display: none;
+  }
+}

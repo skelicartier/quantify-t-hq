@@ -17,11 +17,15 @@
  * Output: test-results/hq/<width>/<theme>/<name>.png
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { chromium, type Browser, type Download, type Page } from "playwright";
 
 const BASE = process.env.HQ_UI_BASE ?? "http://127.0.0.1:3000";
+/** The HQ mock the walk resets and nudges; a copy on another port sets HQ_MOCK_BASE. */
+const MOCK = (process.env.HQ_MOCK_BASE ?? "http://127.0.0.1:7071").replace(/\/+$/, "");
 const OUT = "test-results/hq";
 /** The quarter after today's, for the forecast screens (the current one may end today). */
 const NEXT_QUARTER = (() => {
@@ -3234,12 +3238,36 @@ async function captureSecurityFlows(page: Page, folder: string) {
 }
 
 /**
- * Mail, end to end through the server actions and the mock's rules: a colleague's
- * campaign approved (the sudo window is open) and started, the owner's own draft tested
- * and submitted (it then waits for someone else), a segment checked, a sequence's
+ * Mail, end to end through the server actions and the mock's rules: the owner's own
+ * draft tested and submitted (it then waits for someone else), a colleague's campaign
+ * approved (the sudo window is open) and started, a segment checked, a sequence's
  * enrolment checked. Later passes find the work done and only look.
  */
 async function captureMailFlows(page: Page, folder: string) {
+  // The owner's own draft first, before anything is sent today. It goes to the people the
+  // webinar campaign below writes to, and a person written to today is skipped by the
+  // next campaign: started first, the webinar took every one of them at the hours when
+  // all are inside their sending window (the afternoon in India), the draft was left
+  // with "0 eligible recipients", Submit stayed off as it should, and the walk waited
+  // fifteen seconds for a button that was right to be disabled. In the morning some
+  // sends were deferred, a few people stayed eligible, and the same walk passed.
+  await page.goto(`${BASE}/mail/campaigns/${MAIL.roadmap}`, { waitUntil: "networkidle" });
+  if ((await page.locator("button", { hasText: "Send me a test" }).count()) > 0) {
+    await page.locator("button", { hasText: "Send me a test" }).click();
+    await page.waitForSelector("button:has-text('Submit'):not([disabled])", { timeout: 15_000 });
+    await page.locator("button", { hasText: "Submit" }).click();
+    await page.waitForSelector(".record-banners", { timeout: 15_000 });
+  }
+  if ((await page.locator(".callout__title", { hasText: "Waiting for approval" }).count()) === 0) {
+    report(
+      `${folder}/mail-campaign-submitted`,
+      "the owner's own draft is not waiting for someone else",
+    );
+  }
+  await assertAccessible(page, `${folder}/mail-campaign-submitted`);
+  await page.screenshot({ path: `${OUT}/${folder}/mail-campaign-submitted.png`, fullPage: true });
+  console.log(`  ✓ ${folder}/mail-campaign-submitted`);
+
   await page.goto(`${BASE}/mail/campaigns/${MAIL.webinar}`, { waitUntil: "networkidle" });
   if ((await page.locator("button", { hasText: "Approve" }).count()) > 0) {
     await page.locator("button", { hasText: "Approve" }).click();
@@ -3263,23 +3291,6 @@ async function captureMailFlows(page: Page, folder: string) {
   await assertAccessible(page, `${folder}/mail-campaign-started`);
   await page.screenshot({ path: `${OUT}/${folder}/mail-campaign-started.png`, fullPage: true });
   console.log(`  ✓ ${folder}/mail-campaign-started`);
-
-  await page.goto(`${BASE}/mail/campaigns/${MAIL.roadmap}`, { waitUntil: "networkidle" });
-  if ((await page.locator("button", { hasText: "Send me a test" }).count()) > 0) {
-    await page.locator("button", { hasText: "Send me a test" }).click();
-    await page.waitForSelector("button:has-text('Submit'):not([disabled])", { timeout: 15_000 });
-    await page.locator("button", { hasText: "Submit" }).click();
-    await page.waitForSelector(".record-banners", { timeout: 15_000 });
-  }
-  if ((await page.locator(".callout__title", { hasText: "Waiting for approval" }).count()) === 0) {
-    report(
-      `${folder}/mail-campaign-submitted`,
-      "the owner's own draft is not waiting for someone else",
-    );
-  }
-  await assertAccessible(page, `${folder}/mail-campaign-submitted`);
-  await page.screenshot({ path: `${OUT}/${folder}/mail-campaign-submitted.png`, fullPage: true });
-  console.log(`  ✓ ${folder}/mail-campaign-submitted`);
 
   await page.goto(`${BASE}/mail/segments`, { waitUntil: "networkidle" });
   await page.locator("button", { hasText: "Check who matches" }).click();
@@ -3418,7 +3429,7 @@ async function captureUnsubscribe(page: Page, folder: string) {
     body: "List-Unsubscribe=One-Click",
   });
   const readBack = (await fetch(
-    `http://127.0.0.1:7071/api/v1/public/mail/unsubscribe/mock-${MAIL.stopOneClick}`,
+    `${MOCK}/api/v1/public/mail/unsubscribe/mock-${MAIL.stopOneClick}`,
   ).then((response) => response.json())) as { marketing_state?: string };
   if (oneClick.status !== 200 || readBack.marketing_state !== "unsubscribed") {
     report(
@@ -3641,7 +3652,7 @@ async function run(browser: Browser) {
   }
 }
 
-await fetch("http://127.0.0.1:7071/api/v1/mock/reset", { method: "POST" }).catch(() => {
+await fetch(`${MOCK}/api/v1/mock/reset`, { method: "POST" }).catch(() => {
   console.error("mock-hq is not running; start it with `npm run mock:hq`.");
   process.exit(1);
 });
@@ -3960,7 +3971,7 @@ async function captureBackupFlows(page: Page, folder: string) {
       .waitFor({ timeout: 15_000 });
     await shoot(page, `${folder}/admin-backup-asked`);
   }
-  const approved = await fetch("http://127.0.0.1:7071/api/v1/mock/approve-pending", {
+  const approved = await fetch(`${MOCK}/api/v1/mock/approve-pending`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ kind: "backup", note: "Fine for the board" }),
@@ -4351,7 +4362,7 @@ async function captureFindFlows(page: Page, folder: string) {
  * the page then says when, by whom and to whom, and nothing open is theirs.
  */
 async function captureHandoverFlows(page: Page, folder: string) {
-  const given = await fetch("http://127.0.0.1:7071/api/v1/mock/give-work", {
+  const given = await fetch(`${MOCK}/api/v1/mock/give-work`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "newbie2@hq.test" }),
@@ -4425,7 +4436,7 @@ async function captureRepeatTaskFlows(page: Page, folder: string) {
 async function captureDeskTeamFlows(page: Page, folder: string) {
   const ticketId = "sup_00000000000000000004";
   const colleague = (extra: Record<string, unknown>) =>
-    fetch("http://127.0.0.1:7071/api/v1/mock/desk-colleague", {
+    fetch(`${MOCK}/api/v1/mock/desk-colleague`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: "support@hq.test", ticket_id: ticketId, ...extra }),
@@ -4589,7 +4600,7 @@ async function captureOneOffFlows(page: Page, folder: string) {
       `${folder}/email-no-mailbox`,
       "the page neither offers an email nor says to connect a mailbox",
     );
-  const given = await fetch("http://127.0.0.1:7071/api/v1/mock/give-mailbox", {
+  const given = await fetch(`${MOCK}/api/v1/mock/give-mailbox`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "owner@hq.test" }),
@@ -4937,9 +4948,175 @@ async function capturePhoneFlows(page: Page, folder: string) {
       report(`${folder}/one-hand-approvals`, `${strip.barred} figure(s) carry a bar down the left`);
   }
   await shoot(page, `${folder}/one-hand-approvals`);
+
+  // A thumb's press. On a phone a button takes 6px more above and below than it is drawn
+  // (44px, or 40px for a small one), and no press that lands inside one control is taken
+  // by another button's reach; at a desk nothing is added. Replies is here because its
+  // outcome buttons once stood one on another with no gap.
+  for (const path of ["/inbox", "/support/sup_00000000000000000004", "/mail/replies"]) {
+    await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
+    const presses = await page.evaluate(() =>
+      [...document.querySelectorAll(".btn")]
+        .filter((button) => button.checkVisibility() && button.getBoundingClientRect().height > 0)
+        .map((button) => {
+          const reach = getComputedStyle(button, "::before");
+          const grown = reach.content !== "none" && reach.position === "absolute";
+          const added = grown ? -(parseFloat(reach.top) + parseFloat(reach.bottom)) : 0;
+          return {
+            grown,
+            drawn: Math.round(button.getBoundingClientRect().height),
+            press: Math.round(button.getBoundingClientRect().height + added),
+          };
+        }),
+    );
+    if (presses.length === 0) report(`${folder}/one-hand-press`, `${path} shows no buttons`);
+    const short = presses.filter((press) => press.press < 40 || press.press - press.drawn < 12);
+    if (phone && short.length > 0)
+      report(
+        `${folder}/one-hand-press`,
+        `${short.length} of ${presses.length} buttons on ${path} take a press under 40px tall, or under 12px more than they are drawn (the shortest ${Math.min(...short.map((press) => press.press))}px)`,
+      );
+    const grown = presses.filter((press) => press.grown);
+    if (!phone && grown.length > 0)
+      report(
+        `${folder}/one-hand-press`,
+        `${grown.length} buttons on ${path} carry the phone's press area at a desk`,
+      );
+    // Press just inside the top and the bottom of everything pressable: it must be the
+    // thing itself that takes it, not a button above or below reaching in.
+    const taken = await page.evaluate(() => {
+      const found: string[] = [];
+      const pressable = document.querySelectorAll(
+        "a[href], button, input:not([type=hidden]), select, textarea, summary",
+      );
+      for (const control of pressable) {
+        if (!control.checkVisibility({ contentVisibilityAuto: true })) continue;
+        control.scrollIntoView({ block: "center", inline: "nearest" });
+        const box = control.getBoundingClientRect();
+        if (box.width < 2 || box.height < 3) continue;
+        if (box.top < 0 || box.bottom > innerHeight || box.left < 0 || box.right > innerWidth)
+          continue;
+        for (const y of [box.top + 1.5, box.bottom - 1.5]) {
+          const hit = document.elementFromPoint(box.left + box.width / 2, y);
+          if (!hit || hit === control || control.contains(hit) || hit.contains(control)) continue;
+          const other = hit.closest(".btn");
+          if (!other || other === control) continue;
+          const drawn = other.getBoundingClientRect();
+          if (y >= drawn.top && y <= drawn.bottom) continue;
+          found.push(
+            `"${(other.textContent ?? "").trim().slice(0, 24)}" takes a press on "${(control.textContent ?? "").trim().slice(0, 24)}"`,
+          );
+        }
+      }
+      return found;
+    });
+    if (taken.length > 0)
+      report(
+        `${folder}/one-hand-press`,
+        `${taken.length} press(es) on ${path} land on the wrong button: ${taken.slice(0, 3).join("; ")}`,
+      );
+  }
+  await shoot(page, `${folder}/one-hand-press`);
+}
+
+/**
+ * Releases, against the release function the mock serves under /api (`.env.local` carries
+ * QT_UPDATE_DEPLOY_URL=http://127.0.0.1:7071): the catalogue as it was published, a
+ * release signed and served, stopped and served again, and the one before it put back —
+ * which leaves the catalogue serving what it served, for the next pass.
+ */
+async function captureReleaseFlows(page: Page, folder: string) {
+  await page.goto(`${BASE}/product/releases`, { waitUntil: "networkidle" });
+  if ((await page.locator("text=The release service is not configured for HQ").count()) > 0) {
+    report(
+      `${folder}/releases`,
+      "the release service is not set: add QT_UPDATE_DEPLOY_URL=http://127.0.0.1:7071 to .env.local",
+    );
+    return;
+  }
+  if ((await page.locator("#sudo-code:visible").count()) > 0) {
+    await page.locator("#sudo-code:visible").first().fill("000000");
+    await page.locator(".sudo-gate:visible button[type=submit]").first().click();
+    await page.waitForSelector(".sudo-gate--open", { timeout: 10_000 });
+  }
+  const row = (version: string) => page.locator("table tbody tr", { hasText: version });
+  const state = async (version: string, words: string) => {
+    try {
+      await row(version).filter({ hasText: words }).first().waitFor({ timeout: 15_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // Each press swaps the button under the pointer for another (stop for serve, a row for
+  // the one above it), and on a phone the pointer is left over the new one part-way
+  // through its hover colours: a contrast nobody is ever shown. Take the pointer off and
+  // let the button finish before the capture.
+  const settled = async (name: string) => {
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(400);
+    await shoot(page, name);
+  };
+  if (!(await state("1.4.0", "Serving")))
+    report(`${folder}/releases`, "the catalogue does not show 1.4.0 as the release served");
+  await settled(`${folder}/releases`);
+
+  await page.fill('input[name="version"]', "1.5.0");
+  await page.fill('input[name="name"]', "Quantify Terminal");
+  await page.fill('input[name="title"]', "Harness release");
+  await page.fill('textarea[name="description"]', "Published by the harness, then rolled back.");
+  await page.fill('textarea[name="features"]', "One\nTwo");
+  await page.fill('input[name="download_page_url"]', "https://www.quantifyterminal.com/download");
+  await page.fill(
+    'input[name="windows_url"]',
+    "https://releases.example.test/quantify-terminal-1.5.0.exe",
+  );
+  await page.fill('input[name="checksum_windows"]', "d".repeat(64));
+  await page.locator('fieldset:has-text("Publish") input[name="confirm_version"]').fill("1.5.0");
+  await page.locator("button", { hasText: "Sign and publish" }).click();
+  if (!(await state("1.5.0", "Serving")))
+    report(`${folder}/release-published`, "1.5.0 was published and is not shown as served");
+  if (!(await state("1.4.0", "Superseded")))
+    report(`${folder}/release-published`, "1.4.0 is not shown as superseded by 1.5.0");
+  await settled(`${folder}/release-published`);
+
+  await row("1.5.0").locator("button", { hasText: "Stop serving this release" }).click();
+  if (!(await state("1.5.0", "Not served")))
+    report(`${folder}/release-stopped`, "1.5.0 was stopped and is not shown as not served");
+  await settled(`${folder}/release-stopped`);
+  await row("1.5.0").locator("button", { hasText: "Serve this release again" }).click();
+  if (!(await state("1.5.0", "Serving")))
+    report(`${folder}/release-stopped`, "1.5.0 was served again and is not shown as served");
+
+  await row("1.4.0").locator('input[name="confirm_version"]').fill("1.4.0");
+  await row("1.4.0").locator("button", { hasText: "Roll back" }).click();
+  if (!(await state("1.4.0", "Serving")))
+    report(`${folder}/release-rolled-back`, "rolling back did not put 1.4.0 back as served");
+  await settled(`${folder}/release-rolled-back`);
+}
+
+/**
+ * Data: the founder's real section, walked only as a part and only on a copy. It is in
+ * FLOWS alone, never in SIGNED_IN_PAGES or captureInteractions: a full walk on the live
+ * clone would open real data. Its screens come from each walk module's `shots`
+ * (`scripts/data-walk/*.ts`), against the stand-in `scripts/e2e-data-service.ts` runs.
+ */
+async function captureDataFlows(page: Page, folder: string) {
+  if (new URL(BASE).port === "3000") {
+    report(`${folder}/data`, "refusing: :3000 is the live portal; walk a copy");
+    return;
+  }
+  const walkDir = join(dirname(fileURLToPath(import.meta.url)), "data-walk");
+  for (const name of readdirSync(walkDir)
+    .filter((file) => file.endsWith(".ts"))
+    .sort()) {
+    const loaded = (await import(`./data-walk/${name.slice(0, -3)}`)) as { shots?: Shot[] };
+    for (const shot of loaded.shots ?? []) await capture(page, folder, shot);
+  }
 }
 
 const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
+  data: captureDataFlows,
   prospects: captureProspectFlows,
   mail: captureMailFlows,
   mailboxes: captureMailboxFlows,
@@ -4969,6 +5146,7 @@ const FLOWS: Record<string, (page: Page, folder: string) => Promise<void>> = {
   undo: captureUndoFlows,
   timezone: captureTimeZoneFlows,
   phone: capturePhoneFlows,
+  releases: captureReleaseFlows,
 };
 
 async function runPart(browser: Browser) {

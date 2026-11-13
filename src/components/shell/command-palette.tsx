@@ -73,13 +73,36 @@ const KIND_LABEL: Record<SearchHit["kind"], string> = {
   article: "Help article",
 };
 
-/** What ⌘K can make, for a role that writes the CRM: each opens its page's own form. */
-const CREATE: Array<{ id: string; title: string; href: string; where: string }> = [
+/**
+ * What ⌘K can make: each opens its page's own form. The CRM's need a role that writes the
+ * CRM; an entry naming its own `capability` needs that one instead (Data's, on this Mac).
+ */
+const CREATE: Array<{
+  id: string;
+  title: string;
+  href: string;
+  where: string;
+  capability?: string;
+}> = [
   { id: "company", title: "New company", href: "/companies?new=1", where: "Companies" },
   { id: "person", title: "New person", href: "/people?new=1", where: "People" },
   { id: "lead", title: "New lead", href: "/leads?new=1", where: "Leads" },
   { id: "meeting", title: "Log a meeting", href: "/meetings?new=1", where: "Meetings" },
   { id: "task", title: "New task", href: "/tasks?new=1", where: "Tasks" },
+  {
+    id: "reply",
+    title: "Record a reply",
+    href: "/data/replies?new=1",
+    where: "Replies",
+    capability: "local:data",
+  },
+  {
+    id: "files",
+    title: "Add files",
+    href: "/data/files?add=1",
+    where: "Files",
+    capability: "local:data",
+  },
 ];
 
 function readRecents(): string[] {
@@ -229,16 +252,16 @@ export function CommandPalette({ capabilities, search, recent }: CommandPaletteP
             icon: Clock,
             run: go(hit.href),
           }));
-    const create: Command[] = canCreate
-      ? CREATE.map((item) => ({
-          id: `new:${item.id}`,
-          group: "Create" as const,
-          title: item.title,
-          subtitle: `Opens the form on ${item.where}`,
-          icon: Plus,
-          run: go(item.href),
-        }))
-      : [];
+    const create: Command[] = CREATE.filter((item) =>
+      item.capability ? capabilities.includes(item.capability) : canCreate,
+    ).map((item) => ({
+      id: `new:${item.id}`,
+      group: "Create" as const,
+      title: item.title,
+      subtitle: `Opens the form on ${item.where}`,
+      icon: Plus,
+      run: go(item.href),
+    }));
     const navigation: Command[] = navLinks.map((link) => ({
       id: `go:${link.href}`,
       group: "Go to" as const,
@@ -276,7 +299,7 @@ export function CommandPalette({ capabilities, search, recent }: CommandPaletteP
     return typed.length >= 2
       ? [...records, ...navigation, ...create, ...actions]
       : [...lately, ...create, ...navigation, ...actions];
-  }, [navLinks, hits, viewed, typed, canCreate, singleKeys, theme, setTheme, router]);
+  }, [navLinks, hits, viewed, typed, canCreate, capabilities, singleKeys, theme, setTheme, router]);
 
   const needle = query.trim().toLowerCase();
   const visible = useMemo(() => {

@@ -1,12 +1,13 @@
 import "server-only";
 
 import { cache } from "react";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
-import { grantSudo, readMe, type HqMe } from "@/lib/api/auth";
-import { devAutologinPersona, isDevPersona } from "@/lib/auth/dev-bypass";
-import { readSessionToken } from "@/lib/auth/session";
+import { grantSudo, login, readMe, verifyTotp, type HqMe } from "@/lib/api/auth";
+import { DEV_PERSONAS, devAutologinPersona, isDevPersona } from "@/lib/auth/dev-bypass";
+import { readSessionToken, setSessionCookie } from "@/lib/auth/session";
 import { setRequestTimeZone } from "@/lib/format";
 
 /**
@@ -52,13 +53,45 @@ export const currentStaff = cache(
   },
 );
 
+/**
+ * Development only: a press that finds the session gone signs back in where it landed.
+ * The mock ends an Owner's session after 15 quiet minutes, and typing into a form is quiet,
+ * so the press that follows a long edit arrives signed out. A page load goes through
+ * `/dev/signin` and lands again; a server action cannot (the sign-in route is a GET, and the
+ * action's answer must be the router's own), so it signs in here, sets the cookie, and the
+ * press goes through. Only inside a server action, where a cookie can be set, and once per
+ * request: the page drawn after the action reuses the same sign-in.
+ */
+const devSignBackIn = cache(async (): Promise<StaffContext | null> => {
+  const flag = devAutologinPersona();
+  if (!flag) return null;
+  if ((await headers()).get("next-action") === null) return null;
+  const email = isDevPersona(flag) ? flag : DEV_PERSONAS[0].email;
+  try {
+    const pending = await login(email, "password-123");
+    if (pending.mfa !== "totp") return null;
+    const session = await verifyTotp(pending.pending_token, "000000");
+    await setSessionCookie(session.token);
+    const me = await readMe(session.token);
+    setRequestTimeZone(me.time_zone);
+    return { token: session.token, me };
+  } catch {
+    return null;
+  }
+});
+
 /** The signed-in staff member, or a redirect to sign-in that remembers where to return. */
 export async function requireStaff(nextPath: string): Promise<StaffContext> {
   const state = await currentStaff();
   if (state === "signed-out") {
     const next = nextPath && nextPath !== "/" ? `?next=${encodeURIComponent(nextPath)}` : "";
-    // Development only: a stale cookie (the mock restarted) signs straight back in.
-    if (devAutologinPersona()) redirect(`/dev/signin${next}`);
+    // Development only: a stale cookie (the mock restarted, or the session went quiet)
+    // signs straight back in: in place for a press, through /dev/signin for a page.
+    if (devAutologinPersona()) {
+      const back = await devSignBackIn();
+      if (back) return back;
+      redirect(`/dev/signin${next}`);
+    }
     redirect(`/login${next}`);
   }
   if (state === "unavailable") {

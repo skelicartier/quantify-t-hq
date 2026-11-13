@@ -1,0 +1,228 @@
+/* The waitlist: the list's tools, the stage form, the hold preview and the holds, the
+   colleagues' role selects, and the investor page's readout lines. Tokens only; phone rules
+   at 720px; no side bars. Prefixed hqdata- because .data-table is the shell's. */
+@layer pages {
+  /* Stage tabs, view tabs and the search, in one wrapping row. Positioned, so the search's
+     visually hidden label stays inside it instead of widening the page. */
+  .hqdata-waitlist-tools {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    row-gap: 6px;
+  }
+
+  .hqdata-waitlist-tools > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hqdata-waitlist-more {
+    display: grid;
+    gap: 16px;
+  }
+
+  .hqdata-waitlist-more h3 {
+    margin: 0 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-stages {
+    display: grid;
+    gap: 4px;
+  }
+
+  /* Each stage holds a table that scrolls inside its frame; the grid must not widen for it. */
+  .hqdata-stages > * {
+    min-width: 0;
+  }
+
+  /* The stage form: one group of fields per stage, only the chosen one shown. */
+  .hqdata-stage-form__group {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-stage-form__group[hidden] {
+    display: none;
+  }
+
+  .hqdata-stage-form__group legend {
+    padding: 0 4px;
+    font-size: var(--fs-label);
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* Proof of the yes: the facts under the quote. */
+  .hqdata-proof {
+    display: grid;
+    gap: 4px;
+    margin: 10px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--fs-ui);
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-section-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    row-gap: 6px;
+    margin: 0 0 10px;
+  }
+
+  .hqdata-section-tools .page-note {
+    margin: 0;
+  }
+
+  /* A colleague's role: the select saves on change; the line beside it says so. */
+  .hqdata-role {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-role__said {
+    font-size: var(--fs-label);
+    color: var(--muted);
+  }
+
+  /* The hold preview: every unsent address, ticked. */
+  .hqdata-hold {
+    display: grid;
+    gap: 10px;
+  }
+
+  .hqdata-hold__list {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .hqdata-hold__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 10px;
+    min-height: var(--row-2);
+    padding: 4px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-hold__row .checkbox__label {
+    min-width: 0;
+  }
+
+  /* The holds made, each releasable whole or address by address. */
+  .hqdata-holds {
+    display: grid;
+    gap: 12px;
+    margin: 16px 0 0;
+  }
+
+  .hqdata-holds__title {
+    margin: 0;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-holds__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-holds__list {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* For investors: the date, the definitions, two readout lines, the table. */
+  .hqdata-investors {
+    display: grid;
+    gap: 12px;
+  }
+
+  .hqdata-investors__asof {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 600;
+  }
+
+  .hqdata-investors__definitions {
+    margin: 0;
+    max-width: 72ch;
+    font-size: var(--fs-body);
+    line-height: 1.55;
+  }
+
+  .hqdata-readouts-line {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-readouts-line > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+
+  .hqdata-readouts-line dt {
+    min-width: 96px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .hqdata-readouts-line dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-waitlist-tools .segmented {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+    }
+
+    .hqdata-hold__row {
+      align-items: flex-start;
+    }
+  }
+}
+
+@media print {
+  .hqdata-stage-form__group {
+    border: 0;
+    padding: 0;
+  }
+}

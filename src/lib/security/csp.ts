@@ -40,6 +40,12 @@ export function contentSecurityPolicy(
     // The service worker that shows push notices: 'strict-dynamic' above would refuse it.
     "worker-src 'self'",
     "manifest-src 'self'",
-    "upgrade-insecure-requests",
+    // Not in development, where the server is plain http: a browser holds a redirect it
+    // follows inside a fetch to this rule even on localhost, so the page a link asked
+    // for was requested from https://localhost, which nothing answers, and a navigation
+    // that met a redirect (the proxy's, once the cookie has gone; the dev sign-in's, back
+    // to the page) fell back to a full reload. In production every address is https
+    // already and the rule costs nothing.
+    ...(development ? [] : ["upgrade-insecure-requests"]),
   ].join("; ");
 }

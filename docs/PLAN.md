@@ -26,7 +26,12 @@ danger zone), with real TOTP sign-in. Two repositories:
   uncommitted `src/intelligence/overnight/impact.py`, `src/ui/tabs/deep_research_tab.py`,
   `src/ui/tabs/pulse_tab.py`, `tests/_fabric_coverage_test.db`.
 - `.env.local` is gitignored and must never be committed. It carries
-  `HQ_DEV_AUTOLOGIN=owner@hq.test` (the test bypass; inert in a production build).
+  `HQ_DEV_AUTOLOGIN=owner@hq.test` (the test bypass; inert in a production build) and
+  `QT_UPDATE_DEPLOY_URL=http://127.0.0.1:7071` (Releases, against the release function
+  the mock serves under `/api`) and `HQ_MAIL_MERGE_SOCKET` (Mail merge's local sender).
+- **A real list and the provider key never enter the repository.** Mail merge keeps both in
+  `~/Library/Application Support/hq-mail-merge`. Its tests and its browser walk use invented
+  people on `.example` domains and a stand-in provider.
 - **The mock must mirror the real routes** (route names, methods, payload shapes): the
   route-parity and payload-contract tests enforce it. Any new route = service handler +
   test + mock handler + portal client, in that order.
@@ -64,7 +69,7 @@ npx tsc --noEmit -p tsconfig.json && npx eslint <paths> && npx prettier --write 
 npx vitest run                               # unit + route-parity + payload-contract tests
 npm run check:hq-ui                          # the harness; output in test-results/hq/
 npm run check:passkeys                       # passkeys end to end with a virtual authenticator (dev + mock up; reaches localhost:3000)
-HQ_HARNESS_PAGES='^(prospect|lead-)' HQ_HARNESS_FLOW=prospects npm run check:hq-ui   # one part of the walk, both widths and themes (flows: prospects, mail, fields)
+HQ_HARNESS_PAGES='^(prospect|lead-)' HQ_HARNESS_FLOW=prospects npm run check:hq-ui   # one part of the walk, both widths and themes (flows: prospects, mail, fields, phone, releases and the rest of the script's FLOWS table)
 HQ_HARNESS_WIDTHS=desktop npm run check:hq-ui                                        # the full walk at one width (desktop or phone): about an hour each, under the two-hour task limit
 npx tsx scripts/e2e-leads-import.ts [file.csv] [outDir]   # a file through the import page in a real browser; with no file it writes 1,200 invented rows
 npx tsx scripts/peek-hq.ts <outDir> owner@hq.test /path ...   # screenshots; HQ_PEEK_THEME=light HQ_PEEK_WIDTH=412 HQ_PEEK_AXE=1
@@ -75,6 +80,23 @@ Service (from the product repo root): `.venv/bin/python -m pytest tests/test_hq_
 Personas: `owner@ admin@ sales@ support@ intern@ newbie@hq.test`, password `password-123`,
 every TOTP prompt `000000`. Under the bypass, `/dev/signin?as=<persona>` switches; the
 rail identity menu lists them.
+
+**Where it runs on this machine.** `~/Documents` is in iCloud Drive, which evicts
+`node_modules`, so the portal that answers on `localhost:3000` is a second clone at
+`~/Library/Caches/hq-work/hq`, kept alive by three launchd agents
+(`com.quantifyterminal.hq-dev`, `hq-mock`, `console-mock`; scripts in
+`~/Library/Caches/hq-work/demo`, logs in `~/Library/Logs/hq-demo`). Restart one with
+`launchctl kickstart -k gui/$(id -u)/com.quantifyterminal.hq-mock`; killing its process
+only makes launchd start it again. Three things to know about that clone:
+
+- It has no product repo beside it, so vitest skipped the parity and contract tests
+  (215 of 420) without failing. `~/Library/Caches/hq-work/Quantify Terminal` is now a
+  link to the product repo and the whole suite runs there.
+- A cache folder is the system's to clear. On 2026-10-27 part of `.next/dev` was removed
+  under the running server, which panicked and restarted. Work that exists only in that
+  clone is one clean-up from gone: push it, or copy it back to `~/Documents`.
+- Its dev log (`hq-dev.log`) is the only record of what a person browsing by hand met;
+  the harness walks `127.0.0.1` with full page loads and never sees a failed link.
 
 ## 4. Done (all committed; HQ pushed, service local)
 
@@ -232,7 +254,9 @@ and asked for gaps only. Section 8 of that file is the build order.
   HQ's errors translated to the console's so every screen keeps its messages). Releases
   still go straight to the deploy function, which now accepts an `hq_` token
   (`hq/product/whoami`; a publish needs an Owner and a fresh code). Set
-  `QT_UPDATE_DEPLOY_URL` on the HQ project for Releases.
+  `QT_UPDATE_DEPLOY_URL` on the HQ project for Releases. Locally the HQ mock serves the
+  function's two routes itself (`/api/release_history`, `/api/deploy_update`; §7,
+  2026-11-05), so the screen works on a laptop too.
 - The mock forwards Product routes to the console's mock (`HQ_PRODUCT_MOCK_URL`, default
   `http://127.0.0.1:7072/api/v1`), signed in as the linked persona; run it from the console
   repo with `MOCK_PORT=7072 npm run mock:api`. `tests/lib/product-bridge.test.ts` holds the
@@ -315,9 +339,9 @@ given an archive of their own).
 1. **An enrichment adapter with provenance** (backlog 18): one or two providers in order;
    provider, time and cost per field; a value a person typed is never overwritten. It
    waits on choosing a provider — a founder decision with a contract and a price.
-2. ~~A phone layout for the busiest screens~~ — built 2026-10-06 (§4, "One hand"). Left
-   from backlog 19 only what a native shell would add: an install prompt and the icon
-   badge, taken up when the team installs HQ on a phone.
+2. ~~A phone layout for the busiest screens~~ — built 2026-10-06 (§4, "One hand"), and
+   what a native shell would add on 2026-11-05 (§7): the install button on My
+   notifications. The icon badge was already there (`AppDevice` sets the unread count).
 
 Data-operations items deliberately left: mailing-list members are not checked against
 leads (a list is its own audience, joined by address when it is sent); a phone
@@ -394,7 +418,245 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of one hand: the busiest screens** (2026-10-06, the smaller open items).
+**As of Data: the founder's real files, leads, replies and waitlist, on this computer**
+(2026-11-10). Portal and the local sender; no service change, no migration, nothing committed.
+
+- **What it is.** A rail group "Data" (Owners and Admins, `mail:send`; only where
+  `HQ_MAIL_MERGE_SOCKET` is set, through the synthetic capability `local:data`): Data (today's
+  counts and what is due), Files (14 default folders for an Indian company, upload in 3 MiB parts,
+  versions, tags, notes, review dates, trash, search inside PDFs with `unpdf` 2.1.0, folder zips,
+  Send by email with the file attached, the share sheet, "Shared by me"), All leads (every
+  address from the lead files and Mail merge's lists, status live from the written log and the
+  stop list, the exact words each was sent), Replies (Yes → waitlist, No → Mail merge's stop list,
+  Later and out of office → follow-ups, Wrong person → a referral lead, Question → a follow-up;
+  take back), Waitlist (Joined → Call booked → Call held → Pilot → Customer / Dropped, proof of
+  each yes, colleagues, holds of a firm's unsent addresses only after a preview, "For investors"
+  with no names or addresses), Investors (the pitch list as a pipeline, amounts per currency, no
+  target), Key dates (suggested Indian filings, added only by hand), Backup (one zip, never the
+  key). Home gains a Data block and owed rows; ⌘K gains "Record a reply" and "Add files".
+- **Where it runs.** In the Mail merge process, on the same socket: `scripts/data/host.ts` on the
+  main thread (routes, byte streams, supervision, the four allowed engine calls `addStops`,
+  `removeStop`, `importList`, `status`) and everything else in one worker thread
+  (`scripts/data/worker.ts`, modules `files`, `leads`, `replies`, `waitlist`, `investors`, `dates`,
+  `backup`). A crash restarts the worker (1 s, 5 s, 30 s; off after five in ten minutes; "Restart
+  Data" on the page); a hung worker is ended after a missed deadline and a silent ping. The sender
+  is never stopped by it. `HQ_DATA=off npm run mail-merge` leaves Data out. Its data is
+  `~/Library/Application Support/hq-mail-merge/data/` (0700/0600). `engine.ts` is unchanged;
+  `server.ts` gained extra and stream routes after the sender's own and a last-resort catch;
+  `provider.ts` gained the optional `attachments` field.
+- **Verified on a copy** (`~/Library/Caches/hq-work/hq-ws`, next 3100, mocks 7073/7074, its own
+  socket): vitest 81 files / 741 tests; `npm run check:data` (`scripts/e2e-data.ts` with the
+  stand-in `scripts/e2e-data-service.ts`, 71,806 invented leads) 755/755 at both widths and themes;
+  harness `HQ_HARNESS_FLOW=data` 84 screens and `home` clean (`scripts/screenshot-hq.ts` now reads
+  the mock origin from `HQ_MOCK_BASE`); `check:mail-merge` 65/65 on the final code. The `data` flow
+  refuses port 3000 and is never in `SIGNED_IN_PAGES`: a walk never opens real data. Not checked:
+  Safari, a real print to PDF, a real send by email with an attachment.
+- **Shipped to this clone on 2026-11-10** (rollback copies of the 18 changed files in
+  `~/Library/Caches/hq-work/ship-backup-20261110/`), `npm install` for `unpdf`, hq-dev restarted,
+  the sender restarted detached (`setsid`, log `~/Library/Logs/hq-demo/mail-merge.log`) after it
+  had stopped with its parent session. First run: the lead files and three PDFs in Files, four
+  lead sources (66,341 leads, 6,128 held back), the first yes recorded, the investor list chosen
+  (293 firms). The spec and its addenda are in `~/Library/Caches/hq-work/ws-notes/`.
+- **Fixed 2026-11-11: a press after a long edit.** The mock ends an Owner's session after 15
+  quiet minutes, and typing is quiet, so "Send me a test" after writing an email arrived signed
+  out. `requireStaff` redirected the server action to `/dev/signin` (a GET route), the browser
+  posted there, got 405, and the page showed "An unexpected response was received from the
+  server". In development with `HQ_DEV_AUTOLOGIN` a server action now signs back in where it
+  landed (`devSignBackIn` in `src/lib/access/core.ts`, once per request, only when the
+  `next-action` header is present) and the press goes through; a page load still goes through
+  `/dev/signin`. Checked on the copy with an expired cookie: the old code lost the press, the new
+  code sent the test. Production is unchanged (the bypass is off there).
+
+**As of Mail merge: the raise's investor list, sent from this computer** (2026-11-05). Portal
+and a local sender; no service change, no migration.
+
+- **Why not Campaigns.** The founder asked to add the provider key to HQ and send a made-out
+  email to a CSV of investors. Campaigns are the service's, and the service is not live
+  (`docs/HQ_GO_LIVE.md`: Azure is off, migrations unapplied), so on a laptop they run against
+  the mock and send nothing. The portal also holds no secret by rule. So the sending is a
+  small program beside the portal (`scripts/mail-merge/`, `npm run mail-merge`), reached by
+  a socket file rather than a port, which holds the key and keeps the record. The portal
+  stays a screen over a service (`src/lib/merge/api.ts`, `/mail/merge`). Once the service
+  is live, Campaigns and Lists do this properly and this can go.
+- **Held to the service's provider.** `provider.ts` makes the same calls and classifies
+  answers as `mail_provider.py` does: sent, failed, retry, auth_failed, and a lost answer
+  as `unknown`, never sent again. Checked against the real provider with a key that does not
+  exist: 401 `unauthorized`, read as a refusal on every call. The first real send went on
+  2026-11-06: Brevo took 292 of 293 (274 delivered, 8 hard and 10 soft bounces) and logged
+  the last as out of credits while answering it 201. So "Sent" in Mail merge means the
+  provider accepted it, not that it arrived, and an out-of-credits send can read as sent.
+  Left: reading delivery back from the provider, so the screen says what arrived.
+- **What it will not do.** Write to anyone twice in a send: each attempt is logged before
+  the message goes and a crash between the two reads "may have been sent". Send without a
+  live press: a restart comes back paused. Go past the day's limit. Write to the stop list.
+  Go out with a `[blank]` in the words, an unknown field, an unverified sender, or words
+  that differ from the last test. It pauses itself on a refused key, on no credits, on the
+  provider staying down, and at 5 refusals in the last 20.
+- **The founder's own list decided the design.** `Quantify_Terminal_Investors_Pitch_Emails.xlsx`
+  and its CSV: 293 firms, `{Greeting}` and `{PersonalLine}` in single braces (so both brace
+  forms are fields; left as text they would have been mailed literally), `[link]` and
+  `[Company postal address]` to fill (so blanks block a real send), `CheckFirst` on 37 rows
+  (so a mailing can hold back on a column, and send to one tier), 20-30 a day (so the
+  default limit is 30 at 2 a minute, changed in Setup), its own opt-out line (so the footer
+  starts empty and a missing opt-out is warned about).
+- **The risk that stays with the founder.** That workbook says not to send this list through
+  a newsletter tool, and §6 says the researched list must not go through the transactional
+  provider. Mail merge does exactly that, because it was asked for by name. It was said so
+  at the time. The provider is also what the account notices use: see §6 before sending.
+- **Local state on 2026-11-05.** The list and an "Email 1" draft are loaded in the sender,
+  no key is set, nothing has been sent. The sender runs as a plain process, not a launchd
+  agent: installing one was refused as persistence nobody had asked for, and is the
+  founder's to approve. So after a reboot, `npm run mail-merge` from the clone.
+- **Sending to a few, and to anyone** (2026-11-06, the founder's ask). A mailing's "Send to"
+  is everyone, one column's value, or the people ticked in a searchable list on its page.
+  Addresses can be typed in with the words its fields need; they go on one "Added by hand"
+  list. Any row can be edited in place, from the list or from the preview. In order, the
+  rules are: the stop list beats everything; a person ticked by name beats a hold, because a
+  person looked at them; "tick everyone" never ticks the held or the stopped; "already written
+  to" comes next. That last one is on by default and rests on `written.jsonl`, written as each
+  message goes, not on the mailings: deleting a mailing used to forget who it reached and give
+  the day's limit back. Old mailing files read back with the new fields defaulted.
+- **Finding a mailing** (2026-11-09, the founder's ask, with 227 mailings on the page). The
+  Mailings heading carries a find box (`?q=`, a plain GET form like the list page's) and
+  tabs All / Drafts / Going out / Sent or ended (`?show=`), each with its count; the same
+  words filter the Lists table, and each table says how many of how many match. Every word
+  must appear in the mailing's name, subject, state or list names; a number matches a
+  whole number written there (so "8" finds "Waitlist 08", never "Waitlist 18"), and a
+  mailing whose name starts with it comes first (`src/lib/merge/find.ts`,
+  `tests/mail-merge/find.test.ts`). The walk checks it ("Find a mailing", and `phone-find`):
+  all checks passed on a copy with a stand-in sender before it reached the clone.
+- **Demo figures at another size, and the road to the goal** (2026-11-09, the founder's ask).
+  `MOCK_REVENUE_SCALE` (a whole number, 1 to 100; unset is 1) multiplies the demo book's
+  seats and dollars and the finance seed's cash, vendors, claims, budgets and purchases, so
+  seats × rate and runway still reconcile; investor-update drafts are left as written. The
+  founder's local launcher (`~/Library/Caches/hq-work/demo/hq-mock.sh`) sets 10: about
+  $10.3M ARR on screen. Every revenue and finance page now says, above its title, when its
+  figures are the local demo service's (`src/lib/demo-figures.ts`: a development build
+  reading a service on this machine), so a screenshot of invented figures cannot pass for
+  the company's; the line reads "Demo data, not company figures." and, at the founder's ask
+  (he reads these pages alone, on this machine), shows only in print, not on screen. Exports
+  made against the
+  demo service carry "(demo data)" in their title and "-demo-data" in their file name
+  (`exports/route.ts`). A "Road to $10M ARR" panel was tried and taken out at the founder's
+  ask. `MOCK_PORT` lets a second mock run beside
+  the first for a test copy. Checked on a copy (mock on 7073 at 10, portal on 3100): every
+  revenue and finance page at both widths, axe clean, no overflow, no console errors;
+  vitest 43 files / 503 tests.
+- **Never swap the real sender to test.** The founder was using it, tests and a practice run,
+  while the walk was run on its socket: for a few minutes the portal was talking to the
+  throwaway. A press in that window would have looked like mail going out. The walk now runs
+  on a copy of the checkout (`cp -c` of `node_modules` takes seconds) on port 3100 with its
+  own socket, and the build runs there too, so the live server is left alone.
+- **The demo mail is gone from this laptop's Mail section** (2026-11-06, the founder's ask).
+  `MOCK_EMPTY_MAIL=1` in `.env.local` runs `clearMail()` when the mock starts, not on
+  `mock/reset`, so the harness keeps the world it walks; restart the mock after a walk. The
+  seeds are untouched. With a sender set up, Mail's overview says sending happens in Mail
+  merge rather than asking for a campaign sender. A crawl with it empty: no errors, no failed
+  reads; only direct links to the demo records answer not-found.
+- Tests: `tests/mail-merge/` (template, lists, engine, and the portal's client against the
+  sender over a real socket: 65). `npm run check:mail-merge`: 58 ✓ in a browser, including
+  that no response carries the key.
+- Left: follow-ups in the same thread (a copy of a mailing sends a new email; untick "leave
+  out anyone already reached" for it), stopping when someone replies (replies go to the
+  mailbox; add them to the stop list by hand), sending at each investor's morning.
+
+**As of the local run: a lapsed session, Releases on a laptop, a thumb's press, install**
+(2026-11-05). Portal, mock and harness; no service change, no migration.
+
+- **How it was found.** The gates were green (types, lint, 420 tests, build) and a crawl
+  of all 251 screens as the Owner at both widths found nothing: no console error, no
+  failed request, no overflow, 1,243 links all answering. The fault was in the dev log:
+  "Failed to fetch RSC payload … Falling back to browser navigation", twenty-odd times,
+  always just before a `/dev/signin` redirect.
+- **A link pressed after the session lapsed reloaded the whole page** (the mock restarted,
+  the cookie went stale, the bypass signs back in). The policy's
+  `upgrade-insecure-requests` is applied by the browser to a redirect it follows inside a
+  fetch, even on localhost: the page the sign-in redirected to was asked for as
+  `https://localhost:3000`, which nothing answers (`ERR_SSL_PROTOCOL_ERROR`), and the
+  router fell back to a document load. It never showed on a first request (a browser
+  spares localhost there) or in production (every address is https), and the harness
+  uses full page loads. `contentSecurityPolicy` now leaves the rule out in development
+  only; `tests/lib/csp.test.ts` holds both halves.
+- **Which uncovered a worse one the failure had been hiding.** With the redirect followed,
+  the router kept two answers that pointed at each other (the page's "go and sign in",
+  and the sign-in address's "the page") and walked between them without asking the
+  server again: 668 navigations in seven seconds, the screen never drawn. `/dev/signin`
+  now answers a router fetch (the `rsc` header) with plain text, which the router treats
+  as "open this as a document": one sign-in, one landing. Checked with a stale cookie,
+  with the mock reseeded under an open page, and on both `localhost` and `127.0.0.1`.
+  Development only: in production the route does not exist and sign-in is a page.
+- **Releases works on a laptop.** It was the one screen that could only say "not
+  configured": nothing local served the release function for an `hq_` token (the
+  console's mock knows only its own sessions). `scripts/mock-hq-api.ts` now serves
+  `/api/release_history` and `/api/deploy_update` as `update_deploy_function` does: the
+  caller resolved through `hq/product/whoami`, Admin to read, Owner and a fresh code to
+  publish, `_normalize_manifest` and `_validate_manifest` field for field, the function's
+  own `{ok, error}` envelope, a staged release not served, the live one turned off still
+  written, the signature never echoed, and `mock/reset` reseeding the two releases.
+  `MOCK_RELEASE_SIGNING=unconfigured` answers as a deployment with no key. The
+  `releases` harness part publishes 1.5.0, stops it, serves it again and rolls back to
+  1.4.0 at both widths in both themes.
+- **A pointer left over a button is not a contrast failure.** That part first failed axe
+  on a phone, one run in two: a press swaps the button under the pointer for another,
+  caught part-way through its hover colours (3.96:1 for 140 ms). The part moves the
+  pointer off and waits before each capture; the same will bite any flow that presses a
+  button which is replaced in place.
+- **A thumb's press** (left from "one hand"). At 412px, 1,585 of 1,618 pressable things on
+  eighteen busy screens were under 44px in one dimension. Buttons are the part that
+  could be put right without moving anything: at phone width `.btn::before` reaches 6px
+  past a button above and below, so a button takes 44px and a small one 40px, drawn as
+  they were. Six, because that is the least rows of buttons stand apart. The first
+  attempt reached 8px (44px for all) and was wrong: a reach longer than the gap lands on
+  the row above, and the button later in the page takes the press. Pressing just inside
+  the top and bottom of every control on 27 screens found 27 presses going to the wrong
+  button: the lowest 2px of each button over a wrapped row, and on Replies, where the
+  three outcomes stood one on another touching, a quarter of each. At 6px, with those
+  outcomes given their row's gap (`RowAction` there had no layout class) and the
+  prospects tools' lines 6px apart instead of 4px, there are none. Before and after over
+  all 251 screens: no page overflows, no scroll container gained a pixel, and axe still
+  judges every button's contrast. The `phone` part asserts the 12px added, nothing added
+  at a desk, and that no press inside a control is taken by another button; with the
+  reach made 9px it fails on Replies, as it should.
+- **Install.** The browser's offer to install arrives once, on whatever screen was loaded
+  first, so `AppDevice` holds it (`lib/install-offer.ts`) and My notifications has "HQ as
+  an app": the button where a browser offers, the steps by hand on an iPhone or iPad, a
+  line for a browser that has not offered, and "installed" once it is. Tests:
+  `tests/lib/install-offer.test.ts`.
+- **Replies told Support and the Intern that a read had failed.** `hq/mail/replies` is
+  for those who may write the CRM, the tab is shown to everyone, and the page answered
+  the refusal with "could not be read just now". It now says who Replies is for and does
+  not ask the service. Found by crawling as each role: of 251 screens it was the only one
+  that called a role's limit a failure. (A crawl as Sales trips the read tripwire, as it
+  should: twenty screens answered "Confirm it's you to keep reading". And an applicant
+  is "not found" to Support and the Intern, which is the service's answer, kept.)
+- **The clock gave React two answers.** `SidebarClock` asked the system clock each time
+  its store was read. React reads a store twice in a row, and a second turning over
+  between the two reads logged "The result of getSnapshot should be cached" on whatever
+  screen was open: once in some three thousand page loads here, on an applicant's page.
+  The harness counts every console error, so this was a check that failed once and
+  passed alone. The second the clock shows is now moved by its tick and by nothing else
+  (`tests/components/sidebar-clock.test.tsx`).
+- **The mail flow depended on the hour.** `captureMailFlows` started the webinar campaign
+  and then tested and submitted the owner's own draft, which goes to the same people. In
+  the afternoon in India every recipient is inside their sending window: the webinar
+  took all of them at once, the draft was left with "0 eligible recipients; 23 skipped",
+  Submit was off as it should be, and the walk waited fifteen seconds for it and died.
+  In the morning some sends are deferred and the same walk passes (it did, at 13:00).
+  The draft is now submitted first, before anything is sent. The same class as the
+  prospects flow's take-back count.
+- **The walks.** Desktop and phone, whole, on 2026-11-05 from 17:16: 877 ✓ each, no
+  retries, 27 minutes each on a warmed server. Three earlier attempts died, none on a
+  check: a form pressed before its page had hydrated, while Turbopack wrote its cache
+  for twelve seconds and a second browser was measuring beside the walk (run nothing
+  beside a walk, and warm the server first: one pass over every screen compiles them
+  all); the browser cut off mid-load when the session that started the walk ended
+  (start a walk in a session of its own, under `caffeinate -i`, or it dies with the
+  terminal that launched it); and the mail flow above, at 17:10.
+- Left: text links, checkboxes and radios are still under 24px at phone width (a table
+  title is a 20px line, a checkbox 13px). Making those larger moves every dense table and
+  is a design decision, not a fix.
+
+**Before that: one hand: the busiest screens** (2026-10-06, the smaller open items).
 
 - Portal only, CSS almost entirely: the `max-width: 720px` rules in `globals.css` for the
   owed rows, the Home inbox panel, the shortcuts block, the record column's order, the
@@ -406,9 +668,8 @@ and app password without either).
 - Nothing moves at a desk: the `phone` harness part asserts the phone shape at phone
   width and the desk's order at desk width, so a rule that leaked past the breakpoint
   would fail the desktop walk.
-- Left: larger tap targets on every small button at phone width (a global change to
-  `.btn--small` that tight table rows would have to absorb), an install prompt and the
-  icon badge.
+- Left then, built on 2026-11-05 (above): larger tap targets on every small button at
+  phone width, and an install prompt. The icon badge was already there.
 
 **Before that: typed times in the person's zone** (2026-10-06, the smaller open items).
 

@@ -1,0 +1,156 @@
+/* All leads: the list's filter selects, a lead's sent messages, where they came from, and
+   their badges. Tokens only; phone rules at 720px; no side bars. Prefixed hqdata-. */
+@layer pages {
+  /* The GET selects under the status links: they wrap, and stack on a phone. */
+  .hqdata-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 8px 12px;
+    margin: 0;
+  }
+
+  .hqdata-filters__field {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-filters__field select {
+    max-width: 240px;
+  }
+
+  .hqdata-badges {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 2px 0 0;
+  }
+
+  /* A message as it went: its header lines, the subject, and the body with its line breaks. */
+  .hqdata-mail {
+    display: grid;
+    gap: 8px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-mail:first-of-type {
+    border-top: 1px solid var(--line);
+  }
+
+  .hqdata-mail__head {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-mail__subject {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-mail__body {
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    background: var(--panel-soft);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* One place a lead came from, with every raw column. */
+  .hqdata-source {
+    display: grid;
+    gap: 6px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-source__label {
+    margin: 0;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-linked {
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-note-delete {
+    margin: 6px 0 0;
+  }
+
+  .hqdata-more {
+    display: grid;
+    gap: 16px;
+  }
+
+  .hqdata-more h3 {
+    margin: 0 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-banners {
+    display: grid;
+    gap: 8px;
+  }
+
+  .hqdata-colleagues {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 6px;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-colleagues li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 8px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-filters {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-filters__field select {
+      max-width: none;
+      width: 100%;
+    }
+
+    /* The status links scroll sideways. Positioned, so the search's visually hidden label
+       (absolute) stays inside the strip instead of widening the page. */
+    .hqdata-status-strip {
+      position: relative;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+    }
+  }
+}
+
+@media print {
+  .hqdata-mail__body {
+    border: 0;
+    padding: 0;
+  }
+}

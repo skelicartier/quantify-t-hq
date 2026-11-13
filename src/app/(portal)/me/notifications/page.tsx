@@ -5,6 +5,7 @@ import {
   testPushAction,
   unsubscribePushAction,
 } from "@/app/(portal)/inbox/actions";
+import { InstallCard } from "@/components/inbox/install-card";
 import { PushDeviceCard } from "@/components/inbox/push-device-card";
 import { ActForm } from "@/components/ui/act-form";
 import { RowAction } from "@/components/ui/row-action";
@@ -64,6 +65,15 @@ export default async function NotificationsPage() {
                   reasons={prefs.priority_reasons}
                   isDefault={prefs.priority_default}
                 />
+              </div>
+            </Card>
+            <Card
+              title="HQ as an app"
+              titleAs="h3"
+              description="Installed, HQ opens in its own window from the dock or the home screen, and its icon carries the count of what is unread in your inbox."
+            >
+              <div id="install">
+                <InstallCard />
               </div>
             </Card>
             <Card

@@ -9,13 +9,13 @@ type BrandMarkProps = {
 };
 
 /**
- * The brand at the top of the rail and the phone bar: the wordmark alone, the same one
- * every document carries. A collapsed rail has no room for it and shows none.
+ * The brand at the top of the rail and the phone bar: the name alone, without the symbol.
+ * A collapsed rail has no room for it and shows none.
  */
 export function BrandMark({ compact = false, href = "/home" }: BrandMarkProps) {
   return (
     <Link className="brand" href={href} aria-label="Quantify Terminal HQ, home">
-      <Wordmark size={compact ? "small" : "rail"} />
+      <Wordmark size={compact ? "small" : "rail"} variant="name" />
     </Link>
   );
 }

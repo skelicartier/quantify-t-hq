@@ -7,6 +7,9 @@ import { setSessionCookie } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
+/** The header the client router sends on its own fetches, and a document request never does. */
+const ROUTER_FETCH_HEADER = "rsc";
+
 /**
  * `GET /dev/signin?as=<persona>&next=<path>`: signs in against the mock as that persona
  * — the mock takes one password and one code for everyone — and lands on `next`.
@@ -15,6 +18,18 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const flag = devAutologinPersona();
   if (!flag) return new NextResponse("Not found", { status: 404 });
+  // A link's own fetch arrives here when the session lapsed mid-visit (the mock was
+  // restarted, the cookie went stale). Signing in inside that fetch and redirecting to
+  // the page leaves the router holding two answers that point at each other — the page's
+  // "go and sign in", and this address's "the page" — and it walks between them without
+  // asking again, so the screen never draws. An answer that is not the router's format
+  // makes it open this address as a document, which signs in and lands once.
+  if (request.headers.get(ROUTER_FETCH_HEADER) !== null) {
+    return new NextResponse("Signing in.", {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
   // Redirect to the host the browser used (localhost or 127.0.0.1): the cookie is set
   // for that host and nowhere else, and `nextUrl` reports the dev server's own name.
   const host = request.headers.get("host") ?? request.nextUrl.host;

@@ -9,6 +9,7 @@ import { Fragment } from "react";
 import { createLeadAction } from "@/app/(portal)/leads/actions";
 import { LeadCreateForm } from "@/components/crm/lead-forms";
 import { LeadTabs } from "@/components/crm/lead-tabs";
+import { AllLeadsCallout } from "@/components/data/leads/all-leads-callout";
 import { FirstReplyClock, LeadStagePill } from "@/components/crm/pills";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { DocumentTools } from "@/components/documents/document-tools";
@@ -185,6 +186,7 @@ export default async function LeadsIndexPage({ searchParams }: LeadsPageProps) {
         }
       />
       <LiveRefresh intervalSeconds={60} label="Leads" />
+      <AllLeadsCallout context={context} />
       {page === null ? (
         <Callout tone="danger" role="alert">
           Leads could not be read just now. This is a read failure, not an empty inbox.
