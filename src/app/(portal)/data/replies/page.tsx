@@ -10,7 +10,7 @@ import { ButtonLink, buttonClass } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Field, Input } from "@/components/ui/field";
+import { Field, Input, Textarea } from "@/components/ui/field";
 import { Popover } from "@/components/ui/popover";
 import { RecordSection } from "@/components/ui/record-shell";
 import { Stat, StatGrid } from "@/components/ui/stat";
@@ -22,8 +22,11 @@ import { readLead } from "@/lib/data/api/leads";
 import {
   readFollowUps,
   readReplies,
+  readReplySettings,
   type FollowUpsPage,
   type RepliesPage,
+  type ReplyRow,
+  type ReplySettings,
 } from "@/lib/data/api/replies";
 import { OUTCOMES, OUTCOME_ORDER, TAKEN_BACK, labelOf, toneOf } from "@/lib/data/labels";
 import { dataRead } from "@/lib/data/read";
@@ -36,6 +39,8 @@ import {
   doneFollowUpAction,
   moveFollowUpAction,
   recordReplyAction,
+  releaseFirmHoldAction,
+  saveReplySettingsAction,
 } from "./actions";
 import "./replies.css";
 
@@ -45,7 +50,7 @@ export const dynamic = "force-dynamic";
 const BASE = "/data/replies";
 const PAGE_SIZE = 100;
 const ABOUT =
-  "HQ does not read your mailbox. When a reply arrives, record it here or from the lead: a yes puts the firm on the waitlist, a no puts the address on Mail merge's stop list, a later sets a reminder, a wrong person adds whoever they named, a question adds a follow-up for today.";
+  "HQ does not read your mailbox. When a reply arrives, record it here or from the lead: a yes puts the firm on the waitlist, a no puts the address on Mail merge's stop list, a later sets a reminder, a wrong person adds whoever they named, a question adds a follow-up for today. A meeting request is a yes that asks to meet. Needs review leaves a follow-up for today and nothing else. With “Hold the rest of their firm” ticked, nobody else at the firm is written to.";
 
 const FOLLOW_UP_COLUMNS = [
   { key: "who", label: "Who", width: "22%" },
@@ -80,9 +85,13 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
   const focus = firstSearchValue(parameters.new) === "1";
   const read = allowed
     ? await dataRead(async () => {
-        const [replies, followUps] = await Promise.all([
+        const [replies, followUps, settings] = await Promise.all([
           readReplies({ outcome, q, offset }),
           readFollowUps(),
+          // A service older than this page has no settings yet: the section says so.
+          readReplySettings()
+            .then((answer) => answer.settings)
+            .catch(() => null),
         ]);
         let prefill = "";
         if (LEAD_ID.test(leadParam)) {
@@ -92,7 +101,7 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
             // an unknown lead leaves the address empty
           }
         }
-        return { replies, followUps, prefill };
+        return { replies, followUps, prefill, settings };
       })
     : null;
   const data = read?.ok ? read.data : null;
@@ -127,6 +136,7 @@ export default async function RepliesPage({ searchParams }: { searchParams: Prom
           <Replies
             replies={read.data.replies}
             followUps={read.data.followUps}
+            settings={read.data.settings}
             prefill={read.data.prefill}
             focus={focus || Boolean(read.data.prefill)}
             now={now}
@@ -153,9 +163,107 @@ function listHref(
   return `${BASE}${rendered ? `?${rendered}` : ""}#replies-all`;
 }
 
+const addresses = (count: number) =>
+  `${formatNumber(count)} ${count === 1 ? "address" : "addresses"}`;
+
+/** Under a reply's outcome: what its firm hold held, and the way to release what it still holds. */
+function FirmHold({ reply }: { reply: ReplyRow }) {
+  const hold = reply.firm_hold;
+  if (!hold) return null;
+  return (
+    <span className="hqdata-firm-hold">
+      <span className="table-sub">
+        Held {formatNumber(hold.held)} at {hold.domain}
+        {hold.open < hold.held && hold.open > 0 ? ` · ${formatNumber(hold.open)} still held` : ""}
+      </span>
+      {hold.open > 0 && !reply.taken_back && (
+        <Popover label="Release the firm" align="start" width="wide">
+          <MailForm
+            action={releaseFirmHoldAction}
+            fields={{ reply_id: reply.reply_id, lead_id: reply.lead_id }}
+            submitLabel="Release them"
+            pendingLabel="Releasing…"
+          >
+            <p className="page-note">
+              Release {addresses(hold.open)} at {hold.domain}? Mail merge may write to them again.
+            </p>
+          </MailForm>
+        </Popover>
+      )}
+    </span>
+  );
+}
+
+/** "Your answer to a yes": the booking link and the answer as it reads, and the way to change them. */
+function AnswerSettings({ settings }: { settings: ReplySettings | null }) {
+  if (!settings)
+    return (
+      <RecordSection id="replies-answer" title="Your answer to a yes">
+        <p className="page-note">That part of Data is not loaded.</p>
+      </RecordSection>
+    );
+  return (
+    <RecordSection
+      id="replies-answer"
+      title="Your answer to a yes"
+      actions={
+        <Popover label="Edit your answer" align="end" width="wide">
+          <MailForm action={saveReplySettingsAction} submitLabel="Save" pendingLabel="Saving…">
+            <Field
+              id="answer-link"
+              label="Your booking link"
+              hint="The page where people choose a time with you. It goes into your answer; HQ never opens it."
+            >
+              <Input
+                id="answer-link"
+                name="booking_link"
+                type="url"
+                inputMode="url"
+                maxLength={500}
+                defaultValue={settings.booking_link}
+                placeholder="https://"
+                aria-describedby="answer-link-hint"
+              />
+            </Field>
+            <Field
+              id="answer-text"
+              label="Your answer"
+              hint="{first_name}, {firm} and {booking_link} are filled in for each reply."
+            >
+              <Textarea
+                id="answer-text"
+                name="yes_answer"
+                rows={5}
+                maxLength={2_000}
+                required
+                defaultValue={settings.yes_answer}
+                aria-describedby="answer-text-hint"
+              />
+            </Field>
+          </MailForm>
+        </Popover>
+      }
+    >
+      <dl className="hqdata-answer-settings">
+        <dt>Booking link</dt>
+        <dd className="mono">{settings.booking_link || "No booking link yet"}</dd>
+        <dt>The answer</dt>
+        <dd>
+          <p className="hqdata-quote">{settings.yes_answer}</p>
+        </dd>
+      </dl>
+      <p className="page-note">
+        After a yes or a meeting request, the reply form shows this answer filled in for them, ready
+        to copy into your own reply. Nothing is sent.
+      </p>
+    </RecordSection>
+  );
+}
+
 function Replies({
   replies,
   followUps,
+  settings,
   prefill,
   focus,
   now,
@@ -164,6 +272,7 @@ function Replies({
 }: {
   replies: RepliesPage;
   followUps: FollowUpsPage;
+  settings: ReplySettings | null;
   prefill: string;
   focus: boolean;
   now: number;
@@ -191,7 +300,8 @@ function Replies({
         <Stat label="Recorded" value={formatNumber(live.all ?? 0)} />
         <Stat
           label={OUTCOMES.replied_positive.label}
-          value={formatNumber(live.replied_positive ?? 0)}
+          value={formatNumber((live.replied_positive ?? 0) + (live.meeting_request ?? 0))}
+          hint={`${formatNumber(live.meeting_request ?? 0)} asked to meet`}
         />
         <Stat
           label={OUTCOMES.not_interested.label}
@@ -204,6 +314,16 @@ function Replies({
         />
         <Stat label={OUTCOMES.wrong_person.label} value={formatNumber(live.wrong_person ?? 0)} />
         <Stat label={OUTCOMES.question.label} value={formatNumber(live.question ?? 0)} />
+        <Stat
+          label={OUTCOMES.needs_review.label}
+          value={
+            (live.needs_review ?? 0) > 0 ? (
+              <span className="hqdata-attention">{formatNumber(live.needs_review ?? 0)}</span>
+            ) : (
+              formatNumber(0)
+            )
+          }
+        />
       </StatGrid>
 
       <RecordSection
@@ -381,6 +501,7 @@ function Replies({
                 {reply.taken_back && (
                   <span className="table-sub">{labelOf(OUTCOMES, reply.outcome)}</span>
                 )}
+                <FirmHold reply={reply} />
               </td>
               <td>
                 {reply.words ? (
@@ -421,6 +542,8 @@ function Replies({
           </nav>
         )}
       </RecordSection>
+
+      <AnswerSettings settings={settings} />
     </>
   );
 }

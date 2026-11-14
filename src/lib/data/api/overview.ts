@@ -16,6 +16,7 @@ export const dueKindSchema = z.enum([
   "investor",
   "key_date",
   "file_review",
+  "action",
 ]);
 export type DueKind = z.infer<typeof dueKindSchema>;
 
@@ -72,6 +73,12 @@ export const overviewSchema = ok.extend({
   waitlist: z.array(z.object({ stage: z.string(), count: z.number() })).optional(),
   backup: z
     .object({ last_at: z.string().nullable(), no_backup_disk: z.boolean().nullable() })
+    .optional(),
+  raise: z
+    .object({
+      stages: z.array(z.object({ stage: z.string(), now: z.number() })),
+      first_meetings_this_week: z.number(),
+    })
     .optional(),
 });
 export type DataOverview = z.infer<typeof overviewSchema>;

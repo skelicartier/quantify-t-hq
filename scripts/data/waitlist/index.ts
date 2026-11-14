@@ -15,6 +15,7 @@ import type { Answer, DataCore, DueItem } from "../core";
 import { localDay } from "../days";
 import { LIMITS, clean, cleanText, isDay, isUuid, normaliseEmail, wholeNumber } from "../guard";
 import type { Staff } from "../protocol";
+import { registerWaitlistAgenda } from "./agenda";
 import { findTerms, matchesTerms } from "../../../src/lib/merge/find";
 import {
   COLLEAGUE_ROLES,
@@ -48,6 +49,7 @@ import {
 import { internalCsv, investorCsv, investorRow, type ExportContext } from "./exports";
 import { HOLD_REASON, Holds, holdBack, preview, release, type HoldContext } from "./holds";
 import { readOldFile } from "./import";
+import { RAISE_SERVICES, type WaitlistFeed } from "../raise-contracts";
 import { applyMove, everReached, nextStepWords, nowAt, readStageMove } from "./stages";
 
 const PAGE = 100;
@@ -308,6 +310,25 @@ export function register(core: DataCore): void {
   };
   core.provide("waitlist", service);
 
+  // The numbers (raise spec §8): the firms and their stage moves, read-only.
+  const feed: WaitlistFeed = {
+    entries: () =>
+      book.entries.map((entry) => ({
+        entry_id: entry.entry_id,
+        firm: entry.firm,
+        domain: entry.domain,
+        firm_type: entry.firm_type,
+        free_mail: isFreeMail(entry),
+        joined_on: entry.joined_on,
+        stage: entry.stage,
+      })),
+    moves: () =>
+      book.events
+        .filter((event) => event.kind === "stage" && event.to !== undefined)
+        .map((event) => ({ entry_id: event.entry_id, to: event.to ?? "", at: event.at })),
+  };
+  core.provide(RAISE_SERVICES.waitlistFeed, feed);
+
   // A firm hold reads "Held back: firm already joined" on the lead, though it is a stop.
   leadsOrNull()?.registerStanding({
     name: "waitlist",
@@ -356,6 +377,7 @@ export function register(core: DataCore): void {
     }
     return items;
   });
+  registerWaitlistAgenda(core, book);
 
   // ---------------------------------------------------------------- the list (fixed paths first)
 

@@ -79,17 +79,20 @@ export type BuildInputs = {
 
 const REPLY_STATUS: Record<ReplyMark["outcome"], LeadStatus> = {
   replied_positive: "yes",
+  meeting_request: "yes",
   not_interested: "no",
   not_now: "later",
   out_of_office: "later",
   wrong_person: "wrong_person",
   question: "question",
+  needs_review: "review",
 };
 
 export const REPLY_STATUSES: ReadonlySet<LeadStatus> = new Set([
   "yes",
   "later",
   "question",
+  "review",
   "wrong_person",
   "no",
 ]);
@@ -414,6 +417,7 @@ export class LeadsIndex {
       lead.status_at = mark.received_at;
       switch (mark.outcome) {
         case "replied_positive":
+        case "meeting_request":
           lead.detail =
             mark.went === "waitlist"
               ? `${shortDay(day, context.today)} · on the waitlist`
@@ -437,6 +441,9 @@ export class LeadsIndex {
           break;
         case "question":
           lead.detail = `${shortDay(day, context.today)} · answer due`;
+          break;
+        case "needs_review":
+          lead.detail = `${shortDay(day, context.today)} · decide what it means`;
           break;
         case "wrong_person":
           lead.detail = mark.referral_name ? `Named ${mark.referral_name}` : "Named someone else";

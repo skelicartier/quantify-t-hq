@@ -1,8 +1,11 @@
-/* Investors: the list, the first visit's list chooser, money per currency, and the record.
-   Tokens only; phone rules at 720px; no side bars, no bars of any kind. Prefixed hqdata-. */
+/* Investors: the list, the first visit's list chooser, money per currency, the record, and
+   the raise's funnel and round. Tokens only; phone rules at 720px; no side bars, no bars of
+   any kind, no meters. Prefixed hqdata-. */
 @layer pages {
+  /* One column that never grows past the page: a wide table scrolls in its own frame. */
   .hqdata-investors {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 16px;
     min-width: 0;
   }
@@ -41,6 +44,63 @@
     min-width: 0;
   }
 
+  /* The raise (raise spec §5.6): the funnel's tables, the round, the firm's hints. */
+  .hqdata-investors__search .select {
+    width: auto;
+    min-width: 0;
+  }
+
+  .hqdata-funnel,
+  .hqdata-round {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    min-width: 0;
+  }
+
+  .hqdata-round__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    row-gap: 6px;
+  }
+
+  .hqdata-round .props {
+    max-width: 640px;
+  }
+
+  .hqdata-round__notes {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* Two short fields side by side in a form: an amount and its currency. */
+  .hqdata-round__pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 120px);
+    gap: 8px;
+  }
+
+  /* A property's hint, under its value and the width of the row. */
+  .hqdata-prop-hint {
+    display: block;
+    margin-top: 2px;
+    color: var(--quiet);
+    font-size: 12px;
+  }
+
+  .hqdata-investor__notes:empty {
+    display: none;
+  }
+
+  /* The record header stays put while the page scrolls, so a long form hanging from it
+     (Qualify) scrolls inside its own panel and its button is always reachable. */
+  .hqdata-investor .rhead .popover__panel {
+    max-height: max(240px, calc(100dvh - 280px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
   @media (max-width: 720px) {
     .hqdata-investors__setup {
       max-width: none;
@@ -49,6 +109,15 @@
     .hqdata-investors .filter-strip__search {
       flex-wrap: wrap;
       row-gap: 6px;
+    }
+
+    .hqdata-round__pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* On a phone the firm opens on its notes, then its activity. */
+    .record-layout__main > .hqdata-investor__notes {
+      order: -2;
     }
   }
 }

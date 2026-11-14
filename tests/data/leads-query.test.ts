@@ -31,11 +31,14 @@ type Case = {
 
 const REPLY_TO_STATUS: Record<Outcome, LeadStatus> = {
   replied_positive: "yes",
+  // Raise batch: a meeting request is a yes; "needs review" reads Needs review.
+  meeting_request: "yes",
   not_interested: "no",
   not_now: "later",
   out_of_office: "later",
   wrong_person: "wrong_person",
   question: "question",
+  needs_review: "review",
 };
 
 /** The rule as the spec words it, written apart from the code it checks. */
@@ -131,7 +134,10 @@ describe("the status rule", () => {
           received_at: "2026-11-10T05:00:00.000Z",
           later_until: "2026-11-24",
           referral_name: "Rhea",
-          went: item.reply === "replied_positive" ? "waitlist" : null,
+          went:
+            item.reply === "replied_positive" || item.reply === "meeting_request"
+              ? "waitlist"
+              : null,
         });
     }
     const standing: Standing = {
@@ -148,7 +154,7 @@ describe("the status rule", () => {
       listName: (id) => (id === "list-1" ? "Walk 01" : ""),
       today: "2026-11-10",
     };
-    expect(cases).toHaveLength(7 * 4 * 2 * 2);
+    expect(cases).toHaveLength(9 * 4 * 2 * 2);
     for (const item of cases) {
       const lead = index.status(index.byEmail.get(item.email)!, context);
       const want = expected(item);
@@ -189,6 +195,8 @@ describe("the status rule", () => {
     expect(detailFor("out_of_office")).toBe("Out of office until 24 Nov");
     expect(detailFor("question")).toBe("10 Nov · answer due");
     expect(detailFor("wrong_person")).toBe("Named Rhea");
+    expect(detailFor("meeting_request")).toBe("10 Nov · on the waitlist");
+    expect(detailFor("needs_review")).toBe("10 Nov · decide what it means");
   });
 });
 

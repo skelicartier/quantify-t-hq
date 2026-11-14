@@ -3,6 +3,11 @@
  * what each one did, read back from the service and from Mail merge's own stop list. A Yes
  * needs the waitlist (Unit 4); until it exists the form says "The waitlist is not set up
  * here yet." and the lead stands as it was. Every person is invented, on `.example`.
+ *
+ * Raise batch (spec §7.10, R10–R15): the firm hold, a meeting request, needs review, the
+ * booking link and the answer to copy, and releasing a firm. These use the invented firms
+ * firm3100.example and up, one per step and pass, which no other walk uses (firm3000–3003
+ * are the waitlist walk's; a firm numbered 19 mod 20 has only free-mail people).
  */
 
 import { createHash } from "node:crypto";
@@ -81,6 +86,7 @@ const person = (index: number) => ({
 });
 
 type FollowUp = {
+  follow_up_id: string;
   email: string;
   title: string;
   due_on: string;
@@ -381,4 +387,303 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
     text.slice(0, 400),
   );
   await kit.audit("replies-recorded");
+
+  await raiseSteps(page, kit, pass, day);
+}
+
+// ---------------------------------------------------------------- raise batch: R10–R15
+
+type LeadLine = {
+  lead_id: string;
+  email: string;
+  name: string;
+  status: string;
+  badges?: string[];
+};
+
+/** The invented firm a step uses in this pass: sixteen people, none written to, none free mail. */
+const firmOf = (step: number, pass: number) => `firm${3100 + step * 10 + pass}.example`;
+
+async function leadsAt(kit: WalkKit, domain: string): Promise<LeadLine[]> {
+  return (
+    ((await kit.socket.ask("GET", `/data/leads?domain=${encodeURIComponent(domain)}`)).body
+      .leads as LeadLine[]) ?? []
+  );
+}
+
+async function stopList(kit: WalkKit): Promise<Map<string, string>> {
+  const stops =
+    ((await kit.socket.ask("GET", "/stops")).body.stops as { email: string; reason: string }[]) ??
+    [];
+  return new Map(stops.map((stop) => [stop.email, stop.reason]));
+}
+
+/** Wait for a condition the service decides, a quarter second at a time. */
+async function until(page: Page, condition: () => Promise<boolean>, ms = 20_000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await condition()) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
+
+async function raiseSteps(page: Page, kit: WalkKit, pass: number, day: string): Promise<void> {
+  const holdBox = (open: Page) =>
+    open.locator(".hqdata-reply-form form").getByLabel("Hold the rest of their firm");
+
+  // ---------------------------------------------------------------- R10: meeting request, firm held
+  const firm10 = firmOf(0, pass);
+  const at10 = await leadsAt(kit, firm10);
+  const asker = at10[0]!;
+  const before10 = await stopList(kit);
+  const others = at10.filter((item) => item.email !== asker.email && !before10.has(item.email));
+  const meetingSaid = await record(
+    page,
+    kit,
+    {
+      email: asker.email,
+      words: "Could we meet next week? Tuesday works.",
+      press: "Record a meeting request: they asked to meet",
+    },
+    async (open) => {
+      kit.check("replies R10: the hold box is there and ticked", await holdBox(open).isChecked());
+    },
+  );
+  const after10 = await stopList(kit);
+  kit.check(
+    "replies R10: a meeting request with the box ticked says asked to meet and holds the rest of the firm",
+    meetingSaid.includes(`${asker.name} asked to meet`) &&
+      others.length > 0 &&
+      meetingSaid.includes(`${others.length} other addresses at ${firm10} are held`) &&
+      others.every((item) => after10.get(item.email) === "manual") &&
+      !after10.has(asker.email),
+    { said: meetingSaid, others: others.length },
+  );
+  await page.goto(`${kit.base}/data/leads/${others[0]!.lead_id}`, { waitUntil: "networkidle" });
+  let text = flat(await kit.text());
+  kit.check(
+    "replies R10: a held colleague's lead reads Held back, someone at the firm replied",
+    text.includes("Held back") && /someone at the firm replied/i.test(text),
+    text.slice(0, 300),
+  );
+  await kit.audit("lead-firm-held");
+
+  // ---------------------------------------------------------------- R11: needs review
+  const firm11 = firmOf(1, pass);
+  const unsure = (await leadsAt(kit, firm11))[0]!;
+  const reviewSaid = await record(page, kit, {
+    email: unsure.email,
+    words: "Interesting. Let me see who here would look at it.",
+    press: "Record that it needs review: decide what it means later",
+  });
+  const reviewItem = (await followUps(kit)).find(
+    (item) => item.email === unsure.email && item.kind === "review",
+  );
+  kit.check(
+    "replies R11: needs review leaves a follow-up for today to decide what it means",
+    reviewSaid ===
+      "Recorded: it needs review. A follow-up for today asks you to decide what it means." &&
+      reviewItem?.due_on === day &&
+      reviewItem.title === `Decide what ${unsure.name}'s reply means` &&
+      reviewItem.state === "open",
+    reviewSaid,
+  );
+  await page.goto(`${kit.base}/data/leads/${unsure.lead_id}`, { waitUntil: "networkidle" });
+  text = flat(await kit.text());
+  kit.check("replies R11: the lead reads Needs review", text.includes("Needs review"));
+  // A yes from the same address, with the box unticked: it closes the follow-up, holds nobody.
+  const stopsBefore11 = (await stopList(kit)).size;
+  const laterYes = await record(
+    page,
+    kit,
+    {
+      email: unsure.email,
+      words: "Yes, we would like to see it.",
+      press: "Record a yes: add the firm to the waitlist",
+    },
+    async (open) => {
+      await holdBox(open).uncheck();
+    },
+  );
+  const closed = (await followUps(kit)).find(
+    (item) => item.email === unsure.email && item.kind === "review",
+  );
+  kit.check(
+    "replies R11: a later yes closes the review follow-up; unticked, nobody is held",
+    laterYes.includes("is on the waitlist") &&
+      closed?.state === "done" &&
+      closed.note === "Answered by a later reply" &&
+      (await stopList(kit)).size === stopsBefore11,
+    { said: laterYes, state: closed?.state },
+  );
+
+  // ---------------------------------------------------------------- R12: never for out of office or free mail
+  const firm12 = firmOf(2, pass);
+  const away = (await leadsAt(kit, firm12))[0]!;
+  const stopsBefore12 = (await stopList(kit)).size;
+  const awaySaid = await record(
+    page,
+    kit,
+    { email: away.email, words: "I am away until Monday.", press: "Record: later" },
+    async (open) => {
+      await open
+        .locator(".hqdata-reply-form form")
+        .getByRole("button", { name: "Later", exact: true })
+        .click();
+      await open.locator('input[name="later_until"]').fill(addDays(day, 4));
+      await open.locator('input[name="auto_reply"]').check();
+    },
+  );
+  // A free-mail lead nobody has answered for, and not an investor (an angel's yes goes to Investors).
+  const free = (await leadsAt(kit, "inbox.example")).find(
+    (item) => item.status === "not_sent" && !(item.badges ?? []).includes("Investor"),
+  );
+  const freeSaid = free
+    ? await record(page, kit, {
+        email: free.email,
+        words: "Happy to try it.",
+        press: "Record a yes: add the firm to the waitlist",
+      })
+    : "";
+  kit.check(
+    "replies R12: out of office and a free-mail yes hold nobody, and say nothing of holding",
+    awaySaid.startsWith("Recorded: out of office until") &&
+      !awaySaid.includes("held") &&
+      free !== undefined &&
+      freeSaid.includes("is on the waitlist") &&
+      !freeSaid.includes("held") &&
+      (await stopList(kit)).size === stopsBefore12,
+    { away: awaySaid, free: freeSaid },
+  );
+
+  // ---------------------------------------------------------------- R13: take R10's reply back
+  await page.goto(`${kit.base}/data/leads/${asker.lead_id}`, { waitUntil: "networkidle" });
+  await page.locator("summary", { hasText: "Take this back" }).click();
+  text = flat(await kit.text());
+  kit.check(
+    "replies R13: the take-back preview lists releasing the firm",
+    text.includes(`Release the ${others.length} addresses held at ${firm10}`),
+    text.slice(0, 400),
+  );
+  await page.locator("button", { hasText: "Take it back" }).click();
+  const releasedAll = await until(page, async () => {
+    const stops = await stopList(kit);
+    return others.every((item) => !stops.has(item.email));
+  });
+  kit.check("replies R13: after it, none of them is on the stop list", releasedAll);
+  await kit.audit("lead-hold-taken-back");
+
+  // ---------------------------------------------------------------- R14: the booking link and the answer
+  await page.goto(`${kit.base}/data/replies#replies-answer`, { waitUntil: "networkidle" });
+  const answerSection = page.locator("section[aria-labelledby='replies-answer']");
+  await answerSection.locator("summary", { hasText: "Edit your answer" }).click();
+  const linkField = answerSection.getByLabel("Your booking link");
+  await linkField.fill("http://book.example/walk");
+  await answerSection.getByRole("button", { name: "Save", exact: true }).click();
+  const refusedLink = answerSection.locator(".callout--danger").first();
+  await refusedLink.waitFor({ timeout: 20_000 });
+  const refusedText = flat(await refusedLink.innerText());
+  await linkField.fill("https://book.example/walk");
+  await answerSection.getByRole("button", { name: "Save", exact: true }).click();
+  await answerSection.locator(".form-sent", { hasText: "Saved." }).waitFor({ timeout: 20_000 });
+  const settings = (await kit.socket.ask("GET", "/data/replies/settings")).body.settings as
+    { booking_link?: string; yes_answer?: string } | undefined;
+  kit.check(
+    "replies R14: an http link is refused with its sentence; the https link is saved",
+    refusedText === "Paste the whole link, starting https://." &&
+      settings?.booking_link === "https://book.example/walk" &&
+      (settings.yes_answer ?? "").includes("{booking_link}"),
+    { refused: refusedText, settings },
+  );
+  await kit.audit("replies-answer-edit");
+  const firm14 = firmOf(3, pass);
+  const keen = (await leadsAt(kit, firm14))[0]!;
+  const firstName = keen.name.split(" ")[0] ?? "";
+  await record(
+    page,
+    kit,
+    {
+      email: keen.email,
+      words: "Yes. Send me a time.",
+      press: "Record a yes: add the firm to the waitlist",
+    },
+    async (open) => {
+      await holdBox(open).uncheck();
+    },
+  );
+  const copyBox = page.getByLabel("Your answer, ready to copy");
+  await copyBox.waitFor({ timeout: 20_000 });
+  const ready = await copyBox.inputValue();
+  kit.check(
+    "replies R14: a yes then shows the answer ready to copy, with the link and their first name",
+    ready.includes("https://book.example/walk") &&
+      firstName.length > 0 &&
+      ready.includes(`Thank you, ${firstName}.`) &&
+      (await page.getByRole("button", { name: "Copy", exact: true }).count()) === 1,
+    ready,
+  );
+  await kit.audit("replies-answer-ready");
+
+  // ---------------------------------------------------------------- R15: release the firm from Replies
+  const firm15 = firmOf(4, pass);
+  const at15 = await leadsAt(kit, firm15);
+  const asking = at15[0]!;
+  const before15 = await stopList(kit);
+  const held15 = at15.filter((item) => item.email !== asking.email && !before15.has(item.email));
+  await record(page, kit, { email: asking.email, words: "What does it cost?", press: "Question" });
+  const heldNow = await stopList(kit);
+  const where = `${kit.base}/data/replies?q=${encodeURIComponent(asking.email)}#replies-all`;
+  await page.goto(where, { waitUntil: "networkidle" });
+  const row = page.locator("#table-replies tbody tr").first();
+  await row.locator("summary", { hasText: "Release the firm" }).click();
+  text = flat(await row.innerText());
+  const asked = text.includes(
+    `Release ${held15.length} addresses at ${firm15}? Mail merge may write to them again.`,
+  );
+  await row.getByRole("button", { name: "Release them" }).click();
+  const off = await until(page, async () => {
+    const stops = await stopList(kit);
+    return held15.every((item) => !stops.has(item.email));
+  });
+  // A fresh load: the same address with its anchor would not reload.
+  await page.reload({ waitUntil: "networkidle" });
+  const rowText = flat(await page.locator("#table-replies tbody tr").first().innerText());
+  kit.check(
+    "replies R15: Release the firm takes them off; the row reads Held {n} with no popover left",
+    held15.length > 0 &&
+      held15.every((item) => heldNow.get(item.email) === "manual") &&
+      asked &&
+      off &&
+      rowText.includes(`Held ${held15.length} at ${firm15}`) &&
+      (await page
+        .locator("#table-replies tbody tr")
+        .first()
+        .locator("summary", {
+          hasText: "Release the firm",
+        })
+        .count()) === 0,
+    { asked, off, row: rowText.slice(0, 200) },
+  );
+  await kit.audit("replies-firm-released");
+
+  // ---------------------------------------------------------------- tidy: leave Due as it was
+  // Due shows its first 30 rows and the dates walk looks for its own date there, so the next
+  // steps these yeses made move a month out, and the question's follow-up is done.
+  for (const email of [asker.email, unsure.email, free?.email ?? "", keen.email]) {
+    if (!email) continue;
+    const entry = ((await lead(kit, email)).waitlist as { entry_id?: string } | null)?.entry_id;
+    if (entry)
+      await kit.socket.ask("POST", "/data/_test/waitlist/set", {
+        entry_id: entry,
+        next_step_on: addDays(day, 30),
+        by: WALKER,
+      });
+  }
+  for (const item of await followUps(kit))
+    if (item.email === asking.email && item.state === "open")
+      await kit.socket.ask("POST", `/data/follow-ups/${item.follow_up_id}/done`, {
+        note: "Done in the walk.",
+        by: WALKER,
+      });
 }

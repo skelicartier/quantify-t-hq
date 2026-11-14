@@ -29,6 +29,7 @@ import { DATA_ROLE_LINE, requireData } from "@/lib/data/access";
 import { readLead, type LeadDetail } from "@/lib/data/api/leads";
 import { readTakeBackPreview, type TakeBackPlan } from "@/lib/data/api/replies";
 import {
+  FIRM_HOLD_REASON,
   LEAD_FIELDS,
   OUTCOMES,
   STOP_REASONS,
@@ -287,7 +288,19 @@ function Lead({
               ` Said no on ${formatDate(saidNo.received_at)}.`}
           </Callout>
         )}
-        {lead.firm_hold && (
+        {lead.firm_hold && lead.firm_hold.reason === FIRM_HOLD_REASON && (
+          <Callout tone="attention" compact>
+            Held back: someone at the firm replied ({lead.firm_hold.firm}, on{" "}
+            {formatDate(lead.firm_hold.on)}). Nobody there is written to while you answer.{" "}
+            <Link
+              className="text-link"
+              href={`/data/replies?q=${encodeURIComponent(lead.firm_hold.firm)}#replies-all`}
+            >
+              Release it in Replies
+            </Link>
+          </Callout>
+        )}
+        {lead.firm_hold && lead.firm_hold.reason !== FIRM_HOLD_REASON && (
           <Callout tone="attention" compact>
             Held back: firm already joined ({lead.firm_hold.firm} said yes on{" "}
             {formatDate(lead.firm_hold.on)}).{" "}

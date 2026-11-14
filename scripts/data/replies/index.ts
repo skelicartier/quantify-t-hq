@@ -4,6 +4,10 @@
  * puts the address on Mail merge's stop list, a later sets a reminder, a wrong person adds
  * whoever they named, a question adds a follow-up for today. Every reply can be taken
  * back, with a preview of what is undone and what stays.
+ *
+ * Raise batch (spec §7.2): a meeting request and "needs review"; the firm hold, released
+ * here or by taking the reply back; the booking link and the answer to a yes; and the
+ * open follow-ups as a calendar source.
  */
 
 import { randomUUID } from "node:crypto";
@@ -16,7 +20,13 @@ import { LIMITS, clean, cleanText, isDay, normaliseEmail, wholeNumber } from "..
 import type { Staff } from "../protocol";
 import { toCsv } from "../text";
 import { findTerms, matchesTerms } from "../../../src/lib/merge/find";
-import { OUTCOMES, WAITLIST_STAGE_ORDER, type WaitlistStage } from "../../../src/lib/data/labels";
+import {
+  FIRM_HOLD_REASON,
+  OUTCOMES,
+  POSITIVE_OUTCOMES,
+  WAITLIST_STAGE_ORDER,
+  type WaitlistStage,
+} from "../../../src/lib/data/labels";
 import type {
   FollowUp,
   Interceptor,
@@ -26,6 +36,8 @@ import type {
 } from "../leads/contracts";
 import type { LeadsInternal } from "../leads/index";
 import { BOM } from "../leads/exports";
+import { registerRepliesAgenda } from "./agenda";
+import { FirmHolds, releaseFirmHold, releaseSentence } from "./firm-holds";
 import { FollowUps } from "./follow-ups";
 import { Interceptors } from "./interceptors";
 import {
@@ -34,10 +46,13 @@ import {
   readRecordInput,
   recordReply,
   rowOf,
+  saidNo,
   type RecordContext,
 } from "./record";
+import { ReplySettingsBook, readSettingsInput } from "./settings";
 import { planTakeBack, takeBack } from "./take-back";
 import { WALK_REPLIES } from "./walk-seed";
+import { RAISE_SERVICES, type RepliesFeed } from "../raise-contracts";
 
 const PAGE = 100;
 
@@ -55,8 +70,10 @@ export async function register(core: DataCore): Promise<void> {
     book: new RepliesBook(core.store),
     followUps: new FollowUps(core.store),
     interceptors: new Interceptors(),
+    firmHolds: new FirmHolds(core.store),
+    settings: new ReplySettingsBook(core.store),
   };
-  const { book, followUps } = context;
+  const { book, followUps, firmHolds } = context;
   for (const email of book.byEmail.keys()) leads.noteReply(email, book.markFor(email));
   const closeBySends = () =>
     followUps.closeBySends((email) => core.sender.writtenFor(email), core.day());
@@ -108,7 +125,31 @@ export async function register(core: DataCore): Promise<void> {
     registerInterceptor: (interceptor: Interceptor) => context.interceptors.register(interceptor),
     followUpsFor: (email) => followUps.forEmail(normaliseEmail(email) || email),
   };
+  // A held colleague reads "Held back: someone at the firm replied" while the hold holds them.
+  leads.registerStanding({
+    name: "firm-holds",
+    holdFor: (email) => {
+      const hold = firmHolds.holding(email);
+      return hold
+        ? { reason: FIRM_HOLD_REASON, firm: hold.firm_key, on: core.day(hold.made_at) }
+        : null;
+    },
+  });
+  registerRepliesAgenda(core, followUps, leads);
   core.provide("replies", service);
+
+  // The numbers (raise spec §8): every reply as the numbers count them, read-only.
+  const feed: RepliesFeed = {
+    all: () =>
+      book.replies.map((reply) => ({
+        reply_id: reply.reply_id,
+        email: reply.email,
+        outcome: reply.outcome,
+        received_at: reply.received_at,
+        taken_back: book.takeBacks.has(reply.reply_id),
+      })),
+  };
+  core.provide(RAISE_SERVICES.repliesFeed, feed);
 
   // ---------------------------------------------------------------- the overview and Due
 
@@ -118,8 +159,8 @@ export async function register(core: DataCore): Promise<void> {
     const on = (row: ReplyRow) => core.day(row.received_at) === today;
     return {
       today: all.filter((row) => human(row) && on(row)).length,
-      yes_today: all.filter((row) => row.outcome === "replied_positive" && on(row)).length,
-      yes_total: all.filter((row) => row.outcome === "replied_positive").length,
+      yes_today: all.filter((row) => POSITIVE_OUTCOMES.includes(row.outcome) && on(row)).length,
+      yes_total: all.filter((row) => POSITIVE_OUTCOMES.includes(row.outcome)).length,
       latest: all.slice(0, 5).map((row) => ({
         reply_id: row.reply_id,
         lead_id: row.lead_id,
@@ -210,6 +251,32 @@ export async function register(core: DataCore): Promise<void> {
   core.route("POST", "/data/replies/:id/take-back", async (ctx) => {
     const by = ctx.staff();
     return takeBack(ctx.params[0]!, by, context);
+  });
+
+  // ---------------------------------------------------------------- the firm hold and the answer
+
+  core.route("POST", "/data/replies/:id/release-hold", async (ctx) => {
+    const by = ctx.staff();
+    const reply = book.byId.get(ctx.params[0]!);
+    if (!reply) throw new Refused(404, "not_found", "That reply is not here.");
+    const hold = firmHolds.forReply(reply.reply_id);
+    if (!hold) throw new Refused(409, "nothing_held", "Nothing in that hold is still held back.");
+    const given = Array.isArray(ctx.body.emails) ? ctx.body.emails : undefined;
+    const result = await releaseFirmHold(hold, given, by, {
+      core,
+      leads,
+      holds: firmHolds,
+      saidNo: (email) => saidNo(book, email),
+      refresh: () => leads.module.index.bump(),
+    });
+    return { ...result, message: releaseSentence(result) };
+  });
+
+  core.route("GET", "/data/replies/settings", () => ({ settings: context.settings.settings }));
+
+  core.route("POST", "/data/replies/settings", (ctx) => {
+    const by = ctx.staff();
+    return { settings: context.settings.save(readSettingsInput(ctx.body), by, core.now()) };
   });
 
   // ---------------------------------------------------------------- follow-ups
@@ -318,6 +385,7 @@ export async function register(core: DataCore): Promise<void> {
           "recorded_at",
           "recorded_by",
           "taken_back",
+          "firm_hold",
         ],
         all.map((row) => [
           row.received_at,
@@ -334,6 +402,9 @@ export async function register(core: DataCore): Promise<void> {
           row.recorded_at,
           row.recorded_by.name,
           row.taken_back?.at ?? "",
+          row.firm_hold
+            ? `Held ${row.firm_hold.held.toLocaleString("en-GB")} at ${row.firm_hold.domain}`
+            : "",
         ]),
       );
     writeFileSync(handle.path, text, { mode: 0o600 });
@@ -427,6 +498,7 @@ export async function register(core: DataCore): Promise<void> {
             later_until: seed.later_days ? addDays(today, seed.later_days) : null,
             referral: seed.referral ?? null,
             add_if_missing: false,
+            hold_firm: false,
           },
           by,
           null,

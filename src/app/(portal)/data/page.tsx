@@ -16,6 +16,7 @@ import { DATA_ROLE_LINE, requireData } from "@/lib/data/access";
 import { readDataOverview, type DataOverview } from "@/lib/data/api/overview";
 import {
   FILE_KINDS,
+  INVESTOR_STAGES,
   OUTCOMES,
   WAITLIST_STAGES,
   WAITLIST_STAGE_ORDER,
@@ -271,6 +272,8 @@ function Overview({ overview, now }: { overview: DataOverview; now: number }) {
         </div>
       )}
 
+      {overview.raise && <TheRaise raise={overview.raise} />}
+
       {overview.backup && (
         <div className="hqdata-print-hide">
           <RecordSection id="data-backup" title="Backup">
@@ -298,5 +301,32 @@ function Overview({ overview, now }: { overview: DataOverview; now: number }) {
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * The raise (raise spec §5.6.4): how many firms are at each stage from Replied to Money in
+ * now, each a link to that tab, and the first meetings this week. Counts of firms, not a
+ * funnel graphic; the funnel itself is on Investors.
+ */
+function TheRaise({ raise }: { raise: NonNullable<DataOverview["raise"]> }) {
+  return (
+    <RecordSection id="data-raise" title="The raise">
+      <p className="hqdata-readouts">
+        {raise.stages.map((row, index) => (
+          <span key={row.stage}>
+            {index > 0 && " · "}
+            <Link href={`/data/investors?stage=${row.stage}`}>
+              {labelOf(INVESTOR_STAGES, row.stage)} {formatNumber(row.now)}
+            </Link>
+          </span>
+        ))}
+      </p>
+      <p className="hqdata-readouts">
+        <span>First meetings this week {formatNumber(raise.first_meetings_this_week)}</span>
+        {" · "}
+        <Link href="/data/investors?view=funnel">Open the funnel</Link>
+      </p>
+    </RecordSection>
   );
 }

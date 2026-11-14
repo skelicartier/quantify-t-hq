@@ -8,15 +8,18 @@ import { dataAsk, id, ok } from "@/lib/data/socket";
 /**
  * Replies and follow-ups: a reply recorded once, what it did, taking it back, and what is
  * owed. HQ never reads the mailbox: every reply here was typed or pasted in by a person.
+ * Raise batch: the firm hold and its release, and the booking link with the answer to a yes.
  */
 
 export const outcomeSchema = z.enum([
   "replied_positive",
+  "meeting_request",
   "not_interested",
   "not_now",
   "out_of_office",
   "wrong_person",
   "question",
+  "needs_review",
 ]);
 export type ReplyOutcome = z.infer<typeof outcomeSchema>;
 
@@ -34,6 +37,12 @@ export const effectSchema = z.discriminatedUnion("kind", [
     investor_id: z.string(),
     from: z.string(),
     to: z.string(),
+  }),
+  z.object({
+    kind: z.literal("firm_held"),
+    hold_id: z.string(),
+    domain: z.string(),
+    held: z.number(),
   }),
 ]);
 export type Effect = z.infer<typeof effectSchema>;
@@ -65,6 +74,11 @@ export const replyRowSchema = z.object({
       kept: z.array(z.object({ effect: effectSchema, why: z.string() })),
     })
     .nullable(),
+  /** The firm hold this reply made (absent from a service older than the raise batch). */
+  firm_hold: z
+    .object({ hold_id: z.string(), domain: z.string(), held: z.number(), open: z.number() })
+    .nullish()
+    .transform((value) => value ?? null),
 });
 export type ReplyRow = z.infer<typeof replyRowSchema>;
 
@@ -73,6 +87,7 @@ export const followUpKindSchema = z.enum([
   "write_again",
   "write_to_named",
   "find_address",
+  "review",
   "other",
 ]);
 
@@ -134,11 +149,22 @@ export type RecordReplyInput = {
   auto_reply?: boolean;
   referral?: { name: string; email: string; title: string };
   add_if_missing: boolean;
+  /** "Hold the rest of their firm"; left out, nobody is held. */
+  hold_firm?: boolean;
 };
 
 export const recordReply = (input: RecordReplyInput, by: Staff, attempt: string) =>
   dataAsk(
-    ok.extend({ reply: replyRowSchema, message: z.string(), href: z.string().nullable() }),
+    ok.extend({
+      reply: replyRowSchema,
+      message: z.string(),
+      href: z.string().nullable(),
+      /** The filled-in answer to copy after a yes or a meeting request; null otherwise. */
+      answer: z
+        .string()
+        .nullish()
+        .transform((value) => value ?? null),
+    }),
     "POST",
     "/data/replies",
     { ...input, by, attempt },
@@ -167,6 +193,36 @@ export const takeBackReply = (replyId: string, by: Staff) =>
     `/data/replies/${id(replyId)}/take-back`,
     { by },
   );
+
+export const releaseSchema = ok.extend({
+  released: z.array(z.string()),
+  not_stopped: z.array(z.string()),
+  kept: z.array(z.object({ email: z.string(), why: z.string() })),
+  message: z.string(),
+});
+export type FirmHoldRelease = z.infer<typeof releaseSchema>;
+
+/** Take a firm hold's addresses off the stop list: all of them, or the ones named. */
+export const releaseFirmHold = (replyId: string, emails: string[] | null, by: Staff) =>
+  dataAsk(releaseSchema, "POST", `/data/replies/${id(replyId)}/release-hold`, {
+    ...(emails ? { emails } : {}),
+    by,
+  });
+
+export const replySettingsSchema = z.object({
+  booking_link: z.string(),
+  yes_answer: z.string(),
+  updated_at: z.string().nullable(),
+  updated_by: staffSchema.nullable(),
+});
+export type ReplySettings = z.infer<typeof replySettingsSchema>;
+
+const settingsAnswer = ok.extend({ settings: replySettingsSchema });
+
+export const readReplySettings = () => dataAsk(settingsAnswer, "GET", "/data/replies/settings");
+
+export const saveReplySettings = (input: { booking_link: string; yes_answer: string }, by: Staff) =>
+  dataAsk(settingsAnswer, "POST", "/data/replies/settings", { ...input, by });
 
 export function readFollowUps(query: { state?: string; offset?: number } = {}) {
   const params = new URLSearchParams({ state: query.state ?? "open" });

@@ -46,7 +46,7 @@ export async function readDataHome(allowed: boolean): Promise<DataHome | null> {
 
 export type DataOwedRow = {
   key: string;
-  kind: "Follow-up" | "Waitlist" | "Investor";
+  kind: "Follow-up" | "Waitlist" | "Investor" | "Action";
   href: string;
   title: string;
   sub: string;
@@ -59,12 +59,13 @@ const OWED_KINDS: Partial<Record<DueItem["kind"], DataOwedRow["kind"]>> = {
   follow_up: "Follow-up",
   waitlist: "Waitlist",
   investor: "Investor",
+  action: "Action",
 };
 
 /**
- * Follow-ups, waitlist next steps and investor next steps due today or earlier, as rows of
- * Home's queue: overdue first, then by day and title. Key dates and file reviews stay in
- * Data's own Due list.
+ * Follow-ups, waitlist next steps, investor next steps and actions from notes due today or
+ * earlier, as rows of Home's queue: overdue first, then by day and title. Key dates and file
+ * reviews stay in Data's own Due list.
  */
 export function dataOwedRows(overview: Pick<DataOverview, "due" | "today">): DataOwedRow[] {
   const rows: DataOwedRow[] = [];

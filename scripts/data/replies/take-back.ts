@@ -4,13 +4,16 @@
  * added comes off Mail merge's stop list (through the engine, as it went on), unless another
  * "No" from them still stands or the entry there now is not the one it made; a follow-up
  * still open is closed; a lead it added stays (no lead is ever removed), and so does a
- * waitlist firm or an investor's stage, which are changed on their own pages.
+ * waitlist firm or an investor's stage, which are changed on their own pages. A firm hold
+ * it made is released, by the hold's own rules: someone who said no since, or an entry
+ * put back for another reason, stays on the stop list, and the take-back says why.
  */
 
 import { Refused } from "../../mail-merge/engine";
 import type { Staff } from "../protocol";
 import type { Effect, TakeBack } from "../leads/contracts";
-import type { RecordContext } from "./record";
+import { releaseFirmHold } from "./firm-holds";
+import { saidNo, type RecordContext } from "./record";
 
 export type TakeBackPlan = { undo: Effect[]; keep: { effect: Effect; why: string }[] };
 
@@ -75,6 +78,14 @@ export function planTakeBack(replyId: string, context: RecordContext): TakeBackP
       case "investor_stage":
         plan.keep.push({ effect, why: "The investor keeps its stage; move it back in Investors." });
         break;
+      case "firm_held": {
+        const hold = context.firmHolds.get(effect.hold_id);
+        const open = hold ? context.firmHolds.open(hold).length : 0;
+        // The preview counts what is still held now, which a release may have lowered.
+        if (open > 0) plan.undo.push({ ...effect, held: open });
+        else plan.keep.push({ effect, why: "Nothing in that hold is still held back." });
+        break;
+      }
     }
   }
   return plan;
@@ -107,6 +118,28 @@ export async function takeBack(
       const item = context.followUps.get(effect.follow_up_id);
       if (item) context.followUps.takeBack(item, by, at);
       undone.push(effect);
+      continue;
+    }
+    if (effect.kind === "firm_held") {
+      const hold = context.firmHolds.get(effect.hold_id);
+      if (!hold) continue;
+      try {
+        const result = await releaseFirmHold(hold, undefined, by, {
+          core: context.core,
+          leads: context.leads,
+          holds: context.firmHolds,
+          saidNo: (email) => saidNo(context.book, email),
+          refresh: () => context.leads.module.index.bump(),
+        });
+        if (result.released.length > 0) undone.push({ ...effect, held: result.released.length });
+        for (const item of result.kept)
+          kept.push({ effect, why: `${item.email} stays on the stop list: ${item.why}.` });
+      } catch (error) {
+        kept.push({
+          effect,
+          why: error instanceof Refused ? error.message : "Mail merge could not be reached.",
+        });
+      }
     }
   }
   context.core.sender.poll();
@@ -119,6 +152,11 @@ export async function takeBack(
   const closed = undone.filter((effect) => effect.kind === "follow_up").length;
   if (closed)
     parts.push(closed === 1 ? "its follow-up is closed" : `${closed} follow-ups are closed`);
+  for (const effect of undone)
+    if (effect.kind === "firm_held")
+      parts.push(
+        `the ${effect.held.toLocaleString("en-GB")} ${effect.held === 1 ? "address" : "addresses"} held at ${effect.domain} ${effect.held === 1 ? "is" : "are"} released`,
+      );
   const message = parts.length
     ? `Taken back: ${parts.join(", and ")}.`
     : "Taken back. Nothing it did needed undoing.";

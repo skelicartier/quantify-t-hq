@@ -14,6 +14,7 @@ import { toCsv } from "../text";
 import { DATE_KINDS, DATE_STATES, REPEATS } from "../../../src/lib/data/labels";
 import type { FilesService } from "../leads/contracts";
 import { readVault } from "../backup/vault-index";
+import { registerDatesAgenda } from "./agenda";
 import { CHECKED_ON } from "./catalogue";
 import { DatesBook, inWindow, shownState, type KeyDate } from "./book";
 
@@ -22,6 +23,7 @@ const FILES_SHOWN = 500;
 
 export async function register(core: DataCore): Promise<void> {
   const book = new DatesBook(core);
+  registerDatesAgenda(core, book);
   const files = () => core.need<FilesService>("files");
   const fileExists = (id: string): boolean => {
     const row = files()?.fileRow(id);

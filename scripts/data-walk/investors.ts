@@ -6,6 +6,12 @@
  * firm's page, money shown per currency, the CSV, the "Investor" badge on a lead, and no
  * target, bar or percentage anywhere (I4).
  *
+ * The raise batch (raise spec §5.10, I5–I16): the Funnel view against the service's own
+ * answer, amounts per currency, Qualify, a Made introduction, "Set the wave" on a search,
+ * an offer deadline in Due, the deck link, the round, "The raise" on /data, the intern
+ * kept out, the CSV's new columns, and no "Add a note" of the firm page's own. The figures
+ * move between passes, so every check compares the page with the service, never a number.
+ *
  * The invented investor list mixes people "Walk 01" already wrote to (partner281 … 288,
  * whom no other walk uses) with firms never written to, and an angel on a personal
  * domain. Every person is invented, on `.example`.
@@ -56,6 +62,8 @@ export const shots: Shot[] = [
     path: `/data/investors/${investorIdOf("fund281.example")}`,
     ready: '[data-section="investor-activity"]',
   },
+  { name: "data-investors-funnel", path: "/data/investors?view=funnel", ready: "#table-funnel" },
+  { name: "data-investors-round", path: "/data/investors?view=round", ready: ".hqdata-round" },
 ];
 
 type Answer = { status: number; body: Record<string, unknown> };
@@ -166,9 +174,12 @@ function moneyText(values: Record<string, number>): string {
 
 type Money = Record<string, { soft: number; signed_and_in: number }>;
 
+/** The one sentence that names a target, to say there is none: the Investors page's About. */
+const NO_TARGET = "There is no target.";
+
 /** I4: nothing on the page measures the raise against anything. */
 async function noTarget(page: Page, kit: WalkKit, where: string): Promise<void> {
-  const text = flat(await kit.text());
+  const text = flat(await kit.text()).replace(NO_TARGET, "");
   const meters = await page.evaluate(
     () =>
       document.querySelectorAll(
@@ -383,4 +394,469 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
       body.split("\r\n").filter(Boolean).length === Number(book.total) + 1,
     `${csv.status()} ${body.slice(0, 80)}`,
   );
+  const header = body.replace(/^\ufeff/, "").split("\r\n")[0] ?? "";
+  kit.check(
+    "investors I15: the CSV keeps its columns and appends the raise's at the end",
+    header.startsWith("firm,domain,stage,since,") &&
+      header.endsWith(`,owner,${RAISE_COLUMNS.join(",")}`),
+    header.slice(-160),
+  );
+
+  await raise(page, kit, pass);
+}
+
+const RAISE_COLUMNS = [
+  "wave",
+  "introduced",
+  "intro_status",
+  "introducer",
+  "intro_on",
+  "cheque_min",
+  "cheque_max",
+  "cheque_currency",
+  "stage_focus",
+  "sectors",
+  "geography",
+  "lead_or_follow",
+  "conflict",
+  "residency",
+  "can_invest_india",
+  "last_replied",
+  "last_met",
+  "offer_deadline",
+  "deck_link",
+];
+
+const count = (value: number) => value.toLocaleString("en-GB");
+
+type FunnelAnswer = {
+  firms: number;
+  days_since_first_send: number | null;
+  stages: { stage: string; now: number; reached: number; of: number }[];
+  money: Record<string, Record<string, { amount: number; firms: number }>>;
+  by_intro: { key: string; firms: number }[];
+};
+
+async function funnelOf(kit: WalkKit): Promise<FunnelAnswer> {
+  return (await kit.socket.ask("GET", "/data/raise/funnel")).body.funnel as FunnelAnswer;
+}
+
+/** The cells of a table, by its caption's id, row by row. */
+async function cells(page: Page, tableId: string): Promise<string[][]> {
+  return page.evaluate(
+    (id) =>
+      [...document.querySelectorAll(`#${id} tbody tr`)].map((row) =>
+        [...row.querySelectorAll("td")].map((cell) =>
+          (cell.textContent ?? "").replace(/\s+/g, " ").trim(),
+        ),
+      ),
+    tableId,
+  );
+}
+
+/** Wait until the service says what the page was asked to do. */
+async function until(page: Page, condition: () => Promise<boolean>, tries = 100): Promise<boolean> {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    if (await condition()) return true;
+    await page.waitForTimeout(100);
+  }
+  return false;
+}
+
+type Detail = {
+  investor?: {
+    firm?: string;
+    wave?: string;
+    deck_link?: string;
+    offer_deadline?: string | null;
+    intro?: { status?: string; introducer?: string };
+    profile?: Record<string, unknown>;
+  };
+};
+
+async function detailOf(kit: WalkKit, investorId: string): Promise<Detail> {
+  return (await kit.socket.ask("GET", `/data/investors/${investorId}`)).body as Detail;
+}
+
+/** One inline field on the firm's side: open it, type, press Enter. */
+async function inline(page: Page, label: string, name: string, value: string): Promise<void> {
+  await page.getByRole("button", { name: `Edit ${label}`, exact: true }).click();
+  const input = page.locator(`#inline-investor_id-${name}`);
+  await input.fill(value);
+  await input.press("Enter");
+}
+
+/**
+ * This field's own "Saved", once the editor has closed on the new value: the action has
+ * answered, so leaving the page cannot cut it off half way.
+ */
+async function saved(page: Page, label: string): Promise<boolean> {
+  const prop = page.locator(".prop", {
+    has: page.locator("dt", { hasText: new RegExp(`^${label}$`) }),
+  });
+  return prop
+    .locator(".prop__saved")
+    .waitFor({ timeout: 20_000 })
+    .then(() => true)
+    .catch(() => false);
+}
+
+/** Open a page and wait for its own selector, once more after a reload when it is slow. */
+async function openAt(page: Page, url: string, ready: string): Promise<void> {
+  await page.goto(url, { waitUntil: "networkidle" });
+  const here = await page
+    .waitForSelector(ready, { timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!here) {
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForSelector(ready, { timeout: 30_000 });
+  }
+}
+
+async function raise(page: Page, kit: WalkKit, pass: number): Promise<void> {
+  const today = String((await kit.socket.ask("GET", "/data/_test/day")).body.day ?? "");
+  const firmId = investorIdOf("fund281.example");
+
+  // ---------------------------------------------------------------- I5, I6: the Funnel view
+  await page.goto(`${kit.base}/data/investors?view=funnel`, { waitUntil: "networkidle" });
+  await page.waitForSelector("#table-funnel", { timeout: 30_000 });
+  let funnel = await funnelOf(kit);
+  const rows = await cells(page, "table-funnel");
+  kit.check(
+    "investors I5: the funnel has eight stages, each “of” the stage before as the service says",
+    rows.length === 8 &&
+      funnel.stages.length === 8 &&
+      rows.every(
+        (row, index) =>
+          row[1] === count(funnel.stages[index]!.now) &&
+          row[2] === count(funnel.stages[index]!.reached) &&
+          row[3] ===
+            `${count(funnel.stages[index]!.reached)} of ${count(funnel.stages[index]!.of)}`,
+      ),
+    rows.map((row) => row[3]).join(" | "),
+  );
+  const days = await page
+    .locator(".stat", {
+      has: page.locator(".stat__label", { hasText: "Days since the first send" }),
+    })
+    .locator(".stat__value")
+    .innerText();
+  kit.check(
+    "investors I5: days since the first send is the service's",
+    days.trim() ===
+      (funnel.days_since_first_send === null
+        ? "Not sent yet"
+        : count(funnel.days_since_first_send)),
+    `${days} · ${String(funnel.days_since_first_send)}`,
+  );
+  const currencies = Object.keys(funnel.money).sort();
+  const money = currencies.length ? await cells(page, "table-amounts-by-state") : [];
+  const heads = await page.evaluate(() =>
+    [...document.querySelectorAll("#table-amounts-by-state thead th")].map((cell) =>
+      (cell.textContent ?? "").trim(),
+    ),
+  );
+  const symbols = (text: string) => (text.match(/[$₹]/g) ?? []).length;
+  kit.check(
+    "investors I6: the amounts table keeps each currency in its own column, never added",
+    currencies.length === 0
+      ? flat(await kit.text()).includes("No amounts recorded yet.")
+      : JSON.stringify(heads) === JSON.stringify(["State", ...currencies]) &&
+          money.length === 4 &&
+          money.every(
+            (row) =>
+              row.length === currencies.length + 1 &&
+              !/total|all currencies/i.test(row[0] ?? "") &&
+              row.slice(1).every((cell) => symbols(cell) <= 1),
+          ),
+    `${heads.join(",")} · ${money.map((row) => row.join("/")).join(" | ")}`,
+  );
+  await noTarget(page, kit, "the funnel view");
+  await kit.audit("investors-funnel");
+
+  // ---------------------------------------------------------------- I7: Qualify
+  await page.goto(`${kit.base}/data/investors/${firmId}`, { waitUntil: "networkidle" });
+  await page.waitForSelector('[data-section="investor-activity"]', { timeout: 30_000 });
+  await page.locator("summary", { hasText: /^Qualify$/ }).click();
+  const qualify = page.locator("form", { has: page.locator("#qualify-min") });
+  await qualify.locator("#qualify-min").fill("25000");
+  await qualify.locator("#qualify-max").fill("100000");
+  await qualify.locator("#qualify-currency").selectOption("USD");
+  await qualify.locator("#qualify-stage-seed").check();
+  await qualify.locator("#qualify-sectors").fill("fintech, data");
+  await qualify.locator("#qualify-geo-india").check();
+  await qualify.locator("#qualify-geo-us").check();
+  await qualify.locator("#qualify-lead").selectOption("lead");
+  await qualify.locator("#qualify-residency").selectOption("non_resident");
+  await qualify.locator("#qualify-india").selectOption("yes");
+  await qualify.locator('button[type="submit"]').click();
+  const wanted = {
+    cheque: { min: 25_000, max: 100_000, currency: "USD" },
+    sectors: ["fintech", "data"],
+    lead: "lead",
+    residency: "non_resident",
+    india_ok: "yes",
+  };
+  let profile: Record<string, unknown> | undefined;
+  await until(page, async () => {
+    profile = (await detailOf(kit, firmId)).investor?.profile;
+    return JSON.stringify(profile?.cheque) === JSON.stringify(wanted.cheque);
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  const qualification = flat(
+    await page.locator('section.props[aria-label="Qualification"]').innerText(),
+  );
+  kit.check(
+    "investors I7: Qualify keeps the cheque, stages, sectors, geography, lead, residency and India",
+    JSON.stringify(profile?.cheque) === JSON.stringify(wanted.cheque) &&
+      (profile?.stages as string[] | undefined)?.includes("seed") === true &&
+      JSON.stringify(profile?.sectors) === JSON.stringify(wanted.sectors) &&
+      ["india", "us"].every((key) => (profile?.geography as string[] | undefined)?.includes(key)) &&
+      profile?.lead === "lead" &&
+      profile.residency === "non_resident" &&
+      profile.india_ok === "yes" &&
+      [
+        "$25,000–$100,000",
+        "Seed",
+        "fintech, data",
+        "India, United States",
+        "Leads rounds",
+        "Not resident in India",
+        "Can invest into an Indian private company Yes",
+      ].every((words) => qualification.includes(words)),
+    qualification.slice(0, 240),
+  );
+
+  // ---------------------------------------------------------------- I16: no note form of its own
+  const ownNote = await page.evaluate(
+    () =>
+      [...document.querySelectorAll("main button, main summary")].filter(
+        (element) =>
+          /add a note/i.test(element.textContent ?? "") &&
+          !element.closest(".hqdata-investor__notes"),
+      ).length + document.querySelectorAll('[data-section="investor-activity"] textarea').length,
+  );
+  kit.check("investors I16: the firm's page has no Add a note of its own", ownNote === 0, ownNote);
+
+  // ---------------------------------------------------------------- I11: the deck link
+  await inline(page, "Deck link", "deck_link", "http://deck.example/x");
+  const deckRefused = await page
+    .locator(".prop__error", { hasText: "Paste the whole link, starting https://." })
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+  const deckInput = page.locator("#inline-investor_id-deck_link");
+  await deckInput.fill("https://deck.example/d/walk");
+  await deckInput.press("Enter");
+  await saved(page, "Deck link");
+  await until(page, async () => (await detailOf(kit, firmId)).investor?.deck_link !== "");
+  await page.reload({ waitUntil: "networkidle" });
+  const deck = page.locator('a[href="https://deck.example/d/walk"]');
+  const deckTarget = (await deck.count()) === 1 ? await deck.getAttribute("target") : null;
+  const deckRel = (await deck.count()) === 1 ? ((await deck.getAttribute("rel")) ?? "") : "";
+  kit.check(
+    "investors I11: the deck link refuses http, keeps https, and opens in a new tab",
+    deckRefused &&
+      (await detailOf(kit, firmId)).investor?.deck_link === "https://deck.example/d/walk" &&
+      (await deck.innerText()).includes("Open the deck link") &&
+      deckTarget === "_blank" &&
+      deckRel.includes("noopener"),
+    `${String(deckRefused)} · ${String(deckTarget)} · ${deckRel}`,
+  );
+
+  // ---------------------------------------------------------------- I10: the offer deadline
+  const deadline = new Date(`${today}T12:00:00Z`);
+  deadline.setUTCDate(deadline.getUTCDate() + 2);
+  const deadlineDay = deadline.toISOString().slice(0, 10);
+  await inline(page, "Offer deadline", "offer_deadline", deadlineDay);
+  await saved(page, "Offer deadline");
+  await until(
+    page,
+    async () => (await detailOf(kit, firmId)).investor?.offer_deadline === deadlineDay,
+  );
+  const firmName = (await detailOf(kit, firmId)).investor?.firm ?? "";
+  await openAt(page, `${kit.base}/data`, '[data-section="data-due"]');
+  const due = flat(await page.locator('[data-section="data-due"]').innerText());
+  const dueService = ((await kit.socket.ask("GET", "/data/overview")).body.due ?? []) as {
+    key: string;
+  }[];
+  kit.check(
+    "investors I10: an offer deadline two days ahead is in Due on /data",
+    dueService.some((item) => item.key === `investor:${firmId}:offer`) &&
+      due.includes(`Offer deadline: ${firmName}`),
+    due.slice(0, 240),
+  );
+
+  // ---------------------------------------------------------------- I13: The raise on /data
+  const overview = (await kit.socket.ask("GET", "/data/overview")).body.raise as
+    { stages: { stage: string; now: number }[]; first_meetings_this_week: number } | undefined;
+  const LABELS: Record<string, string> = {
+    replied: "Replied",
+    meeting: "Meeting booked",
+    met: "Met",
+    diligence: "Diligence",
+    soft: "Soft commit",
+    signed: "Signed",
+    money_in: "Money in",
+  };
+  const raiseText = flat(await page.locator('[data-section="data-raise"]').innerText());
+  const expected = (overview?.stages ?? [])
+    .map((row) => `${LABELS[row.stage] ?? row.stage} ${count(row.now)}`)
+    .join(" · ");
+  kit.check(
+    "investors I13: The raise on /data has the overview's counts",
+    Boolean(overview) &&
+      overview!.stages.length === 7 &&
+      raiseText.includes(expected) &&
+      raiseText.includes(`First meetings this week ${count(overview!.first_meetings_this_week)}`) &&
+      (await page
+        .locator('[data-section="data-raise"] a[href="/data/investors?view=funnel"]')
+        .count()) === 1,
+    `${expected} · ${raiseText.slice(0, 200)}`,
+  );
+
+  // ---------------------------------------------------------------- I8: a Made introduction
+  const cold = (await kit.socket.ask("GET", "/data/investors?intro=cold")).body.investors as {
+    investor_id: string;
+    firm: string;
+  }[];
+  const target = cold[pass % Math.max(1, cold.length)] ?? cold[0];
+  if (target) {
+    funnel = await funnelOf(kit);
+    const before = funnel.by_intro.find((split) => split.key === "warm")?.firms ?? 0;
+    await page.goto(`${kit.base}/data/investors/${target.investor_id}`, {
+      waitUntil: "networkidle",
+    });
+    await page.locator("summary", { hasText: /^Introduction$/ }).click();
+    const intro = page.locator("form", { has: page.locator("#intro-status") });
+    await intro.locator("#intro-status").selectOption("made");
+    await intro.locator("#intro-name").fill("Walk Introducer");
+    await intro.locator('button[type="submit"]').click();
+    await until(
+      page,
+      async () => (await detailOf(kit, target.investor_id)).investor?.intro?.status === "made",
+    );
+    funnel = await funnelOf(kit);
+    const after = funnel.by_intro.find((split) => split.key === "warm")?.firms ?? 0;
+    await page.goto(`${kit.base}/data/investors?intro=warm`, { waitUntil: "networkidle" });
+    await page.waitForSelector("#table-investors", { timeout: 30_000 });
+    const row = flat(
+      await page.locator("#table-investors tr", { hasText: target.firm }).first().innerText(),
+    );
+    kit.check(
+      "investors I8: a Made introduction reads Introduced in the list and adds one to the funnel's",
+      after === before + 1 && row.includes("Introduced"),
+      `${before} → ${after} · ${row.slice(0, 160)}`,
+    );
+  } else kit.check("investors I8: a firm not yet introduced is here", false, cold);
+
+  // ---------------------------------------------------------------- I9: Set the wave on a search
+  const search = "Walk Fund";
+  const listed = (await kit.socket.ask("GET", `/data/investors?q=${encodeURIComponent(search)}`))
+    .body as { total: number; investors: { investor_id: string }[] };
+  await page.goto(`${kit.base}/data/investors?q=${encodeURIComponent(search)}`, {
+    waitUntil: "networkidle",
+  });
+  await page.waitForSelector("#table-investors", { timeout: 30_000 });
+  await page.locator(".pagebar__actions summary", { hasText: /^More$/ }).click();
+  await page.fill("#investors-set-wave", "Wave 1");
+  await page.locator("button", { hasText: "Set the wave" }).click();
+  const said = `Set “Wave 1” on ${count(listed.total)} ${listed.total === 1 ? "firm" : "firms"}.`;
+  const saidIt = await kit
+    .says(said, 20_000)
+    .then(() => true)
+    .catch(() => false);
+  const waved = (
+    await kit.socket.ask("GET", `/data/investors?wave=${encodeURIComponent("Wave 1")}`)
+  ).body as { total: number; investors: { investor_id: string }[] };
+  await page.goto(`${kit.base}/data/investors?wave=${encodeURIComponent("Wave 1")}`, {
+    waitUntil: "networkidle",
+  });
+  await page.waitForSelector("#table-investors", { timeout: 30_000 });
+  const shownRows = await page.locator("#table-investors tbody tr").count();
+  const ids = new Set(waved.investors.map((row) => row.investor_id));
+  kit.check(
+    "investors I9: Set the wave on a search says the list's count, and the Wave filter shows those firms",
+    saidIt &&
+      listed.total > 0 &&
+      listed.investors.every((row) => ids.has(row.investor_id)) &&
+      waved.total === listed.total &&
+      shownRows === Math.min(100, waved.total),
+    `${said} · ${String(saidIt)} · ${waved.total} · ${shownRows}`,
+  );
+
+  // ---------------------------------------------------------------- I12: the round
+  await page.goto(`${kit.base}/data/investors?view=round`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".hqdata-round", { timeout: 30_000 });
+  await page
+    .locator(".hqdata-round summary", { hasText: /^(Record|Change) the round$/ })
+    .first()
+    .click();
+  const round = page.locator("form", { has: page.locator("#round-instrument") });
+  await round.locator("#round-instrument").selectOption("iSAFE");
+  await round.locator("#round-cap").fill("5000000");
+  await round.locator("#round-cap-currency").selectOption("USD");
+  await round.locator("#round-cap-basis").selectOption("post_money");
+  await round.locator("#round-discount").fill("20");
+  await round.locator("#round-mfn").check();
+  await round.locator("#round-minimum").fill("25000");
+  await round.locator("#round-minimum-currency").selectOption("USD");
+  await round.locator('input[name="lead"][value="no"]').check();
+  const savedBefore = (await kit.socket.ask("GET", "/data/raise/round")).body.history as unknown[];
+  await round.locator('button[type="submit"]').click();
+  await until(
+    page,
+    async () =>
+      ((await kit.socket.ask("GET", "/data/raise/round")).body.history as unknown[]).length >
+      savedBefore.length,
+  );
+  const terms = (await kit.socket.ask("GET", "/data/raise/round")).body.round as Record<
+    string,
+    unknown
+  > | null;
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForSelector(".hqdata-round", { timeout: 30_000 });
+  const roundText = flat(await kit.text());
+  kit.check(
+    "investors I12: the round keeps its terms and says the discount as “20 per cent”",
+    terms?.instrument === "iSAFE" &&
+      terms.discount_percent === 20 &&
+      terms.mfn === true &&
+      terms.lead === "no" &&
+      !Object.keys(terms).some((key) => /target|goal|range/i.test(key)) &&
+      [
+        "20 per cent",
+        "$5,000,000, post-money",
+        "$25,000",
+        "Most favoured nation Yes",
+        "Lead Not yet",
+      ].every((words) => roundText.includes(words)),
+    roundText.slice(0, 240),
+  );
+  await noTarget(page, kit, "the round view");
+  await kit.audit("investors-round");
+
+  // ---------------------------------------------------------------- I14: the intern
+  if (kit.pass.first) {
+    const browser = page.context().browser();
+    if (browser) {
+      const other = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const intern = await other.newPage();
+      await intern.goto(
+        `${kit.base}/dev/signin?as=intern%40hq.test&next=${encodeURIComponent("/data/investors?view=funnel")}`,
+        { waitUntil: "networkidle" },
+      );
+      await intern.goto(`${kit.base}/data/investors?view=funnel`, { waitUntil: "networkidle" });
+      const body = await intern.locator("main").first().innerText();
+      kit.check(
+        "investors I14: the intern sees “Data is for Owners and Admins.” on the funnel, and no address",
+        body.includes("Data is for Owners and Admins.") &&
+          !body.includes("@") &&
+          (await intern.locator("#table-funnel").count()) === 0,
+        body.slice(0, 160),
+      );
+      await other.close();
+    } else kit.check("investors I14: a second browser context", false);
+  }
 }

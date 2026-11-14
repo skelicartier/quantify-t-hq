@@ -3,14 +3,17 @@ import { notFound } from "next/navigation";
 
 import { DueChip } from "@/components/crm/pills";
 import { DataUnavailable } from "@/components/data/data-down";
+import { IntroForm, QualifyForm, RaiseProperties } from "@/components/data/investors/firm-raise";
 import { StageForm } from "@/components/data/investors/stage-form";
 import { InvestorStagePill, amountWords } from "@/components/data/investors/stage-pill";
+import { TOUCH_WORDS } from "@/components/data/investors/words";
 import { LeadStatus } from "@/components/data/leads/lead-status";
+import { NotesSection } from "@/components/data/notes/notes-section";
 import { MailForm } from "@/components/mail/mail-form";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
 import { DataTable } from "@/components/ui/data-table";
-import { Field, Input, Select, Textarea } from "@/components/ui/field";
+import { Field, Input, Select } from "@/components/ui/field";
 import { InlineField } from "@/components/ui/inline-field";
 import { KeyValue, KeyValueRow } from "@/components/ui/key-value";
 import { Popover } from "@/components/ui/popover";
@@ -44,8 +47,9 @@ import { requestNow } from "@/lib/request-time";
 import "../../leads/leads.css";
 import "../../replies/replies.css";
 import {
-  addInvestorNoteAction,
+  introductionAction,
   moveInvestorAction,
+  qualifyInvestorAction,
   recordAmountAction,
   updateInvestorAction,
 } from "../actions";
@@ -65,6 +69,9 @@ const KIND_WORDS: Record<string, string> = {
   update: "Change",
   reply: "Reply",
   person: "Person",
+  profile: "Qualified",
+  intro: "Introduction",
+  raise: "Change",
 };
 
 const PEOPLE_COLUMNS = [
@@ -106,9 +113,24 @@ function stepWords(step: string, on: string | null): string {
   return on ? `${step} · ${formatDate(on)}` : step;
 }
 
+/** The newest of written to, replied and met, with which it was. */
+function lastTouch(
+  investor: InvestorDetail["investor"],
+): { kind: keyof typeof TOUCH_WORDS; at: string } | null {
+  let touch: { kind: keyof typeof TOUCH_WORDS; at: string } | null = null;
+  for (const [kind, at] of [
+    ["written", investor.last_written_at],
+    ["replied", investor.last_replied_at],
+    ["met", investor.last_met_at],
+  ] as const)
+    if (at && (!touch || at > touch.at)) touch = { kind, at };
+  return touch;
+}
+
 function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
   const { investor, today } = detail;
   const base = `/data/investors/${investor.investor_id}`;
+  const touch = lastTouch(investor);
   const latest = [...investor.amounts].sort(
     (a, b) => b.on.localeCompare(a.on) || b.at.localeCompare(a.at),
   )[0];
@@ -125,9 +147,11 @@ function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
             value: `${labelOf(INVESTOR_STAGES, investor.stage)}, since ${formatDate(investor.stage_since)}`,
           },
           {
-            label: "Last written",
-            value: investor.last_written_at ? (
-              <Timestamp value={investor.last_written_at} now={now} mode="relative" />
+            label: "Last touch",
+            value: touch ? (
+              <>
+                {TOUCH_WORDS[touch.kind]} <Timestamp value={touch.at} now={now} mode="relative" />
+              </>
             ) : (
               "Never"
             ),
@@ -196,23 +220,11 @@ function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
                 </Field>
               </MailForm>
             </Popover>
-            <Popover label="Add a note" align="start" width="wide">
-              <MailForm
-                action={addInvestorNoteAction}
-                fields={{ investor_id: investor.investor_id }}
-                submitLabel="Add the note"
-                pendingLabel="Adding…"
-              >
-                <Field id="investor-note-header" label="Note">
-                  <Textarea
-                    id="investor-note-header"
-                    name="text"
-                    rows={3}
-                    maxLength={4_000}
-                    required
-                  />
-                </Field>
-              </MailForm>
+            <Popover label="Qualify" align="start" width="wide">
+              <QualifyForm detail={detail} action={qualifyInvestorAction} />
+            </Popover>
+            <Popover label="Introduction" align="start" width="wide">
+              <IntroForm detail={detail} action={introductionAction} />
             </Popover>
           </>
         }
@@ -222,19 +234,17 @@ function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
           Not on the chosen investor list now. It stays because something was recorded on it.
         </Callout>
       )}
-      <RecordGrid side={<Side detail={detail} />}>
+      <RecordGrid side={<Side detail={detail} now={now} />}>
+        {/* U2's Notes section; on a phone it comes first (investors.css). */}
+        <div className="hqdata-investor__notes">
+          <NotesSection
+            subject={{ kind: "investor", id: investor.investor_id, name: investor.firm }}
+            now={now}
+            today={today}
+            path={base}
+          />
+        </div>
         <RecordSection id="investor-activity" title="Activity">
-          <MailForm
-            action={addInvestorNoteAction}
-            fields={{ investor_id: investor.investor_id }}
-            submitLabel="Add the note"
-            pendingLabel="Adding…"
-          >
-            <label className="sr-only" htmlFor="investor-note">
-              A note
-            </label>
-            <Textarea id="investor-note" name="text" rows={3} maxLength={4_000} required />
-          </MailForm>
           {detail.events.length === 0 ? (
             <p className="timeline-empty">Nothing has happened yet.</p>
           ) : (
@@ -409,7 +419,7 @@ function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
   );
 }
 
-function Side({ detail }: { detail: InvestorDetail }) {
+function Side({ detail, now }: { detail: InvestorDetail; now: number }) {
   const { investor, today } = detail;
   const inline = { action: updateInvestorAction, idName: "investor_id", id: investor.investor_id };
   const amounts = [...investor.amounts].sort(
@@ -458,6 +468,59 @@ function Side({ detail }: { detail: InvestorDetail }) {
             {labelOf(PASS_REASONS, investor.passed_reason)}
           </Property>
         )}
+        <InlineField
+          {...inline}
+          name="wave"
+          label="Wave"
+          value={investor.wave}
+          placeholder="Wave 1"
+          display={investor.wave || <span className="quiet">No wave</span>}
+        />
+        <InlineField
+          {...inline}
+          name="offer_deadline"
+          label="Offer deadline"
+          type="date"
+          value={investor.offer_deadline ?? ""}
+          display={
+            <>
+              {investor.offer_deadline ? (
+                <DueChip due={investor.offer_deadline} today={today} />
+              ) : (
+                <span className="quiet">None set</span>
+              )}
+              <span className="hqdata-prop-hint">It joins Due three days before.</span>
+            </>
+          }
+        />
+        <InlineField
+          {...inline}
+          name="deck_link"
+          label="Deck link"
+          type="url"
+          value={investor.deck_link}
+          placeholder="https://"
+          display={
+            <>
+              {investor.deck_link ? (
+                <a
+                  className="text-link"
+                  href={investor.deck_link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open the deck link
+                </a>
+              ) : (
+                <span className="quiet">None set</span>
+              )}
+              <span className="hqdata-prop-hint">
+                The link you send this firm, from the service that shows who opened it. HQ keeps
+                only the link. Put the key numbers in the email itself too.
+              </span>
+            </>
+          }
+        />
         <Property label="On the lists">
           {investor.lists.length ? investor.lists.map((list) => list.name).join(", ") : "None now"}
         </Property>
@@ -476,6 +539,7 @@ function Side({ detail }: { detail: InvestorDetail }) {
           )}
         </Property>
       </Properties>
+      <RaiseProperties detail={detail} now={now} />
       <Properties title="Amounts">
         {amounts.length === 0 ? (
           <Property label="Recorded">None recorded</Property>

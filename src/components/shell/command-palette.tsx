@@ -3,21 +3,28 @@
 import {
   ArrowRight,
   BookOpen,
+  BookUser,
   Building2,
   CalendarDays,
+  CircleHelp,
   Clock,
   Contact,
   FileSignature,
   FileText,
+  FolderOpen,
+  HandCoins,
   Handshake,
   Inbox,
   Keyboard,
   LifeBuoy,
   ListChecks,
+  Milestone,
   Moon,
+  NotebookText,
   Plus,
   Receipt,
   Search,
+  SquareUser,
   StickyNote,
   Sun,
 } from "lucide-react";
@@ -56,6 +63,13 @@ const KIND_ICON: Record<SearchHit["kind"], typeof Search> = {
   invoice: Receipt,
   quote: FileText,
   article: BookOpen,
+  data_lead: BookUser,
+  data_investor: HandCoins,
+  data_file: FolderOpen,
+  data_note: NotebookText,
+  data_faq: CircleHelp,
+  data_decision: Milestone,
+  data_contact: SquareUser,
 };
 
 const KIND_LABEL: Record<SearchHit["kind"], string> = {
@@ -71,6 +85,13 @@ const KIND_LABEL: Record<SearchHit["kind"], string> = {
   invoice: "Invoice",
   quote: "Quote",
   article: "Help article",
+  data_lead: "All leads",
+  data_investor: "Investors",
+  data_file: "Files",
+  data_note: "Notes",
+  data_faq: "Investor FAQ",
+  data_decision: "Decisions",
+  data_contact: "Contacts",
 };
 
 /**

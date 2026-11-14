@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useActionState, useId, useState, useSyncExternalStore } from "react";
 
+import { AnswerToCopy } from "@/components/data/replies/answer-to-copy";
 import { useTimeZone } from "@/components/shell/time-zone-context";
 import { AttemptField } from "@/components/ui/attempt-field";
 import { Checkbox, Field, Input, Textarea } from "@/components/ui/field";
@@ -27,23 +28,38 @@ function addDays(day: string, count: number): string {
   return `${moved.getUTCFullYear()}-${pad(moved.getUTCMonth() + 1)}-${pad(moved.getUTCDate())}`;
 }
 
-function linkOf(state: ActionState): { href: string; label: string } | null {
-  if (!state.detail) return null;
+function detailOf(state: ActionState): { href?: unknown; label?: unknown; answer?: unknown } {
+  if (!state.detail) return {};
   try {
-    const parsed = JSON.parse(state.detail) as { href?: unknown; label?: unknown };
-    return typeof parsed.href === "string" && parsed.href.startsWith("/")
-      ? { href: parsed.href, label: typeof parsed.label === "string" ? parsed.label : "Open it" }
-      : null;
+    const parsed = JSON.parse(state.detail) as unknown;
+    return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
-    return null;
+    return {};
   }
 }
 
+function linkOf(state: ActionState): { href: string; label: string } | null {
+  const parsed = detailOf(state);
+  return typeof parsed.href === "string" && parsed.href.startsWith("/")
+    ? { href: parsed.href, label: typeof parsed.label === "string" ? parsed.label : "Open it" }
+    : null;
+}
+
+/** The answer to a yes, filled in, when the service gave one. */
+function answerOf(state: ActionState): string | null {
+  const parsed = detailOf(state);
+  return typeof parsed.answer === "string" && parsed.answer ? parsed.answer : null;
+}
+
 /**
- * Record one reply in one press. Yes, No and Question submit at once; Later and Wrong
- * person open the few fields they need first. Without scripts every field shows and every
- * button records its own answer. A double press records once: the form carries an
- * attempt, and the service replays the first answer for it.
+ * Record one reply in one press. Yes, Meeting request, No, Question and Needs review submit
+ * at once; Later and Wrong person open the few fields they need first. Without scripts
+ * every field shows and every button records its own answer. A double press records once:
+ * the form carries an attempt, and the service replays the first answer for it.
+ *
+ * "Hold the rest of their firm" is ticked to begin with: the rest of the firm goes onto
+ * the stop list while he answers, and he can untick it. After a yes or a meeting request
+ * the answer to copy is shown under the sentence; nothing is sent.
  */
 export function ReplyForm({
   action,
@@ -71,6 +87,7 @@ export function ReplyForm({
   const id = useId();
   const field = (name: string) => `${id}-${name}`;
   const link = state.status === "sent" ? linkOf(state) : null;
+  const answer = state.status === "sent" ? answerOf(state) : null;
   const submit = submitWithoutReset(formAction);
   const label = (value: string, text: string) =>
     isPending && pressed === value ? "Recording…" : text;
@@ -159,6 +176,16 @@ export function ReplyForm({
             <button
               type="submit"
               name="outcome"
+              value="meeting_request"
+              className="btn btn--small"
+              aria-label="Record a meeting request: they asked to meet"
+              disabled={isPending}
+            >
+              {label("meeting_request", "Meeting request")}
+            </button>
+            <button
+              type="submit"
+              name="outcome"
               value="not_interested"
               className="btn btn--small"
               aria-label="Record a no: put them on the stop list"
@@ -207,7 +234,25 @@ export function ReplyForm({
             >
               {label("question", "Question")}
             </button>
+            <button
+              type="submit"
+              name="outcome"
+              value="needs_review"
+              className="btn btn--small"
+              aria-label="Record that it needs review: decide what it means later"
+              disabled={isPending}
+            >
+              {label("needs_review", "Needs review")}
+            </button>
           </div>
+          <Checkbox
+            id={field("hold")}
+            name="hold_firm"
+            className="hqdata-reply-form__hold"
+            label="Hold the rest of their firm"
+            description="Nobody else at their firm is written to while you answer. Not for free-mail addresses or out-of-office replies; release it from Replies."
+            defaultChecked
+          />
         </fieldset>
         <fieldset
           id={field("later")}
@@ -282,6 +327,7 @@ export function ReplyForm({
           </div>
         </fieldset>
         <FormFeedback state={state} />
+        {answer && <AnswerToCopy answer={answer} />}
         {link && (
           <p className="hqdata-reply-form__link">
             <Link className="text-link" href={link.href}>

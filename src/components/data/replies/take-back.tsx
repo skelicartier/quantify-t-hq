@@ -24,8 +24,13 @@ export function effectWords(effect: Effect): string {
       return `Added ${effect.email} as a lead`;
     case "investor_stage":
       return "Moved the investor's stage";
+    case "firm_held":
+      return `Held ${addresses(effect.held)} at ${effect.domain}`;
   }
 }
+
+const addresses = (count: number) =>
+  `${count.toLocaleString("en-GB")} ${count === 1 ? "address" : "addresses"}`;
 
 /** What taking a reply back undid, in the past tense. */
 export function undoneWords(effect: Effect): string {
@@ -34,6 +39,8 @@ export function undoneWords(effect: Effect): string {
       return `Took ${effect.email} off the stop list`;
     case "follow_up":
       return "Closed its follow-up";
+    case "firm_held":
+      return `Released the ${addresses(effect.held)} held at ${effect.domain}`;
     default:
       return effectWords(effect);
   }
@@ -45,6 +52,8 @@ function undoWords(effect: Effect): string {
       return `Take ${effect.email} off the stop list`;
     case "follow_up":
       return "Close its follow-up";
+    case "firm_held":
+      return `Release the ${addresses(effect.held)} held at ${effect.domain}`;
     default:
       return effectWords(effect);
   }

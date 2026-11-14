@@ -9,18 +9,21 @@ import { typedInstant } from "@/lib/time-zone";
 /**
  * Replies' writes: recording one (from Replies or from a lead), taking it back, and the
  * follow-ups it leaves. The service does what each reply means and says so in a sentence,
- * which the form shows as it is.
+ * which the form shows as it is. Raise batch: the firm hold (ticked in the form, released
+ * here), and the booking link with the answer to a yes.
  */
 
 const ROUTE_ID = /^[A-Za-z0-9-]{1,64}$/;
 const LEAD_ID = /^[0-9a-f]{32}$/;
 const OUTCOMES = new Set<string>([
   "replied_positive",
+  "meeting_request",
   "not_interested",
   "not_now",
   "out_of_office",
   "wrong_person",
   "question",
+  "needs_review",
 ]);
 
 const attemptOf = (formData: FormData): string =>
@@ -56,6 +59,7 @@ export async function recordReplyAction(
     subject: fieldValue(formData, "subject", 200),
     received_at: received ? typedInstant(received, context.me.time_zone) : "",
     add_if_missing: fieldValue(formData, "add_if_missing", 10) === "on",
+    hold_firm: fieldValue(formData, "hold_firm", 10) === "on",
     ...(outcome === "not_now" && laterUntil ? { later_until: laterUntil } : {}),
     ...(outcome === "not_now" && fieldValue(formData, "auto_reply", 10) === "on"
       ? { auto_reply: true }
@@ -70,19 +74,60 @@ export async function recordReplyAction(
         }
       : {}),
   };
-  let answer: { reply: api.ReplyRow; message: string; href: string | null };
+  let answer: { reply: api.ReplyRow; message: string; href: string | null; answer: string | null };
   try {
     answer = await api.recordReply(input, staffOf(context), attemptOf(formData));
   } catch (error) {
     return refusal(error);
   }
   refreshReplies(answer.reply.lead_id);
+  const detail = {
+    ...(answer.href ? { href: answer.href, label: "See the firm's page" } : {}),
+    ...(answer.answer ? { answer: answer.answer } : {}),
+  };
   return {
     ...sent(answer.message),
-    ...(answer.href
-      ? { detail: JSON.stringify({ href: answer.href, label: "See the firm's page" }) }
-      : {}),
+    ...(Object.keys(detail).length ? { detail: JSON.stringify(detail) } : {}),
   };
+}
+
+export async function releaseFirmHoldAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/replies");
+  if (refused(context)) return context;
+  const replyId = fieldValue(formData, "reply_id", 64);
+  if (!ROUTE_ID.test(replyId)) return { status: "error", message: "That reply is not here." };
+  let message = "";
+  try {
+    message = (await api.releaseFirmHold(replyId, null, staffOf(context))).message;
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshReplies(fieldValue(formData, "lead_id", 64));
+  return sent(message);
+}
+
+export async function saveReplySettingsAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/replies");
+  if (refused(context)) return context;
+  try {
+    await api.saveReplySettings(
+      {
+        booking_link: fieldValue(formData, "booking_link", 600).trim(),
+        yes_answer: fieldValue(formData, "yes_answer", 2_000),
+      },
+      staffOf(context),
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshData("/data/replies");
+  return sent("Saved.");
 }
 
 export async function takeBackReplyAction(

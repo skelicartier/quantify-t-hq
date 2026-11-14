@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DataUnavailable } from "@/components/data/data-down";
+import { NotesSection } from "@/components/data/notes/notes-section";
 import { Colleagues } from "@/components/data/waitlist/colleagues";
 import { HoldPreview } from "@/components/data/waitlist/hold-preview";
 import { StageForm } from "@/components/data/waitlist/stage-form";
@@ -9,7 +10,7 @@ import { MailForm } from "@/components/mail/mail-form";
 import { PageHeader } from "@/components/shell/page-header";
 import { ButtonLink } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import { Field, Input, Textarea } from "@/components/ui/field";
+import { Field, Input } from "@/components/ui/field";
 import { InlineField } from "@/components/ui/inline-field";
 import { Popover } from "@/components/ui/popover";
 import {
@@ -40,7 +41,6 @@ import { firstSearchValue } from "@/lib/search-params";
 import "../../replies/replies.css";
 import {
   addColleagueAction,
-  addEntryNoteAction,
   attachProofAction,
   holdAction,
   moveStageAction,
@@ -149,7 +149,7 @@ function Entry({
         ]}
         actions={
           <>
-            <Popover label="Move to a stage" variant="primary" width="wide" align="start">
+            <Popover label="Move to a stage" variant="primary" width="wide" align="end">
               <StageForm
                 action={moveStageAction}
                 entryId={entry.entry_id}
@@ -157,49 +157,18 @@ function Entry({
                 today={today}
               />
             </Popover>
-            <Popover label="Add a note" width="wide" align="start">
-              <MailForm
-                action={addEntryNoteAction}
-                fields={{ entry_id: entry.entry_id, kind: "note" }}
-                submitLabel="Add the note"
-                pendingLabel="Adding…"
-              >
-                <Field id="note-header" label="Note">
-                  <Textarea id="note-header" name="text" rows={3} maxLength={4_000} required />
-                </Field>
-              </MailForm>
-            </Popover>
-            <Popover label="Add a call" width="wide" align="start">
-              <MailForm
-                action={addEntryNoteAction}
-                fields={{ entry_id: entry.entry_id, kind: "call" }}
-                submitLabel="Add the call"
-                pendingLabel="Adding…"
-              >
-                <Field id="call-when" label="When">
-                  <Input id="call-when" name="at" type="datetime-local" required />
-                </Field>
-                <Field id="call-notes" label="Notes">
-                  <Textarea id="call-notes" name="text" rows={4} maxLength={4_000} required />
-                </Field>
-              </MailForm>
-            </Popover>
           </>
         }
       />
       <RecordGrid side={<Side detail={detail} />}>
+        {/* Notes are written here now (raise spec §6.6.7); older notes stay in Activity. */}
+        <NotesSection
+          subject={{ kind: "waitlist", id: entry.entry_id, name: entry.firm }}
+          now={now}
+          today={today}
+          path={base}
+        />
         <RecordSection id="waitlist-activity" title="Activity">
-          <MailForm
-            action={addEntryNoteAction}
-            fields={{ entry_id: entry.entry_id, kind: "note" }}
-            submitLabel="Add the note"
-            pendingLabel="Adding…"
-          >
-            <label className="sr-only" htmlFor="note-composer">
-              A note
-            </label>
-            <Textarea id="note-composer" name="text" rows={3} maxLength={4_000} required />
-          </MailForm>
           {events.length === 0 ? (
             <p className="timeline-empty">Nothing has happened yet.</p>
           ) : (

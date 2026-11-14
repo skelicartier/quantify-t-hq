@@ -193,6 +193,9 @@ export default async function FilesPage({ searchParams }: { searchParams: Promis
                 )}
                 <NewFolder folders={data.folders} open={folder} />
                 <More folder={folder} folders={data.folders} list={data.list} />
+                <ButtonLink href="/data/files/packs" size="small">
+                  Data-room packs
+                </ButtonLink>
                 {view === "trash" && data.list.counts.trash > 0 && (
                   <Popover label="Empty the trash" width="wide">
                     <MailForm

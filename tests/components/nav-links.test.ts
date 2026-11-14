@@ -47,7 +47,7 @@ describe("capability-filtered navigation", () => {
     ).toBe(false);
   });
 
-  it("an Owner with local:data sees seven Data links in order, right after Command", () => {
+  it("an Owner with local:data sees eleven Data links in order, right after Command", () => {
     const everything = NAV_GROUPS.flatMap((group) => group.links)
       .map((link) => link.capability)
       .filter((capability): capability is string => Boolean(capability));
@@ -61,7 +61,11 @@ describe("capability-filtered navigation", () => {
       "/data/replies",
       "/data/waitlist",
       "/data/investors",
+      "/data/notes",
+      "/data/contacts",
+      "/data/decisions",
       "/data/dates",
+      "/data/numbers",
     ]);
     expect(data?.links.map((link) => link.label)).toEqual([
       "Data",
@@ -70,7 +74,11 @@ describe("capability-filtered navigation", () => {
       "Replies",
       "Waitlist",
       "Investors",
+      "Notes",
+      "Contacts",
+      "Decisions",
       "Key dates",
+      "Numbers",
     ]);
     expect(data?.links.find((link) => link.href === "/data/files")?.key).toBe("f");
     expect(data?.links.find((link) => link.href === "/data")?.activePrefix).toBeUndefined();

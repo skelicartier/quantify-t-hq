@@ -191,6 +191,9 @@ describe("the backup zip (B1, B2)", () => {
     expect(readme.split("\n")[0]).toBe(
       `Made on ${Number(date)} ${months[Number(month) - 1]} ${year} by Walk Owner. Not encrypted: keep it on an encrypted disk.`,
     );
+    expect(readme).toContain(
+      "- data/: Data's own records (folders, leads, replies, waitlist, investors and the round, key dates, notes, decisions and contacts, the calendar link's checksum, numbers and monthly updates, data-room packs).",
+    );
     expect(readme).not.toMatch(/demo/i);
   });
 

@@ -21,15 +21,20 @@ import {
   AMOUNT_STATES,
   CURRENCIES,
   INSTRUMENTS,
+  INTRO_STATUSES,
   INVESTOR_STAGES,
   INVESTOR_STAGE_ORDER,
   PASS_REASONS,
 } from "../../../src/lib/data/labels";
 import { domainOf, fieldOf, firmKeyOf } from "../leads/types";
+import { amountValue } from "./amount";
+import { deckLinkOf, introOf, offerDeadlineOf, profileOf, waveOf, withDefaults } from "./raise";
 import {
   DATA_STAFF,
   MAIL_MERGE,
   NO_NEXT_STEP,
+  defaultIntro,
+  defaultProfile,
   investorIdOf,
   type Amount,
   type AmountState,
@@ -38,16 +43,18 @@ import {
   type InvestorEvent,
   type InvestorRow,
   type InvestorStage,
+  type LastTouch,
   type PassReason,
   type Person,
   type Setup,
 } from "./types";
 
+export { MAX_AMOUNT, amountValue } from "./amount";
+
 const FIRMS = "investors/firms.json";
 const SETUP = "investors/setup.json";
 const EVENTS = "investors/events.jsonl";
 export const MAX_LISTS = 10;
-export const MAX_AMOUNT = 1_000_000_000_000;
 
 const STAGES = new Set<string>(INVESTOR_STAGE_ORDER);
 const isStage = (value: unknown): value is InvestorStage =>
@@ -185,12 +192,23 @@ export type AmountInput = {
   on: unknown;
 };
 
-/** An amount as typed: "50,000", "50000.5", 25_00_000; never negative, never words. */
-export function amountValue(value: unknown): number | null {
-  const text = typeof value === "number" ? String(value) : clean(value, 40).replace(/[,\s_]/g, "");
-  if (!/^\d+(\.\d{1,2})?$/.test(text)) return null;
-  const parsed = Number(text);
-  return Number.isFinite(parsed) && parsed > 0 && parsed <= MAX_AMOUNT ? parsed : null;
+/** What the replies module knows of a firm, for its row: whether and when anyone replied. */
+export type Touches = { replied: boolean; last_replied_at: string | null };
+
+/** The newest of written to, replied and met, with which it was. */
+export function lastTouchOf(
+  written: string | null,
+  replied: string | null,
+  met: string | null,
+): LastTouch {
+  let touch: LastTouch = null;
+  for (const [kind, at] of [
+    ["written", written],
+    ["replied", replied],
+    ["met", met],
+  ] as const)
+    if (at && (!touch || at > touch.at)) touch = { kind, at };
+  return touch;
 }
 
 export class InvestorsBook {
@@ -198,6 +216,8 @@ export class InvestorsBook {
   setup: Setup;
   readonly firms = new Map<string, Investor>();
   readonly events: InvestorEvent[] = [];
+  /** Each firm's events, oldest first: the same objects as `events`. */
+  readonly #eventsBy = new Map<string, InvestorEvent[]>();
   readonly #byEmail = new Map<string, string>();
   #listeners = new Set<() => void>();
 
@@ -212,12 +232,14 @@ export class InvestorsBook {
       set_at: typeof setup.set_at === "string" ? setup.set_at : null,
       set_by: setup.set_by ?? null,
     };
-    const stored = core.store.readJson<{ firms?: Investor[] }>(FIRMS, {});
+    // Format 1 (before the raise batch) or 2: every stored field is kept, each new one gets
+    // its default, and the next save writes format 2 (raise spec §5.2).
+    const stored = core.store.readJson<{ format?: number; firms?: Investor[] }>(FIRMS, {});
     for (const investor of Array.isArray(stored.firms) ? stored.firms : [])
       if (typeof investor?.investor_id === "string" && isStage(investor.stage))
-        this.firms.set(investor.investor_id, investor);
+        this.firms.set(investor.investor_id, withDefaults(investor));
     for (const line of core.store.readLines<InvestorEvent>(EVENTS))
-      if (typeof line?.investor_id === "string") this.events.push(line);
+      if (typeof line?.investor_id === "string") this.#keep(line);
     this.#reindex();
   }
 
@@ -234,8 +256,15 @@ export class InvestorsBook {
       for (const person of investor.people) this.#byEmail.set(person.email, investor.investor_id);
   }
 
+  #keep(event: InvestorEvent): void {
+    this.events.push(event);
+    const list = this.#eventsBy.get(event.investor_id);
+    if (list) list.push(event);
+    else this.#eventsBy.set(event.investor_id, [event]);
+  }
+
   save(): void {
-    this.#core.store.writeJson(FIRMS, { format: 1, firms: [...this.firms.values()] });
+    this.#core.store.writeJson(FIRMS, { format: 2, firms: [...this.firms.values()] });
     this.#reindex();
     for (const listener of this.#listeners) {
       try {
@@ -264,7 +293,7 @@ export class InvestorsBook {
       by,
       at: this.#core.now(),
     };
-    this.events.push(event);
+    this.#keep(event);
     this.#core.store.appendLine(EVENTS, event);
     return event;
   }
@@ -273,6 +302,7 @@ export class InvestorsBook {
   forget(investorIds: ReadonlySet<string>): void {
     const kept = this.events.filter((event) => !investorIds.has(event.investor_id));
     this.events.splice(0, this.events.length, ...kept);
+    for (const id of investorIds) this.#eventsBy.delete(id);
     this.#core.store.writeText(
       EVENTS,
       kept.map((event) => JSON.stringify(event)).join("\n") + (kept.length ? "\n" : ""),
@@ -300,20 +330,36 @@ export class InvestorsBook {
   }
 
   eventsOf(investorId: string): InvestorEvent[] {
-    return this.events
-      .filter((event) => event.investor_id === investorId)
-      .sort((a, b) => b.at.localeCompare(a.at));
+    return [...(this.#eventsBy.get(investorId) ?? [])].sort((a, b) => b.at.localeCompare(a.at));
   }
 
   /** Whether the firm was ever at a meeting (booked or held), from its own history. */
   everMet(investor: Investor): boolean {
     if (investor.stage === "meeting" || investor.stage === "met") return true;
-    return this.events.some(
-      (event) =>
-        event.investor_id === investor.investor_id &&
-        event.kind === "stage" &&
-        (event.to === "meeting" || event.to === "met"),
+    return (this.#eventsBy.get(investor.investor_id) ?? []).some(
+      (event) => event.kind === "stage" && (event.to === "meeting" || event.to === "met"),
     );
+  }
+
+  /** When the firm was last moved to Met, from its own history. */
+  lastMetAt(investor: Investor): string | null {
+    let last: string | null = null;
+    for (const event of this.#eventsBy.get(investor.investor_id) ?? [])
+      if (event.kind === "stage" && event.to === "met" && (last === null || event.at > last))
+        last = event.at;
+    return last;
+  }
+
+  /** Every stage the firm was moved to, with when: the seeded, written and stage lines. */
+  movesOf(investor: Investor): { to: InvestorStage; at: string }[] {
+    const moves: { to: InvestorStage; at: string }[] = [];
+    for (const event of this.#eventsBy.get(investor.investor_id) ?? [])
+      if (
+        (event.kind === "seeded" || event.kind === "written" || event.kind === "stage") &&
+        isStage(event.to)
+      )
+        moves.push({ to: event.to, at: event.at });
+    return moves;
   }
 
   // ------------------------------------------------------------------ Mail merge's side
@@ -437,6 +483,11 @@ export class InvestorsBook {
         passed_reason: "",
         owner: "",
         amounts: [],
+        profile: defaultProfile(),
+        intro: defaultIntro(),
+        wave: "",
+        offer_deadline: null,
+        deck_link: "",
         touched: false,
         created_at: now,
         updated_at: now,
@@ -645,12 +696,34 @@ export class InvestorsBook {
     return event;
   }
 
-  /** One field from the record's side: the firm's name, the owner, the next step or its day. */
+  /**
+   * One field from the record's side: the firm's name, the owner, the next step or its day;
+   * and the raise's three (the wave, the offer deadline, the deck link), each an event "raise".
+   */
   update(investor: Investor, field: unknown, value: unknown, by: Staff): Investor {
     const name = clean(field, 40);
     const today = this.#core.day();
     let detail = "";
+    let kind: "update" | "raise" = "update";
     switch (name) {
+      case "wave": {
+        investor.wave = waveOf(value);
+        detail = investor.wave ? `Wave: ${investor.wave}` : "Wave: none";
+        kind = "raise";
+        break;
+      }
+      case "offer_deadline": {
+        investor.offer_deadline = offerDeadlineOf(value, today);
+        detail = `Offer deadline: ${investor.offer_deadline ? dayWords(investor.offer_deadline) : "None set"}`;
+        kind = "raise";
+        break;
+      }
+      case "deck_link": {
+        investor.deck_link = deckLinkOf(value);
+        detail = investor.deck_link ? "Deck link: set" : "Deck link: cleared";
+        kind = "raise";
+        break;
+      }
       case "firm": {
         const firm = cleanText(value, LIMITS.title);
         if (!firm) throw new Refused(400, "invalid", "The firm needs a name.");
@@ -690,15 +763,67 @@ export class InvestorsBook {
     }
     investor.touched = true;
     investor.updated_at = this.#core.now();
-    this.#event(investor, "update", "Changed", by, { detail });
+    this.#event(investor, kind, "Changed", by, { detail });
     this.save();
     return investor;
   }
 
+  // ------------------------------------------------------------------ the raise (spec §5)
+
+  /** "Qualify": the whole profile at once, as the form sends it. */
+  qualify(investor: Investor, body: Record<string, unknown>, by: Staff): Investor {
+    investor.profile = profileOf(body);
+    investor.touched = true;
+    investor.updated_at = this.#core.now();
+    this.#event(investor, "profile", "Qualification changed", by);
+    this.save();
+    return investor;
+  }
+
+  /** "Introduction": its status, who makes it (a contact when he chose one), and the day. */
+  introduce(
+    investor: Investor,
+    body: Record<string, unknown>,
+    contact: ((contactId: string) => { name: string } | null) | null,
+    by: Staff,
+  ): Investor {
+    const intro = introOf(body, this.#core.day(), contact);
+    investor.intro = intro;
+    investor.touched = true;
+    investor.updated_at = this.#core.now();
+    this.#event(investor, "intro", `Introduction: ${INTRO_STATUSES[intro.status].label}`, by, {
+      detail: [intro.introducer, intro.on ? `on ${dayWords(intro.on)}` : ""]
+        .filter(Boolean)
+        .join(" · "),
+    });
+    this.save();
+    return investor;
+  }
+
+  /** "Set the wave" for every firm a list shows: one line on each firm whose wave changed. */
+  setWave(investors: readonly Investor[], value: unknown, by: Staff): number {
+    const wave = waveOf(value);
+    const now = this.#core.now();
+    let changed = 0;
+    for (const investor of investors) {
+      if (investor.wave === wave) continue;
+      investor.wave = wave;
+      investor.touched = true;
+      investor.updated_at = now;
+      this.#event(investor, "raise", "Changed", by, {
+        detail: wave ? `Wave: ${wave}` : "Wave: none",
+      });
+      changed += 1;
+    }
+    if (changed) this.save();
+    return changed;
+  }
+
   // ------------------------------------------------------------------ reading
 
-  rowOf(investor: Investor, replied: (investor: Investor) => boolean): InvestorRow {
+  rowOf(investor: Investor, touches: (investor: Investor) => Touches): InvestorRow {
     const last = this.lastWritten(investor);
+    const heard = touches(investor);
     const contact =
       investor.people.find((person) => this.#core.sender.writtenFor(person.email).length > 0) ??
       investor.people[0] ??
@@ -727,7 +852,10 @@ export class InvestorsBook {
           }
         : null,
       on_list: investor.list_ids.length > 0,
-      replied: replied(investor),
+      replied: heard.replied,
+      wave: investor.wave,
+      warm: investor.intro.status === "made",
+      last_touch: lastTouchOf(last?.at ?? null, heard.last_replied_at, this.lastMetAt(investor)),
     };
   }
 
@@ -739,6 +867,10 @@ export class InvestorsBook {
       investor.next_step,
       ...investor.people.flatMap((person) => [person.email, person.name, person.title]),
       ...Object.values(investor.list_values),
+      investor.wave,
+      investor.intro.introducer,
+      ...investor.profile.sectors,
+      investor.profile.conflict,
     ]
       .join(" ")
       .toLowerCase();

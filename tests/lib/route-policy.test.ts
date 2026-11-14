@@ -18,6 +18,7 @@ describe("default-deny route policy", () => {
       "/status/confirm/czE3sK2x",
       "/status/stop/czE3sK2x",
       "/q/hqq_dTEBfb56jBDzRbafTujEGstXyZ",
+      "/cal/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCd",
     ]) {
       expect(isPublicPath(path)).toBe(true);
     }
@@ -41,6 +42,8 @@ describe("default-deny route policy", () => {
       "/statusx",
       "/q",
       "/quotes",
+      "/cal",
+      "/calendar",
     ]) {
       expect(isPublicPath(path)).toBe(false);
     }

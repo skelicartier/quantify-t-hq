@@ -73,7 +73,69 @@
     gap: 6px;
   }
 
+  /* Raise batch: the firm hold box, the answer to copy, a hold under a reply's outcome. */
+  .hqdata-reply-form__hold {
+    margin-top: 10px;
+  }
+
+  .hqdata-answer {
+    display: grid;
+    gap: 6px;
+  }
+
+  .hqdata-answer__label {
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-answer__text {
+    width: 100%;
+    resize: vertical;
+  }
+
+  .hqdata-answer__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-firm-hold {
+    display: grid;
+    justify-items: start;
+    gap: 4px;
+    margin-top: 4px;
+    white-space: normal;
+  }
+
+  .hqdata-attention {
+    color: var(--attention);
+  }
+
+  .hqdata-answer-settings {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 8px 16px;
+    margin: 0 0 10px;
+    font-size: var(--fs-body);
+  }
+
+  .hqdata-answer-settings dt {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-answer-settings dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   @media (max-width: 720px) {
+    .hqdata-answer-settings {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
     .hqdata-reply-form {
       max-width: none;
     }

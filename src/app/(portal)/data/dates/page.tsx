@@ -122,6 +122,9 @@ export default async function DatesPage({ searchParams }: { searchParams: Promis
                   />
                 </MailForm>
               </Popover>
+              <ButtonLink href="/data/calendar" size="small">
+                Add to your calendar
+              </ButtonLink>
               <a className={buttonClass({ size: "small" })} href={`${BASE}/export`}>
                 Download (CSV)
               </a>

@@ -15,6 +15,8 @@ import { SHARE_MAX_BYTES } from "../protocol";
 import { decode, toCsv } from "../text";
 import { ZipLimitError, ZipWriter, zipEntryName } from "../zip";
 import { Checker } from "./check";
+import { registerPacks } from "./packs";
+import { registerFileSources } from "./providers";
 import { byMatch, matchFile, termsOf } from "./search";
 import { Shares } from "./share";
 import { servedType, sniff } from "./sniff";
@@ -498,6 +500,10 @@ export function register(core: DataCore): void {
     onChange: (listener) => vault.onChange(listener),
   };
   core.provide("files", service);
+
+  // Data-room packs, and what Files offers the calendar and the search (raise spec §8.10–§8.11).
+  registerPacks(core, vault, text, service.putFile);
+  registerFileSources(core, vault, text);
 
   if (core.testRoutes) {
     // The service as another module sees it, over the socket, for the tests.

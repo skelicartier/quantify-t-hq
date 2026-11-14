@@ -291,6 +291,9 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
   await form.locator('input[name="email"]').first().fill(yes.email);
   await form.locator('textarea[name="words"]').fill(words);
   await form.locator('input[name="subject"]').fill(subject);
+  // This walk holds the firm's unsent addresses itself (W4), after a preview; the reply's own
+  // "Hold the rest of their firm" box is ticked by default, so it is unticked here.
+  await form.locator('input[name="hold_firm"]').uncheck();
   await form.getByRole("button", { name: "Record a yes: add the firm to the waitlist" }).click();
   const yesSaid = await said(page, ".hqdata-reply-form");
   kit.check(

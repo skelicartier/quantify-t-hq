@@ -19,6 +19,7 @@ export const leadStatusSchema = z.enum([
   "yes",
   "later",
   "question",
+  "review",
   "wrong_person",
   "no",
   "stopped",

@@ -418,6 +418,47 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
+**As of the raise batch: investors qualified, notes, contacts, decisions, numbers, packs, the
+calendar feed and search over Data** (2026-11-14). Portal and the local sender; no service
+change, no migration. From the research pass of 2026-11-13 (report outside the repo:
+`~/Documents/evm/reports/HQ portal gaps and build plan.md`, its Wave 1 and item 3.1).
+
+- **What it adds.** Investors: qualification (cheque range, stage, sectors, geography, lead or
+  follow, residency and "can invest into an Indian Pvt Ltd"), introductions (warm when Made),
+  waves, offer deadline, a deck link per firm; views Funnel (counts and "of" ratios per stage,
+  days since first send, first meetings this week, money per currency never summed, pass reasons,
+  time in stage, splits by wave and warm or cold; no target, no "%") and The round (instrument,
+  cap, discount, MFN, smallest cheque; no target range). Notes on investor firms and waitlist
+  entries (call notes, objections, actions that become the Due kind "Action", the investor FAQ,
+  "record as decision"); Contacts (CA, CS, lawyer, bank, auditor, introducers; archived, never
+  deleted, never leads); Decisions. Replies: "Hold the rest of their firm" (ticked by default;
+  never for out of office or free mail; released by taking the reply back), outcomes Meeting
+  request (a yes) and Needs review, a booking-link answer. Numbers (counted from Data only; cash
+  and burn typed per currency, unused after 35 days; runway rounded down), the monthly update
+  (asks first, `[brackets]` for missing parts, frozen numbers, recipients handed to Mail merge as a
+  list he sends himself, a Key date on the 10th). Data-room packs in Files (numbered index, zip
+  with a SHA-256 manifest, what is missing, a share log typed by hand). A private calendar feed at
+  `/cal/<token>` (only its SHA-256 stored; full titles or kinds only; a downloadable `.ics`), and
+  Data in `/search` and ⌘K. Modules now: files, leads, replies, waitlist, investors, dates,
+  contacts, notes, numbers, calendar, search, backup.
+- **Verified on a copy** (`~/Library/Caches/hq-work/hq-raise`, next 3110, mocks 7079/7080): vitest
+  105 files / 911 tests; `check:data` 1,159 checks / 0 failed over four passes, roles and global
+  checks; harness data flow 140 screens and find flow 44, clean; `check:mail-merge` 65 unchanged.
+  Built by four units on copies `hq-raise-u1..u4` from `ws-notes/raise/spec.md`, merged by
+  `git apply --3way`. Tests that prove one module alone run with `startStack({ modules })`;
+  `tests/data/raise-merged.test.ts` and `scripts/data-walk/raise.ts` prove the seams.
+- **Shipped** to the live clone on 2026-11-14 with a rollback in
+  `~/Library/Caches/hq-work/ship-backup-20261114/` (README, CHANGED, NEW, SHIPPED); the sender
+  (now under launchd, `com.quantifyterminal.hq-mail-merge`) was restarted with nothing sending.
+- **Lessons.** Walking three copies at once drove the load average to 61 and caused every timing
+  flake; walk one copy at a time. A closed lid on battery suspends the Mac for 18 s to 16 min and
+  breaks wall-clock tests; run gates on mains power with the lid open.
+- **Next.** The company batch (`ws-notes/company/spec.md`: company facts and directors with
+  fact-driven Key dates, meetings and minutes, register of members, legal-document register, the
+  Owner-only people ledger, pilots, diligence, the closing checklist with every statutory day
+  marked "confirm with your CS"). Not built and the founder's to decide: moving cold mail off the
+  transactional provider, one-click unsubscribe on a public endpoint, the Azure switch-on (§6).
+
 **As of Data: the founder's real files, leads, replies and waitlist, on this computer**
 (2026-11-10). Portal and the local sender; no service change, no migration, nothing committed.
 

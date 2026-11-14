@@ -101,6 +101,33 @@ describe("Data's block on Home", () => {
     expect(rows[0]).toMatchObject({ key: "data:late-follow", href: "/data/waitlist/late-follow" });
   });
 
+  it("gives an action from a note as an owed row “Action”: overdue 1, due today 2", () => {
+    const action = (key: string, dueOn: string, title: string): DataOverview["due"][number] => ({
+      key: `action:${key}`,
+      kind: "action",
+      title,
+      sub: "Walk Fund 281 · from “Walk first call”",
+      due_on: dueOn,
+      href: "/data/notes/walk-note",
+    });
+    const rows = dataOwedRows(
+      overview([
+        action("today", TODAY, "Send the pilot summary"),
+        action("late", "2026-11-09", "Introduce the CTO"),
+        action("later", "2026-11-20", "Share the deck"),
+      ]),
+    );
+    expect(rows.map((row) => [row.kind, row.urgency, row.title])).toEqual([
+      ["Action", 1, "Introduce the CTO"],
+      ["Action", 2, "Send the pilot summary"],
+    ]);
+    expect(rows[1]).toMatchObject({
+      key: "data:action:today",
+      href: "/data/notes/walk-note",
+      sub: "Walk Fund 281 · from “Walk first call”",
+    });
+  });
+
   it("words the Mail block from Mail merge's own figures", () => {
     expect(mailLine({ sent_today: 290, daily_cap: 5_000, sending: null })).toBe(
       "290 of 5,000 sent today. Nothing is sending.",

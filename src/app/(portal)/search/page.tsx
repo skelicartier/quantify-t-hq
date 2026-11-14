@@ -9,7 +9,7 @@ import { Field, Input } from "@/components/ui/field";
 import { RecordSection } from "@/components/ui/record-shell";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
-import { requireStaff } from "@/lib/access/core";
+import { hasCapability, requireStaff } from "@/lib/access/core";
 import { HqApiRequestError, HqApiUnavailableError } from "@/lib/api/core";
 import {
   SEARCH_KINDS,
@@ -19,6 +19,15 @@ import {
   type SearchKind,
   type SearchPage,
 } from "@/lib/api/search";
+import {
+  DATA_SEARCH_KIND_KEYS,
+  searchData,
+  type DataSearchKindKey,
+  type DataSearchPage,
+} from "@/lib/data/api/search";
+import { DATA_SEARCH_KINDS } from "@/lib/data/labels";
+import { isDataError } from "@/lib/data/read";
+import { dataConfigured } from "@/lib/data/socket";
 import { formatNumber } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 import { firstSearchValue } from "@/lib/search-params";
@@ -60,18 +69,45 @@ function marked(text: string, q: string): ReactNode {
   );
 }
 
+/** Data's records on this Mac, asked beside the service's; a Data failure is said once. */
+async function readDataSearch(
+  allowed: boolean,
+  q: string,
+  kind: DataSearchKindKey | "",
+): Promise<{ page: DataSearchPage | null; failed: boolean }> {
+  if (!allowed || q.length < 2) return { page: null, failed: false };
+  try {
+    return {
+      page: await searchData(q, kind ? { kind, limit: ONE_KIND } : { limit: OVERVIEW }),
+      failed: false,
+    };
+  } catch (error) {
+    if (!isDataError(error)) throw error;
+    return { page: null, failed: true };
+  }
+}
+
 export default async function SearchResultsPage({ searchParams }: SearchPageProps) {
   const context = await requireStaff(BASE);
   const now = requestNow();
   const parameters = await searchParams;
   const q = (firstSearchValue(parameters.q) ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
   const requestedKind = firstSearchValue(parameters.kind) ?? "";
+  // Data's records only for people allowed Data, where the service on this Mac is set up.
+  const dataAllowed = hasCapability(context, "mail:send") && dataConfigured();
+  const dataKind: DataSearchKindKey | "" =
+    dataAllowed &&
+    requestedKind.startsWith("data_") &&
+    (DATA_SEARCH_KIND_KEYS as readonly string[]).includes(requestedKind.slice(5))
+      ? (requestedKind.slice(5) as DataSearchKindKey)
+      : "";
   const kind: SearchKind | "" = (SEARCH_KINDS as readonly string[]).includes(requestedKind)
     ? (requestedKind as SearchKind)
     : "";
   let page: SearchPage | null = null;
   let recent: RecentlyViewed | null = null;
   let failed = false;
+  const dataRead = readDataSearch(dataAllowed, q, dataKind);
   try {
     if (q.length >= 2)
       page = await readSearch(context.token, q, {
@@ -84,8 +120,16 @@ export default async function SearchResultsPage({ searchParams }: SearchPageProp
       throw error;
     failed = true;
   }
+  const data = await dataRead;
   const found = page?.groups.filter((group) => group.count > 0) ?? [];
-  const shown = kind ? found.filter((group) => group.kind === kind) : found;
+  const shown = dataKind ? [] : kind ? found.filter((group) => group.kind === kind) : found;
+  const dataFound = data.page?.groups.filter((group) => group.count > 0) ?? [];
+  const dataShown = kind
+    ? []
+    : dataKind
+      ? dataFound.filter((group) => group.kind === dataKind)
+      : dataFound;
+  const total = (page?.total ?? 0) + (data.page?.total ?? 0);
 
   return (
     <>
@@ -118,6 +162,12 @@ export default async function SearchResultsPage({ searchParams }: SearchPageProp
           </Callout>
         )}
 
+        {data.failed && (
+          <Callout tone="neutral" role="status">
+            Data could not be searched just now.
+          </Callout>
+        )}
+
         {q.length < 2 && recent !== null && (
           <RecordSection id="search-recent" title="Recently viewed">
             {recent.recent.length === 0 ? (
@@ -144,12 +194,25 @@ export default async function SearchResultsPage({ searchParams }: SearchPageProp
           </RecordSection>
         )}
 
-        {page !== null && (
+        {(page !== null || data.page !== null) && (
           <>
             <nav className="search-kinds" aria-label="What to show">
-              <Link href={href(q)} aria-current={kind === "" ? "page" : undefined}>
-                All <span className="num">{formatNumber(page.total)}</span>
+              <Link
+                href={href(q)}
+                aria-current={kind === "" && dataKind === "" ? "page" : undefined}
+              >
+                All <span className="num">{formatNumber(total)}</span>
               </Link>
+              {dataFound.map((group) => (
+                <Link
+                  key={`data_${group.kind}`}
+                  href={href(q, `data_${group.kind}`)}
+                  aria-current={dataKind === group.kind ? "page" : undefined}
+                >
+                  {DATA_SEARCH_KINDS[group.kind]}{" "}
+                  <span className="num">{formatNumber(group.count)}</span>
+                </Link>
+              ))}
               {found.map((group) => (
                 <Link
                   key={group.kind}
@@ -164,7 +227,43 @@ export default async function SearchResultsPage({ searchParams }: SearchPageProp
                 </Link>
               ))}
             </nav>
-            {shown.length === 0 ? (
+            {dataShown.map((group) => (
+              <RecordSection
+                key={`data_${group.kind}`}
+                id={`search-data-${group.kind}`}
+                title={DATA_SEARCH_KINDS[group.kind]}
+                actions={
+                  !dataKind && group.count > group.hits.length ? (
+                    <Link className="text-link" href={href(q, `data_${group.kind}`)}>
+                      All {formatNumber(group.count)}
+                    </Link>
+                  ) : undefined
+                }
+              >
+                <ul className="search-results">
+                  {group.hits.map((hit) => (
+                    <li key={`data-${hit.kind}-${hit.id}`} className="search-result">
+                      <span className="search-result__head">
+                        <Link className="search-result__title" href={hit.href}>
+                          {marked(hit.title, q)}
+                        </Link>
+                      </span>
+                      {hit.subtitle && <p className="search-result__meta">{hit.subtitle}</p>}
+                      {hit.snippet && (
+                        <p className="search-result__snippet">{marked(hit.snippet, q)}</p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {dataKind && group.count > group.hits.length && (
+                  <p className="page-note">
+                    The best {formatNumber(group.hits.length)} of {formatNumber(group.count)} are
+                    shown. Add a word to narrow them.
+                  </p>
+                )}
+              </RecordSection>
+            ))}
+            {shown.length === 0 && dataShown.length === 0 ? (
               <EmptyState
                 title={`Nothing matches “${q}”`}
                 description="Try fewer words, part of a name, an address, or words a note would use. Archived records are included and marked."

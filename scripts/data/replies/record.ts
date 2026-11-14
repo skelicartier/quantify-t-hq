@@ -7,6 +7,13 @@
  * sentence when there is none. A no goes onto Mail merge's own stop list through the
  * engine bridge, never anywhere else. Later, out of office, a wrong person and a question
  * each leave a follow-up. Nothing is ever sent.
+ *
+ * Raise batch (spec §7.2): a meeting request is a yes that asks to meet; "needs review"
+ * leaves a follow-up for today and nothing else, and any later reply from the address
+ * closes it. With "Hold the rest of their firm" ticked (`hold_firm`; absent is unticked,
+ * so older callers behave as before), the rest of the firm goes onto the stop list after
+ * the outcome's own effects. A yes or a meeting request answers with the filled-in
+ * answer to copy.
  */
 
 import { randomUUID } from "node:crypto";
@@ -16,25 +23,36 @@ import type { DataCore } from "../core";
 import { addDays, addWorkingDays, workingDayAfter } from "../days";
 import { LIMITS, clean, cleanText, isDay, normaliseEmail } from "../guard";
 import type { Staff } from "../protocol";
-import { INVESTOR_STAGES, OUTCOMES, type Outcome } from "../../../src/lib/data/labels";
+import {
+  INVESTOR_STAGES,
+  OUTCOMES,
+  POSITIVE_OUTCOMES,
+  type Outcome,
+} from "../../../src/lib/data/labels";
 import type { Effect, Reply, ReplyRow, TakeBack, WaitlistService } from "../leads/contracts";
 import type { LeadsInternal } from "../leads/index";
 import { shortDay, type LeadRow, type ReplyMark } from "../leads/types";
+import { holdTheFirm, type FirmHolds } from "./firm-holds";
 import type { FollowUps } from "./follow-ups";
 import type { Interceptors } from "./interceptors";
+import { fillAnswer, type ReplySettingsBook } from "./settings";
 
 const FILE = "replies/replies.jsonl";
 
 export const OUTCOME_KEYS: readonly Outcome[] = [
   "replied_positive",
+  "meeting_request",
   "not_interested",
   "not_now",
   "out_of_office",
   "wrong_person",
   "question",
+  "needs_review",
 ];
 
 export const WAITLIST_MISSING = "The waitlist is not set up here yet.";
+export const NEEDS_REVIEW =
+  "Recorded: it needs review. A follow-up for today asks you to decide what it means.";
 export const NOT_A_LEAD =
   "No lead has that address. Tick “If they are not a lead yet, add them” to record it.";
 
@@ -116,6 +134,8 @@ export type RecordInput = {
   later_until: string | null;
   referral: { name: string; email: string; title: string } | null;
   add_if_missing: boolean;
+  /** "Hold the rest of their firm": only `true`, "on" or "true" ticks it; absent never holds. */
+  hold_firm: boolean;
 };
 
 /** A reply as the form sends it, checked; refusals are the form's own sentences. */
@@ -177,6 +197,7 @@ export function readRecordInput(
     later_until,
     referral,
     add_if_missing: flag(body.add_if_missing),
+    hold_firm: flag(body.hold_firm),
   };
 }
 
@@ -186,11 +207,22 @@ export type RecordContext = {
   book: RepliesBook;
   followUps: FollowUps;
   interceptors: Interceptors;
+  firmHolds: FirmHolds;
+  settings: ReplySettingsBook;
 };
+
+/** Whether a reply to this address that said no still stands (not taken back). */
+export function saidNo(book: RepliesBook, email: string): boolean {
+  return (book.byEmail.get(email) ?? []).some(
+    (reply) => reply.outcome === "not_interested" && !book.takeBacks.has(reply.reply_id),
+  );
+}
 
 export function rowOf(reply: Reply, context: RecordContext): ReplyRow {
   const lead = context.leads.byEmail(reply.email);
   const takeBack = context.book.takeBacks.get(reply.reply_id);
+  const made = reply.effects.find((effect) => effect.kind === "firm_held");
+  const hold = made?.kind === "firm_held" ? context.firmHolds.get(made.hold_id) : null;
   return {
     ...reply,
     name: lead?.name ?? "",
@@ -198,7 +230,28 @@ export function rowOf(reply: Reply, context: RecordContext): ReplyRow {
     taken_back: takeBack
       ? { at: takeBack.at, by: takeBack.by, undone: takeBack.undone, kept: takeBack.kept }
       : null,
+    firm_hold:
+      made?.kind === "firm_held"
+        ? {
+            hold_id: made.hold_id,
+            domain: made.domain,
+            held: hold ? hold.emails.length : made.held,
+            open: hold ? context.firmHolds.open(hold).length : 0,
+          }
+        : null,
   };
+}
+
+/** The answer to copy after a yes or a meeting request: his template, filled in for them. */
+export function answerFor(lead: LeadRow, context: RecordContext): string {
+  const { booking_link, yes_answer } = context.settings.settings;
+  const fields = context.leads.module.index.byEmail.get(lead.email)?.fields;
+  return fillAnswer(yes_answer, booking_link, {
+    first_name: fields?.first_name ?? "",
+    name: lead.name,
+    company: lead.company,
+    firm_key: context.leads.firmKeyOf(lead.email, lead.email_kind),
+  });
 }
 
 const plural = (count: number, one: string, many: string) =>
@@ -210,14 +263,15 @@ export async function recordReply(
   by: Staff,
   attempt: string | null,
   context: RecordContext,
-): Promise<{ reply: ReplyRow; message: string; href: string | null }> {
+): Promise<{ reply: ReplyRow; message: string; href: string | null; answer: string | null }> {
   const { core, leads, followUps } = context;
   const now = core.now();
   const today = core.day();
   const interceptor = context.interceptors.ownerOf(input.email);
   const waitlist = core.need<WaitlistService>("waitlist");
+  const positive = POSITIVE_OUTCOMES.includes(input.outcome);
   // Refused before anything is written, so the lead stands as it was.
-  if (input.outcome === "replied_positive" && !interceptor && !waitlist)
+  if (positive && !interceptor && !waitlist)
     throw new Refused(409, "waitlist_missing", WAITLIST_MISSING);
 
   const effects: Effect[] = [];
@@ -234,6 +288,10 @@ export async function recordReply(
     effects.push({ kind: "lead_added", lead_id: lead.lead_id, email: lead.email });
   }
   const name = lead.name || lead.email;
+  // Open "needs review" follow-ups of earlier replies: this later reply answers them.
+  const reviews = followUps
+    .forEmail(input.email)
+    .filter((item) => item.kind === "review" && item.state === "open");
   core.sender.poll();
   const last = [...core.sender.writtenFor(input.email)].sort((a, b) => b.at.localeCompare(a.at))[0];
   const reply: Reply = {
@@ -278,6 +336,8 @@ export async function recordReply(
 
   let message = "";
   let href: string | null = null;
+  /** A yes's "{n} other addresses … have not been written to yet", left out when they are held. */
+  let unsent: { sentence: string; href: string } | null = null;
 
   /** Every "no" reaches the stop list, an investor's too: his rule. */
   const stop = async (): Promise<boolean> => {
@@ -314,20 +374,28 @@ export async function recordReply(
       await stop();
     if (input.outcome === "question")
       followUp("answer", `Answer ${name}'s question`, today, lead, input.words);
+    if (input.outcome === "needs_review")
+      followUp("review", `Decide what ${name}'s reply means`, today, lead, input.words);
     const said: Record<Outcome, string> = {
       replied_positive: "said yes",
+      meeting_request: "asked to meet",
       not_interested: "said no",
       not_now: "said later",
       out_of_office: "is out of office",
       wrong_person: "named someone else",
       question: "asked a question",
+      needs_review: "replied",
     };
-    message = stage
-      ? `Recorded: ${name} ${said[input.outcome]}. ${lead.company || "The firm"} moves to ${stage} in Investors${input.outcome === "replied_positive" ? ", not the waitlist" : ""}.`
-      : `Recorded: ${name} ${said[input.outcome]}.`;
+    message =
+      input.outcome === "needs_review"
+        ? NEEDS_REVIEW
+        : stage
+          ? `Recorded: ${name} ${said[input.outcome]}. ${lead.company || "The firm"} moves to ${stage} in Investors${positive ? ", not the waitlist" : ""}.`
+          : `Recorded: ${name} ${said[input.outcome]}.`;
   } else {
     switch (input.outcome) {
-      case "replied_positive": {
+      case "replied_positive":
+      case "meeting_request": {
         const firmKey = leads.firmKeyOf(input.email, lead.email_kind) || `mail:${input.email}`;
         const joined = waitlist!.joinFromReply({ reply, lead, firmKey, by });
         effects.push({
@@ -335,11 +403,12 @@ export async function recordReply(
           entry_id: joined.entry_id,
           created: joined.created,
         });
-        message = `Recorded: ${name} said yes. ${joined.firm || lead.company || "The firm"} is on the waitlist.`;
-        if (joined.unsent > 0) {
-          message += ` ${plural(joined.unsent, "other address", "other addresses")} at ${lead.domain} ${joined.unsent === 1 ? "has" : "have"} not been written to yet: see them on the firm's page.`;
-          href = joined.href;
-        }
+        message = `Recorded: ${name} ${input.outcome === "meeting_request" ? "asked to meet" : "said yes"}. ${joined.firm || lead.company || "The firm"} is on the waitlist.`;
+        if (joined.unsent > 0)
+          unsent = {
+            sentence: `${plural(joined.unsent, "other address", "other addresses")} at ${lead.domain} ${joined.unsent === 1 ? "has" : "have"} not been written to yet: see them on the firm's page.`,
+            href: joined.href,
+          };
         break;
       }
       case "not_interested": {
@@ -399,13 +468,65 @@ export async function recordReply(
         message = "Recorded: a question. It is on today's follow-ups.";
         break;
       }
+      case "needs_review": {
+        followUp("review", `Decide what ${name}'s reply means`, today, lead, input.words);
+        message = NEEDS_REVIEW;
+        break;
+      }
     }
   }
 
+  // The rest of their firm, after the outcome's own effects (and an interceptor's).
+  let held = false;
+  let holdSentence = "";
+  if (input.hold_firm) {
+    const outcome = await holdTheFirm(
+      {
+        reply_id: reply.reply_id,
+        email: input.email,
+        email_kind: lead.email_kind,
+        outcome: input.outcome,
+        named: input.referral?.email ?? "",
+        by,
+      },
+      {
+        core,
+        leads,
+        holds: context.firmHolds,
+        saidNo: (email) => saidNo(context.book, email),
+        refresh: () => leads.module.index.bump(),
+      },
+    );
+    if (outcome.kind === "held") {
+      held = true;
+      effects.push({
+        kind: "firm_held",
+        hold_id: outcome.hold.hold_id,
+        domain: outcome.hold.firm_key,
+        held: outcome.hold.emails.length,
+      });
+      holdSentence = outcome.sentence;
+    } else if (outcome.kind === "failed") {
+      followUp("other", `Hold the rest of ${outcome.domain}`, today);
+      holdSentence = outcome.sentence;
+    } else if (outcome.kind === "too_many") holdSentence = outcome.sentence;
+  }
+  if (unsent && !held) {
+    message += ` ${unsent.sentence}`;
+    href = unsent.href;
+  }
+  if (holdSentence) message += ` ${holdSentence}`;
+
+  for (const item of reviews) followUps.done(item, "Answered by a later reply", by, now);
   context.book.append(reply);
   leads.noteReply(input.email, context.book.markFor(input.email));
   core.log(`reply recorded: ${input.outcome}, ${effects.length} effect(s)`);
-  return { reply: rowOf(reply, context), message, href };
+  return {
+    reply: rowOf(reply, context),
+    message,
+    href,
+    answer: positive ? answerFor(lead, context) : null,
+  };
 }
 
 export function outcomeLabel(outcome: Outcome): string {

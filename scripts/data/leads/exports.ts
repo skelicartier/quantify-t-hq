@@ -71,6 +71,7 @@ function heldWords(reason: string): string {
   const known: Record<string, string> = {
     "not a buyer": "not a buyer",
     "firm already joined": "firm already joined",
+    "someone at the firm replied": "someone at the firm replied",
   };
   return known[reason.trim().toLowerCase()] ?? reason;
 }
@@ -92,6 +93,8 @@ export function trackerStatus(lead: Lead, stops: ReadonlyMap<string, Stop>): str
       return "Replied: later";
     case "question":
       return "Replied: question";
+    case "review":
+      return "Replied: needs review";
     case "wrong_person":
       return "Replied: wrong person";
     case "stopped": {

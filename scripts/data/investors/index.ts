@@ -6,31 +6,89 @@
  * target and no bar: amounts are shown per currency, never added across them, never
  * against a goal.
  *
+ * The raise batch (raise spec §5) adds each firm's qualification, introduction, wave,
+ * offer deadline and deck link; the funnel as plain counts of firms; and the one round's
+ * terms, with no target field. It provides `investors-raise` (the funnel, firm names and
+ * the update's recipients), `agenda:investors` and `search:investors`, and puts offer
+ * deadlines in Due three days ahead.
+ *
  * A reply from anyone on the list is taken over from the replies module (the
  * interceptor), and every lead on the list wears the "Investor" badge in All leads.
  */
 
 import { writeFileSync } from "node:fs";
 
+import { Refused } from "../../mail-merge/engine";
 import type { Answer, DataCore, DueItem } from "../core";
+import { addDays } from "../days";
 import { LIMITS, clean, wholeNumber } from "../guard";
 import type { Staff } from "../protocol";
+import {
+  RAISE_SERVICES,
+  agendaService,
+  searchService,
+  type AgendaItem,
+  type AgendaSource,
+  type ContactsLookup,
+  type DataSearchHit,
+  type FunnelSummary,
+  type InvestorsRaise,
+  type PacksLookup,
+  type SearchSource,
+  type UpdateRecipientFirm,
+} from "../raise-contracts";
 import { toCsv } from "../text";
 import { findTerms, matchesTerms } from "../../../src/lib/merge/find";
 import {
   AMOUNT_STATES,
+  GEOGRAPHIES,
+  INDIA_OK,
+  INTRO_STATUSES,
   INVESTOR_STAGES,
   INVESTOR_STAGE_ORDER,
+  LEAD_OR_FOLLOW,
   PASS_REASONS,
+  RESIDENCY,
+  STAGE_FOCUS,
 } from "../../../src/lib/data/labels";
 import type { LeadsService, RepliesService, ReplyRow, WaitlistService } from "../leads/contracts";
-import { InvestorsBook, latestAmount, moneyOf } from "./book";
+import { InvestorsBook, latestAmount, moneyOf, type Touches } from "./book";
+import { funnelOf, type FunnelFirm } from "./funnel";
 import { investorInterceptor } from "./interceptor";
+import { MAX_WAVE_FIRMS, OFFER_DUE_DAYS, WAVE_LIMIT, roundOf } from "./raise";
+import { RoundBook } from "./round";
 import { NO_NEXT_STEP, type Investor, type InvestorStage } from "./types";
 
 const PAGE = 100;
 const BOM = "﻿";
 const STAGE_KEYS = new Set<string>(INVESTOR_STAGE_ORDER);
+/** The stages an agenda item or an offer deadline is no longer owed at. */
+const CLOSED: ReadonlySet<InvestorStage> = new Set(["money_in", "passed", "do_not_pitch"]);
+/** Soft commit and later: first in the firm pickers. */
+const COMMITTED: ReadonlySet<InvestorStage> = new Set(["soft", "signed", "money_in"]);
+
+/** The Firms view's filters, as the list and the bulk wave both read them. */
+type Filters = {
+  stage: string;
+  terms: string[];
+  /** null: every wave; "": no wave; else the label. */
+  wave: string | null;
+  intro: "warm" | "cold" | "";
+};
+
+function filtersOf(input: { stage: unknown; q: unknown; wave: unknown; intro: unknown }): Filters {
+  const wave = clean(input.wave, WAVE_LIMIT);
+  const intro = clean(input.intro, 10);
+  return {
+    stage: clean(input.stage, 40),
+    terms: findTerms(clean(input.q, LIMITS.search)),
+    wave: wave === "-" ? "" : wave || null,
+    intro: intro === "warm" || intro === "cold" ? intro : "",
+  };
+}
+
+const byName = (a: string, b: string): number =>
+  a.localeCompare(b, "en", { sensitivity: "base", numeric: true });
 
 /** What the leads module (and anyone else) may ask: is this address at an investor firm. */
 export type InvestorsService = {
@@ -51,8 +109,15 @@ export async function register(core: DataCore): Promise<void> {
       .flatMap((person) => service.forEmail(person.email))
       .sort((a, b) => b.received_at.localeCompare(a.received_at));
   };
-  const replied = (investor: Investor): boolean =>
-    repliesOf(investor).some((row) => row.taken_back === null && row.outcome !== "out_of_office");
+  /** Replies that count: not taken back, not an automatic out-of-office. */
+  const heardFrom = (investor: Investor): ReplyRow[] =>
+    repliesOf(investor).filter((row) => row.taken_back === null && row.outcome !== "out_of_office");
+  const replied = (investor: Investor): boolean => heardFrom(investor).length > 0;
+  const touches = (investor: Investor): Touches => {
+    const heard = heardFrom(investor);
+    return { replied: heard.length > 0, last_replied_at: heard[0]?.received_at ?? null };
+  };
+  const rounds = new RoundBook(core);
 
   // ---------------------------------------------------------------- the other modules
 
@@ -114,8 +179,183 @@ export async function register(core: DataCore): Promise<void> {
         href: `/data/investors/${investor.investor_id}`,
       });
     }
+    // An offer deadline joins Due three days before (raise spec §5.7).
+    const soon = addDays(today, OFFER_DUE_DAYS);
+    for (const investor of book.firms.values()) {
+      if (!investor.offer_deadline || CLOSED.has(investor.stage)) continue;
+      if (investor.offer_deadline > soon) continue;
+      items.push({
+        key: `investor:${investor.investor_id}:offer`,
+        kind: "investor",
+        title: `Offer deadline: ${investor.firm}`,
+        sub: INVESTOR_STAGES[investor.stage].label,
+        due_on: investor.offer_deadline,
+        href: `/data/investors/${investor.investor_id}`,
+      });
+    }
     return items;
   });
+
+  // ---------------------------------------------------------------- the raise (spec §5)
+
+  /** The firm's contact: the first person Mail merge wrote to, else the first person. */
+  const contactOf = (investor: Investor) =>
+    investor.people.find((person) => core.sender.writtenFor(person.email).length > 0) ??
+    investor.people[0] ??
+    null;
+
+  const funnel = (): FunnelSummary => {
+    const firms: FunnelFirm[] = [];
+    let firstSend: string | null = null;
+    for (const investor of book.sorted()) {
+      const first = book.writtenTo(investor)[0];
+      if (first && (firstSend === null || first.at < firstSend)) firstSend = first.at;
+      const latest = latestAmount(investor);
+      firms.push({
+        investor_id: investor.investor_id,
+        firm: investor.firm,
+        stage: investor.stage,
+        stage_since: investor.stage_since,
+        next_step: investor.next_step,
+        next_step_on: investor.next_step_on,
+        passed_reason: investor.passed_reason,
+        wave: investor.wave,
+        warm: investor.intro.status === "made",
+        latest: latest
+          ? { state: latest.state, amount: latest.amount, currency: latest.currency }
+          : null,
+        moves: book.movesOf(investor),
+      });
+    }
+    return funnelOf({ firms, today: core.day(), first_send_at: firstSend });
+  };
+
+  const firmOptions = () =>
+    [...book.firms.values()]
+      .sort(
+        (a, b) =>
+          Number(COMMITTED.has(b.stage)) - Number(COMMITTED.has(a.stage)) || byName(a.firm, b.firm),
+      )
+      .map((investor) => ({
+        investor_id: investor.investor_id,
+        firm: investor.firm,
+        stage: investor.stage,
+      }));
+
+  const raise: InvestorsRaise = {
+    funnel,
+    firmOptions,
+    recipients: (stages): UpdateRecipientFirm[] => {
+      const wanted = new Set<string>(stages);
+      return book
+        .sorted()
+        .filter((investor) => wanted.has(investor.stage))
+        .map((investor) => {
+          const people: UpdateRecipientFirm["people"] = [];
+          for (const row of heardFrom(investor)) {
+            if (people.some((person) => person.email === row.email)) continue;
+            const person = investor.people.find((item) => item.email === row.email);
+            people.push({ email: row.email, name: person?.name || row.name, replied: true });
+          }
+          if (people.length === 0) {
+            const contact = contactOf(investor);
+            if (contact) people.push({ email: contact.email, name: contact.name, replied: false });
+          }
+          return {
+            investor_id: investor.investor_id,
+            firm: investor.firm,
+            stage: investor.stage,
+            people,
+          };
+        });
+    },
+    name: (investorId) => book.get(investorId)?.firm ?? null,
+  };
+  core.provide(RAISE_SERVICES.investorsRaise, raise);
+
+  core.provideOverview("raise", () => {
+    const summary = funnel();
+    return {
+      stages: summary.stages
+        .filter((row) => row.stage !== "written")
+        .map((row) => ({ stage: row.stage, now: row.now })),
+      first_meetings_this_week: summary.first_meetings_this_week,
+    };
+  });
+
+  const agendaOf = (): AgendaItem[] => {
+    const items: AgendaItem[] = [];
+    for (const investor of book.sorted()) {
+      if (CLOSED.has(investor.stage)) continue;
+      const href = `/data/investors/${investor.investor_id}`;
+      const stage = INVESTOR_STAGES[investor.stage].label;
+      if (investor.next_step_on)
+        items.push({
+          key: `investor:${investor.investor_id}`,
+          kind: "investor",
+          title: `${investor.next_step || "Next step"} · ${investor.firm}`,
+          plain: "Investor next step",
+          sub: stage,
+          on: investor.next_step_on,
+          remind_days: [0],
+          href,
+        });
+      if (investor.offer_deadline)
+        items.push({
+          key: `offer_deadline:${investor.investor_id}`,
+          kind: "offer_deadline",
+          title: `Offer deadline: ${investor.firm}`,
+          plain: "Offer deadline",
+          sub: stage,
+          on: investor.offer_deadline,
+          remind_days: [3, 0],
+          href,
+        });
+    }
+    return items;
+  };
+  const agenda: AgendaSource = {
+    agenda: (today) => {
+      void today; // every open item, overdue ones included
+      try {
+        return agendaOf();
+      } catch (error) {
+        core.log(`investors agenda failed: ${error instanceof Error ? error.name : "error"}`);
+        return [];
+      }
+    },
+  };
+  core.provide(agendaService("investors"), agenda);
+
+  const searchOf: SearchSource["search"] = ({ terms, kind, limit }) => {
+    if ((kind && kind !== "investor") || terms.length === 0) return [];
+    const words = terms.map((term) => term.toLowerCase());
+    const found = book
+      .sorted()
+      .filter((investor) => matchesTerms([book.searchText(investor)], words));
+    const hits: DataSearchHit[] = found.slice(0, Math.max(0, limit)).map((investor) => ({
+      kind: "investor",
+      id: investor.investor_id,
+      title: investor.firm,
+      subtitle: `${INVESTOR_STAGES[investor.stage].label} · ${
+        investor.firm_key.startsWith("mail:") ? "A firm of one" : investor.domain
+      }`,
+      snippet: "",
+      href: `/data/investors/${investor.investor_id}`,
+    }));
+    return [{ kind: "investor", count: found.length, hits }];
+  };
+  const search: SearchSource = {
+    search: (input) => {
+      try {
+        return searchOf(input);
+      } catch (error) {
+        core.log(`investors search failed: ${error instanceof Error ? error.name : "error"}`);
+        return [];
+      }
+    },
+  };
+  core.provide(searchService("investors"), search);
 
   // ---------------------------------------------------------------- reading
 
@@ -156,28 +396,75 @@ export async function register(core: DataCore): Promise<void> {
     return { ...result, chosen: chosenAnswer() };
   });
 
+  /** The firms a Firms view shows for these filters (every page), and the ones behind its tabs. */
+  const listed = (filters: Filters) => {
+    const all = book.sorted();
+    const searched = all.filter(
+      (investor) =>
+        (!filters.terms.length || matchesTerms([book.searchText(investor)], filters.terms)) &&
+        (filters.wave === null || investor.wave === filters.wave) &&
+        (!filters.intro || (investor.intro.status === "made") === (filters.intro === "warm")),
+    );
+    const shown = STAGE_KEYS.has(filters.stage)
+      ? searched.filter((investor) => investor.stage === filters.stage)
+      : searched;
+    return { all, searched, shown };
+  };
+
+  const wavesOf = (all: readonly Investor[]) => {
+    const counts = new Map<string, number>();
+    for (const investor of all)
+      if (investor.wave) counts.set(investor.wave, (counts.get(investor.wave) ?? 0) + 1);
+    return [
+      ...[...counts.entries()]
+        .sort(([a], [b]) => byName(a, b))
+        .map(([label, firms]) => ({ label, firms })),
+      { label: "", firms: all.filter((investor) => !investor.wave).length },
+    ];
+  };
+
+  // Registered before the `:id` routes (first match wins).
+  core.route("POST", "/data/investors/wave", (ctx) => {
+    const by = ctx.staff();
+    const { shown } = listed(
+      filtersOf({
+        stage: ctx.body.stage,
+        q: ctx.body.q,
+        wave: ctx.body.wave_filter,
+        intro: ctx.body.intro,
+      }),
+    );
+    if (shown.length > MAX_WAVE_FIRMS)
+      throw new Refused(
+        400,
+        "invalid",
+        `That is ${shown.length.toLocaleString("en-GB")} firms; narrow the list to ${MAX_WAVE_FIRMS.toLocaleString("en-GB")} at most.`,
+      );
+    book.setWave(shown, ctx.body.wave, by);
+    return { changed: shown.length };
+  });
+
   core.route("GET", "/data/investors", (ctx) => {
     core.sender.poll();
     book.refreshWritten();
-    const stage = clean(ctx.query.get("stage"), 40);
-    const terms = findTerms(clean(ctx.query.get("q"), LIMITS.search));
     const offset = Math.min(200_000, Math.max(0, wholeNumber(ctx.query.get("offset"), 0)));
-    const all = book.sorted();
-    const searched = terms.length
-      ? all.filter((investor) => matchesTerms([book.searchText(investor)], terms))
-      : all;
+    const { all, searched, shown } = listed(
+      filtersOf({
+        stage: ctx.query.get("stage"),
+        q: ctx.query.get("q"),
+        wave: ctx.query.get("wave"),
+        intro: ctx.query.get("intro"),
+      }),
+    );
     const counts: Record<string, number> = { all: searched.length };
     for (const key of INVESTOR_STAGE_ORDER) counts[key] = 0;
     for (const investor of searched) counts[investor.stage] = (counts[investor.stage] ?? 0) + 1;
-    const shown = STAGE_KEYS.has(stage)
-      ? searched.filter((investor) => investor.stage === stage)
-      : searched;
     const money = moneyOf(all);
     const latest = all.map((investor) => latestAmount(investor));
     return {
       investors: shown
         .slice(offset, offset + PAGE)
-        .map((investor) => book.rowOf(investor, replied)),
+        .map((investor) => book.rowOf(investor, touches)),
       total: shown.length,
       offset,
       limit: PAGE,
@@ -194,6 +481,7 @@ export async function register(core: DataCore): Promise<void> {
         ).length,
       },
       chosen: chosenAnswer(),
+      waves: wavesOf(all),
       today: core.day(),
     };
   });
@@ -202,13 +490,30 @@ export async function register(core: DataCore): Promise<void> {
     core.sender.poll();
     const leadsService = leads();
     const waitlist = core.need<WaitlistService>("waitlist");
+    const contacts = core.need<ContactsLookup>(RAISE_SERVICES.contacts);
+    const packs = core.need<PacksLookup>(RAISE_SERVICES.packs);
     const last = book.lastWritten(investor);
+    const heard = touches(investor);
+    let introducers: ReturnType<ContactsLookup["introducers"]> | null = null;
+    let dataRoom: ReturnType<PacksLookup["sharedWith"]> | null = null;
+    try {
+      introducers = contacts ? contacts.introducers() : null;
+    } catch (error) {
+      core.log(`investors: the introducers could not be read: ${errorName(error)}`);
+    }
+    try {
+      dataRoom = packs ? packs.sharedWith(investor.investor_id) : null;
+    } catch (error) {
+      core.log(`investors: the data room could not be read: ${errorName(error)}`);
+    }
     return {
       investor: {
         ...investor,
         free_mail: investor.firm_key.startsWith("mail:"),
         last_written_at: last?.at ?? null,
         last_mailing: last?.mailing ?? "",
+        last_replied_at: heard.last_replied_at,
+        last_met_at: book.lastMetAt(investor),
         lists: investor.list_ids.map((id) => ({
           id,
           name: core.sender.list(id)?.name ?? "A list no longer in Mail merge",
@@ -235,6 +540,8 @@ export async function register(core: DataCore): Promise<void> {
           ? waitlist.forFirm(investor.firm_key)
           : null,
       waitlist_here: waitlist !== null,
+      introducers,
+      data_room: dataRoom,
       today: core.day(),
     };
   };
@@ -270,6 +577,51 @@ export async function register(core: DataCore): Promise<void> {
     return { investor };
   });
 
+  core.route("POST", "/data/investors/:id/profile", (ctx) => {
+    const by = ctx.staff();
+    const investor = book.mustGet(ctx.params[0]);
+    book.qualify(investor, ctx.body, by);
+    return { investor };
+  });
+
+  core.route("POST", "/data/investors/:id/intro", (ctx) => {
+    const by = ctx.staff();
+    const investor = book.mustGet(ctx.params[0]);
+    const contacts = core.need<ContactsLookup>(RAISE_SERVICES.contacts);
+    book.introduce(
+      investor,
+      ctx.body,
+      contacts
+        ? (contactId) => {
+            const found = contacts.get(contactId);
+            return found ? { name: found.name } : null;
+          }
+        : null,
+      by,
+    );
+    return { investor };
+  });
+
+  // ---------------------------------------------------------------- the funnel and the round
+
+  core.route("GET", "/data/raise/funnel", () => {
+    core.sender.poll();
+    book.refreshWritten();
+    return { funnel: funnel() };
+  });
+
+  core.route("GET", "/data/raise/round", () => ({
+    round: rounds.round,
+    firms: firmOptions(),
+    history: rounds.history(),
+  }));
+
+  core.route("POST", "/data/raise/round", (ctx) => {
+    const by = ctx.staff();
+    const fields = roundOf(ctx.body, (investorId) => book.get(investorId) !== null);
+    return { round: rounds.save(fields, by) };
+  });
+
   core.route("POST", "/data/investors/:id/notes", (ctx) => {
     const by = ctx.staff();
     const investor = book.mustGet(ctx.params[0]);
@@ -296,13 +648,42 @@ export async function register(core: DataCore): Promise<void> {
 
   // ---------------------------------------------------------------- the download
 
+  /** The raise's columns, appended after the old ones (raise spec §5.7); still no address. */
+  const raiseColumns = (investor: Investor): (string | number)[] => {
+    const { profile, intro } = investor;
+    const heard = touches(investor);
+    const labelsOf = (keys: readonly string[], table: Readonly<Record<string, string>>) =>
+      keys.map((key) => table[key] ?? key).join(", ");
+    return [
+      investor.wave,
+      intro.status === "made" ? "Yes" : "No",
+      INTRO_STATUSES[intro.status].label,
+      intro.introducer,
+      intro.on ?? "",
+      profile.cheque?.min ?? "",
+      profile.cheque?.max ?? "",
+      profile.cheque?.currency ?? "",
+      labelsOf(profile.stages, STAGE_FOCUS),
+      profile.sectors.join(", "),
+      labelsOf(profile.geography, GEOGRAPHIES),
+      profile.lead ? LEAD_OR_FOLLOW[profile.lead] : "",
+      profile.conflict,
+      profile.residency ? RESIDENCY[profile.residency] : "",
+      profile.india_ok ? INDIA_OK[profile.india_ok] : "",
+      heard.last_replied_at?.slice(0, 10) ?? "",
+      book.lastMetAt(investor)?.slice(0, 10) ?? "",
+      investor.offer_deadline ?? "",
+      investor.deck_link,
+    ];
+  };
+
   core.builds.provide("investors_csv", async (handle, input) => {
     core.sender.poll();
     const all = book.sorted();
     handle.setProgress(0, all.length);
     await core.yield();
     const rows = all.map((investor) => {
-      const row = book.rowOf(investor, replied);
+      const row = book.rowOf(investor, touches);
       const latest = latestAmount(investor);
       return [
         investor.firm,
@@ -324,6 +705,7 @@ export async function register(core: DataCore): Promise<void> {
         latest?.currency ?? "",
         latest?.instrument ?? "",
         investor.owner,
+        ...raiseColumns(investor),
       ];
     });
     const text =
@@ -349,6 +731,7 @@ export async function register(core: DataCore): Promise<void> {
           "currency",
           "instrument",
           "owner",
+          ...RAISE_COLUMNS,
         ],
         rows,
       );
@@ -376,7 +759,40 @@ export async function register(core: DataCore): Promise<void> {
       book.save();
       return { reset: true };
     });
+
+    // What `agenda:investors` and `search:investors` give, for the tests (raise spec §5.4).
+    core.route("GET", "/data/_test/raise/agenda", () => ({ items: agenda.agenda(core.day()) }));
+    core.route("GET", "/data/_test/raise/search", (ctx) => {
+      const query = clean(ctx.query.get("q"), LIMITS.search);
+      return {
+        groups: search.search({ query, terms: findTerms(query), kind: null, limit: 5 }),
+      };
+    });
   }
 }
+
+const errorName = (error: unknown): string => (error instanceof Error ? error.name : "error");
+
+const RAISE_COLUMNS = [
+  "wave",
+  "introduced",
+  "intro_status",
+  "introducer",
+  "intro_on",
+  "cheque_min",
+  "cheque_max",
+  "cheque_currency",
+  "stage_focus",
+  "sectors",
+  "geography",
+  "lead_or_follow",
+  "conflict",
+  "residency",
+  "can_invest_india",
+  "last_replied",
+  "last_met",
+  "offer_deadline",
+  "deck_link",
+] as const;
 
 export type { InvestorStage };

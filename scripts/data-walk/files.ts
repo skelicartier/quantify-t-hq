@@ -1,8 +1,9 @@
 /**
- * Files, walked (spec §5.1 F1–F16, and Share from addendum §4). The stand-in is seeded with
- * invented files at pinned ids, so the harness can open their pages; each pass then makes
- * its own folder and files (names and bytes carry the pass and a run mark, so a second run
- * against the same stand-in finds nothing already there).
+ * Files, walked (spec §5.1 F1–F16, Share from addendum §4, and F17 from the raise spec
+ * §8.14). The stand-in is seeded with invented files at pinned ids, so the harness can
+ * open their pages; each pass then makes its own folder and files (names and bytes carry
+ * the pass and a run mark, so a second run against the same stand-in finds nothing
+ * already there).
  *
  * Every person and file here is invented; mail goes to the stand-in's outbox only.
  */
@@ -175,6 +176,14 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
       navNames.slice(0, 15).join(" | "),
     );
   }
+  // ---- F17 (raise spec §8.14): the Files page links to the data-room packs
+  const packsLink = page.locator(".pagebar__actions a", { hasText: "Data-room packs" });
+  kit.check(
+    "F17: the Files page has the Data-room packs link",
+    (await packsLink.count()) === 1 &&
+      (await packsLink.first().getAttribute("href")) === "/data/files/packs",
+    await packsLink.count(),
+  );
   const mca = list.find((folder) => folder.default_key === "mca")!;
   await open(page, kit, `/data/files?folder=${mca.folder_id}`, ".hqdata-files");
   let text = flat(await kit.text());

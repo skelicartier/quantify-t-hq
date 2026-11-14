@@ -1,0 +1,139 @@
+/* Data-room packs: the list of packs, and one pack with its numbered files, the checklist
+   of what is missing, the index as it goes in the zip, and the record of shares. Tokens
+   only; phone rules at 720px; no side bars (a warning is words, not a stripe). Prefixed
+   hqdata-. Printed, it is the tables and the index, without the forms. */
+@layer pages {
+  .hqdata-packs,
+  .hqdata-pack {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  /* Each section shrinks to the page; its table scrolls inside its own frame. */
+  .hqdata-packs > *,
+  .hqdata-pack > * {
+    min-width: 0;
+  }
+
+  .hqdata-packs__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-pack__more,
+  .hqdata-pack__add {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hqdata-pack__search {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .hqdata-pack__search input {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+
+  .hqdata-pack__groups {
+    display: grid;
+    gap: 12px;
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+
+  .hqdata-pack__group,
+  .hqdata-pack__how {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .hqdata-pack__group legend,
+  .hqdata-pack__how legend {
+    padding: 0;
+    margin-bottom: 4px;
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+
+  .hqdata-pack__radio {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-pack__warning {
+    display: block;
+    margin-top: 2px;
+    font-size: 11.5px;
+    color: var(--danger);
+  }
+
+  .hqdata-pack__order {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .hqdata-pack__row-form {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .hqdata-pack__covers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .hqdata-pack__covers .form-actions {
+    margin: 0;
+  }
+
+  .hqdata-pack__index {
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-pack__order,
+    .hqdata-pack__covers {
+      row-gap: 6px;
+    }
+
+    .hqdata-pack__groups {
+      max-height: none;
+    }
+  }
+}
+
+@media print {
+  .hqdata-pack__order,
+  .hqdata-pack__covers .form-actions {
+    display: none;
+  }
+}

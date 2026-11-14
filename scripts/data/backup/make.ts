@@ -211,7 +211,7 @@ export async function makeBackup(
         "- files/: every file in Data's Files, the current version under its folder.",
         "- files/_versions/: the older versions, as v<n> and the name each was added with.",
         "- files/_trash/: files in the trash, in the folder they came from.",
-        "- data/: Data's own records (folders, leads, replies, waitlist, investors, key dates).",
+        "- data/: Data's own records (folders, leads, replies, waitlist, investors and the round, key dates, notes, decisions and contacts, the calendar link's checksum, numbers and monthly updates, data-room packs).",
         "- mail-merge/: Mail merge's lists, mailings, written log, stop list, settings and tests log.",
         "- manifest-sha256.txt: the SHA-256 of every file here, to check none changed.",
         "",

@@ -11,6 +11,11 @@
  * - Question: Replied; the replies module adds the follow-up "Answer {name}'s question".
  * - Wrong person: whoever they named joins the firm's people, and All leads as a lead.
  * - Out of office: no move; a follow-up for the working day after they are back.
+ * - Meeting request (raise spec §7.2.2): Replied, with the next step "Send times or your
+ *   booking link" due today, when the firm is before or at Replied; otherwise a line on
+ *   its activity and the stage kept. No waitlist.
+ * - Needs review: only a line on the firm's activity; the replies module adds the
+ *   follow-up "Decide what {name}'s reply means".
  *
  * A reply never drags a firm backwards: one already at Soft commit, Signed, Money in or
  * Do not pitch keeps its stage, and a Yes to a firm past Replied keeps it where it is.
@@ -69,6 +74,18 @@ export function investorInterceptor(core: DataCore, book: InvestorsBook): Interc
           if (BEFORE_REPLIED.has(investor.stage) || investor.stage === "replied")
             move("replied", next);
           else book.replyNote(investor, heard, ctx.by, "The stage was kept.");
+          break;
+        }
+        case "meeting_request": {
+          const next = step("Send times or your booking link", today);
+          if (BEFORE_REPLIED.has(investor.stage) || investor.stage === "replied")
+            move("replied", next);
+          else book.replyNote(investor, heard, ctx.by, "The stage was kept.");
+          break;
+        }
+        case "needs_review": {
+          // The follow-up itself is the replies module's ("Decide what {name}'s reply means").
+          book.replyNote(investor, heard, ctx.by);
           break;
         }
         case "not_interested": {

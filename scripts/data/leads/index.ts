@@ -32,6 +32,7 @@ import { LeadRecords } from "./edits";
 import { leftOutCsv, listCsv, trackerCsv, viewCsv, type ExportContext } from "./exports";
 import { PAGE, parseLeadQuery, queryString, runQuery } from "./query";
 import { detailOf, type LeadDetail } from "./record";
+import { registerLeadsSearch } from "./search";
 import { SeenLists } from "./seen-lists";
 import {
   leftOutName,
@@ -623,6 +624,7 @@ export async function register(core: DataCore): Promise<void> {
   const leads = new LeadsModule(core);
   const service = leads.service();
   core.provide("leads", service);
+  registerLeadsSearch(core, leads);
   await leads.rebuild({ initial: true });
   core.sender.watch((changes) => leads.onSender(changes));
   leads.files()?.onChange((event) => {

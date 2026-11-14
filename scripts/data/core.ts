@@ -70,7 +70,7 @@ type RouteEntry =
   | { kind: "json"; method: "GET" | "POST"; pattern: RegExp; handler: JsonHandler }
   | { kind: "stream"; method: "GET" | "POST"; pattern: RegExp; handler: StreamHandler };
 
-export type DueKind = "follow_up" | "waitlist" | "investor" | "key_date" | "file_review";
+export type DueKind = "follow_up" | "waitlist" | "investor" | "key_date" | "file_review" | "action";
 export type DueItem = {
   key: string;
   kind: DueKind;
@@ -93,6 +93,11 @@ export const MODULES = [
   "waitlist",
   "investors",
   "dates",
+  "contacts",
+  "notes",
+  "numbers",
+  "calendar",
+  "search",
   "backup",
 ] as const;
 export type ModuleName = (typeof MODULES)[number];

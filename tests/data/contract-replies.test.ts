@@ -10,8 +10,11 @@ import {
   moveFollowUp,
   readFollowUps,
   readReplies,
+  readReplySettings,
   readTakeBackPreview,
   recordReply,
+  releaseFirmHold,
+  saveReplySettings,
   takeBackReply,
 } from "@/lib/data/api/replies";
 import { dataAsk, ok } from "@/lib/data/socket";
@@ -132,8 +135,71 @@ describe("the portal and Replies agree", () => {
     for await (const chunk of opened.body) chunks.push(chunk as Buffer);
     const text = Buffer.concat(chunks).toString("utf8");
     expect(text.split("\r\n")[0]).toBe(
-      "\ufeffreceived_at,email,name,firm,outcome,words,subject,mailing,later_until,referral_name,referral_email,recorded_at,recorded_by,taken_back",
+      "\ufeffreceived_at,email,name,firm,outcome,words,subject,mailing,later_until,referral_name,referral_email,recorded_at,recorded_by,taken_back,firm_hold",
     );
     expect(text.trim().split("\r\n")).toHaveLength(1 + 3);
+  });
+
+  it("on the firm hold, its release, and the answer to a yes (raise spec §7.2)", async () => {
+    // A colleague of Asha's at peak.example replies, with the rest of the firm held.
+    const held = await recordReply(
+      {
+        ...base,
+        email: "cara@peak.example",
+        outcome: "question",
+        add_if_missing: true,
+        hold_firm: true,
+      },
+      WALKER,
+      crypto.randomUUID(),
+    );
+    expect(held.message).toBe(
+      "Recorded: a question. It is on today's follow-ups. 1 other address at peak.example is held: nobody else there is written to.",
+    );
+    expect(held.answer).toBeNull();
+    expect(held.reply.effects).toContainEqual({
+      kind: "firm_held",
+      hold_id: expect.any(String),
+      domain: "peak.example",
+      held: 1,
+    });
+    const row = (await readReplies({ q: "cara" })).replies[0]!;
+    expect(row.firm_hold).toMatchObject({ domain: "peak.example", held: 1, open: 1 });
+    const released = await releaseFirmHold(row.reply_id, null, WALKER);
+    expect(released).toMatchObject({ released: ["asha@peak.example"], kept: [] });
+    expect(released.message).toBe("Released 1.");
+    await expect(releaseFirmHold(row.reply_id, null, WALKER)).rejects.toMatchObject({
+      status: 409,
+      code: "nothing_held",
+    });
+    expect((await readReplies({ q: "cara" })).replies[0]!.firm_hold).toMatchObject({ open: 0 });
+
+    // The booking link and the answer: refused, saved, and filled in after a meeting request.
+    expect((await readReplySettings()).settings).toMatchObject({ booking_link: "" });
+    await expect(
+      saveReplySettings({ booking_link: "http://book.example/x", yes_answer: "Hi" }, WALKER),
+    ).rejects.toMatchObject({ status: 400, message: "Paste the whole link, starting https://." });
+    const saved = await saveReplySettings(
+      { booking_link: "https://book.example/x", yes_answer: "Hi {first_name}: {booking_link}" },
+      WALKER,
+    );
+    expect(saved.settings).toMatchObject({
+      booking_link: "https://book.example/x",
+      updated_by: WALKER,
+    });
+    await stack.ask("POST", "/data/_test/waitlist", { by: WALKER, on: true });
+    try {
+      const meeting = await recordReply(
+        { ...base, email: "ben@nine.example", outcome: "meeting_request" },
+        WALKER,
+        crypto.randomUUID(),
+      );
+      expect(meeting.message).toBe(
+        "Recorded: Ben Rao asked to meet. Nine Ventures is on the waitlist.",
+      );
+      expect(meeting.answer).toBe("Hi Ben: https://book.example/x");
+    } finally {
+      await stack.ask("POST", "/data/_test/waitlist", { by: WALKER, on: false });
+    }
   });
 });

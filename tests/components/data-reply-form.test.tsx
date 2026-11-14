@@ -9,7 +9,9 @@ import type { ActionState } from "@/lib/forms/action-state";
 /**
  * The reply form (spec §2.5.2): Yes, No and Question record at once with their outcome;
  * Later and Wrong person open their fields first; without scripts every field is there
- * and every answer is its own submit.
+ * and every answer is its own submit. Raise batch (§7.2.5): Meeting request and Needs
+ * review record at once too, "Hold the rest of their firm" is there and ticked, and after
+ * a yes the answer to copy is shown under the sentence.
  */
 
 const NOW = Date.parse("2026-11-10T06:30:00.000Z");
@@ -34,6 +36,8 @@ describe("ReplyForm", () => {
     ["Record a yes: add the firm to the waitlist", "replied_positive"],
     ["Record a no: put them on the stop list", "not_interested"],
     ["Question", "question"],
+    ["Record a meeting request: they asked to meet", "meeting_request"],
+    ["Record that it needs review: decide what it means later", "needs_review"],
   ])("“%s” records at once with outcome %s", async (name, outcome) => {
     const { action, seen, user } = setup();
     await user.type(theirAddress(), "asha@peak.example");
@@ -45,6 +49,7 @@ describe("ReplyForm", () => {
     expect(data.get("email")).toBe("asha@peak.example");
     expect(data.get("words")).toBe("Invented words.");
     expect(data.get("add_if_missing")).toBe("on");
+    expect(data.get("hold_firm")).toBe("on");
     expect(String(data.get("attempt"))).toMatch(/^[0-9a-f-]{36}$/);
     expect(await screen.findByText("Recorded.")).toBeInTheDocument();
   });
@@ -141,6 +146,7 @@ describe("ReplyForm", () => {
       "referral_name",
       "referral_email",
       "referral_title",
+      "hold_firm",
     ])
       expect(page.querySelector(`[name="${name}"]`), name).not.toBeNull();
     const outcomes = [...page.querySelectorAll('button[name="outcome"]')].map((button) => [
@@ -149,15 +155,57 @@ describe("ReplyForm", () => {
     ]);
     expect(outcomes).toEqual([
       ["submit", "replied_positive"],
+      ["submit", "meeting_request"],
       ["submit", "not_interested"],
       ["submit", "not_now"],
       ["submit", "wrong_person"],
       ["submit", "question"],
+      ["submit", "needs_review"],
       ["submit", "not_now"],
       ["submit", "wrong_person"],
     ]);
+    // The hold box is there before scripts run, and ticked.
+    expect(page.querySelector('input[name="hold_firm"]')).toHaveProperty("defaultChecked", true);
     // Nothing is hidden before scripts run.
     expect(page.querySelectorAll("fieldset[hidden]")).toHaveLength(0);
     expect(page.querySelector(".hqdata-outcomes")).not.toBeNull();
+  });
+
+  it("has “Hold the rest of their firm” ticked, and an unticked box sends nothing", async () => {
+    const { action, seen, user } = setup();
+    const hold = screen.getByLabelText("Hold the rest of their firm");
+    expect(hold).toBeChecked();
+    expect(
+      screen.getByText(
+        "Nobody else at their firm is written to while you answer. Not for free-mail addresses or out-of-office replies; release it from Replies.",
+      ),
+    ).toBeInTheDocument();
+    await user.type(theirAddress(), "asha@peak.example");
+    await user.click(hold);
+    await user.click(screen.getByRole("button", { name: "Question" }));
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    expect(seen[0]!.get("hold_firm")).toBeNull();
+  });
+
+  it("after a yes shows the answer to copy, and copies it", async () => {
+    const answer = "Thank you, Asha. Choose a time that suits you here: https://book.example/walk";
+    const { user } = setup({
+      status: "sent",
+      message: "Recorded: Asha Rao said yes. Peak Capital is on the waitlist.",
+      sentAt: 2,
+      detail: JSON.stringify({ answer }),
+    });
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await user.type(theirAddress(), "asha@peak.example");
+    await user.click(
+      screen.getByRole("button", { name: "Record a yes: add the firm to the waitlist" }),
+    );
+    const box = await screen.findByLabelText("Your answer, ready to copy");
+    expect(box).toHaveValue(answer);
+    expect(box).toHaveAttribute("readonly");
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    expect(writeText).toHaveBeenCalledWith(answer);
+    expect(await screen.findByText("Copied.")).toBeInTheDocument();
   });
 });

@@ -1,0 +1,206 @@
+/* Notes, the Investor FAQ, decisions and contacts: the Notes section on a firm's page, the
+   note's page, the three Notes views, Decisions and Contacts. Tokens only; radius 0; no
+   side stripe on anything; phone rules at 720px. Prefixed hqdata-. Printed, each page is
+   its data without the controls. */
+@layer pages {
+  .hqdata-notes {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-notes > * {
+    min-width: 0;
+  }
+
+  /* The Notes section's list: day, kind, title, then the counts. */
+  .hqdata-notes-list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hqdata-notes-list__row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 6px 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-notes-list__day {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .hqdata-notes-list__title {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-notes-list__counts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 12px;
+    font-size: var(--fs-ui);
+    color: var(--muted);
+  }
+
+  .hqdata-notes-section__all {
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  /* Forms: two fields side by side, and the composer's action rows. */
+  .hqdata-note-form__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-note-form__actions {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-note-form__action {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  /* Tools above a table: tabs, the search and a link, in one wrapping row. Positioned, so
+     the search's visually hidden label stays inside it. */
+  .hqdata-notes-tools {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .hqdata-notes-tools > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hqdata-notes__acts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* A note taken back, a done action, an archived question or contact: kept, and muted. */
+  .hqdata-notes__row--withdrawn td,
+  .hqdata-notes__row--done td {
+    color: var(--muted);
+  }
+
+  .hqdata-notes__row--withdrawn .table-title {
+    color: var(--muted);
+  }
+
+  /* One note: what was said, as written. */
+  .hqdata-note-body {
+    margin: 0;
+    max-width: 72ch;
+    font-size: var(--fs-body);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-objections {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hqdata-objection {
+    display: grid;
+    gap: 6px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-objection__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px 12px;
+  }
+
+  .hqdata-objection__text {
+    margin: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-objection__answer {
+    margin: 0;
+    padding: 8px 12px;
+    border: 1px solid var(--line-soft);
+    background: var(--panel-soft);
+    font-size: var(--fs-ui);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-objection__forms {
+    display: grid;
+    gap: 16px;
+  }
+
+  .hqdata-objection__forms h3 {
+    margin: 0 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  @media (max-width: 720px) {
+    /* A firm's page opens on its notes, and a note's page on what was said. */
+    .record-layout__main > [data-section$="-notes"],
+    .record-layout__main > [data-section="note-body"] {
+      order: -2;
+    }
+
+    .hqdata-notes-list__row {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .hqdata-notes-list__title,
+    .hqdata-notes-list__counts {
+      grid-column: 1 / -1;
+    }
+
+    .hqdata-note-form__pair,
+    .hqdata-note-form__action {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-notes__acts {
+      justify-content: flex-start;
+      row-gap: 6px;
+    }
+  }
+}
+
+@media print {
+  .hqdata-notes__acts,
+  .hqdata-notes-tools form {
+    display: none;
+  }
+}

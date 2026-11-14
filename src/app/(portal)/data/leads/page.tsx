@@ -54,6 +54,7 @@ const REPLY_LINKS = [
   ["later", "Later"],
   ["no", "No"],
   ["question", "Question"],
+  ["review", "Needs review"],
   ["wrong_person", "Wrong person"],
 ] as const;
 

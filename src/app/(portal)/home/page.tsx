@@ -61,7 +61,8 @@ type OwedRow = {
     | "Mail"
     | "Follow-up"
     | "Waitlist"
-    | "Investor";
+    | "Investor"
+    | "Action";
   href: string;
   title: string;
   sub: string;

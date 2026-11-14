@@ -1,0 +1,75 @@
+/* The calendar feed: the link and the one-time box it is shown in, the steps. Tokens only;
+   phone rules at 720px; button rows wrap with a 6px gap; no side stripe on anything. */
+@layer pages {
+  .hqdata-calendar-link {
+    display: grid;
+    gap: 10px;
+    max-width: 760px;
+  }
+
+  .hqdata-calendar-link__line {
+    margin: 0;
+    font-size: var(--fs-body);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-calendar-link__acts,
+  .hqdata-calendar-made__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .hqdata-calendar-link__off {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .hqdata-calendar-link__off .form-actions {
+    margin: 0;
+  }
+
+  .hqdata-calendar-made {
+    display: grid;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    background: var(--panel-soft);
+  }
+
+  .hqdata-calendar-made .form-sent {
+    margin: 0;
+  }
+
+  .hqdata-calendar-made__link {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .hqdata-calendar-steps {
+    margin: 0 0 10px;
+    padding-left: 20px;
+    display: grid;
+    gap: 6px;
+    font-size: var(--fs-body);
+    line-height: 1.55;
+    max-width: 760px;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-calendar-link,
+    .hqdata-calendar-steps {
+      max-width: none;
+    }
+  }
+
+  @media print {
+    .hqdata-calendar-link__acts,
+    .hqdata-calendar-made,
+    .hqdata-calendar .form-actions {
+      display: none;
+    }
+  }
+}

@@ -107,7 +107,9 @@ export type Effect =
   | { kind: "stop_failed"; email: string }
   | { kind: "follow_up"; follow_up_id: string }
   | { kind: "lead_added"; lead_id: string; email: string }
-  | { kind: "investor_stage"; investor_id: string; from: string; to: string };
+  | { kind: "investor_stage"; investor_id: string; from: string; to: string }
+  /** The rest of the replier's firm, put on the stop list while he answers (raise spec §7.2). */
+  | { kind: "firm_held"; hold_id: string; domain: string; held: number };
 
 export type Reply = {
   kind: "reply";
@@ -147,6 +149,8 @@ export type ReplyRow = Reply & {
     undone: Effect[];
     kept: { effect: Effect; why: string }[];
   } | null;
+  /** The firm hold this reply made: how many it held, and how many it still holds. */
+  firm_hold: { hold_id: string; domain: string; held: number; open: number } | null;
 };
 
 export type FollowUp = {
