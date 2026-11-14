@@ -62,7 +62,7 @@ export default async function PortalLayout({ children }: Readonly<{ children: Re
         }}
         // Plus the made-up `local:data` where the local service is set up, so the rail
         // shows the Data group only on the one computer that has it.
-        capabilities={withDataNav(me.capabilities)}
+        capabilities={withDataNav(me.capabilities, me.role)}
         elevation={
           me.elevation
             ? {

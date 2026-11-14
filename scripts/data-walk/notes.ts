@@ -188,12 +188,13 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
     .catch(() => [] as string[]);
   const at = (href: string) => rail.indexOf(href);
   kit.check(
-    "notes N10: the rail shows Notes, Contacts and Decisions between Investors and Key dates",
+    "notes N10: the rail shows Notes, Contacts and Decisions between Investors and Company, and Key dates after them",
     at("/data/investors") >= 0 &&
       at("/data/notes") === at("/data/investors") + 1 &&
       at("/data/contacts") === at("/data/notes") + 1 &&
       at("/data/decisions") === at("/data/contacts") + 1 &&
-      at("/data/dates") === at("/data/decisions") + 1,
+      at("/data/company") === at("/data/decisions") + 1 &&
+      at("/data/dates") > at("/data/company"),
     rail.filter((href) => href.startsWith("/data")).join(" "),
   );
 

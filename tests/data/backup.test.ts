@@ -197,6 +197,80 @@ describe("the backup zip (B1, B2)", () => {
     expect(readme).not.toMatch(/demo/i);
   });
 
+  it("holds the people ledger only when the Owner makes it (company spec §8.6)", async () => {
+    const added = await stack.ask("POST", "/data/people", {
+      name: "Walk Backup Intern",
+      email: "backup@walkintern.example",
+      kind: "intern",
+      starts_on: "2026-12-01",
+      ends_on: "2027-02-28",
+      stipend: { amount: 17345, currency: "INR", pays_on: 7 },
+      // With an attempt, as the portal sends it: its answer must not reach Data's own replay log.
+      attempt: crypto.randomUUID(),
+      by: WALKER,
+    });
+    expect(added.status).toBe(200);
+    // A signed copy, which the ledger keeps itself (never in Files).
+    const LETTER = "%PDF-1.4\n% Invented quokka internship letter\n";
+    const personId = String((added.json!.person as Body).person_id);
+    const withCopy = await stack.ask("POST", `/data/people/${personId}/documents`, {
+      kind: "internship",
+      title: "Quokka internship letter",
+      content: Buffer.from(LETTER).toString("base64"),
+      name: "quokka-letter.pdf",
+      by: WALKER,
+    });
+    expect(withCopy.status).toBe(200);
+    const copyFile = String(
+      (((withCopy.json!.person as Body).documents as Body[])[0]!.copy as Body).file,
+    );
+    const made = async (people: boolean): Promise<string> => {
+      const started = await stack.ask("POST", "/data/builds", {
+        kind: "backup",
+        people,
+        by: WALKER,
+      });
+      const buildId = String((started.json!.build as Body).build_id);
+      await until(
+        async () =>
+          ((await stack.ask("GET", `/data/builds/${buildId}`)).json!.build as Body).state ===
+          "ready",
+        "the backup",
+      );
+      const file = await stack.raw(stack.socket, "GET", `/data/builds/${buildId}/bytes`);
+      const path = join(out, `people-${String(people)}-${buildId}.zip`);
+      writeFileSync(path, file.bytes);
+      return path;
+    };
+    const owners = await made(true);
+    const readme = entry(owners, "README.txt").toString();
+    expect(entries(owners)).toContain("data/people/people.json");
+    expect(entry(owners, `data/people/files/${copyFile}`).toString()).toBe(LETTER);
+    expect(entries(owners).some((name) => name.startsWith("files/") && /quokka/i.test(name))).toBe(
+      false,
+    );
+    expect(readme).toContain(
+      "- data/people/: the people ledger. The Owner made this backup: keep it as private as this Mac.",
+    );
+    const others = await made(false);
+    const names = entries(others);
+    expect(names.some((name) => name.startsWith("data/people/"))).toBe(false);
+    for (const name of names) {
+      const bytes = entry(others, name);
+      expect(
+        bytes.includes("Walk Backup Intern") ||
+          bytes.includes('"amount":17345') ||
+          bytes.includes("quokka"),
+        name,
+      ).toBe(false);
+    }
+    const said = entry(others, "README.txt").toString();
+    expect(said).toContain(
+      "- data/people/ is left out: only a backup the Owner makes holds the people ledger.",
+    );
+    expect(said).not.toContain("keep it as private as this Mac");
+  });
+
   it("is refused when the disk would have under 5 GB free after it", async () => {
     await stack.ask("POST", "/data/_test/backup/free-bytes", {
       bytes: 5 * 1024 ** 3 + 100,

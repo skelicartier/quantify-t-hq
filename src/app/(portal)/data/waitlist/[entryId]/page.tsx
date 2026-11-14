@@ -2,7 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DataUnavailable } from "@/components/data/data-down";
+import { EntryDiligenceSections } from "@/components/data/diligence/entry-diligence-sections";
 import { NotesSection } from "@/components/data/notes/notes-section";
+import { EntryPilotSection } from "@/components/data/pilots/entry-pilot-section";
 import { Colleagues } from "@/components/data/waitlist/colleagues";
 import { HoldPreview } from "@/components/data/waitlist/hold-preview";
 import { StageForm } from "@/components/data/waitlist/stage-form";
@@ -161,6 +163,19 @@ function Entry({
         }
       />
       <RecordGrid side={<Side detail={detail} />}>
+        {/* C4's three (company spec §9.7.5), directly above Notes. */}
+        <EntryPilotSection
+          entry={{
+            entry_id: entry.entry_id,
+            firm: entry.firm,
+            stage: entry.stage,
+            pilot: entry.pilot,
+          }}
+        />
+        <EntryDiligenceSections
+          entry={{ entry_id: entry.entry_id, firm: entry.firm }}
+          today={today}
+        />
         {/* Notes are written here now (raise spec §6.6.7); older notes stay in Activity. */}
         <NotesSection
           subject={{ kind: "waitlist", id: entry.entry_id, name: entry.firm }}

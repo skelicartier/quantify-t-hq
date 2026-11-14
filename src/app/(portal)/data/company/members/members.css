@@ -1,0 +1,77 @@
+/* Company › Members: the register, the certificates and the holdings it adds up, and their
+   forms. Tokens only; radius 0; no side stripe on anything; phone rules at 720px. Prefixed
+   hqdata-. Printed, the register is its data without the controls. */
+@layer pages {
+  .hqdata-members {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-members > * {
+    min-width: 0;
+  }
+
+  .hqdata-members-form__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-members__holds {
+    display: block;
+  }
+
+  /* A reversed entry or a cancelled certificate: kept, struck through and muted. */
+  .hqdata-members__row--reversed td {
+    color: var(--muted);
+  }
+
+  .hqdata-members__row--reversed td:not(:last-child):not(:nth-last-child(2)) {
+    text-decoration: line-through;
+  }
+
+  .hqdata-attention {
+    color: var(--attention);
+  }
+
+  .hqdata-members__totals {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-copy {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-copy legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-members-form__pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+}
+
+@media print {
+  /* The Change columns hold only controls: on paper they are left out. */
+  #table-entries th:last-child,
+  #table-entries td:last-child,
+  #table-share-certificates th:last-child,
+  #table-share-certificates td:last-child {
+    display: none;
+  }
+}

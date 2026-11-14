@@ -7,6 +7,7 @@ import { LeadBadges, LeadStatus } from "@/components/data/leads/lead-status";
 import { FollowUpActions } from "@/components/data/replies/follow-up-actions";
 import { ReplyForm } from "@/components/data/replies/reply-form";
 import { TakeBack, effectWords, undoneWords } from "@/components/data/replies/take-back";
+import { TouchesSection } from "@/components/data/touches/touches-section";
 import { MailForm } from "@/components/mail/mail-form";
 import { LiveRefresh } from "@/components/shell/live-refresh";
 import { PageHeader } from "@/components/shell/page-header";
@@ -397,6 +398,12 @@ function Lead({
           )}
         </RecordSection>
 
+        <TouchesSection
+          subject={{ kind: "lead", id: lead.lead_id, name: lead.name || lead.email }}
+          now={now}
+          today={today}
+          path={`/data/leads/${lead.lead_id}`}
+        />
         <RecordSection id="lead-sent" title="What was sent">
           {lead.sent.length === 0 ? (
             <p className="page-note">

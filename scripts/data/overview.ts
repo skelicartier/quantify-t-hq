@@ -52,13 +52,13 @@ export function overviewOf(input: {
 }
 
 export function registerOverview(core: DataCore): void {
-  core.route("GET", "/data/overview", async () => {
+  core.route("GET", "/data/overview", async (ctx) => {
     core.sender.poll();
     return overviewOf({
       today: core.day(),
       written: core.sender.written(),
       sending: core.sender.sending(),
-      due: await core.dueItems(),
+      due: await core.dueItems({ owner: ctx.query.get("owner") === "1" }),
       parts: await core.overviewParts(),
     });
   });

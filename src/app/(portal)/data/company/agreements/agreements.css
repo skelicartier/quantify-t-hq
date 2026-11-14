@@ -1,0 +1,150 @@
+/* Company › Agreements and one agreement: "What is missing", the register, the forms and the
+   terms. Tokens only; radius 0; no side stripe on anything; phone rules at 720px. Prefixed
+   hqdata-. Printed, each page is its data without the controls, sources' addresses after
+   their links. */
+@layer pages {
+  .hqdata-agreements {
+    display: grid;
+    gap: 20px;
+    min-width: 0;
+  }
+
+  .hqdata-agreements > *,
+  .hqdata-agreements__missing,
+  .hqdata-agreements__list {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hqdata-agreements__missing > *,
+  .hqdata-agreements__list > * {
+    min-width: 0;
+  }
+
+  .hqdata-agreements__heading {
+    margin: 0;
+    font-size: var(--fs-section, 1rem);
+    font-weight: 600;
+  }
+
+  .hqdata-agreements__why {
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-agreements-tools {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .hqdata-agreements-tools > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hqdata-agreement-form__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-agreement-form__three {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-parties,
+  .hqdata-copy,
+  .hqdata-radios {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-parties legend,
+  .hqdata-copy legend,
+  .hqdata-radios legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-party {
+    display: grid;
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-parties__more > summary {
+    cursor: pointer;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-parties__more[open] > summary {
+    margin-bottom: 8px;
+  }
+
+  .hqdata-radios__item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-attention {
+    color: var(--attention);
+  }
+
+  /* One agreement's terms, every field in words. */
+  .hqdata-terms {
+    display: grid;
+    grid-template-columns: minmax(10rem, max-content) minmax(0, 1fr);
+    gap: 6px 16px;
+    margin: 0;
+  }
+
+  .hqdata-terms dt {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-terms dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-terms__line {
+    display: block;
+  }
+
+  .hqdata-terms__notes {
+    white-space: pre-wrap;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-agreement-form__pair,
+    .hqdata-agreement-form__three,
+    .hqdata-terms {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-terms dd {
+      margin-bottom: 6px;
+    }
+  }
+}
+
+@media print {
+  .hqdata-agreements-tools form {
+    display: none;
+  }
+}

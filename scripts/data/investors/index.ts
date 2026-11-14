@@ -57,6 +57,7 @@ import { funnelOf, type FunnelFirm } from "./funnel";
 import { investorInterceptor } from "./interceptor";
 import { MAX_WAVE_FIRMS, OFFER_DUE_DAYS, WAVE_LIMIT, roundOf } from "./raise";
 import { RoundBook } from "./round";
+import { INVESTORS_CLOSE, type InvestorsClose } from "../closing/seams";
 import { NO_NEXT_STEP, type Investor, type InvestorStage } from "./types";
 
 const PAGE = 100;
@@ -272,6 +273,33 @@ export async function register(core: DataCore): Promise<void> {
     name: (investorId) => book.get(investorId)?.firm ?? null,
   };
   core.provide(RAISE_SERVICES.investorsRaise, raise);
+
+  // What the closing reads of a firm and of the round (company spec §9.2): C4-internal.
+  const close: InvestorsClose = {
+    firm: (investorId) => {
+      const investor = book.get(investorId);
+      if (!investor) return null;
+      const latest = latestAmount(investor);
+      const contact = contactOf(investor);
+      return {
+        investor_id: investor.investor_id,
+        firm: investor.firm,
+        stage: investor.stage,
+        residency: investor.profile?.residency ?? "",
+        latest: latest
+          ? {
+              state: latest.state,
+              amount: latest.amount,
+              currency: latest.currency,
+              instrument: latest.instrument,
+            }
+          : null,
+        contact: contact ? { email: contact.email, name: contact.name } : null,
+      };
+    },
+    roundInstrument: () => rounds.round?.instrument ?? null,
+  };
+  core.provide(INVESTORS_CLOSE, close);
 
   core.provideOverview("raise", () => {
     const summary = funnel();

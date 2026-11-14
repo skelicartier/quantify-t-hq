@@ -12,6 +12,7 @@ import {
   FileSignature,
   FileText,
   FolderOpen,
+  Gavel,
   HandCoins,
   Handshake,
   Inbox,
@@ -27,6 +28,7 @@ import {
   SquareUser,
   StickyNote,
   Sun,
+  UsersRound,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -70,6 +72,9 @@ const KIND_ICON: Record<SearchHit["kind"], typeof Search> = {
   data_faq: CircleHelp,
   data_decision: Milestone,
   data_contact: SquareUser,
+  data_meeting: Gavel,
+  data_agreement: FileSignature,
+  data_member: UsersRound,
 };
 
 const KIND_LABEL: Record<SearchHit["kind"], string> = {
@@ -92,6 +97,9 @@ const KIND_LABEL: Record<SearchHit["kind"], string> = {
   data_faq: "Investor FAQ",
   data_decision: "Decisions",
   data_contact: "Contacts",
+  data_meeting: "Meetings",
+  data_agreement: "Agreements",
+  data_member: "Members",
 };
 
 /**

@@ -37,6 +37,7 @@ export const NEVER_IN_BACKUP = new Set(["provider.key", "provider-status.json", 
 
 /** Data's folders that are not records: the bytes (zipped from Files), the uploads, the read text. */
 const DATA_SKIP = new Set(["tmp", "files/blobs", "files/uploads", "files/text"]);
+const DATA_SKIP_PEOPLE = new Set([...DATA_SKIP, "people"]);
 
 type Entry =
   | { name: string; kind: "blob"; path: string; bytes: number; sha256: string }
@@ -65,7 +66,12 @@ function fileSize(path: string): number | null {
   }
 }
 
-function walkRecords(root: string, at: string, out: string[]): void {
+function walkRecords(
+  root: string,
+  at: string,
+  out: string[],
+  skip: ReadonlySet<string> = DATA_SKIP,
+): void {
   let names: string[];
   try {
     names = readdirSync(join(root, at));
@@ -74,7 +80,7 @@ function walkRecords(root: string, at: string, out: string[]): void {
   }
   for (const name of names.sort()) {
     const rel = at ? `${at}/${name}` : name;
-    if (DATA_SKIP.has(rel)) continue;
+    if (skip.has(rel)) continue;
     const path = join(root, rel);
     let stat;
     try {
@@ -82,13 +88,13 @@ function walkRecords(root: string, at: string, out: string[]): void {
     } catch {
       continue;
     }
-    if (stat.isDirectory()) walkRecords(root, rel, out);
+    if (stat.isDirectory()) walkRecords(root, rel, out, skip);
     else if (stat.isFile() && (name.endsWith(".json") || name.endsWith(".jsonl"))) out.push(rel);
   }
 }
 
 /** What goes in, in order, with sizes: the plan the free-space check and the zip both use. */
-export function planBackup(core: DataCore): Entry[] {
+export function planBackup(core: DataCore, options: { people?: boolean } = {}): Entry[] {
   const entries: Entry[] = [];
   const taken = new Set<string>();
   const claim = (name: string): string => {
@@ -128,12 +134,33 @@ export function planBackup(core: DataCore): Entry[] {
 
   // Data's own records.
   const records: string[] = [];
-  walkRecords(core.store.root, "", records);
+  walkRecords(core.store.root, "", records, options.people === true ? DATA_SKIP : DATA_SKIP_PEOPLE);
   for (const rel of records) {
     const path = join(core.store.root, rel);
     const bytes = fileSize(path);
     if (bytes !== null)
       entries.push({ name: claim(zipEntryName("data", rel)), kind: "record", path, bytes });
+  }
+  // The people ledger's signed copies (never in Files): only in a backup the Owner makes.
+  if (options.people === true) {
+    let copies: string[] = [];
+    try {
+      copies = readdirSync(join(core.store.root, "people", "files")).sort();
+    } catch {
+      copies = [];
+    }
+    for (const name of copies) {
+      if (name.endsWith(".writing")) continue;
+      const path = join(core.store.root, "people", "files", name);
+      const bytes = fileSize(path);
+      if (bytes !== null)
+        entries.push({
+          name: claim(zipEntryName("data", "people", "files", name)),
+          kind: "record",
+          path,
+          bytes,
+        });
+    }
   }
 
   // Mail merge's files: an allow-list, never the key.
@@ -168,7 +195,7 @@ export async function makeBackup(
   freeBytes: () => number,
 ): Promise<{ name: string; type: string }> {
   core.sender.poll();
-  const entries = planBackup(core);
+  const entries = planBackup(core, { people: input.body.people === true });
   if (entries.length + 2 > ZIP_MAX_ENTRIES)
     throw new Refused(
       400,
@@ -213,6 +240,9 @@ export async function makeBackup(
         "- files/_trash/: files in the trash, in the folder they came from.",
         "- data/: Data's own records (folders, leads, replies, waitlist, investors and the round, key dates, notes, decisions and contacts, the calendar link's checksum, numbers and monthly updates, data-room packs).",
         "- mail-merge/: Mail merge's lists, mailings, written log, stop list, settings and tests log.",
+        input.body.people === true
+          ? "- data/people/: the people ledger. The Owner made this backup: keep it as private as this Mac."
+          : "- data/people/ is left out: only a backup the Owner makes holds the people ledger.",
         "- manifest-sha256.txt: the SHA-256 of every file here, to check none changed.",
         "",
         "Mail merge's provider key is never in a backup: set it again in Mail merge's Setup.",

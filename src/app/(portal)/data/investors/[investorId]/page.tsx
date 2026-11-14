@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DueChip } from "@/components/crm/pills";
+import { ClosingSectionView } from "@/components/data/closing/closing-section-view";
 import { DataUnavailable } from "@/components/data/data-down";
 import { IntroForm, QualifyForm, RaiseProperties } from "@/components/data/investors/firm-raise";
 import { StageForm } from "@/components/data/investors/stage-form";
@@ -9,6 +10,7 @@ import { InvestorStagePill, amountWords } from "@/components/data/investors/stag
 import { TOUCH_WORDS } from "@/components/data/investors/words";
 import { LeadStatus } from "@/components/data/leads/lead-status";
 import { NotesSection } from "@/components/data/notes/notes-section";
+import { TouchesSection } from "@/components/data/touches/touches-section";
 import { MailForm } from "@/components/mail/mail-form";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
@@ -27,6 +29,7 @@ import {
 import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { DATA_ROLE_LINE, requireData } from "@/lib/data/access";
+import { readClosing, type ClosingPage } from "@/lib/data/api/closing";
 import { readInvestor, type InvestorDetail } from "@/lib/data/api/investors";
 import {
   AMOUNT_STATES,
@@ -40,10 +43,11 @@ import {
   labelOf,
   toneOf,
 } from "@/lib/data/labels";
-import { dataRead } from "@/lib/data/read";
+import { dataRead, type DataRead } from "@/lib/data/read";
 import { formatDate, formatMoney, formatNumber } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 
+import "@/components/data/closing/closing.css";
 import "../../leads/leads.css";
 import "../../replies/replies.css";
 import {
@@ -53,6 +57,14 @@ import {
   recordAmountAction,
   updateInvestorAction,
 } from "../actions";
+import {
+  addClosingDatesAction,
+  addRefundDateAction,
+  clearClosingStepAction,
+  closingStepAction,
+  closingTermsAction,
+  startClosingAction,
+} from "../closing/actions";
 import "../investors.css";
 
 export const metadata = { title: "Investor" };
@@ -92,6 +104,7 @@ export default async function InvestorPage({
   if (!INVESTOR_ID.test(investorId)) notFound();
   const now = requestNow();
   const read = allowed ? await dataRead(() => readInvestor(investorId)) : null;
+  const closing = read?.ok ? await dataRead(() => readClosing(investorId)) : null;
   if (!allowed || !read || !read.ok)
     return (
       <>
@@ -105,7 +118,7 @@ export default async function InvestorPage({
         </div>
       </>
     );
-  return <Investor detail={read.data} now={now} />;
+  return <Investor detail={read.data} closing={closing} now={now} />;
 }
 
 function stepWords(step: string, on: string | null): string {
@@ -127,7 +140,15 @@ function lastTouch(
   return touch;
 }
 
-function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
+function Investor({
+  detail,
+  closing,
+  now,
+}: {
+  detail: InvestorDetail;
+  closing: DataRead<ClosingPage> | null;
+  now: number;
+}) {
   const { investor, today } = detail;
   const base = `/data/investors/${investor.investor_id}`;
   const touch = lastTouch(investor);
@@ -234,7 +255,32 @@ function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
           Not on the chosen investor list now. It stays because something was recorded on it.
         </Callout>
       )}
-      <RecordGrid side={<Side detail={detail} now={now} />}>
+      <RecordGrid
+        side={
+          <Side
+            detail={detail}
+            now={now}
+            guardrails={closing?.ok ? closing.data.guardrails.map((item) => item.short) : []}
+          />
+        }
+      >
+        {/* C4's Closing section (company spec §9.7.7); on a phone it follows Notes. */}
+        {closing && (
+          <div className="hqdata-investor__closing">
+            <ClosingSectionView
+              investorId={investor.investor_id}
+              read={closing}
+              actions={{
+                start: startClosingAction,
+                terms: closingTermsAction,
+                step: closingStepAction,
+                clear: clearClosingStepAction,
+                addDates: addClosingDatesAction,
+                refundDate: addRefundDateAction,
+              }}
+            />
+          </div>
+        )}
         {/* U2's Notes section; on a phone it comes first (investors.css). */}
         <div className="hqdata-investor__notes">
           <NotesSection
@@ -244,6 +290,13 @@ function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
             path={base}
           />
         </div>
+        {/* C3's Touches section (company spec §3.4, §9.7.7). */}
+        <TouchesSection
+          subject={{ kind: "investor", id: investor.investor_id, name: investor.firm }}
+          now={now}
+          today={today}
+          path={base}
+        />
         <RecordSection id="investor-activity" title="Activity">
           {detail.events.length === 0 ? (
             <p className="timeline-empty">Nothing has happened yet.</p>
@@ -419,7 +472,15 @@ function Investor({ detail, now }: { detail: InvestorDetail; now: number }) {
   );
 }
 
-function Side({ detail, now }: { detail: InvestorDetail; now: number }) {
+function Side({
+  detail,
+  now,
+  guardrails,
+}: {
+  detail: InvestorDetail;
+  now: number;
+  guardrails: readonly string[];
+}) {
   const { investor, today } = detail;
   const inline = { action: updateInvestorAction, idName: "investor_id", id: investor.investor_id };
   const amounts = [...investor.amounts].sort(
@@ -554,6 +615,13 @@ function Side({ detail, now }: { detail: InvestorDetail; now: number }) {
           ))
         )}
       </Properties>
+      {guardrails.length > 0 && (
+        <ul className="hqdata-guardrail-words" aria-label="Warnings on the close">
+          {guardrails.map((words) => (
+            <li key={words}>{words}</li>
+          ))}
+        </ul>
+      )}
       <p className="side-quiet">
         Each amount stays in its own currency; nothing is added across currencies.
       </p>

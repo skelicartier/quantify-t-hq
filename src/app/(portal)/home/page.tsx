@@ -62,7 +62,9 @@ type OwedRow = {
     | "Follow-up"
     | "Waitlist"
     | "Investor"
-    | "Action";
+    | "Action"
+    | "Pilot"
+    | "People";
   href: string;
   title: string;
   sub: string;
@@ -89,7 +91,7 @@ export default async function HomePage() {
         throw error;
       return null;
     }),
-    readDataHome(hasCapability(context, "mail:send")),
+    readDataHome(hasCapability(context, "mail:send"), context.me.role === "owner"),
   ]);
 
   const owed: OwedRow[] = [];

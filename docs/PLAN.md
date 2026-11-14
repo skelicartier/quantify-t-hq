@@ -418,6 +418,49 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
+**As of the company batch: the company record, Key dates from its facts, meetings and minutes,
+the register of members, agreements, the Owner-only people ledger, touches, pilots, diligence and
+the closing checklist** (2026-11-14). Portal and the local sender; no service change, no migration.
+Waves 3–5 of the 2026-11-13 research (report outside the repo:
+`~/Documents/evm/reports/HQ portal gaps and build plan.md`). Spec: `ws-notes/company/spec.md`
+(§14 Step 0 as built, §15 the lead's decisions) in `~/Library/Caches/hq-work`.
+
+- **What it adds.** Data › Company record (rail "Company record", icon Stamp, so it never reads as
+  System › Company, which runs on the demo service): facts (CIN, PAN, TAN, GSTIN, state,
+  incorporation, first year end, auditor, AD bank, FIRMS user, DPIIT; flags) and directors (DIN,
+  DSC expiry, DIR-3 KYC cycle, contact changes); views Meetings (notice and quorum checks,
+  resolutions with an MGT-14 flag, SS-1 timers on minutes, minutes locked once signed), Members
+  (register of members with a certificate log; a cap-table view read from the register, never a
+  model; built as its own module so it can be dropped) and Agreements (parties, term, renewal and
+  notice-by days into Due, the "what is missing" check). Key dates gains fact-driven suggestions
+  (first AGM, AOC-4, MGT-7A, ADT-1, INC-20A, the board-gap rule, DSC and DIR-3 KYC), evidence per
+  date (status, owner, SRN or challan, filed copy, fee), a professional's sign-off for "not for us",
+  and a Rules view where every rule shows its source, checked-on day and "confirm with your CA/CS";
+  his own days replace the rule's everywhere. Data › People ledger (rail "People ledger", Owner
+  only, capability `local:data:owner`): engagement terms, project brief, evaluations gating the
+  certificate, stipends paid (a record, never payroll; tax "CA to confirm"), access with 24-hour and
+  5-day offboarding deadlines; its letters and certificates are kept inside the ledger
+  (`data/people/files/`, an Owner-only download), never in Files, search, the calendar feed or an
+  Admin's backup. Touches logged by hand on leads and investors. Waitlist › Pilots (criteria, owners,
+  term, price, conversion, go/no-go, weekly check-ins; the active count is a sentence, never a
+  limit) and Diligence (questionnaires, security reviews, references, redlines, Labs trials).
+  Investors › Closing: a per-firm checklist that adds its dated deadlines to Key dates (allotment
+  60 days, refund 15 after, PAS-3, register, certificates, MGT-14, valuation age, FIRMS, FC-GPR,
+  FLA), every statutory day editable and "confirm with your CS" until ticked; the only refusal is
+  an allotment dated before the money. Modules now 21.
+- **Verified on a copy** (`hq-co`, next 3120, mocks 7089/7090): vitest 131 files / 1,113 tests;
+  `check:data` 1,478 / 0 over four passes (merged checks M1–M9 included); harness data 208 and find
+  44, clean; `check:mail-merge` 65 unchanged. Built by four units on `hq-co-u1..u4` over a shared
+  Step 0 (`scripts/data/company-contracts.ts`), merged by `git apply --3way`;
+  `tests/data/company-merged.test.ts` and `scripts/data-walk/company-merged.ts` prove the seams.
+- **Shipped** to the live clone on 2026-11-14 with a rollback in
+  `~/Library/Caches/hq-work/ship-backup-20261114-company/`; 21 modules loaded on his real data; an
+  Admin sees "The people ledger is for the Owner only." and no People link.
+- **Waiting on him and his CA or CS** (spec §13): every statutory reading in the Rules view; PAS-3
+  at 15 or 30 days; MGT-14 for private-company board resolutions; whether HQ keeps the register of
+  members at all (drop the `members` module if not); Indian company or a US parent; stipend tax and
+  whether paid interns are employees; J&K Professional Tax, Shops & Establishments, stamp duty.
+
 **As of the raise batch: investors qualified, notes, contacts, decisions, numbers, packs, the
 calendar feed and search over Data** (2026-11-14). Portal and the local sender; no service
 change, no migration. From the research pass of 2026-11-13 (report outside the repo:

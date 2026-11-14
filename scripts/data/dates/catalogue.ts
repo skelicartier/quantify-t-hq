@@ -1,24 +1,51 @@
 /**
  * Dates suggested for an Indian private company (spec §3.4.8, research-founder-hq §4.2 and
- * §4.3), each a rule kept as data with the day it was last checked. They are suggestions:
- * nothing is added until he presses "Add it", nothing alarms for a date he did not add,
- * and every row says to check it with the CA, because five of these rules changed in the
- * last twelve months and the entity question was still open.
+ * §4.3; company spec §6.5), each a rule kept as data with its sources and the day it was
+ * last checked. They are suggestions: nothing is added until he presses "Add it", nothing
+ * alarms for a date he did not add, and every row says to check it with the CA or CS.
  *
- * `next(today, facts)` is the next due date on or after today; the AGM-based ones need the
- * day the AGM was held and answer null without it, and the renewals are dates he types
- * (null). Calendar dates are strings and are never shifted into a zone.
+ * `next(today, facts)` is the next due date on or after today. The items behind a clock
+ * in the rule book (`rule_key`) learn the company record's facts: the AGM becomes the
+ * first AGM until one is held, the AGM-based filings count from the last AGM, the board
+ * rows learn the last board meeting, INC-20A counts from incorporation. With no facts
+ * every item answers as it always did. `hidden(facts)` gives the reason a row is not
+ * shown for this company, or null. Calendar dates are strings, never shifted into a zone.
  */
 
+import {
+  addMonths,
+  fyEndOf,
+  ruleOf,
+  type ConfirmWith,
+  type Flag,
+  type RuleKey,
+} from "../company-contracts";
 import { addDays } from "../days";
 import type { DateKind, Repeats } from "../../../src/lib/data/labels";
+import { dayWords } from "../../../src/lib/data/labels-company";
 
-/** The day every rule here was last checked against its source. */
+/** The day every calendar rule here was last checked against its source. */
 export const CHECKED_ON = "2026-11-10";
 
-export type Facts = { agm_on: string | null };
+export type Facts = {
+  /** The last AGM held: from Meetings when it has one, else the day typed on Key dates. */
+  agm_on: string | null;
+  incorporated_on?: string | null;
+  first_fy_end?: string | null;
+  small?: Flag;
+  startup?: Flag;
+  gst_registered?: Flag;
+  exports?: Flag;
+  last_board_on?: string | null;
+  /** His amounts from the rule book. */
+  amounts?: Partial<Record<RuleKey, number>>;
+  /** Any director in office is recorded on the company record. */
+  directors?: number;
+};
 
 export type Group = "monthly" | "quarterly" | "yearly" | "renewal";
+
+export type Source = { name: string; url: string };
 
 export type CatalogueItem = {
   /** In a URL: letters, digits and hyphens only. */
@@ -36,7 +63,33 @@ export type CatalogueItem = {
   /** A date he types (a renewal): there is nothing to work out. */
   typed: boolean;
   remind_days: 0 | 2 | 7 | 14;
+  /** The clock in the rule book this row follows, or null for a calendar date or a renewal. */
+  rule_key: RuleKey | null;
+  sources: readonly Source[];
+  verified_on: string;
+  /** Null for a renewal: a day he types, nobody to confirm it with. */
+  confirm_with: ConfirmWith | null;
+  /** What the sources disagree on, or "". */
+  note: string;
   next(today: string, facts: Facts): string | null;
+  /** Why the row is not shown for this company, or null. */
+  hidden(facts: Facts): string | null;
+};
+
+/** How one row reads today, with the facts: what the suggestion list shows. */
+export type Worked = {
+  title: string;
+  rule: string;
+  rule_key: RuleKey | null;
+  next: string | null;
+  /** "Not before 31 Jan 2027": the earliest day, when the rule sets one inside the period. */
+  earliest: string | null;
+  /** Where its day came from, in words, or null when it is not worked out from a fact. */
+  from_fact: string | null;
+  /** What is missing to work it out, or null. */
+  needs: string | null;
+  /** The day the rule counts from, when its date is that day plus the rule's amount. */
+  base_on: string | null;
 };
 
 const pad = (value: number): string => String(value).padStart(2, "0");
@@ -81,12 +134,116 @@ const fixed =
   (today: string): string | null =>
     firstFrom(today, everyYear(today, monthDays));
 
+/** His amount for a rule, or the rule's own. */
+export function amountIn(facts: Facts, key: RuleKey): number {
+  return facts.amounts?.[key] ?? ruleOf(key).amount ?? 0;
+}
+
 const afterAgm =
-  (days: number) =>
+  (key: RuleKey) =>
   (_today: string, facts: Facts): string | null =>
-    facts.agm_on ? addDays(facts.agm_on, days) : null;
+    facts.agm_on ? addDays(facts.agm_on, amountIn(facts, key)) : null;
 
 const typed = (): string | null => null;
+const shown = (): string | null => null;
+
+const otherCompany = (facts: Facts): boolean => facts.small === "no" && facts.startup === "no";
+
+/** The next AGM after the last one held on L: 6 months after L's financial year, or 15 months after L, whichever is earlier. */
+export function nextAgm(last: string, facts: Facts): string {
+  const byYear = addMonths(fyEndOf(last), amountIn(facts, "agm"));
+  const byGap = addMonths(last, amountIn(facts, "agm-gap"));
+  return byYear < byGap ? byYear : byGap;
+}
+
+/** The first AGM: 9 months (his amount) after the end of the first financial year. */
+export function firstAgm(firstFyEnd: string, facts: Facts): string {
+  return addMonths(firstFyEnd, amountIn(facts, "first-agm"));
+}
+
+/** A half of the calendar year: its first and last day, for the year given. */
+function half(which: "first" | "second", year: number): { from: string; to: string } {
+  return which === "first"
+    ? { from: `${year}-01-01`, to: `${year}-06-30` }
+    : { from: `${year}-07-01`, to: `${year}-12-31` };
+}
+
+/**
+ * The half-year board row (company spec §5.2): the end of its half on or after today; a
+ * board meeting already held in that half moves it to the same half next year.
+ */
+export function boardHalf(which: "first" | "second", today: string, facts: Facts): string {
+  const year = Number(today.slice(0, 4));
+  let span = half(which, year);
+  if (span.to < today) span = half(which, year + 1);
+  const last = facts.last_board_on ?? null;
+  if (last && last >= span.from && last <= span.to)
+    span = half(which, Number(span.to.slice(0, 4)) + 1);
+  return span.to;
+}
+
+/** "Not before {last + 90}" when that day falls inside the half the row is due in. */
+export function boardEarliest(
+  which: "first" | "second",
+  today: string,
+  facts: Facts,
+): string | null {
+  const last = facts.last_board_on ?? null;
+  if (!last) return null;
+  const due = boardHalf(which, today, facts);
+  const span = half(which, Number(due.slice(0, 4)));
+  const earliest = addDays(last, amountIn(facts, "board-gap-small"));
+  return earliest >= span.from && earliest <= span.to ? earliest : null;
+}
+
+const GST: readonly Source[] = [
+  {
+    name: "Treelife: GST for startups",
+    url: "https://treelife.in/compliance/gst-compliance-for-startups/",
+  },
+];
+const ROC: readonly Source[] = [
+  {
+    name: "LegalWiz: ROC calendar FY 2026-27",
+    url: "https://www.legalwiz.in/blog/roc-compliance-calendar-for-fy-2026-2027",
+  },
+];
+const TDS: readonly Source[] = [
+  {
+    name: "India Briefing: tax deadlines",
+    url: "https://www.india-briefing.com/news/india-tax-compliance-deadlines-april-may-2026-43913.html",
+  },
+];
+
+const fromRule = (key: RuleKey) => {
+  const rule = ruleOf(key);
+  return {
+    rule_key: key,
+    sources: rule.sources,
+    verified_on: rule.verified_on,
+    confirm_with: rule.confirm_with,
+    note: rule.note,
+  };
+};
+
+const calendar = (sources: readonly Source[], confirm: ConfirmWith, note = "") => ({
+  rule_key: null,
+  sources,
+  verified_on: CHECKED_ON,
+  confirm_with: confirm,
+  note,
+});
+
+const renewal = {
+  rule_key: null,
+  sources: [],
+  verified_on: CHECKED_ON,
+  confirm_with: null,
+  note: "",
+};
+
+const noGst = (facts: Facts): string | null =>
+  facts.gst_registered === "no" ? "Registered for GST is No." : null;
 
 export const CATALOGUE: readonly CatalogueItem[] = [
   // ---------------------------------------------------------------- monthly
@@ -101,6 +258,7 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 7,
+    ...calendar(TDS, "CA"),
     next: (today) =>
       firstFrom(
         today,
@@ -108,6 +266,7 @@ export const CATALOGUE: readonly CatalogueItem[] = [
           month === 4 ? `${year}-04-30` : `${year}-${pad(month)}-07`,
         ),
       ),
+    hidden: shown,
   },
   {
     key: "gstr-1",
@@ -120,7 +279,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 7,
+    ...calendar(GST, "CA"),
     next: (today) => firstFrom(today, everyMonth(today, monthDay(11))),
+    hidden: noGst,
   },
   {
     key: "gstr-3b",
@@ -133,7 +294,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 7,
+    ...calendar(GST, "CA"),
     next: (today) => firstFrom(today, everyMonth(today, monthDay(20))),
+    hidden: noGst,
   },
   // ---------------------------------------------------------------- quarterly
   {
@@ -148,7 +311,18 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
+    ...calendar(
+      [
+        {
+          name: "Zoho Books Academy: TDS and TCS",
+          url: "https://www.zoho.com/books/academy/in/taxes-and-compliance/income-tax-act-tds-tcs-updates-india.html",
+        },
+      ],
+      "CA",
+      "Sources differ on the 30th or the 31st.",
+    ),
     next: fixed("01-31", "05-31", "07-31", "10-31"),
+    hidden: shown,
   },
   {
     key: "advance-tax",
@@ -162,7 +336,17 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
+    ...calendar(
+      [
+        {
+          name: "TaxGuru: Income-tax Act 2025",
+          url: "https://taxguru.in/income-tax/income-tax-act-2025-complete-guide-common-taxpayers.html",
+        },
+      ],
+      "CA",
+    ),
     next: fixed("03-15", "06-15", "09-15", "12-15"),
+    hidden: shown,
   },
   {
     key: "gstr-3b-quarterly",
@@ -176,7 +360,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 7,
+    ...calendar(GST, "CA"),
     next: fixed("01-24", "04-24", "07-24", "10-24"),
+    hidden: noGst,
   },
   // ---------------------------------------------------------------- yearly
   {
@@ -190,7 +376,13 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
-    next: fixed("09-30"),
+    ...fromRule("agm"),
+    next: (today, facts) => {
+      if (facts.agm_on) return nextAgm(facts.agm_on, facts);
+      if (facts.first_fy_end) return firstAgm(facts.first_fy_end, facts);
+      return fixed("09-30")(today);
+    },
+    hidden: shown,
   },
   {
     key: "adt-1",
@@ -203,7 +395,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: true,
     typed: false,
     remind_days: 7,
-    next: afterAgm(15),
+    ...fromRule("adt-1"),
+    next: afterAgm("adt-1"),
+    hidden: shown,
   },
   {
     key: "aoc-4",
@@ -216,7 +410,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: true,
     typed: false,
     remind_days: 14,
-    next: afterAgm(30),
+    ...fromRule("aoc-4"),
+    next: afterAgm("aoc-4"),
+    hidden: shown,
   },
   {
     key: "mgt-7a",
@@ -229,7 +425,28 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: true,
     typed: false,
     remind_days: 14,
-    next: afterAgm(60),
+    ...fromRule("mgt-7a"),
+    next: afterAgm("mgt-7a"),
+    hidden: shown,
+  },
+  {
+    key: "inc-20a",
+    title: ruleOf("inc-20a").title,
+    kind: "filing",
+    group: "yearly",
+    rule: "Incorporation + 180 days",
+    applies: "A company with share capital incorporated on or after 2 Nov 2018",
+    repeats: "never",
+    needs_agm: false,
+    typed: false,
+    remind_days: 14,
+    ...fromRule("inc-20a"),
+    next: (_today, facts) =>
+      facts.incorporated_on ? addDays(facts.incorporated_on, amountIn(facts, "inc-20a")) : null,
+    hidden: (facts) =>
+      facts.incorporated_on && facts.incorporated_on < "2018-11-02"
+        ? "Incorporated before 2 Nov 2018, so it does not apply."
+        : null,
   },
   {
     key: "company-itr",
@@ -242,6 +459,16 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
+    ...calendar(
+      [
+        {
+          name: "RegisterKaro: private company compliance",
+          url: "https://www.registerkaro.in/post/pvt-ltd-compliance",
+        },
+      ],
+      "CA",
+      "The 21 Nov 2026 date for this year could not be confirmed: the research gives 31 Oct, or 30 Nov where transfer pricing applies. Ask your CA.",
+    ),
     next: (today) => {
       const year = Number(today.slice(0, 4));
       const days = [year - 1, year, year + 1, year + 2].map((y) =>
@@ -249,6 +476,7 @@ export const CATALOGUE: readonly CatalogueItem[] = [
       );
       return firstFrom(today, days);
     },
+    hidden: shown,
   },
   {
     key: "gstr-9",
@@ -261,7 +489,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
+    ...calendar(GST, "CA"),
     next: fixed("12-31"),
+    hidden: noGst,
   },
   {
     key: "dpt-3",
@@ -274,7 +504,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
+    ...calendar(ROC, "CS"),
     next: fixed("06-30"),
+    hidden: shown,
   },
   {
     key: "msme-1-april",
@@ -287,7 +519,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 7,
+    ...calendar(ROC, "CS"),
     next: fixed("04-30"),
+    hidden: shown,
   },
   {
     key: "msme-1-october",
@@ -300,7 +534,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 7,
+    ...calendar(ROC, "CS"),
     next: fixed("10-31"),
+    hidden: shown,
   },
   {
     key: "dir-3-kyc",
@@ -314,12 +550,15 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
+    ...fromRule("dir-3-kyc"),
     next: (today) => {
       const year = Math.max(2028, Number(today.slice(0, 4)));
       for (let y = year; y <= year + 3; y += 1)
         if ((y - 2028) % 3 === 0 && `${y}-06-30` >= today) return `${y}-06-30`;
       return null;
     },
+    hidden: (facts) =>
+      (facts.directors ?? 0) > 0 ? "Each director has their own row below." : null,
   },
   {
     key: "board-first-half",
@@ -333,7 +572,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
-    next: fixed("06-30"),
+    ...fromRule("board-gap-small"),
+    next: (today, facts) => boardHalf("first", today, facts),
+    hidden: (facts) => (otherCompany(facts) ? "Four board meetings a year apply instead." : null),
   },
   {
     key: "board-second-half",
@@ -347,7 +588,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
-    next: fixed("12-31"),
+    ...fromRule("board-gap-small"),
+    next: (today, facts) => boardHalf("second", today, facts),
+    hidden: (facts) => (otherCompany(facts) ? "Four board meetings a year apply instead." : null),
   },
   {
     key: "lut",
@@ -360,7 +603,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: false,
     remind_days: 14,
+    ...calendar(GST, "CA"),
     next: fixed("03-31"),
+    hidden: (facts) => (facts.exports === "no" ? "Exports services is No." : null),
   },
   // ---------------------------------------------------------------- renewals he types
   {
@@ -374,7 +619,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: true,
     remind_days: 14,
+    ...renewal,
     next: typed,
+    hidden: shown,
   },
   {
     key: "mailbox",
@@ -387,7 +634,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: true,
     remind_days: 14,
+    ...renewal,
     next: typed,
+    hidden: shown,
   },
   {
     key: "mail-plan",
@@ -400,7 +649,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: true,
     remind_days: 14,
+    ...renewal,
     next: typed,
+    hidden: shown,
   },
   {
     key: "developer-programme",
@@ -413,7 +664,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: true,
     remind_days: 14,
+    ...renewal,
     next: typed,
+    hidden: shown,
   },
   {
     key: "code-signing",
@@ -426,7 +679,9 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: true,
     remind_days: 14,
+    ...renewal,
     next: typed,
+    hidden: shown,
   },
   {
     key: "director-dsc",
@@ -439,7 +694,10 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: true,
     remind_days: 14,
+    ...renewal,
     next: typed,
+    hidden: (facts) =>
+      (facts.directors ?? 0) > 0 ? "Each director has their own row below." : null,
   },
   {
     key: "trademark",
@@ -452,10 +710,126 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     needs_agm: false,
     typed: true,
     remind_days: 14,
+    ...renewal,
     next: typed,
+    hidden: shown,
   },
 ];
 
+/**
+ * Rows listed only when the facts call for them, so they are not in `CATALOGUE` (whose
+ * length the first tests count against a company with no facts): four board meetings a
+ * year, for a company that is neither small nor a DPIIT-recognised startup.
+ */
+export const FACT_ONLY: readonly CatalogueItem[] = [
+  {
+    key: "board-gap-120",
+    title: "Board meeting, four a year",
+    kind: "board",
+    group: "quarterly",
+    rule: "At most 120 days after the last",
+    applies: "A company that is neither a small company nor a DPIIT-recognised startup",
+    repeats: "quarterly",
+    needs_agm: false,
+    typed: false,
+    remind_days: 14,
+    ...fromRule("board-gap-other"),
+    next: (_today, facts) =>
+      facts.last_board_on ? addDays(facts.last_board_on, amountIn(facts, "board-gap-other")) : null,
+    hidden: (facts) =>
+      otherCompany(facts)
+        ? null
+        : "Only when Small company and DPIIT-recognised startup are both No.",
+  },
+];
+
+/** Every row, the fact-only ones last. */
+export const ALL_ITEMS: readonly CatalogueItem[] = [...CATALOGUE, ...FACT_ONLY];
+
 export function catalogueItem(key: string): CatalogueItem | null {
-  return CATALOGUE.find((item) => item.key === key) ?? null;
+  return ALL_ITEMS.find((item) => item.key === key) ?? null;
+}
+
+const agmWords = (facts: Facts): string => `From the AGM held ${dayWords(facts.agm_on)}`;
+
+/** The rule in words with his amount, as the suggestion row shows it. */
+function ruleWords(item: CatalogueItem, facts: Facts): string {
+  if (item.needs_agm && item.rule_key) return `AGM + ${amountIn(facts, item.rule_key)} days`;
+  if (item.key === "inc-20a") return `Incorporation + ${amountIn(facts, "inc-20a")} days`;
+  if (item.key === "board-gap-120")
+    return `At most ${amountIn(facts, "board-gap-other")} days after the last`;
+  if (item.key === "board-first-half" || item.key === "board-second-half")
+    return item.rule.replace("90", String(amountIn(facts, "board-gap-small")));
+  return item.rule;
+}
+
+/** How a catalogue row reads today, with the company's facts. */
+export function workOut(item: CatalogueItem, today: string, facts: Facts): Worked {
+  const base: Worked = {
+    title: item.title,
+    rule: ruleWords(item, facts),
+    rule_key: item.rule_key,
+    next: item.next(today, facts),
+    earliest: null,
+    from_fact: null,
+    needs: null,
+    base_on: null,
+  };
+  switch (item.key) {
+    case "agm":
+      if (facts.agm_on) return { ...base, from_fact: agmWords(facts) };
+      if (facts.first_fy_end)
+        return {
+          ...base,
+          rule: `First AGM: ${amountIn(facts, "first-agm")} months after the first financial year ends`,
+          rule_key: "first-agm",
+          from_fact: `From the first financial year ending ${dayWords(facts.first_fy_end)}`,
+          base_on: facts.first_fy_end,
+        };
+      return base;
+    case "adt-1":
+    case "aoc-4":
+    case "mgt-7a": {
+      const title =
+        item.key !== "mgt-7a"
+          ? item.title
+          : facts.small === "yes"
+            ? "MGT-7A (annual return)"
+            : facts.small === "no"
+              ? "MGT-7 (annual return)"
+              : item.title;
+      return facts.agm_on
+        ? { ...base, title, from_fact: agmWords(facts), base_on: facts.agm_on }
+        : { ...base, title };
+    }
+    case "inc-20a":
+      return facts.incorporated_on
+        ? {
+            ...base,
+            from_fact: `From the incorporation day, ${dayWords(facts.incorporated_on)}`,
+            base_on: facts.incorporated_on,
+          }
+        : { ...base, needs: "Needs the incorporation day on Company." };
+    case "board-first-half":
+    case "board-second-half": {
+      const which = item.key === "board-first-half" ? "first" : "second";
+      return facts.last_board_on
+        ? {
+            ...base,
+            earliest: boardEarliest(which, today, facts),
+            from_fact: `From the last board meeting, ${dayWords(facts.last_board_on)}`,
+          }
+        : base;
+    }
+    case "board-gap-120":
+      return facts.last_board_on
+        ? {
+            ...base,
+            from_fact: `From the last board meeting, ${dayWords(facts.last_board_on)}`,
+            base_on: facts.last_board_on,
+          }
+        : { ...base, needs: "Record your last board meeting in Meetings to work this out." };
+    default:
+      return base;
+  }
 }

@@ -14,6 +14,7 @@ import type { Staff } from "../protocol";
 import { SHARE_MAX_BYTES } from "../protocol";
 import { decode, toCsv } from "../text";
 import { ZipLimitError, ZipWriter, zipEntryName } from "../zip";
+import { USED_FOR_SOURCES } from "../company-contracts";
 import { Checker } from "./check";
 import { registerPacks } from "./packs";
 import { registerFileSources } from "./providers";
@@ -574,7 +575,7 @@ function previewOf(text: TextJobs, version: Version): Preview {
 function detailOf(core: DataCore, vault: Vault, text: TextJobs, file: FileMeta): Answer {
   const current = vault.current(file);
   const used: { label: string; href: string }[] = [];
-  for (const name of ["leads", "waitlist"]) {
+  for (const name of ["leads", "waitlist", ...USED_FOR_SOURCES]) {
     try {
       used.push(...(core.need<UsedFor>(name)?.usedFor?.(file.file_id) ?? []));
     } catch (error) {

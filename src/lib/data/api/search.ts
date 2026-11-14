@@ -18,6 +18,9 @@ export const DATA_SEARCH_KIND_KEYS = [
   "faq",
   "decision",
   "contact",
+  "meeting",
+  "agreement",
+  "member",
 ] as const;
 export const dataSearchKindSchema = z.enum(DATA_SEARCH_KIND_KEYS);
 export type DataSearchKindKey = z.infer<typeof dataSearchKindSchema>;

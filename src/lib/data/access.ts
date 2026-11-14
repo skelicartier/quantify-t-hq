@@ -28,9 +28,17 @@ export const DATA_ROLE_LINE = "Data is for Owners and Admins.";
  */
 export const DATA_CAPABILITY = "local:data";
 
-export function withDataNav(capabilities: readonly string[]): string[] {
+/**
+ * Made up like `local:data`, for the Owner only (the effective role, as Admin › Backup checks
+ * it): it shows the rail's People link (the people ledger). The pages check the role themselves.
+ */
+export const DATA_OWNER_CAPABILITY = "local:data:owner";
+
+export function withDataNav(capabilities: readonly string[], role = ""): string[] {
   const held = [...capabilities];
   if (dataConfigured() && capabilities.includes("mail:send") && !held.includes(DATA_CAPABILITY))
     held.push(DATA_CAPABILITY);
+  if (held.includes(DATA_CAPABILITY) && role === "owner" && !held.includes(DATA_OWNER_CAPABILITY))
+    held.push(DATA_OWNER_CAPABILITY);
   return held;
 }

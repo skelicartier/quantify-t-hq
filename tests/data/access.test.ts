@@ -16,7 +16,12 @@ vi.mock("next/navigation", () => ({
   },
 }));
 
-import { DATA_CAPABILITY, requireData, withDataNav } from "@/lib/data/access";
+import {
+  DATA_CAPABILITY,
+  DATA_OWNER_CAPABILITY,
+  requireData,
+  withDataNav,
+} from "@/lib/data/access";
 
 const previous = process.env.HQ_MAIL_MERGE_SOCKET;
 afterEach(() => {
@@ -50,5 +55,19 @@ describe("where Data exists (G3)", () => {
     expect(core.requireStaff).toHaveBeenCalledWith("/data");
     core.requireStaff.mockResolvedValue({ token: "t", me: { capabilities: ["crm:read"] } });
     expect((await requireData("/data/files")).allowed).toBe(false);
+  });
+
+  it("shows the People link to the Owner only, and only where Data shows at all", () => {
+    process.env.HQ_MAIL_MERGE_SOCKET = "/tmp/hq-data-test/s.sock";
+    expect(withDataNav(["mail:send"], "owner")).toEqual([
+      "mail:send",
+      DATA_CAPABILITY,
+      DATA_OWNER_CAPABILITY,
+    ]);
+    expect(withDataNav(["mail:send"], "admin")).toEqual(["mail:send", DATA_CAPABILITY]);
+    expect(withDataNav(["mail:send"])).not.toContain(DATA_OWNER_CAPABILITY);
+    expect(withDataNav(["crm:read"], "owner")).toEqual(["crm:read"]);
+    delete process.env.HQ_MAIL_MERGE_SOCKET;
+    expect(withDataNav(["mail:send"], "owner")).toEqual(["mail:send"]);
   });
 });

@@ -20,6 +20,10 @@ export const agendaKindSchema = z.enum([
   "follow_up",
   "file_review",
   "action",
+  "meeting",
+  "agreement",
+  "pilot",
+  "diligence",
 ]);
 
 export const agendaItemSchema = z.object({
@@ -56,6 +60,10 @@ export const calendarSourceNames = [
   "replies",
   "files",
   "notes",
+  "meetings",
+  "agreements",
+  "pilots",
+  "diligence",
 ] as const;
 
 export const calendarPageSchema = ok.extend({

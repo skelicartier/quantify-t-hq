@@ -11,7 +11,17 @@
 export type IcsDetail = "full" | "plain";
 
 export type IcsKind =
-  "key_date" | "investor" | "offer_deadline" | "waitlist" | "follow_up" | "file_review" | "action";
+  | "key_date"
+  | "investor"
+  | "offer_deadline"
+  | "waitlist"
+  | "follow_up"
+  | "file_review"
+  | "action"
+  | "meeting"
+  | "agreement"
+  | "pilot"
+  | "diligence";
 
 /** An agenda item, as the service gives it (`AgendaItem` in the service's contract). */
 export type IcsItem = {
@@ -39,6 +49,10 @@ const KIND_WORDS: Record<IcsKind, string> = {
   follow_up: "Follow-up",
   file_review: "File review",
   action: "Action",
+  meeting: "Meeting",
+  agreement: "Agreement",
+  pilot: "Pilot",
+  diligence: "Diligence",
 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

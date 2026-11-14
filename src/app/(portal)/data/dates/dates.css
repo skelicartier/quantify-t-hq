@@ -1,8 +1,11 @@
-/* Key dates: the list grouped Overdue and then by month, each row's acts, the edit form,
-   and the suggestions with the AGM date they are worked out from. Tokens only; phone rules
-   at 720px; no side bars. Prefixed hqdata-. Printed, it is the list: the sheet for the CA. */
+/* Key dates: the list grouped Overdue and then by month, each row's state, evidence and
+   acts, the edit form, the suggestions (worked out from the company record, then the
+   catalogue) with the AGM date they are worked out from, and the Rules view. Tokens only;
+   phone rules at 720px; no side bars. Prefixed hqdata-. Printed, it is the list or the rule
+   book: the sheet for the CA, with every source's address written after its link. */
 @layer pages {
-  .hqdata-dates {
+  .hqdata-dates,
+  .hqdata-rules {
     display: grid;
     gap: 16px;
     min-width: 0;
@@ -28,6 +31,21 @@
     gap: 6px;
   }
 
+  .hqdata-dates__pills,
+  .hqdata-rules__pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .hqdata-dates__evidence {
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-dates__late {
+    color: var(--danger);
+  }
+
   .hqdata-dates__edit {
     display: grid;
     gap: 12px;
@@ -36,6 +54,30 @@
 
   .hqdata-dates__facts {
     max-width: 320px;
+  }
+
+  .hqdata-dates__hidden summary {
+    cursor: pointer;
+    font-size: var(--fs-ui);
+    color: var(--muted);
+  }
+
+  .hqdata-dates__hidden ul {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-sources {
+    display: inline;
+  }
+
+  .hqdata-source-url {
+    display: none;
+  }
+
+  .hqdata-sources .table-sub {
+    display: block;
   }
 
   @media (max-width: 720px) {
@@ -52,7 +94,34 @@
 }
 
 @media print {
-  .hqdata-dates__acts {
+  .hqdata-dates__acts,
+  .hqdata-dates .segmented,
+  .hqdata-dates .popover,
+  .hqdata-rules .popover {
+    display: none !important;
+  }
+
+  /* A source is a link reading "Source" on screen; on paper its address follows it. */
+  .hqdata-source-url {
+    display: inline !important;
+    overflow-wrap: anywhere;
+  }
+
+  /* On paper the rule book is the sheet for the CA: each note in full, room for the
+     addresses, and no empty column where the buttons were. */
+  .hqdata-rules .table-sub--prose {
+    max-width: none;
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .hqdata-rules .hqdata-sources {
+    display: block;
+    min-width: 24ch;
+  }
+
+  .hqdata-rules .data-table th:last-child,
+  .hqdata-rules .data-table td:last-child {
     display: none;
   }
 }

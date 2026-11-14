@@ -300,7 +300,7 @@ describe("Key dates on the real stack", () => {
     const file = await stack.raw(stack.socket, "GET", `/data/builds/${buildId}/bytes`);
     const lines = file.bytes.toString("utf8").split("\r\n").filter(Boolean);
     expect(lines[0]).toBe(
-      "﻿due_on,what,kind,repeats,company,handled_by,remind_days_before,state,notes,file,suggested_rule,last_done",
+      "﻿due_on,what,kind,repeats,company,handled_by,remind_days_before,state,notes,file,suggested_rule,last_done,rule,source,checked_on,confirmed_by,owner,srn,challan,filed_on,fee_paid,filed_copy,not_for_us_signed_off_by,from_record",
     );
     expect(lines.some((line) => line.includes("GSTR-1 (monthly filers)"))).toBe(true);
   });

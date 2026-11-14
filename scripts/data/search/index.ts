@@ -2,7 +2,8 @@
  * Data's search (raise spec §7.5): one question asked of every searchable module
  * (`search:<name>`) at request time, every word having to match somewhere in a record, as
  * Mail merge's find does. The answer is grouped by kind in one fixed order (leads,
- * investors, files, notes, the FAQ, decisions, contacts), each group with its exact count
+ * investors, files, notes, the FAQ, decisions, contacts, then the company batch's meetings,
+ * agreements and members), each group with its exact count
  * and its best few hits. A module that is not loaded is skipped; one that fails is logged
  * and skipped, so search never fails for one part of Data.
  */
@@ -29,6 +30,9 @@ export const KIND_ORDER: readonly DataSearchKind[] = [
   "faq",
   "decision",
   "contact",
+  "meeting",
+  "agreement",
+  "member",
 ];
 const KINDS: ReadonlySet<string> = new Set(KIND_ORDER);
 export const OVERVIEW_LIMIT = 5;
@@ -41,6 +45,9 @@ const SOURCE_KINDS: Record<SearchSourceName, readonly DataSearchKind[]> = {
   files: ["file"],
   notes: ["note", "faq", "decision"],
   contacts: ["contact"],
+  meetings: ["meeting"],
+  agreements: ["agreement"],
+  members: ["member"],
 };
 
 const isKind = (value: unknown): value is DataSearchKind =>

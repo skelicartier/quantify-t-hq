@@ -1,0 +1,76 @@
+/* The company record: Facts, Directors and one director. One column that never grows past
+   the page; each group's form in its popover; the checks as callouts; the director's record
+   with its side panel. Tokens only; phone rules at 720px; no side bars. Prefixed hqdata-.
+   Printed, the facts and the tables; no buttons, no forms. */
+@layer pages {
+  .hqdata-company,
+  .hqdata-directors,
+  .hqdata-director {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-company .kv__value,
+  .hqdata-director .kv__value {
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-company .table-sub {
+    display: block;
+  }
+
+  .hqdata-company__flag {
+    display: grid;
+    gap: 4px;
+  }
+
+  .hqdata-company__flag .choice-row {
+    min-width: 0;
+  }
+
+  .hqdata-company__checks {
+    display: grid;
+    gap: 8px;
+  }
+
+  .hqdata-company__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-director__value {
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-company__acts {
+      row-gap: 6px;
+    }
+
+    /* A record's activity moves first on a phone. */
+    .hqdata-director .rgrid__main {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .hqdata-director [data-section="director-activity"] {
+      order: -1;
+    }
+  }
+}
+
+@media print {
+  .hqdata-company .popover,
+  .hqdata-directors .popover,
+  .hqdata-director .popover,
+  .hqdata-company__acts,
+  .hqdata-company .segmented,
+  .hqdata-directors .segmented,
+  .hqdata-director .segmented {
+    display: none !important;
+  }
+}

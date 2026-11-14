@@ -29,6 +29,7 @@ import {
   type InvestorsPage,
 } from "@/lib/data/api/investors";
 import { INVESTOR_STAGES, INVESTOR_STAGE_ORDER, INVESTOR_VIEWS } from "@/lib/data/labels";
+import { CLOSING_VIEW } from "@/lib/data/labels-close";
 import { dataRead } from "@/lib/data/read";
 import { formatDate, formatMoneyBy, formatNumber } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -130,11 +131,14 @@ export default async function InvestorsPage({ searchParams }: { searchParams: Pr
           <div className="hqdata-investors">
             <SegmentedLinks
               label="View"
-              items={(Object.keys(INVESTOR_VIEWS) as View[]).map((key) => ({
-                href: key === "firms" ? BASE : `${BASE}?view=${key}`,
-                label: INVESTOR_VIEWS[key],
-                current: view === key,
-              }))}
+              items={[
+                ...(Object.keys(INVESTOR_VIEWS) as View[]).map((key) => ({
+                  href: key === "firms" ? BASE : `${BASE}?view=${key}`,
+                  label: INVESTOR_VIEWS[key],
+                  current: view === key,
+                })),
+                { href: CLOSING_VIEW.href, label: CLOSING_VIEW.label, current: false },
+              ]}
             />
             {view === "funnel" && read.data.funnel ? (
               <FunnelView funnel={read.data.funnel} />

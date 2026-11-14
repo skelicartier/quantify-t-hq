@@ -38,6 +38,10 @@ const KINDS: ReadonlySet<AgendaKind> = new Set([
   "follow_up",
   "file_review",
   "action",
+  "meeting",
+  "agreement",
+  "pilot",
+  "diligence",
 ]);
 
 export type Detail = "full" | "plain";

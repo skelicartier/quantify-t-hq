@@ -1,0 +1,118 @@
+/* Touches by hand: the Touches section on a lead's and an investor firm's page, and the
+   Touches page. Tokens only; radius 0; no side stripe on anything; phone rules at 720px.
+   Prefixed hqdata-. Printed, each is its data without the controls. */
+@layer pages {
+  .hqdata-touches {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-touches > * {
+    min-width: 0;
+  }
+
+  .hqdata-touches__warnings {
+    display: grid;
+    gap: 8px;
+  }
+
+  .hqdata-touches__attention {
+    color: var(--attention);
+  }
+
+  .hqdata-touches__row--withdrawn td {
+    color: var(--muted);
+  }
+
+  .hqdata-touches__row--withdrawn .hqdata-touches__note {
+    text-decoration: line-through;
+  }
+
+  .hqdata-touches-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  /* The section's list: day, kind, note, who. */
+  .hqdata-touches-list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hqdata-touches-list__row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 6px 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-touches-list__row.hqdata-touches__row--withdrawn {
+    color: var(--muted);
+  }
+
+  .hqdata-touches-list__day {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .hqdata-touches-list__note {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+  }
+
+  .hqdata-touches-list__by {
+    font-size: var(--fs-ui);
+    color: var(--muted);
+  }
+
+  .hqdata-touches-section__all,
+  .hqdata-touches-section__week {
+    margin: 8px 0 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-touch-form__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-source-url {
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-touches-list__row {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .hqdata-touches-list__note {
+      grid-column: 1 / -1;
+    }
+
+    .hqdata-touch-form__pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-touches-tools {
+      row-gap: 6px;
+    }
+  }
+
+  @media print {
+    .hqdata-touches-tools,
+    .hqdata-touches .row-action-cell {
+      display: none;
+    }
+  }
+}

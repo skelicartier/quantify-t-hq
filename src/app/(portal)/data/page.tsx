@@ -62,9 +62,11 @@ function tileCount(overview: DataOverview): 2 | 3 | 4 {
  * is not loaded is absent, never zero.
  */
 export default async function DataPage() {
-  const { allowed } = await requireData("/data");
+  const { allowed, context } = await requireData("/data");
   const now = requestNow();
-  const read = allowed ? await dataRead(readDataOverview) : null;
+  const read = allowed
+    ? await dataRead(() => readDataOverview({ owner: context.me.role === "owner" }))
+    : null;
   const overview = read?.ok ? read.data : null;
   return (
     <>
@@ -274,6 +276,8 @@ function Overview({ overview, now }: { overview: DataOverview; now: number }) {
 
       {overview.raise && <TheRaise raise={overview.raise} />}
 
+      {overview.company && <TheCompany company={overview.company} />}
+
       {overview.backup && (
         <div className="hqdata-print-hide">
           <RecordSection id="data-backup" title="Backup">
@@ -326,6 +330,47 @@ function TheRaise({ raise }: { raise: NonNullable<DataOverview["raise"]> }) {
         <span>First meetings this week {formatNumber(raise.first_meetings_this_week)}</span>
         {" · "}
         <Link href="/data/investors?view=funnel">Open the funnel</Link>
+      </p>
+    </RecordSection>
+  );
+}
+
+/**
+ * The company (company spec §6.7.6): when it was incorporated (or which facts are not filled
+ * in), how many directors, any DSC expiring within 60 days, and how many rules his CA or CS
+ * has not confirmed. Counts with words, never a percentage.
+ */
+function TheCompany({ company }: { company: NonNullable<DataOverview["company"]> }) {
+  return (
+    <RecordSection id="data-company" title="The company">
+      <p className="hqdata-readouts">
+        <span>
+          {company.incorporated_on
+            ? `Incorporated ${formatDate(company.incorporated_on)}`
+            : `Facts not filled in: ${company.facts_missing.join(", ")}`}
+        </span>
+        {" · "}
+        <span>
+          {formatNumber(company.directors)} {company.directors === 1 ? "director" : "directors"}
+        </span>
+        {company.dsc_soon > 0 && (
+          <>
+            {" · "}
+            <StatusPill
+              value="dsc_soon"
+              label={`${formatNumber(company.dsc_soon)} DSC expiring within 60 days`}
+              tone="attention"
+            />
+          </>
+        )}
+        {" · "}
+        <span>
+          {formatNumber(company.rules_unconfirmed)}{" "}
+          {company.rules_unconfirmed === 1 ? "rule" : "rules"} not confirmed by your CA or CS
+        </span>
+      </p>
+      <p className="hqdata-readouts">
+        <Link href="/data/company">Open the company record</Link>
       </p>
     </RecordSection>
   );

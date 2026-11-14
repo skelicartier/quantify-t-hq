@@ -31,19 +31,42 @@ export const AGENDA_SOURCES = [
   "replies",
   "files",
   "notes",
+  "meetings",
+  "agreements",
+  "pilots",
+  "diligence",
 ] as const;
 export type AgendaSourceName = (typeof AGENDA_SOURCES)[number];
 export const agendaService = (name: AgendaSourceName): string => `agenda:${name}`;
 
 /** Each searchable module provides `search:<name>`; the search (U3) reads them all. */
-export const SEARCH_SOURCES = ["leads", "investors", "files", "notes", "contacts"] as const;
+export const SEARCH_SOURCES = [
+  "leads",
+  "investors",
+  "files",
+  "notes",
+  "contacts",
+  "meetings",
+  "agreements",
+  "members",
+] as const;
 export type SearchSourceName = (typeof SEARCH_SOURCES)[number];
 export const searchService = (name: SearchSourceName): string => `search:${name}`;
 
 // ------------------------------------------------------------------ the calendar's agenda
 
 export type AgendaKind =
-  "key_date" | "investor" | "offer_deadline" | "waitlist" | "follow_up" | "file_review" | "action";
+  | "key_date"
+  | "investor"
+  | "offer_deadline"
+  | "waitlist"
+  | "follow_up"
+  | "file_review"
+  | "action"
+  | "meeting"
+  | "agreement"
+  | "pilot"
+  | "diligence";
 
 export type AgendaItem = {
   /** Stable from one read to the next: "<kind>:<record id>", plus ":<part>" when one record gives two. */
@@ -68,7 +91,17 @@ export type AgendaSource = { agenda(today: string): AgendaItem[] };
 
 // ------------------------------------------------------------------ search
 
-export type DataSearchKind = "lead" | "investor" | "file" | "note" | "faq" | "decision" | "contact";
+export type DataSearchKind =
+  | "lead"
+  | "investor"
+  | "file"
+  | "note"
+  | "faq"
+  | "decision"
+  | "contact"
+  | "meeting"
+  | "agreement"
+  | "member";
 
 export type DataSearchHit = {
   kind: DataSearchKind;

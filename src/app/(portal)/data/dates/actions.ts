@@ -8,14 +8,35 @@ import { formatDate } from "@/lib/format";
 
 /**
  * Key dates' writes: adding a date (by hand or from a suggestion, only ever on his press),
- * editing it, marking it done or not for us, deleting it, and the AGM date the
- * suggestions are worked out from.
+ * editing it, marking it in progress, done (with its evidence and filed copy) or not for us
+ * (with the professional's sign-off on a statutory date), who files it, deleting it, the AGM
+ * date the suggestions are worked out from, and the rule book: his amounts, confirmations
+ * and moving dates to a changed amount (company spec §6.8).
  */
 
 const ROUTE_ID = /^[A-Za-z0-9-]{1,64}$/;
 const KINDS = new Set<string>(api.dateKindSchema.options);
 const REPEATS = new Set<string>(api.repeatsSchema.options);
 const NO_DATE: ActionState = { status: "error", message: "That date is not here." };
+const NO_RULE: ActionState = { status: "error", message: "That rule is not here." };
+const MAX_COPY_BYTES = 3 * 1024 * 1024;
+
+const ruleKeyFrom = (formData: FormData): string => {
+  const value = fieldValue(formData, "key", 64);
+  return ROUTE_ID.test(value) ? value : "";
+};
+
+const signOffOf = (formData: FormData): Partial<api.SignOffInput> => {
+  const out: Partial<api.SignOffInput> = {};
+  for (const name of [
+    "sign_off_name",
+    "sign_off_role",
+    "sign_off_on",
+    "sign_off_contact_id",
+  ] as const)
+    if (formData.has(name)) out[name] = fieldValue(formData, name, 120);
+  return out;
+};
 
 const attemptOf = (formData: FormData): string =>
   fieldValue(formData, "attempt", 64) || crypto.randomUUID();
@@ -103,15 +124,40 @@ export async function doneDateAction(
   if (refused(context)) return context;
   const dateId = dateIdFrom(formData);
   if (!dateId) return NO_DATE;
-  let message = "Done.";
+  const evidence: api.EvidenceInput = {
+    srn: fieldValue(formData, "srn", 60),
+    challan: fieldValue(formData, "challan", 60),
+    filed_on: fieldValue(formData, "filed_on", 10),
+    fee_paid: fieldValue(formData, "fee_paid", 16),
+  };
+  const file = formData.get("file");
+  const chosen = fieldValue(formData, "filed_file_id", 64);
+  let copy: { filed_file_id: string } | { content: string; name: string } | null = null;
+  if (file instanceof File && file.size > 0) {
+    if (file.size > MAX_COPY_BYTES)
+      return {
+        status: "error",
+        message: "That copy is over 3 MB. Put it in Files, then choose it from there.",
+      };
+    copy = {
+      content: Buffer.from(await file.arrayBuffer()).toString("base64"),
+      name: file.name.slice(0, 200),
+    };
+  } else if (chosen) copy = { filed_file_id: chosen };
+  let message = "Marked done.";
   try {
-    const date = (await api.doneDate(dateId, fieldValue(formData, "note", 4_000), staffOf(context)))
-      .date;
-    if (date.state === "coming_up") message = `Done. It is next due on ${formatDate(date.due_on)}.`;
+    const date = (
+      await api.doneDate(dateId, fieldValue(formData, "note", 2_000), staffOf(context), {
+        ...evidence,
+        ...(copy ?? {}),
+      })
+    ).date;
+    if (date.state === "coming_up") message = `Done. Next due ${formatDate(date.due_on)}.`;
   } catch (error) {
     return refusal(error);
   }
   refreshDates();
+  if (copy && "content" in copy) refreshData("/data/files");
   return sent(message);
 }
 
@@ -124,7 +170,12 @@ export async function notForUsAction(
   const dateId = dateIdFrom(formData);
   if (!dateId) return NO_DATE;
   try {
-    await api.notForUsDate(dateId, fieldValue(formData, "note", 4_000), staffOf(context));
+    await api.notForUsDate(
+      dateId,
+      fieldValue(formData, "note", 4_000),
+      staffOf(context),
+      signOffOf(formData),
+    );
   } catch (error) {
     return refusal(error);
   }
@@ -191,4 +242,155 @@ export async function setFactsAction(
   }
   refreshDates();
   return sent(agm ? "The AGM-based dates are worked out from it." : "Cleared.");
+}
+
+export async function inProgressAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/dates");
+  if (refused(context)) return context;
+  const dateId = dateIdFrom(formData);
+  if (!dateId) return NO_DATE;
+  try {
+    await api.markInProgress(dateId, fieldValue(formData, "note", 4_000), staffOf(context));
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshDates();
+  return sent("Marked in progress.");
+}
+
+export async function dateOwnerAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/dates");
+  if (refused(context)) return context;
+  const dateId = dateIdFrom(formData);
+  if (!dateId) return NO_DATE;
+  try {
+    await api.setDateOwner(
+      dateId,
+      {
+        owner_role: fieldValue(formData, "owner_role", 10),
+        handled_by: fieldValue(formData, "handled_by", 120),
+      },
+      staffOf(context),
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshDates();
+  return sent("Saved.");
+}
+
+export async function signOffAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/dates");
+  if (refused(context)) return context;
+  const dateId = dateIdFrom(formData);
+  if (!dateId) return NO_DATE;
+  const signOff = signOffOf(formData);
+  try {
+    await api.recordSignOff(
+      dateId,
+      {
+        sign_off_name: signOff.sign_off_name ?? "",
+        sign_off_role: signOff.sign_off_role ?? "",
+        sign_off_on: signOff.sign_off_on ?? "",
+        ...(signOff.sign_off_contact_id
+          ? { sign_off_contact_id: signOff.sign_off_contact_id }
+          : {}),
+      },
+      staffOf(context),
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshDates();
+  return sent("Recorded.");
+}
+
+export async function ruleAmountAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/dates");
+  if (refused(context)) return context;
+  const key = ruleKeyFrom(formData);
+  if (!key) return NO_RULE;
+  try {
+    await api.setRuleAmount(key, fieldValue(formData, "amount", 12).trim(), staffOf(context));
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshDates();
+  return sent("Saved.");
+}
+
+export async function confirmRuleAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/dates");
+  if (refused(context)) return context;
+  const key = ruleKeyFrom(formData);
+  if (!key) return NO_RULE;
+  let name = "";
+  try {
+    name =
+      (
+        await api.confirmRule(
+          key,
+          {
+            name: fieldValue(formData, "name", 120),
+            role: fieldValue(formData, "role", 10),
+            on: fieldValue(formData, "on", 10),
+          },
+          staffOf(context),
+        )
+      ).rule.confirmed?.name ?? "";
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshDates();
+  return sent(`Recorded: confirmed by ${name}.`);
+}
+
+export async function unconfirmRuleAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/dates");
+  if (refused(context)) return context;
+  const key = ruleKeyFrom(formData);
+  if (!key) return NO_RULE;
+  try {
+    await api.unconfirmRule(key, staffOf(context));
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshDates();
+  return sent("Removed.");
+}
+
+export async function moveRuleDatesAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/dates");
+  if (refused(context)) return context;
+  const key = ruleKeyFrom(formData);
+  if (!key) return NO_RULE;
+  let moved = 0;
+  try {
+    moved = (await api.moveRuleDates(key, staffOf(context))).moved;
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshDates();
+  return sent(`Moved ${moved} ${moved === 1 ? "date" : "dates"}.`);
 }

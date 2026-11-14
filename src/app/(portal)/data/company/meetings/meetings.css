@@ -1,0 +1,183 @@
+/* Company › Meetings and one meeting: the list, the record, the forms and the minutes.
+   Tokens only; radius 0; no side stripe on anything; phone rules at 720px. Prefixed
+   hqdata-. Printed, each page is its data without the controls. */
+@layer pages {
+  .hqdata-meetings {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-meetings > * {
+    min-width: 0;
+  }
+
+  .hqdata-meetings__row--cancelled td,
+  .hqdata-meetings__row--cancelled .table-title {
+    color: var(--muted);
+  }
+
+  /* A notice short of the rule, a quorum not met, a step past its day. */
+  .hqdata-short,
+  .hqdata-late {
+    color: var(--danger);
+  }
+
+  .hqdata-meeting-form__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-meeting__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-meeting__acts--row {
+    justify-content: flex-end;
+  }
+
+  .hqdata-meeting__quorum {
+    margin: 8px 0 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-meeting__agenda {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-attendees,
+  .hqdata-copy,
+  .hqdata-radios {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-attendees legend,
+  .hqdata-copy legend,
+  .hqdata-radios legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-attendees__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+  }
+
+  .hqdata-attendees__other {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .hqdata-radios__item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-ui);
+  }
+
+  /* The minutes: as written, the lock, and the notes after signing. */
+  .hqdata-minutes__text {
+    margin: 12px 0 0;
+    max-width: 72ch;
+    padding: 12px;
+    border: 1px solid var(--line-soft);
+    background: var(--panel-soft);
+    font-size: var(--fs-body);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-minutes__lock {
+    margin-bottom: 12px;
+  }
+
+  .hqdata-minutes__comments {
+    margin: 8px 0 0;
+    font-size: var(--fs-ui);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-minutes__after {
+    display: grid;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .hqdata-minutes__after-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+  }
+
+  .hqdata-minutes__after-head h3 {
+    margin: 0;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-minutes__notes {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hqdata-minutes__notes li {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-minutes__note {
+    margin: 0 0 4px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-meeting-form__pair,
+    .hqdata-attendees__other {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-meeting__acts,
+    .hqdata-meeting__acts--row {
+      justify-content: flex-start;
+      row-gap: 6px;
+    }
+  }
+}
+
+@media print {
+  /* The Change column holds only controls: on paper it is left out. */
+  #table-resolutions th:last-child,
+  #table-resolutions td:last-child,
+  .hqdata-meeting__acts,
+  .hqdata-minutes__after-head .hqdata-meeting__acts {
+    display: none;
+  }
+
+  .hqdata-minutes__text {
+    border: 0;
+    padding: 0;
+  }
+}

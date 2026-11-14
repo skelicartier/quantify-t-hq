@@ -162,6 +162,12 @@ function Actions({ today }: { today: string }) {
           </Field>
         </LinkingForm>
       </Popover>
+      <ButtonLink href={`${BASE}/pilots`} size="small">
+        Pilots
+      </ButtonLink>
+      <ButtonLink href={`${BASE}/diligence`} size="small">
+        Diligence
+      </ButtonLink>
       <ButtonLink href={`${BASE}/for-investors`} size="small">
         For investors
       </ButtonLink>

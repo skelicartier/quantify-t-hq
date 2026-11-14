@@ -9,6 +9,7 @@ import {
   CalendarOff,
   KeyRound,
   Landmark,
+  IdCard,
   NotebookPen,
   ChartNoAxesCombined,
   ClipboardList,
@@ -59,6 +60,7 @@ import {
   SquareUser,
   Milestone,
   type LucideIcon,
+  Stamp,
 } from "lucide-react";
 
 export type NavLink = {
@@ -98,7 +100,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     // The founder's real work, kept on his own computer: the papers, every lead and what
     // Mail merge sent them, the replies, the waitlist, the investors and the dates. The
     // capability is made up by the layout where the local service is set up (Owners and
-    // Admins only); every page checks `mail:send` for itself.
+    // Admins only); every page checks `mail:send` for itself. The company record is for
+    // Owners and Admins; the people ledger only for the Owner, through `local:data:owner`.
     label: "Data",
     links: [
       { href: "/data", label: "Data", icon: Briefcase, capability: "local:data" },
@@ -158,6 +161,20 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Milestone,
         activePrefix: "/data/decisions/",
         capability: "local:data",
+      },
+      {
+        href: "/data/company",
+        label: "Company record",
+        icon: Stamp,
+        activePrefix: "/data/company/",
+        capability: "local:data",
+      },
+      {
+        href: "/data/people",
+        label: "People ledger",
+        icon: IdCard,
+        activePrefix: "/data/people/",
+        capability: "local:data:owner",
       },
       {
         href: "/data/dates",

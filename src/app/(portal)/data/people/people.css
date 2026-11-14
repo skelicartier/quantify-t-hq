@@ -1,0 +1,88 @@
+/* The people ledger: the People page and one person's page. Tokens only; radius 0; no side
+   stripe on anything; phone rules at 720px. Prefixed hqdata-. Printed, each page is its data
+   without the controls. */
+@layer pages {
+  .hqdata-people {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-people > * {
+    min-width: 0;
+  }
+
+  .hqdata-people__empty {
+    margin: 0;
+  }
+
+  /* Forms: two or three fields side by side. */
+  .hqdata-person-form__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-person-form__triple {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.4fr);
+    gap: 12px;
+  }
+
+  .hqdata-person__warnings {
+    display: grid;
+    gap: 8px;
+    margin: 0 0 16px;
+  }
+
+  .hqdata-person__prose {
+    margin: 0;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-person__terms {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 12px;
+    margin: 0 0 4px;
+  }
+
+  .hqdata-person__total {
+    margin: 8px 0 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-person__late {
+    color: var(--danger);
+  }
+
+  .hqdata-person__struck {
+    text-decoration: line-through;
+  }
+
+  .hqdata-person__row--withdrawn td {
+    color: var(--muted);
+  }
+
+  .hqdata-person__row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-person-form__pair,
+    .hqdata-person-form__triple {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media print {
+    .hqdata-person__row-actions {
+      display: none;
+    }
+  }
+}

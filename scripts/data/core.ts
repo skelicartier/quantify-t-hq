@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { Refused } from "../mail-merge/engine";
 import { Builds } from "./builds";
 import { localDay } from "./days";
+import type { CompanyDueKind } from "./company-contracts";
 import { attemptOf, staffOf } from "./guard";
 import {
   type DataState,
@@ -70,7 +71,8 @@ type RouteEntry =
   | { kind: "json"; method: "GET" | "POST"; pattern: RegExp; handler: JsonHandler }
   | { kind: "stream"; method: "GET" | "POST"; pattern: RegExp; handler: StreamHandler };
 
-export type DueKind = "follow_up" | "waitlist" | "investor" | "key_date" | "file_review" | "action";
+export type DueKind =
+  "follow_up" | "waitlist" | "investor" | "key_date" | "file_review" | "action" | CompanyDueKind;
 export type DueItem = {
   key: string;
   kind: DueKind;
@@ -78,6 +80,8 @@ export type DueItem = {
   sub: string;
   due_on: string;
   href: string;
+  /** Shown to the Owner only (the people ledger's rows); every other row is for Owners and Admins. */
+  owner_only?: true;
 };
 
 export type OverviewProvider = () => Answer | Promise<Answer>;
@@ -98,6 +102,15 @@ export const MODULES = [
   "numbers",
   "calendar",
   "search",
+  "company",
+  "meetings",
+  "members",
+  "agreements",
+  "people",
+  "touches",
+  "pilots",
+  "diligence",
+  "closing",
   "backup",
 ] as const;
 export type ModuleName = (typeof MODULES)[number];
@@ -381,8 +394,11 @@ export class DataCore {
     return parts;
   }
 
-  /** What is owed, from every module: overdue first, then by date; at most 30. */
-  async dueItems(): Promise<DueItem[]> {
+  /**
+   * What is owed, from every module: overdue first, then by date; at most 30. Owner-only rows
+   * only when asked as the Owner.
+   */
+  async dueItems(options: { owner?: boolean } = {}): Promise<DueItem[]> {
     const items: DueItem[] = [];
     for (const provider of this.#due) {
       try {
@@ -392,6 +408,7 @@ export class DataCore {
       }
     }
     return items
+      .filter((item) => options.owner === true || item.owner_only !== true)
       .sort((a, b) => a.due_on.localeCompare(b.due_on) || a.title.localeCompare(b.title))
       .slice(0, DUE_ROWS);
   }

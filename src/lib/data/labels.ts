@@ -35,6 +35,11 @@ export const DUE_KINDS = {
   key_date: "Key date",
   file_review: "File review",
   action: "Action",
+  meeting: "Meeting",
+  agreement: "Agreement",
+  person: "People",
+  pilot: "Pilot",
+  diligence: "Diligence",
 } as const;
 export type DueKind = keyof typeof DUE_KINDS;
 
@@ -197,6 +202,10 @@ export const AGENDA_SOURCE_LABELS = {
   replies: "Follow-ups",
   files: "Files",
   notes: "Notes",
+  meetings: "Meetings",
+  agreements: "Agreements",
+  pilots: "Pilots",
+  diligence: "Diligence",
 } as const;
 
 export const DATA_SEARCH_KINDS = {
@@ -207,6 +216,9 @@ export const DATA_SEARCH_KINDS = {
   faq: "Investor FAQ",
   decision: "Decisions",
   contact: "Contacts",
+  meeting: "Meetings",
+  agreement: "Agreements",
+  member: "Members",
 } as const;
 
 // ------------------------------------------------------------------ the waitlist
@@ -591,8 +603,10 @@ export type DateKind = keyof typeof DATE_KINDS;
 export const DATE_STATES = {
   coming_up: "Coming up",
   due_this_week: "Due this week",
+  in_progress: "In progress",
   done: "Done",
   not_for_us: "Not for us",
+  taken_back: "Taken back",
 } as const;
 
 export const REPEATS = {

@@ -17,6 +17,11 @@ export const dueKindSchema = z.enum([
   "key_date",
   "file_review",
   "action",
+  "meeting",
+  "agreement",
+  "person",
+  "pilot",
+  "diligence",
 ]);
 export type DueKind = z.infer<typeof dueKindSchema>;
 
@@ -27,6 +32,7 @@ export const dueItemSchema = z.object({
   sub: z.string(),
   due_on: z.string(),
   href: z.string(),
+  owner_only: z.literal(true).optional(),
 });
 export type DueItem = z.infer<typeof dueItemSchema>;
 
@@ -80,7 +86,18 @@ export const overviewSchema = ok.extend({
       first_meetings_this_week: z.number(),
     })
     .optional(),
+  company: z
+    .object({
+      incorporated_on: z.string().nullable(),
+      directors: z.number(),
+      dsc_soon: z.number(),
+      rules_unconfirmed: z.number(),
+      facts_missing: z.array(z.string()),
+    })
+    .optional(),
 });
 export type DataOverview = z.infer<typeof overviewSchema>;
 
-export const readDataOverview = () => dataAsk(overviewSchema, "GET", "/data/overview");
+/** The Owner asks as the Owner, and only then are the people ledger's Due rows in the answer. */
+export const readDataOverview = (options: { owner?: boolean } = {}) =>
+  dataAsk(overviewSchema, "GET", options.owner ? "/data/overview?owner=1" : "/data/overview");

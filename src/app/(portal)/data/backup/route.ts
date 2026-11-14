@@ -36,7 +36,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!hasCapability(context, "mail:send")) return new NextResponse("Forbidden", { status: 403 });
   const by = staffOf(context);
   try {
-    const started = await startBuild({ kind: "backup", by });
+    const started = await startBuild({ kind: "backup", by, people: context.me.role === "owner" });
     const build = await waitForBuild(started.build.build_id);
     if (build.state === "building") {
       const base = process.env.NEXT_PUBLIC_SITE_URL || request.nextUrl.origin;

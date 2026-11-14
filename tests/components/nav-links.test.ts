@@ -47,11 +47,13 @@ describe("capability-filtered navigation", () => {
     ).toBe(false);
   });
 
-  it("an Owner with local:data sees eleven Data links in order, right after Command", () => {
+  it("an Owner with local:data and local:data:owner sees thirteen Data links in order, right after Command", () => {
     const everything = NAV_GROUPS.flatMap((group) => group.links)
       .map((link) => link.capability)
       .filter((capability): capability is string => Boolean(capability));
-    const groups = visibleNavGroups([...new Set([...everything, "local:data"])]);
+    const groups = visibleNavGroups([
+      ...new Set([...everything, "local:data", "local:data:owner"]),
+    ]);
     expect(groups[1]?.label).toBe("Data");
     const data = groups.find((group) => group.label === "Data");
     expect(data?.links.map((link) => link.href)).toEqual([
@@ -64,6 +66,8 @@ describe("capability-filtered navigation", () => {
       "/data/notes",
       "/data/contacts",
       "/data/decisions",
+      "/data/company",
+      "/data/people",
       "/data/dates",
       "/data/numbers",
     ]);
@@ -77,10 +81,35 @@ describe("capability-filtered navigation", () => {
       "Notes",
       "Contacts",
       "Decisions",
+      "Company record",
+      "People ledger",
       "Key dates",
       "Numbers",
     ]);
     expect(data?.links.find((link) => link.href === "/data/files")?.key).toBe("f");
     expect(data?.links.find((link) => link.href === "/data")?.activePrefix).toBeUndefined();
+  });
+
+  it("an Admin with local:data but not local:data:owner sees no People link", () => {
+    const everything = NAV_GROUPS.flatMap((group) => group.links)
+      .map((link) => link.capability)
+      .filter((capability): capability is string => Boolean(capability))
+      .filter((capability) => capability !== "local:data:owner");
+    const groups = visibleNavGroups([...new Set([...everything, "local:data"])]);
+    const data = groups.find((group) => group.label === "Data");
+    expect(data?.links.map((link) => link.href)).toEqual([
+      "/data",
+      "/data/files",
+      "/data/leads",
+      "/data/replies",
+      "/data/waitlist",
+      "/data/investors",
+      "/data/notes",
+      "/data/contacts",
+      "/data/decisions",
+      "/data/company",
+      "/data/dates",
+      "/data/numbers",
+    ]);
   });
 });

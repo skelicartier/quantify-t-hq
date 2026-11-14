@@ -28,9 +28,12 @@ export type DataHome =
  * Data's part of Home, or null where Data is not set up or not for this person (then
  * nothing of it is drawn: absent, not zero). Never throws: a failure is "down".
  */
-export async function readDataHome(allowed: boolean): Promise<DataHome | null> {
+export async function readDataHome(allowed: boolean, owner = false): Promise<DataHome | null> {
   if (!allowed || !dataConfigured()) return null;
-  const [overview, status] = await Promise.allSettled([readDataOverview(), readMergeStatus()]);
+  const [overview, status] = await Promise.allSettled([
+    readDataOverview({ owner }),
+    readMergeStatus(),
+  ]);
   const mail: DataMail | null =
     status.status === "fulfilled"
       ? {
@@ -46,7 +49,7 @@ export async function readDataHome(allowed: boolean): Promise<DataHome | null> {
 
 export type DataOwedRow = {
   key: string;
-  kind: "Follow-up" | "Waitlist" | "Investor" | "Action";
+  kind: "Follow-up" | "Waitlist" | "Investor" | "Action" | "Meeting" | "Pilot" | "People";
   href: string;
   title: string;
   sub: string;
@@ -60,11 +63,15 @@ const OWED_KINDS: Partial<Record<DueItem["kind"], DataOwedRow["kind"]>> = {
   waitlist: "Waitlist",
   investor: "Investor",
   action: "Action",
+  meeting: "Meeting",
+  pilot: "Pilot",
+  person: "People",
 };
 
 /**
- * Follow-ups, waitlist next steps, investor next steps and actions from notes due today or
- * earlier, as rows of Home's queue: overdue first, then by day and title. Key dates and file
+ * Follow-ups, waitlist next steps, investor next steps, actions from notes, meeting steps,
+ * pilots and (for the Owner only) the people ledger's rows due today or earlier, as rows of
+ * Home's queue: overdue first, then by day and title. Key dates, agreements, diligence and file
  * reviews stay in Data's own Due list.
  */
 export function dataOwedRows(overview: Pick<DataOverview, "due" | "today">): DataOwedRow[] {

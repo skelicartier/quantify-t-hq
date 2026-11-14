@@ -5,7 +5,7 @@ import type { DueItem } from "@/lib/data/api/overview";
 import { DUE_KINDS } from "@/lib/data/labels";
 
 export const NOTHING_DUE =
-  "Nothing is due. Follow-ups, next steps, actions from notes, key dates and file reviews land here on their day.";
+  "Nothing is due. Follow-ups, next steps, actions from notes, key dates, meetings, agreements, pilots and file reviews land here on their day.";
 
 /**
  * What is owed, one list across every module: a kind word, the record, who or which firm,

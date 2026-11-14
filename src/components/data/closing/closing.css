@@ -1,0 +1,328 @@
+/* Pilots, buyer diligence, dataset trials and the close (ws-notes/company/spec.md §9.7): the
+   Pilots and Diligence lists, one pilot, the waitlist firm's three sections, the Closing view
+   and the investor firm's Closing section. Tokens only; radius 0; no side stripe, no bar and no
+   meter on anything; phone rules at 720px. Prefixed hqdata-. Printed, each page is its data
+   without the controls, and every source's address follows its "Source" link. */
+@layer pages {
+  .hqdata-pilots,
+  .hqdata-diligence,
+  .hqdata-closing {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-pilot {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-pilot__warnings,
+  .hqdata-guardrails {
+    display: grid;
+    gap: 8px;
+  }
+
+  .hqdata-pills {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* Words that need a look, without a box: an owner not named, a trial not cleared. */
+  .hqdata-attention {
+    color: var(--accent);
+  }
+
+  .hqdata-danger {
+    color: var(--danger);
+  }
+
+  .hqdata-line {
+    margin: 0 0 8px;
+    font-size: var(--fs-body);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-prose {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* A label and its value on one line; the label above it on a phone. */
+  .hqdata-kv {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 12px;
+  }
+
+  .hqdata-kv__row {
+    display: grid;
+    grid-template-columns: minmax(120px, 200px) minmax(0, 1fr);
+    gap: 4px 12px;
+    align-items: baseline;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-kv__row dt {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-kv__row dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-kv__row dd .table-sub {
+    display: block;
+  }
+
+  /* A row with its own form: the button sits at the row's end, so its panel opens leftwards
+     from the right edge of the column and never under the rail. */
+  .hqdata-kv__row--act {
+    grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) auto;
+  }
+
+  .hqdata-kv__act {
+    justify-self: end;
+  }
+
+  .hqdata-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-inline-action {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-inline-action .form-actions {
+    margin: 0;
+  }
+
+  .hqdata-met {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* The plan form: two or three short fields side by side, the criteria grouped. */
+  .hqdata-pilot-form__pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .hqdata-pilot-form__three {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .hqdata-pilot-form__criteria {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .hqdata-pilot-form__criteria legend {
+    margin-bottom: 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  /* The record header's long forms scroll inside their own panel. */
+  .hqdata-pilot .rhead .popover__panel,
+  .hqdata-investor__closing .popover__panel {
+    max-height: max(240px, calc(100dvh - 280px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .hqdata-renewal-line {
+    margin-top: 8px;
+  }
+
+  .hqdata-trials {
+    display: grid;
+    margin: 0 0 8px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hqdata-trials__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+    align-items: baseline;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-trials__facts {
+    grid-column: 1;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-trials__row .hqdata-actions {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  /* The close: the deadlines line, the Key dates a step added, the offers line. */
+  .hqdata-deadlines {
+    margin: 0 0 12px;
+    font-size: var(--fs-body);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-deadline--done {
+    color: var(--muted);
+  }
+
+  .hqdata-key-dates {
+    display: grid;
+    gap: 4px;
+  }
+
+  .hqdata-key-date {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    color: inherit;
+    font-size: var(--fs-ui);
+    text-decoration: none;
+  }
+
+  .hqdata-key-date:hover .hqdata-key-date__title,
+  .hqdata-key-date:focus-visible .hqdata-key-date__title {
+    text-decoration: underline;
+  }
+
+  .hqdata-offers {
+    margin: 0;
+    font-size: var(--fs-body);
+  }
+
+  .hqdata-offers__classes {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-next {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-closing__advice {
+    margin: 0;
+  }
+
+  .hqdata-guardrail-words {
+    display: grid;
+    gap: 4px;
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--accent);
+    font-size: var(--fs-ui);
+  }
+
+  /* A source's address exists only on paper, after its "Source" link. */
+  .hqdata-print-url {
+    display: none;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-pilot-form__pair,
+    .hqdata-pilot-form__three,
+    .hqdata-kv__row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-trials__row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-trials__row .hqdata-actions {
+      grid-column: 1;
+      grid-row: auto;
+    }
+
+    .hqdata-kv__row--act {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* On a phone a row's forms open under the whole row, never off the screen's edge. */
+    .hqdata-kv__row,
+    .hqdata-trials__row {
+      position: relative;
+    }
+
+    .hqdata-kv__row .popover,
+    .hqdata-trials__row .popover {
+      position: static;
+    }
+
+    .hqdata-kv__row .popover > .popover__panel,
+    .hqdata-trials__row .popover > .popover__panel {
+      right: 0;
+      left: 0;
+      width: auto;
+    }
+
+    /* On a phone the firm opens on its notes, then its closing, then the rest. */
+    .record-layout__main > .hqdata-investor__closing {
+      order: -1;
+    }
+  }
+}
+
+@media print {
+  .hqdata-print-url {
+    display: inline;
+  }
+
+  /* On paper a checklist is the page's width, every column on it. */
+  .hqdata-investor__closing .table-frame,
+  .hqdata-closing .table-frame,
+  .hqdata-pilot .table-frame {
+    overflow: visible;
+  }
+
+  .hqdata-investor__closing .data-table,
+  .hqdata-closing .data-table,
+  .hqdata-pilot .data-table {
+    min-width: 0;
+  }
+
+  .hqdata-actions,
+  .hqdata-inline-action,
+  .hqdata-pilot .popover,
+  .hqdata-closing .popover,
+  .hqdata-investor__closing .popover,
+  .hqdata-guardrails .popover {
+    display: none !important;
+  }
+}
