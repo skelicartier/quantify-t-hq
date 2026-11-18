@@ -71,7 +71,11 @@ const provider = (key: string): MailProvider => {
   );
   return walkProvider;
 };
-const engine = new MergeEngine({ dir, liveProvider: provider });
+const engine = new MergeEngine({
+  dir,
+  liveProvider: provider,
+  delivery: { tickMs: 1_000, minGapMs: 1_000, pageGapMs: 0, recentEveryMs: 3_600_000 },
+});
 
 const pad = (value: number) => String(value).padStart(2, "0");
 const LISTS = 20;
@@ -149,6 +153,9 @@ if (engine.status().counts.lists === 0) {
   });
   engine.startMailing(practice.id, { practice: true });
   while ((await engine.step()) !== "finished");
+  // Delivery read back from the stand-in provider (delivery spec §5.6): Walk live 01's mix.
+  const read = await engine.readDelivery("now");
+  console.log(`[walk] delivery read: ${read.kept} events kept`);
   const status = engine.status();
   console.log(
     `[walk] seeded ${status.counts.lists} lists of ${PEOPLE}; ${status.sent_today} live sends to "Walk 01"; one practice run`,
@@ -192,6 +199,9 @@ await new Promise<void>((resolve) => server.listen(socket, resolve));
 console.log(`[walk] listening on ${socket}`);
 await data.ready(120_000);
 void engine.loop((ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 100))));
+void engine.deliveryLoop(
+  (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 1_000))),
+);
 
 // ------------------------------------------------------------------ each walk's own seed
 

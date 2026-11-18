@@ -6,7 +6,14 @@
  * written log never holds them.
  */
 
-import { LEAD_FIELDS, OUTCOMES, STOP_REASONS } from "../../../src/lib/data/labels";
+import {
+  LEAD_FIELDS,
+  OUTCOMES,
+  POSITIVE_OUTCOMES,
+  STOP_REASONS,
+} from "../../../src/lib/data/labels";
+import { NOT_ON_STOP_LIST, stopWordsOf, whereOf } from "../../../src/lib/data/labels-outreach";
+import type { DeliveryFeed } from "../../../src/lib/merge/delivery-contracts";
 import type { SenderFiles, Stop } from "../sender-files";
 import type { Lead } from "./build";
 import type {
@@ -23,6 +30,8 @@ import {
   fieldOf,
   shortDay,
   type ActivityItem,
+  type LeadConsent,
+  type LeadDelivery,
   type LeadField,
   type LeadNote,
   type LeadRow,
@@ -31,7 +40,8 @@ import {
   type StopInfo,
 } from "./types";
 
-export type LeadDetail = LeadRow & {
+/** The row, whole: its one-word `delivery` gives way to every send that was read. */
+export type LeadDetail = Omit<LeadRow, "delivery"> & {
   fields: Record<LeadField, string>;
   other: Record<string, string>;
   edited: LeadField[];
@@ -53,7 +63,30 @@ export type LeadDetail = LeadRow & {
   /** Mail merge is sending to a list this lead is on: the page refreshes itself. */
   sending_to_them: boolean;
   origin: "hand" | "referral" | "reply" | "copied" | null;
+  /** Every send whose delivery was read, newest first; [] when nothing reads it here. */
+  delivery: LeadDelivery[];
+  consent: LeadConsent;
 };
+
+const SHORT_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+/** "2026-11-14" → "14 Nov 2026": a calendar day, never shifted. */
+export function dayInWords(day: string): string {
+  const [year = "", month = "1", date = "1"] = day.split("-");
+  return `${Number(date)} ${SHORT_MONTHS[Number(month) - 1] ?? ""} ${year}`;
+}
 
 export type RecordContext = {
   sender: SenderFiles;
@@ -75,6 +108,10 @@ export type RecordContext = {
   waitlist: () => WaitlistService | null;
   investors: () => InvestorsLookup | null;
   today: string;
+  /** The read-back of delivery, when it is loaded here. */
+  delivery?: () => DeliveryFeed | null;
+  /** This Mac's calendar day of an instant (`core.day`). */
+  dayOf?: (at: string) => string;
 };
 
 const humanise = (key: string): string =>
@@ -271,6 +308,33 @@ export function detailOf(lead: Lead, context: RecordContext): LeadDetail {
   const fields = {} as Record<LeadField, string>;
   for (const key of LEAD_FIELD_KEYS) fields[key] = lead.fields[key];
 
+  // Consent and source: read from the stop list and the replies, never asked of anyone.
+  const dayOf = context.dayOf ?? ((at: string) => at.slice(0, 10));
+  const delivery: LeadDelivery[] = (context.delivery?.()?.forEmail(lead.email) ?? [])
+    .map((send) => ({
+      mailing_id: send.mailing_id,
+      mailing: send.mailing,
+      sent_at: send.sent_at,
+      shown: send.standing.shown,
+      reason: send.standing.reason,
+      at: send.standing.reaction_at ?? send.standing.delivery_at,
+    }))
+    .sort((a, b) => b.sent_at.localeCompare(a.sent_at));
+  const firstYes = replyRows
+    .filter((reply) => !reply.taken_back && POSITIVE_OUTCOMES.includes(reply.outcome))
+    .reduce<string | null>(
+      (first, reply) => (first === null || reply.received_at < first ? reply.received_at : first),
+      null,
+    );
+  const consent: LeadConsent = {
+    where: whereOf(lead.fields.country),
+    opted_out_on: stopEntry && stopEntry.reason === "asked" ? dayOf(stopEntry.at) : null,
+    stop_words: stopEntry
+      ? stopWordsOf(stopEntry.reason, dayInWords(dayOf(stopEntry.at)))
+      : NOT_ON_STOP_LIST,
+    said_yes_on: firstYes ? dayOf(firstYes) : null,
+  };
+
   return {
     ...row,
     fields,
@@ -304,5 +368,7 @@ export function detailOf(lead: Lead, context: RecordContext): LeadDetail {
       lead.lists.some((member) => !member.gone && sendingMailing.list_ids.includes(member.list_id)),
     ),
     origin: lead.origin,
+    delivery,
+    consent,
   };
 }

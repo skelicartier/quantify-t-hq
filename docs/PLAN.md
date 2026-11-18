@@ -418,6 +418,36 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
+**As of the delivery batch: Mail merge reads delivery back; Batches, lead source, trust packs**
+(2026-11-18). Portal and the local sender; no service change. Spec: `ws-notes/delivery/spec.md` in
+`~/Library/Caches/hq-work`; from the second research report
+(`~/Documents/evm/reports/HQ complete company platform.md`).
+
+- **What it adds.** Mail merge reads the provider's own delivery events back (every 30 minutes for
+  the last 7 days, daily to 30, on demand to 90; at most 60 requests an hour; nothing without a key;
+  a read never holds a send up) and shows per mailing: accepted, delivered, not yet, soft and hard
+  bounces, blocked, complaints, unsubscribed, and a "Didn't arrive" list. "Sent" now reads
+  "accepted by the provider". A hard bounce, complaint, unsubscribe or invalid address goes on the
+  stop list automatically from the moment this code first ran with the key
+  (`auto_stop_from` 2026-11-18T17:31Z); anything earlier waits for one "Apply to the stop list"
+  press carrying the count it showed. Warnings (complaints over 0.1 per cent, hard bounces over 2)
+  never pause a send; "Pause this mailing" sits beside a warning only while it sends. "Make a retry
+  mailing for these" makes a draft only. Data: Waitlist › Batches (a funnel per real mailing: sent,
+  delivered, bounced, replies, yeses, calls, pilots), "Delivery, last 7 days" on the overview, a
+  lead's consent and source with Where and Delivery filters, trust packs for buyer diligence, and
+  the phone record-header overlap fixed in `globals.css`. Modules now 23.
+- **The provider's tag filter** (`tags=["hq-mail-merge"]`) returned no events on the real account;
+  the built-in check read once without it, found the mail, and turned the filter off for good. The
+  first real read kept 3,998 events; last 7 days: 1,978 accepted, 1,905 delivered, 54 hard bounces
+  (2.7 per cent, warned), 19 soft, 7 unsubscribed, 0 complaints. 140 older addresses wait for his
+  press; the stop list was 0 before and after shipping.
+- **Verified on a copy** (`hq-dl`, next 3130, mocks 7099/7100): vitest 141 files / 1,277 tests;
+  `check:data` 1,589 / 0; harness data 220, find 44, mail-campaign pages 32; `check:mail-merge`
+  105 / 0 including MD1–MD12. Rollback: `~/Library/Caches/hq-work/ship-backup-20261118-delivery/`.
+- **Next.** The "duties" batch (`ws-notes/duties/spec.md`: Registers with incidents and CERT-In,
+  trademarks, domains and certificates; the rule book's duty rules, holidays, stipend tax, a cash
+  view; Money records with TDS and MSME; statements, the monthly close, computed cash and runway).
+
 **As of the company batch: the company record, Key dates from its facts, meetings and minutes,
 the register of members, agreements, the Owner-only people ledger, touches, pilots, diligence and
 the closing checklist** (2026-11-14). Portal and the local sender; no service change, no migration.

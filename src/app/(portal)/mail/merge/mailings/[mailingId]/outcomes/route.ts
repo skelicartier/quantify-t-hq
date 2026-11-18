@@ -23,8 +23,29 @@ export async function GET(
   try {
     const answer = await readMergeOutcomes(mailingId);
     const csv = toCsv(
-      ["email", "name", "list", "state", "reason", "at"],
-      answer.rows.map((row) => [row.email, row.name, row.list, row.state, row.reason, row.at]),
+      [
+        "email",
+        "name",
+        "list",
+        "state",
+        "reason",
+        "at",
+        "delivery",
+        "delivery_reason",
+        "delivery_at",
+      ],
+      answer.rows.map((row) => [
+        row.email,
+        row.name,
+        row.list,
+        row.state,
+        row.reason,
+        row.at,
+        // A sender from before the read-back sends none of the three.
+        row.delivery ?? "",
+        row.delivery_reason ?? "",
+        row.delivery_at ?? "",
+      ]),
     );
     const name = answer.name.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60) || "mailing";
     return new NextResponse(`﻿${csv}`, {

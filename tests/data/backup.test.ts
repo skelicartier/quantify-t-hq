@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DISK_FULL } from "../../scripts/data/backup/make";
 import { noBackupDisk } from "../../scripts/data/backup/index";
 import { localDay } from "../../scripts/data/days";
+import { WALK_KEY, WalkProvider, resetWalkEvents } from "../../scripts/mail-merge/e2e-provider";
 import { Scripted, peopleCsv, readyToSend, sendLive } from "./leads-kit";
 import { WALKER, codeOf, startStack, until, type Stack } from "./helpers";
 
@@ -270,6 +271,79 @@ describe("the backup zip (B1, B2)", () => {
     );
     expect(said).not.toContain("keep it as private as this Mac");
   });
+
+  it("holds delivery read back from the provider, with no address inside a bounce's reason (delivery spec §6.10)", async () => {
+    // A stack of its own: this one's provider is the walk's stand-in, which has events to read.
+    const shared = stack;
+    resetWalkEvents();
+    stack = await startStack({
+      liveProvider: (key) => new WalkProvider(key, () => undefined),
+      engine: { delivery: { pageGapMs: 0 } },
+    });
+    try {
+      const engine = stack.engine;
+      engine.saveSettings({
+        from_email: "founder@walk.example",
+        from_name: "Walk Founder",
+        per_minute: 60,
+        daily_cap: 5_000,
+      });
+      await engine.setKey({ key: WALK_KEY });
+      const rows = ["First Name,Company,Email"];
+      for (let n = 30; n <= 45; n += 1)
+        rows.push(`Asha${n},Walk Fund ${n},partner${n}@fund${n}.example`);
+      const list = engine.importList({
+        name: "Walk 01",
+        file_name: "walk-01.csv",
+        text: `${rows.join("\n")}\n`,
+      }).list.id;
+      const mailing = engine.createMailing({ name: "Walk live 01" }).mailing.id;
+      engine.updateMailing(mailing, {
+        subject: "A note for {{company}}",
+        body: "Hi {{first_name}},\n\nA short note.",
+        list_ids: [list],
+      });
+      await engine.testMailing(mailing, { to: "founder@walk.example" });
+      engine.startMailing(mailing, { practice: false, confirm: 16 });
+      while ((await engine.step()) !== "finished");
+      expect((await engine.readDelivery("now")).outcome).toBe("ok");
+      // Fund 36 bounced hard, 41 complained, 43 unsubscribed: three on the stop list by themselves.
+      expect(engine.stops({}).total).toBe(3);
+
+      const { build, path } = await backup();
+      expect(build.state).toBe("ready");
+      execFileSync("unzip", ["-tq", path]);
+      const names = entries(path);
+      for (const name of [
+        "mail-merge/delivery/state.json",
+        "mail-merge/delivery/applied.jsonl",
+        `mail-merge/delivery/mailings/${mailing}.json`,
+      ])
+        expect(names).toContain(name);
+      expect(names.filter((name) => name.startsWith("mail-merge/delivery/"))).toHaveLength(3);
+      expect(names.some((name) => /provider\.key|provider-status\.json|\.sock$/.test(name))).toBe(
+        false,
+      );
+      const kept = entry(path, `mail-merge/delivery/mailings/${mailing}.json`).toString();
+      expect(kept).toContain("550 5.1.1 <[address]>: user unknown");
+      for (const name of names) {
+        const text = entry(path, name).toString();
+        expect(text, name).not.toMatch(/user unknown[^"]*@|5\.1\.1 <[^[]/);
+        expect(text.includes(WALK_KEY), name).toBe(false);
+      }
+      expect(entry(path, "README.txt").toString()).toContain(
+        "- mail-merge/: Mail merge's lists, mailings, written log, stop list, settings, tests log and delivery read back from the provider.",
+      );
+      const manifest = entry(path, "manifest-sha256.txt").toString();
+      expect(manifest).toContain(
+        `${sha256(entry(path, "mail-merge/delivery/state.json"))}  mail-merge/delivery/state.json`,
+      );
+    } finally {
+      await stack.stop();
+      stack = shared;
+      resetWalkEvents();
+    }
+  }, 60_000);
 
   it("is refused when the disk would have under 5 GB free after it", async () => {
     await stack.ask("POST", "/data/_test/backup/free-bytes", {

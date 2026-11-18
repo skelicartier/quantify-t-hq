@@ -165,6 +165,9 @@ function Actions({ today }: { today: string }) {
       <ButtonLink href={`${BASE}/pilots`} size="small">
         Pilots
       </ButtonLink>
+      <ButtonLink href={`${BASE}/batches`} size="small">
+        Batches
+      </ButtonLink>
       <ButtonLink href={`${BASE}/diligence`} size="small">
         Diligence
       </ButtonLink>

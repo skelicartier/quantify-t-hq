@@ -46,6 +46,24 @@ export const LEAD_FIELD_KEYS = [
 export const leadFieldSchema = z.enum(LEAD_FIELD_KEYS);
 export type LeadFieldKey = z.infer<typeof leadFieldSchema>;
 
+export const leadWhereSchema = z.enum(["us", "uk", "eu", "in", "elsewhere", "unknown"]);
+export type LeadWhere = z.infer<typeof leadWhereSchema>;
+
+/** A send's delivery in one word: the contract's standings and reactions. */
+export const deliveryShownSchema = z.enum([
+  "delivered",
+  "not_yet",
+  "deferred",
+  "soft_bounce",
+  "hard_bounce",
+  "blocked",
+  "invalid",
+  "error",
+  "complaint",
+  "unsubscribed",
+]);
+export type DeliveryShown = z.infer<typeof deliveryShownSchema>;
+
 export const leadRowSchema = z.object({
   lead_id: z.string(),
   email: z.string(),
@@ -66,6 +84,8 @@ export const leadRowSchema = z.object({
   batches: z.array(z.string()),
   tags: z.array(z.string()),
   badges: z.array(z.string()),
+  where: leadWhereSchema,
+  delivery: deliveryShownSchema.nullable(),
 });
 export type LeadRow = z.infer<typeof leadRowSchema>;
 
@@ -102,6 +122,8 @@ export const leadsPageSchema = ok.extend({
     batch: z.array(facetEntrySchema),
     source: z.array(facetEntrySchema),
     tag: z.array(facetEntrySchema),
+    where: z.array(facetEntrySchema),
+    delivery: z.array(facetEntrySchema),
   }),
   read_at: z.string(),
   sending: z.boolean(),
@@ -178,6 +200,23 @@ export const leadDetailSchema = leadRowSchema.extend({
   }),
   sending_to_them: z.boolean(),
   origin: z.enum(["hand", "referral", "reply", "copied"]).nullable(),
+  // On one lead, every send that was read, newest first (the row's one word gives way to it).
+  delivery: z.array(
+    z.object({
+      mailing_id: z.string(),
+      mailing: z.string(),
+      sent_at: z.string(),
+      shown: deliveryShownSchema,
+      reason: z.string(),
+      at: z.string().nullable(),
+    }),
+  ),
+  consent: z.object({
+    where: leadWhereSchema,
+    opted_out_on: z.string().nullable(),
+    stop_words: z.string(),
+    said_yes_on: z.string().nullable(),
+  }),
 });
 export type LeadDetail = z.infer<typeof leadDetailSchema>;
 
@@ -239,6 +278,8 @@ export type LeadsQuery = Partial<
     | "batch"
     | "source"
     | "tag"
+    | "where"
+    | "delivery"
     | "domain"
     | "sort",
     string

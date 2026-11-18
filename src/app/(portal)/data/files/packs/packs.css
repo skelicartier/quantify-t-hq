@@ -107,6 +107,19 @@
     margin: 0;
   }
 
+  /* "For Labs too" on a trust pack: the tick and its Save, on one wrapping row. */
+  .hqdata-pack__labs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .hqdata-pack__labs .form-actions {
+    margin: 0;
+  }
+
   .hqdata-pack__index {
     margin: 0;
     padding: 12px;
@@ -133,7 +146,8 @@
 
 @media print {
   .hqdata-pack__order,
-  .hqdata-pack__covers .form-actions {
+  .hqdata-pack__covers .form-actions,
+  .hqdata-pack__labs {
     display: none;
   }
 }

@@ -18,6 +18,12 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  DELIVERY_WORDS,
+  messageIdKey,
+  type ReadScope,
+} from "../../src/lib/merge/delivery-contracts";
+import { Delivery, type DeliveryOptions, type LiveSend, type ReadResult } from "./delivery";
+import {
   ImportRefused,
   displayName,
   importCsv,
@@ -204,6 +210,8 @@ export type EngineOptions = {
   now?: () => Date;
   /** The provider a live send uses, given the key. Tests hand in their own. */
   liveProvider?: (key: string) => MailProvider;
+  /** How often delivery is read back, and how gently; the defaults are `DELIVERY_DEFAULTS`. */
+  delivery?: Partial<DeliveryOptions>;
 };
 
 const LIMITS = {
@@ -264,6 +272,9 @@ export class MergeEngine {
   readonly #writtenKeys = new Set<string>();
   #retryAt = 0;
   #looping = false;
+  /** Delivery read back from the provider: its own loop, beside the send's and never in it. */
+  readonly #delivery: Delivery;
+  #deliveryLooping = false;
 
   constructor(options: EngineOptions) {
     this.#store = new Store(options.dir);
@@ -300,6 +311,20 @@ export class MergeEngine {
         this.#saveMailing(mailing);
       }
     }
+    this.#delivery = new Delivery({
+      store: this.#store,
+      now: this.#now,
+      options: options.delivery,
+      provider: () => (this.#key ? this.#liveProvider(this.#key) : null),
+      sends: () => this.#liveSends(),
+      stop: (email, reason, detail, at) => {
+        if (this.#stops.has(email)) return "already";
+        this.#stops.set(email, { email, reason, detail, at });
+        this.#saveStops();
+        return "added";
+      },
+      stopSince: (email) => this.#stops.get(email)?.at ?? null,
+    });
   }
 
   // ------------------------------------------------------------------ small helpers
@@ -502,6 +527,8 @@ export class MergeEngine {
       );
     this.#key = key;
     this.#store.writeSecret("provider.key", key);
+    // From this instant on, what the provider reports can stop an address by itself.
+    this.#delivery.keySet();
     await this.#check();
     return this.status();
   }
@@ -1156,6 +1183,7 @@ export class MergeEngine {
       started_at: mailing.started_at,
       finished_at: mailing.finished_at,
       editable: this.#editable(mailing),
+      delivery: mailing.mode === "live" ? this.#delivery.brief(mailing.id) : null,
     };
   }
 
@@ -1305,6 +1333,7 @@ export class MergeEngine {
     const offset = Math.max(0, Math.trunc(query.offset ?? 0));
     const wanted = query.state ?? "all";
     const listNames = new Map([...this.#lists.values()].map((list) => [list.id, list.name]));
+    const standings = showRun && run.mode === "live" ? this.#delivery.standings(mailing.id) : null;
     const rows = showRun
       ? run.recipients
           .map((recipient) => {
@@ -1316,6 +1345,7 @@ export class MergeEngine {
               state: outcome ? outcome.state : ("waiting" as const),
               reason: outcome?.reason ?? "",
               at: outcome?.at ?? null,
+              delivery: standings?.get(recipient.email)?.shown ?? null,
             };
           })
           .filter((row) => wanted === "all" || row.state === wanted)
@@ -1610,11 +1640,13 @@ export class MergeEngine {
     const mailing = this.#mailing(id);
     const run = this.#runs.get(mailing.id);
     const listNames = new Map([...this.#lists.values()].map((list) => [list.id, list.name]));
+    const standings = run?.mode === "live" ? this.#delivery.standings(mailing.id) : null;
     return {
       name: mailing.name,
       mode: run?.mode ?? null,
       rows: (run?.recipients ?? []).map((recipient) => {
         const outcome = run!.outcomes.get(recipient.key);
+        const standing = standings?.get(recipient.email);
         return {
           email: recipient.email,
           name: recipient.name,
@@ -1622,9 +1654,201 @@ export class MergeEngine {
           state: outcome ? outcome.state : "waiting",
           reason: outcome?.reason ?? "",
           at: outcome?.at ?? "",
+          delivery: standing ? DELIVERY_WORDS[standing.shown].label : "",
+          delivery_reason: standing?.reason ?? "",
+          delivery_at: standing ? (standing.reaction_at ?? standing.delivery_at ?? "") : "",
         };
       }),
     };
+  }
+
+  // ------------------------------------------------------------------ delivery read back
+
+  /** Every live run's recipients the provider accepted, or may have, in send order. */
+  #liveSends(): LiveSend[] {
+    const sends: LiveSend[] = [];
+    for (const [mailingId, run] of this.#runs) {
+      if (run.mode !== "live") continue;
+      const mailing = this.#mailings.get(mailingId);
+      if (!mailing) continue;
+      for (const recipient of run.recipients) {
+        const outcome = run.outcomes.get(recipient.key);
+        if (!outcome || (outcome.state !== "sent" && outcome.state !== "unknown")) continue;
+        sends.push({
+          mailing_id: mailing.id,
+          name: mailing.name,
+          email: recipient.email,
+          message_id: messageIdKey(outcome.message_id),
+          sent_at: outcome.at,
+        });
+      }
+    }
+    return sends;
+  }
+
+  /** A mailing that went out for real, or the refusal that says why it has no delivery. */
+  #liveRun(mailing: Mailing, refusal: string): Run {
+    const run = this.#runs.get(mailing.id);
+    if (!run || run.mode !== "live") throw new Refused(409, "practice", refusal);
+    return run;
+  }
+
+  /**
+   * Read delivery back now and wait for it. It refuses nothing: with no key it answers
+   * `no_key`, and asked while a read goes it answers that read's result.
+   */
+  readDelivery(scope: ReadScope, options: { days?: number } = {}): Promise<ReadResult> {
+    return this.#delivery.read(scope, options);
+  }
+
+  deliveryOverview() {
+    return this.#delivery.overview();
+  }
+
+  /** "Check delivery now": from Mail merge's home, or for one mailing (further back). */
+  async checkDelivery(input: { mailing_id?: unknown; wait?: unknown }) {
+    if (!this.#key)
+      throw new Refused(409, "no_key", "Delivery is read with the provider key. Add it in Setup.");
+    let days = 8;
+    if (input.mailing_id !== undefined && input.mailing_id !== null && input.mailing_id !== "") {
+      const mailing = this.#mailing(clean(input.mailing_id, 64));
+      const run = this.#liveRun(mailing, "A practice run has no delivery to read.");
+      const first = [...run.outcomes.values()]
+        .filter((outcome) => outcome.state === "sent" || outcome.state === "unknown")
+        .reduce<string | null>(
+          (earliest, outcome) =>
+            earliest === null || outcome.at < earliest ? outcome.at : earliest,
+          null,
+        );
+      const since = first === null ? 0 : this.#now().getTime() - new Date(first).getTime();
+      days = Math.min(90, Math.max(8, Math.floor(Math.max(0, since) / 86_400_000) + 2));
+    }
+    if (this.#delivery.reading)
+      return { started: false, reading: true, days, read: this.#delivery.readView() };
+    const refusal = this.#delivery.checkRefusal();
+    if (refusal) throw new Refused(refusal.status, refusal.code, refusal.message);
+    const going = this.#delivery.read("now", { days });
+    // A read that fails says so in `read`; it never takes the request down with it.
+    going.catch(() => undefined);
+    if (input.wait === true) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        going.catch(() => undefined),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, 20_000);
+        }),
+      ]);
+      clearTimeout(timer);
+    }
+    return {
+      started: true,
+      reading: this.#delivery.reading,
+      days,
+      read: this.#delivery.readView(),
+    };
+  }
+
+  /** The press: what waited from before the first run with a key goes on the stop list. */
+  applyDeliveryBacklog(input: { count?: unknown }) {
+    const done = this.#delivery.applyBacklog(input.count);
+    if ("status" in done) throw new Refused(done.status, done.code, done.message);
+    return done;
+  }
+
+  mailingDelivery(id: string, query: { view?: string; offset?: number }) {
+    const mailing = this.#mailing(id);
+    const run = this.#runs.get(mailing.id);
+    const listNames = new Map([...this.#lists.values()].map((list) => [list.id, list.name]));
+    const people = new Map(
+      (run?.mode === "live" ? run.recipients : []).map((recipient) => [
+        recipient.email,
+        {
+          name: recipient.name,
+          list: listNames.get(recipient.list_id) ?? "A list since removed",
+        },
+      ]),
+    );
+    return {
+      mailing: { id: mailing.id, name: mailing.name, state: mailing.state, mode: mailing.mode },
+      read: this.#delivery.readView(),
+      ...(run?.mode === "live"
+        ? this.#delivery.mailingRows(mailing.id, people, query)
+        : this.#delivery.mailingRows("", people, query)),
+    };
+  }
+
+  /**
+   * "Make a retry mailing for these": a draft and nothing else. It goes only to the people
+   * the provider failed in passing (a soft bounce, blocked, not sent) who are not on the
+   * stop list and are still on the lists. Nothing is sent or started here: the test of the
+   * wording, the typed count and a fresh code all apply to it as to any draft.
+   */
+  retryMailing(id: string) {
+    const from = this.#mailing(id);
+    this.#liveRun(from, "Only a mailing sent for real has deliveries to retry.");
+    const wanted = this.#delivery.retryable(from.id);
+    if (wanted.length === 0)
+      throw new Refused(409, "nothing_to_retry", "Nobody here is waiting for a retry.");
+    const listIds = from.list_ids.filter((listId) => this.#lists.has(listId));
+    const onLists = new Set<string>();
+    for (const listId of listIds)
+      for (const row of this.#lists.get(listId)!.rows) onLists.add(row.email);
+    const picked = wanted.filter((email) => onLists.has(email));
+    if (picked.length === 0)
+      throw new Refused(
+        409,
+        "not_on_lists",
+        "The people to retry are no longer on this mailing's lists.",
+      );
+    const stamp = this.#stamp();
+    const mailing: Mailing = {
+      ...from,
+      id: randomUUID(),
+      name: `${from.name} (retry)`.slice(0, LIMITS.name),
+      list_ids: listIds,
+      only_column: "",
+      only_value: "",
+      pick_only: true,
+      picked,
+      skip_written: false,
+      state: "draft",
+      mode: null,
+      pause_reason: null,
+      run: 0,
+      created_at: stamp,
+      updated_at: stamp,
+      started_at: null,
+      finished_at: null,
+      tested: null,
+    };
+    this.#mailings.set(mailing.id, mailing);
+    this.#saveMailing(mailing);
+    return {
+      mailing: this.#mailingSummary(mailing),
+      picked: picked.length,
+      not_on_lists: wanted.length - picked.length,
+    };
+  }
+
+  /**
+   * Keep reading delivery back until told to stop. Its own loop: a send never waits for a
+   * read and a read never waits for a send.
+   */
+  async deliveryLoop(sleep: (ms: number) => Promise<void>): Promise<void> {
+    if (this.#deliveryLooping) return;
+    this.#deliveryLooping = true;
+    while (this.#deliveryLooping) {
+      try {
+        await this.#delivery.tick();
+      } catch (error) {
+        // By name only: a failure here must not carry an address into the log.
+        console.error(
+          "[mail-merge] a delivery read failed:",
+          error instanceof Error ? error.name : "error",
+        );
+      }
+      await sleep(this.#delivery.options.tickMs);
+    }
   }
 
   async testMailing(id: string, input: { to?: unknown }) {
@@ -2016,5 +2240,7 @@ export class MergeEngine {
 
   stop(): void {
     this.#looping = false;
+    this.#deliveryLooping = false;
+    this.#delivery.halt();
   }
 }

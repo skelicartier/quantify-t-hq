@@ -14,6 +14,7 @@ import { FilterChips, type FilterChip } from "@/components/ui/filter-chips";
 import { Popover } from "@/components/ui/popover";
 import { SelectionBar } from "@/components/ui/selection-bar";
 import { Stat, StatGrid } from "@/components/ui/stat";
+import { StatusPill } from "@/components/ui/status-pill";
 import { Timestamp } from "@/components/ui/timestamp";
 import { DATA_ROLE_LINE, requireData } from "@/lib/data/access";
 import {
@@ -24,8 +25,10 @@ import {
   type LeadsQuery,
 } from "@/lib/data/api/leads";
 import { LEAD_STATUS_ORDER } from "@/lib/data/labels";
+import { NOT_READ_YET, NOT_WRITTEN_TO } from "@/lib/data/labels-outreach";
 import { dataRead } from "@/lib/data/read";
 import { formatNumber } from "@/lib/format";
+import { DELIVERY_WORDS } from "@/lib/merge/delivery-contracts";
 import { requestNow } from "@/lib/request-time";
 import { boundedInteger, firstSearchValue } from "@/lib/search-params";
 
@@ -72,6 +75,8 @@ const FACETS = [
   ["batch", "Batch"],
   ["source", "Source"],
   ["tag", "Tag"],
+  ["where", "Where"],
+  ["delivery", "Delivery"],
 ] as const;
 type FacetKey = (typeof FACETS)[number][0];
 
@@ -81,6 +86,7 @@ const COLUMNS = [
   { key: "title", label: "Title" },
   { key: "place", label: "Place" },
   { key: "status", label: "Status", width: "16%" },
+  { key: "delivery", label: "Delivery" },
   { key: "written", label: "Last written" },
   { key: "batch", label: "Batch" },
 ];
@@ -100,6 +106,8 @@ const QUERY_KEYS = [
   "batch",
   "source",
   "tag",
+  "where",
+  "delivery",
   "domain",
   "sort",
 ] as const;
@@ -506,6 +514,19 @@ function List({ page, query, now }: { page: LeadsPage; query: LeadsQuery; now: n
             </td>
             <td>
               <LeadStatus status={lead.status} detail={lead.status_detail} />
+            </td>
+            <td>
+              {lead.delivery ? (
+                <StatusPill
+                  value={lead.delivery}
+                  label={DELIVERY_WORDS[lead.delivery].label}
+                  tone={DELIVERY_WORDS[lead.delivery].tone}
+                />
+              ) : (
+                <span className="table-sub">
+                  {lead.times_written > 0 ? NOT_READ_YET : NOT_WRITTEN_TO}
+                </span>
+              )}
             </td>
             <td className="nowrap">
               {lead.last_written_at ? (

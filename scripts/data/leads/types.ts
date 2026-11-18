@@ -9,6 +9,8 @@ import { createHash } from "node:crypto";
 import type { Staff } from "../protocol";
 import type { SentMail } from "../sender-files";
 import type { LeadField, LeadStatus, Outcome } from "../../../src/lib/data/labels";
+import type { WhereKey } from "../../../src/lib/data/labels-outreach";
+import type { DeliveryStanding, Reaction } from "../../../src/lib/merge/delivery-contracts";
 
 export type { LeadField, LeadStatus, Outcome };
 
@@ -172,6 +174,33 @@ export type LeadRow = {
   batches: string[];
   tags: string[];
   badges: string[];
+  /** Where they are, from the country field alone (never guessed from the address). */
+  where: WhereKey;
+  /** What was read back about the newest send to them, in one word; null when nothing was. */
+  delivery: DeliveryStanding | Reaction | null;
+};
+
+/** One live send to a lead, as the provider's own events say it went. */
+export type LeadDelivery = {
+  mailing_id: string;
+  mailing: string;
+  sent_at: string;
+  shown: DeliveryStanding | Reaction;
+  /** The provider's reason for a failure, addresses taken out; "" for none. */
+  reason: string;
+  /** When that happened: the reaction's time, else the delivery's. */
+  at: string | null;
+};
+
+/** What HQ already holds about a lead's consent and source; nothing here is asked of anyone. */
+export type LeadConsent = {
+  where: WhereKey;
+  /** The day they asked to stop (the stop list's reason "asked"), else null. */
+  opted_out_on: string | null;
+  /** The stop list's entry in words, or "Not on the stop list". */
+  stop_words: string;
+  /** The day of their first yes that still stands, else null. */
+  said_yes_on: string | null;
 };
 
 export type LeadSourceState = "waiting" | "reading" | "read" | "failed";

@@ -7,11 +7,13 @@ import {
   cancelMailingAction,
   deleteMailingAction,
   duplicateMailingAction,
+  checkDeliveryAction,
   pauseMailingAction,
   pickAllAction,
   pickPersonAction,
   practiseMailingAction,
   resumeMailingAction,
+  retryMailingAction,
   saveMailingAction,
   startMailingAction,
   testMailingAction,
@@ -20,6 +22,7 @@ import { SudoGate } from "@/components/admin/sudo-gate";
 import { MailForm } from "@/components/mail/mail-form";
 import { MailTabs } from "@/components/mail/mail-tabs";
 import { MailingPill, RecipientPill, SenderDown } from "@/components/mail/merge";
+import { DeliveryPill, DeliveryWarnings, isDeliveryShown } from "@/components/mail/merge-delivery";
 import { MergeEditor } from "@/components/mail/merge-editor";
 import { PickBox } from "@/components/mail/merge-people";
 import { RenderedPreview } from "@/components/mail/rendered-preview";
@@ -41,11 +44,16 @@ import {
   MergeRequestError,
   MergeUnavailableError,
   readMergeMailing,
+  readMergeMailingDelivery,
   readMergePeople,
+  type MergeMailingDelivery,
   type MergeMailingDetail,
   type MergePeople,
 } from "@/lib/merge/api";
+import { isRetry } from "@/lib/merge/delivery-contracts";
 import { requestNow } from "@/lib/request-time";
+
+import "../../delivery.css";
 
 export const metadata = { title: "Mailing" };
 export const dynamic = "force-dynamic";
@@ -54,9 +62,64 @@ const RECIPIENT_COLUMNS = [
   { key: "who", label: "Person" },
   { key: "list", label: "List" },
   { key: "state", label: "State" },
+  { key: "delivery", label: "Delivery" },
   { key: "why", label: "Why" },
   { key: "when", label: "When" },
 ];
+
+const DELIVERY_COLUMNS = [
+  { key: "who", label: "Person" },
+  { key: "what", label: "What happened" },
+  { key: "when", label: "When" },
+  { key: "next", label: "What next" },
+];
+
+const DELIVERY_VIEWS = [
+  {
+    key: "didnt",
+    label: "Didn’t arrive",
+    empty: "Everyone accepted has arrived or is still on its way.",
+  },
+  { key: "not_yet", label: "Not delivered yet", empty: "Nothing is still on its way." },
+  { key: "retry", label: "For a retry", empty: "Nobody is waiting for a retry." },
+  { key: "all", label: "Everyone", empty: "Nobody here" },
+] as const;
+type DeliveryViewKey = (typeof DELIVERY_VIEWS)[number]["key"];
+
+/**
+ * A mailing's delivery, from a sender that may be older than the read-back ("nothing
+ * answers there" is then not a failure). Any other failure of this one read is null, and
+ * the rest of the page is drawn as usual.
+ */
+async function readDelivery(
+  mailingId: string,
+  view: DeliveryViewKey,
+  offset: number,
+): Promise<MergeMailingDelivery | "older_sender" | null> {
+  try {
+    return await readMergeMailingDelivery(mailingId, { view, offset });
+  } catch (error) {
+    if (error instanceof MergeRequestError && error.code === "no_such_route") return "older_sender";
+    if (error instanceof MergeRequestError || error instanceof MergeUnavailableError) return null;
+    throw error;
+  }
+}
+
+/** What comes next for one person, in a few words: the stop list, a retry, or nothing. */
+function whatNext(row: MergeMailingDelivery["rows"][number]) {
+  if (row.reaction !== null || row.delivery === "hard_bounce" || row.delivery === "invalid") {
+    if (row.stop.on)
+      return (
+        <>
+          On the stop list since <Timestamp value={row.stop.since} mode="date" />
+        </>
+      );
+    return row.stop.waiting ? "Waiting for your say on Mail merge" : "Not on the stop list";
+  }
+  if (isRetry(row.delivery)) return row.stop.on ? "On the stop list" : "Can be retried";
+  if (row.delivery === "delivered") return "Arrived";
+  return "Still on its way";
+}
 
 const FILTERS = [
   { key: "all", label: "All" },
@@ -107,6 +170,8 @@ export default async function MailingPage({
     q?: string;
     show?: string;
     from?: string;
+    dview?: string;
+    doffset?: string;
   }>;
 }) {
   const { mailingId } = await params;
@@ -122,11 +187,22 @@ export default async function MailingPage({
   const from = Math.max(0, Number.parseInt(query.from ?? "0", 10) || 0);
   let detail: MergeMailingDetail | null = null;
   let people: MergePeople | null = null;
+  const dview: DeliveryViewKey =
+    DELIVERY_VIEWS.find((view) => view.key === query.dview)?.key ?? "didnt";
+  const doffset = Math.max(0, Number.parseInt(query.doffset ?? "0", 10) || 0);
+  let delivered: MergeMailingDelivery | null = null;
+  // A sender from before the read-back has no such answer: the section says so, in a line.
+  let olderSender = false;
   if (allowed) {
     try {
       detail = await readMergeMailing(mailingId, { preview, offset, state: wanted });
       if (detail.mailing.editable && detail.mailing.pick_only)
         people = await readMergePeople(mailingId, { q: search, offset: from, view: show });
+      if (detail.mailing.mode === "live" && detail.mailing.state !== "draft") {
+        const read = await readDelivery(mailingId, dview, doffset);
+        delivered = read === "older_sender" ? null : read;
+        olderSender = read === "older_sender";
+      }
     } catch (error) {
       if (error instanceof MergeRequestError && error.status === 404) notFound();
       if (!(error instanceof MergeUnavailableError || error instanceof MergeRequestError))
@@ -159,6 +235,21 @@ export default async function MailingPage({
   const sendable = detail?.audience.sendable ?? 0;
   const sendLabel = `Send to ${formatNumber(sendable)} ${sendable === 1 ? "person" : "people"}`;
   const filterHref = (state: string) => (state === "all" ? path : `${path}?state=${state}`);
+  // The Delivery section's own two keys, kept apart from the recipients table's.
+  const deliveryHref = (next: { view?: DeliveryViewKey; offset?: number }) => {
+    const params = new URLSearchParams();
+    if (wanted !== "all") params.set("state", wanted);
+    if (offset) params.set("offset", String(offset));
+    const view = next.view ?? dview;
+    if (view !== "didnt") params.set("dview", view);
+    if (next.offset) params.set("doffset", String(next.offset));
+    const text = params.toString();
+    return `${path}${text ? `?${text}` : ""}#merge-delivery`;
+  };
+  const counts = delivered?.delivery?.counts ?? null;
+  const retryCount = delivered?.retry.count ?? 0;
+  const reading = delivered?.read.reading === true;
+  const deliveryView = DELIVERY_VIEWS.find((view) => view.key === dview)!;
   return (
     <>
       <PageHeader
@@ -220,9 +311,13 @@ export default async function MailingPage({
               <>
                 <StatGrid columns={6} label="This send">
                   <Stat
-                    label={practice ? "Practised" : "Sent"}
+                    label={practice ? "Practised" : "Accepted"}
                     value={formatNumber(progress.sent)}
-                    hint={`of ${formatNumber(progress.total)}`}
+                    hint={
+                      practice
+                        ? `of ${formatNumber(progress.total)}`
+                        : `of ${formatNumber(progress.total)}, by the provider`
+                    }
                   />
                   <Stat label="Waiting" value={formatNumber(progress.waiting)} />
                   <Stat
@@ -267,6 +362,224 @@ export default async function MailingPage({
                   </div>
                 )}
               </>
+            )}
+
+            {hasRun && !practice && (
+              <RecordSection
+                id="merge-delivery"
+                title="Delivery"
+                actions={
+                  delivered ? (
+                    <MailForm
+                      action={checkDeliveryAction}
+                      fields={idField}
+                      submitLabel="Check delivery now"
+                      pendingLabel="Asking the provider…"
+                      className="inline-form"
+                      disabled={!delivered.read.key_set || reading}
+                    />
+                  ) : undefined
+                }
+              >
+                <div className="merge-delivery">
+                  {olderSender ? (
+                    <p>
+                      Delivery read-back starts when the sender is next restarted, between batches.
+                    </p>
+                  ) : !delivered ? (
+                    <p>Delivery could not be read from the sender just now.</p>
+                  ) : (
+                    <>
+                      <p>
+                        What the provider says happened after it accepted each message.{" "}
+                        {reading ? (
+                          <span role="status">
+                            Reading now…{" "}
+                            {mailing.state !== "sending" && (
+                              <LiveRefresh intervalSeconds={5} label="Delivery" />
+                            )}
+                          </span>
+                        ) : delivered.delivery?.read_at ? (
+                          <>
+                            Read{" "}
+                            <Timestamp
+                              value={delivered.delivery.read_at}
+                              now={now}
+                              mode="relative"
+                            />
+                            .
+                          </>
+                        ) : (
+                          "Not read yet."
+                        )}
+                      </p>
+                      {!delivered.delivery || !counts ? (
+                        <EmptyState
+                          compact
+                          title="Not read yet"
+                          description="Delivery is read every 30 minutes for mailings sent in the last 7 days, then once a day up to 30 days. Check now to read it at once."
+                        />
+                      ) : (
+                        <>
+                          <DeliveryWarnings
+                            warnings={delivered.warnings}
+                            after={(warning) =>
+                              warning.key === "hard_bounces" ? (
+                                <p>
+                                  {(delivered.waiting_stops ?? 0) > 0
+                                    ? "They go on the stop list once you say so on Mail merge."
+                                    : "Those addresses are on the stop list now."}
+                                </p>
+                              ) : null
+                            }
+                            pause={
+                              mailing.state === "sending" ? (
+                                <MailForm
+                                  action={pauseMailingAction}
+                                  fields={idField}
+                                  submitLabel="Pause this mailing"
+                                  pendingLabel="Pausing…"
+                                  className="inline-form"
+                                />
+                              ) : undefined
+                            }
+                          />
+                          <p className="merge-delivery__sentence">
+                            {formatNumber(counts.delivered)} of {formatNumber(counts.accepted)}{" "}
+                            delivered. {formatNumber(counts.didnt_arrive)} didn&rsquo;t arrive.{" "}
+                            {formatNumber(counts.not_yet)} not delivered yet.
+                            {(counts.complaint > 0 || counts.unsubscribed > 0) &&
+                              ` ${formatNumber(counts.complaint)} marked as spam, ${formatNumber(counts.unsubscribed)} unsubscribed.`}
+                          </p>
+                          <StatGrid columns={3} label="Delivery">
+                            <Stat
+                              label="Delivered"
+                              value={formatNumber(counts.delivered)}
+                              hint={`of ${formatNumber(counts.accepted)} accepted`}
+                            />
+                            <Stat
+                              label="Not delivered yet"
+                              value={formatNumber(counts.not_yet)}
+                              hint="no word, or delayed"
+                            />
+                            <Stat
+                              label="Hard bounces"
+                              value={formatNumber(counts.hard_bounce)}
+                              hint="go on the stop list"
+                              tone={counts.hard_bounce > 0 ? "danger" : "default"}
+                            />
+                            <Stat
+                              label="Soft bounces"
+                              value={formatNumber(counts.soft_bounce)}
+                              hint="worth one retry"
+                            />
+                            <Stat
+                              label="Blocked by the provider"
+                              value={formatNumber(counts.blocked)}
+                              hint="can be retried"
+                            />
+                            <Stat
+                              label="Not a working address"
+                              value={formatNumber(counts.invalid)}
+                              hint="go on the stop list"
+                            />
+                            <Stat
+                              label="Not sent by the provider"
+                              value={formatNumber(counts.error)}
+                              hint="can be retried"
+                            />
+                            <Stat
+                              label="Spam complaints"
+                              value={formatNumber(counts.complaint)}
+                              hint="go on the stop list"
+                              tone={counts.complaint > 0 ? "danger" : "default"}
+                            />
+                            <Stat
+                              label="Unsubscribed"
+                              value={formatNumber(counts.unsubscribed)}
+                              hint="go on the stop list"
+                            />
+                          </StatGrid>
+                          <SegmentedLinks
+                            label="Show"
+                            items={DELIVERY_VIEWS.map((view) => ({
+                              href: deliveryHref({ view: view.key }),
+                              label: `${view.label} ${formatNumber(delivered.counts_by_view[view.key])}`,
+                              current: view.key === dview,
+                            }))}
+                          />
+                          <p className="merge-delivery__print">Showing: {deliveryView.label}</p>
+                          <DataTable
+                            caption="Delivery by person"
+                            columns={DELIVERY_COLUMNS}
+                            isEmpty={delivered.rows.length === 0}
+                            empty={<EmptyState compact title={deliveryView.empty} />}
+                          >
+                            {delivered.rows.map((row) => (
+                              <tr key={row.email}>
+                                <td>
+                                  <span className="mono">{row.email}</span>
+                                  {row.name && <span className="table-sub">{row.name}</span>}
+                                </td>
+                                <td>
+                                  <DeliveryPill shown={row.shown} />
+                                  {row.reason && <span className="table-sub">{row.reason}</span>}
+                                </td>
+                                <td>
+                                  <Timestamp
+                                    value={row.reaction_at ?? row.delivery_at}
+                                    now={now}
+                                    mode="relative"
+                                    fallback="No word yet"
+                                  />
+                                </td>
+                                <td>{whatNext(row)}</td>
+                              </tr>
+                            ))}
+                          </DataTable>
+                          {delivered.total > delivered.limit && (
+                            <Pagination
+                              offset={delivered.offset}
+                              limit={delivered.limit}
+                              returned={delivered.rows.length}
+                              hasMore={delivered.offset + delivered.limit < delivered.total}
+                              nextOffset={delivered.offset + delivered.limit}
+                              buildHref={(next) => deliveryHref({ offset: next })}
+                              noun="people"
+                            />
+                          )}
+                          {retryCount > 0 && (
+                            <div className="merge-delivery__retry">
+                              <p>
+                                {retryCount === 1
+                                  ? "1 soft bounce, blocked or not sent can be tried once more."
+                                  : `${formatNumber(retryCount)} soft bounces, blocked or not sent can be tried once more.`}
+                                {delivered.retry.on_stop_list > 0 &&
+                                  ` ${formatNumber(delivered.retry.on_stop_list)} more are on the stop list and are left out.`}
+                              </p>
+                              <div className="merge-delivery__act">
+                                <MailForm
+                                  action={retryMailingAction}
+                                  fields={idField}
+                                  submitLabel="Make a retry mailing for these"
+                                  pendingLabel="Making the draft…"
+                                  className="inline-form"
+                                />
+                                <p className="side-quiet">
+                                  It makes a draft that goes only to these{" "}
+                                  {formatNumber(retryCount)}, with “Leave out anyone another mailing
+                                  already reached” unticked. Nothing goes until you test it and send
+                                  it.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              </RecordSection>
             )}
 
             {mailing.editable && (
@@ -640,6 +953,13 @@ export default async function MailingPage({
                       <td>{row.list}</td>
                       <td>
                         <RecipientPill state={row.state} practice={practice} />
+                      </td>
+                      <td>
+                        {practice ? null : isDeliveryShown(row.delivery) ? (
+                          <DeliveryPill shown={row.delivery} />
+                        ) : row.state === "sent" || row.state === "unknown" ? (
+                          <span className="table-sub">Not read yet</span>
+                        ) : null}
                       </td>
                       <td>{row.reason}</td>
                       <td>{row.at && <Timestamp value={row.at} now={now} mode="relative" />}</td>

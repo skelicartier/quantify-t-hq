@@ -22,6 +22,7 @@ import {
   type DataPackPage,
 } from "@/lib/data/api/packs";
 import { PACK_NEEDS, PACK_SHARE_HOW, labelOf } from "@/lib/data/labels";
+import { PACK_KINDS } from "@/lib/data/labels-trust";
 import { dataRead } from "@/lib/data/read";
 import { formatBytes, formatDate, formatNumber } from "@/lib/format";
 import { firstSearchValue } from "@/lib/search-params";
@@ -35,6 +36,7 @@ import {
   removePackItemAction,
   renamePackAction,
   savePackIndexAction,
+  setPackLabsAction,
 } from "../actions";
 import "../packs.css";
 
@@ -46,6 +48,14 @@ const SEND_NOTE =
   "HQ does not send the pack. Download the zip and send it from your own mailbox: one attachment over 3 MB would not go through Send by email.";
 const LIST_NOTE =
   "From an investor's published list for a company that has not launched: the deck, the team and a roadmap to the next round, then pilot data once there is some.";
+
+const TRUST_SEND_NOTE =
+  "HQ does not send the pack. Download the zip and send it from your own mailbox, or show it in a meeting: buyers usually ask for it once they are serious.";
+const TRUST_LIST_NOTE =
+  "What a buyer's security and compliance team asks for before a purchase. A line marked “When there is some” is never counted as missing.";
+const QUESTIONNAIRE_NOTE =
+  "Upload a new version in Files when the answers change: the pack always takes the newest.";
+const SHARE_HINT = "A record of what you shared, for you. HQ sends nothing.";
 
 const ITEM_COLUMNS = [
   { key: "n", label: "No.", align: "end" as const },
@@ -119,17 +129,27 @@ function Pack({
 }) {
   const { pack } = page;
   const id = pack.pack_id;
+  const trust = pack.kind === "trust";
+  const lines = page.checklist.map((line) => ({ key: line.key, label: line.label }));
   return (
     <div className="hqdata-pack">
       <RecordHeader
         crumbs={[
           { href: "/data/files", label: "Files" },
-          { href: "/data/files/packs", label: "Data-room packs" },
+          trust
+            ? { href: "/data/files/packs?kind=trust", label: "Trust packs" }
+            : { href: "/data/files/packs", label: "Data-room packs" },
         ]}
         title={pack.name}
         status={
-          pack.archived ? (
-            <StatusPill value="archived" label="Archived" tone="neutral" />
+          trust || pack.archived ? (
+            <>
+              {trust && <StatusPill value="trust" label={PACK_KINDS.trust} tone="neutral" />}
+              {trust && pack.labs && (
+                <StatusPill value="labs" label="For Labs too" tone="neutral" />
+              )}
+              {pack.archived && <StatusPill value="archived" label="Archived" tone="neutral" />}
+            </>
           ) : undefined
         }
         readouts={[
@@ -187,7 +207,7 @@ function Pack({
         }
       />
       <Callout tone="neutral" compact>
-        {SEND_NOTE}
+        {trust ? TRUST_SEND_NOTE : SEND_NOTE}
       </Callout>
 
       <RecordSection
@@ -200,7 +220,13 @@ function Pack({
           columns={ITEM_COLUMNS}
           columnMenu={false}
           isEmpty={page.items.length === 0}
-          empty={<p className="page-note">Nothing in the pack yet. Add the deck first.</p>}
+          empty={
+            <p className="page-note">
+              {trust
+                ? "Nothing in the pack yet. Add the questionnaire answers first."
+                : "Nothing in the pack yet. Add the deck first."}
+            </p>
+          }
         >
           {page.items.map((item) => (
             <tr key={item.item_id} id={`pack-item-${item.n}`}>
@@ -229,6 +255,7 @@ function Pack({
                   itemId={item.item_id}
                   n={item.n}
                   covers={item.covers}
+                  lines={lines}
                 />
               </td>
               <td>
@@ -284,6 +311,24 @@ function Pack({
       </RecordSection>
 
       <RecordSection id="pack-missing" title="What's missing">
+        {trust && (
+          <MailForm
+            action={setPackLabsAction}
+            fields={{ pack_id: id }}
+            submitLabel="Save"
+            pendingLabel="Saving…"
+            className="inline-form hqdata-pack__labs"
+          >
+            <Checkbox
+              id="pack-labs"
+              name="labs"
+              value="1"
+              defaultChecked={pack.labs}
+              label="For Labs too"
+              description="Adds provenance, the data dictionary, the MNPI policy and the alternative-data answers."
+            />
+          </MailForm>
+        )}
         <DataTable caption="Checklist" columns={CHECKLIST_COLUMNS} columnMenu={false}>
           {page.checklist.map((line) => {
             const titles = line.covered_by.map((n) => {
@@ -294,7 +339,12 @@ function Pack({
               <tr key={line.key}>
                 <td>{line.label}</td>
                 <td>{PACK_NEEDS[line.need]}</td>
-                <td>{line.why}</td>
+                <td>
+                  {line.why}
+                  {trust && line.key === "questionnaire" && (
+                    <span className="table-sub">{QUESTIONNAIRE_NOTE}</span>
+                  )}
+                </td>
                 <td>
                   {titles.length > 0 ? (
                     titles.join(", ")
@@ -308,7 +358,7 @@ function Pack({
             );
           })}
         </DataTable>
-        <p className="page-note">{LIST_NOTE}</p>
+        <p className="page-note">{trust ? TRUST_LIST_NOTE : LIST_NOTE}</p>
       </RecordSection>
 
       <RecordSection id="pack-index" title="The index">
@@ -318,7 +368,14 @@ function Pack({
       <RecordSection
         id="pack-shares"
         title="Shared"
-        actions={<RecordShare packId={id} firms={page.firms} today={page.today} />}
+        actions={
+          <RecordShare
+            packId={id}
+            firms={page.firms}
+            buyers={trust ? (page.buyers ?? []) : null}
+            today={page.today}
+          />
+        }
       >
         <DataTable
           caption="Shared"
@@ -336,7 +393,11 @@ function Pack({
             <tr key={share.share_id}>
               <td>{formatDate(share.shared_on)}</td>
               <td>
-                {share.investor_id ? (
+                {share.entry_id ? (
+                  <Link className="table-title" href={`/data/waitlist/${share.entry_id}`}>
+                    {share.firm}
+                  </Link>
+                ) : share.investor_id ? (
                   <Link className="table-title" href={`/data/investors/${share.investor_id}`}>
                     {share.firm}
                   </Link>
@@ -426,7 +487,7 @@ function AddFiles({
         >
           <div className="hqdata-pack__groups">
             <CandidateGroup
-              legend="10 Fundraising and investors"
+              legend={candidates.first_label}
               rows={candidates.fundraising}
               prefix="pack-add-fundraising"
             />
@@ -445,10 +506,13 @@ function AddFiles({
 function RecordShare({
   packId,
   firms,
+  buyers,
   today,
 }: {
   packId: string;
   firms: DataPackPage["firms"];
+  /** For a trust pack: the firms on the waitlist (none: an empty list); null for a data-room pack. */
+  buyers: NonNullable<DataPackPage["buyers"]> | null;
   today: string;
 }) {
   return (
@@ -459,7 +523,41 @@ function RecordShare({
         submitLabel="Record it"
         pendingLabel="Recording…"
       >
-        {firms ? (
+        {buyers ? (
+          <>
+            {buyers.length > 0 && (
+              <Field id="pack-share-buyer" label="Firm on the waitlist" hint={SHARE_HINT}>
+                <Select
+                  id="pack-share-buyer"
+                  name="entry_id"
+                  defaultValue=""
+                  aria-describedby="pack-share-buyer-hint"
+                >
+                  <option value="">Choose a firm</option>
+                  {buyers.map((buyer) => (
+                    <option key={buyer.entry_id} value={buyer.entry_id}>
+                      {buyer.firm}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+            <Field
+              id="pack-share-firm"
+              label={buyers.length > 0 ? "Or type a firm" : "Firm"}
+              {...(buyers.length > 0 ? {} : { hint: SHARE_HINT })}
+            >
+              <Input
+                id="pack-share-firm"
+                name="firm"
+                maxLength={120}
+                required={buyers.length === 0}
+                autoComplete="off"
+                {...(buyers.length > 0 ? {} : { "aria-describedby": "pack-share-firm-hint" })}
+              />
+            </Field>
+          </>
+        ) : firms ? (
           <Field id="pack-share-firm" label="Firm">
             <Select id="pack-share-firm" name="investor_id" required defaultValue="">
               <option value="" disabled>

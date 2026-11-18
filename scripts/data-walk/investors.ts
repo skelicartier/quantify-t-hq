@@ -289,6 +289,12 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
       (waitlistAfter?.length ?? 0) === (waitlistBefore?.length ?? 0),
     said.body,
   );
+  // Fund 288 (the fourth pass) bounced hard in the stand-in provider's mix (delivery spec §5.6):
+  // where delivery is read back it is on the stop list already, as bounced, and stays there.
+  const stoppedBefore = (
+    ((await kit.socket.ask("GET", "/stops")).body.stops as
+      { email: string; reason: string }[] | undefined) ?? []
+  ).find((stop) => stop.email === no);
   const refused = await record(no, "not_interested");
   const stops =
     ((await kit.socket.ask("GET", "/stops")).body.stops as
@@ -300,7 +306,10 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
     refused.status === 200 &&
       passed?.stage === "passed" &&
       passed.passed_reason === "none_given" &&
-      stops.some((stop) => stop.email === no && stop.reason === "asked"),
+      stops.some(
+        (stop) =>
+          stop.email === no && stop.reason === (stoppedBefore ? stoppedBefore.reason : "asked"),
+      ),
     `${passed?.stage} · ${stops.length} stops`,
   );
 

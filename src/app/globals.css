@@ -13293,6 +13293,8 @@
     /* And for a record's header: Share sits after Follow and Archive there. */
     .rhead {
       position: relative;
+      /* The desk's sticky offset (top: var(--bar)) must not shift a relative header onto what follows. */
+      top: auto;
     }
 
     .rhead__actions .popover {

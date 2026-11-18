@@ -29,7 +29,8 @@ export function MailingPill({ mailing }: { mailing: Pick<MergeMailing, "state" |
 
 const RECIPIENT: Record<MergeRecipientState, { label: string; tone: PillTone }> = {
   waiting: { label: "Waiting", tone: "neutral" },
-  sent: { label: "Sent", tone: "live" },
+  // "Accepted": the provider took it. What happened next is the Delivery column's to say.
+  sent: { label: "Accepted", tone: "live" },
   failed: { label: "Refused", tone: "danger" },
   skipped: { label: "Left out", tone: "neutral" },
   unknown: { label: "No answer", tone: "attention" },

@@ -9,6 +9,7 @@ import {
   reviewWords,
 } from "@/components/data/diligence/diligence-words";
 import { PageHeader } from "@/components/shell/page-header";
+import { ButtonLink } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { DataTable } from "@/components/ui/data-table";
 import { RecordSection } from "@/components/ui/record-shell";
@@ -59,6 +60,11 @@ export default async function DiligencePage() {
         description={ABOUT}
         meta={
           data ? <span className="quiet">{formatNumber(data.counts.open)} open</span> : undefined
+        }
+        actions={
+          <ButtonLink href="/data/files/packs?kind=trust" size="small">
+            Trust packs
+          </ButtonLink>
         }
       />
       <div className="page-content">

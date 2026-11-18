@@ -49,6 +49,24 @@
     overflow-wrap: anywhere;
   }
 
+  /* What the provider said happened to this send: words, never a meter. */
+  .hqdata-mail__delivery {
+    margin: 0;
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+  }
+
+  /* "Consent and source": each place a lead came from, one line each. */
+  .hqdata-consent__from {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   .hqdata-mail__subject {
     margin: 0;
     font-size: var(--fs-body);

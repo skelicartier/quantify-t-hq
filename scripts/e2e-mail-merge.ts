@@ -11,9 +11,13 @@
  *     HQ_UI_BASE=http://localhost:3100 npm run check:mail-merge -- "$T/outbox.jsonl"
  *
  * It walks what a person does: add a file, write the email, practise, give the key, test,
- * send, meet the day's limit, resume, download the record, pick a few people, type
- * addresses in, edit one person, and checks at each step what left and what did not, that
- * no key came back to a browser, at both widths and for every role.
+ * send, meet the day's limit, resume, download the record, read delivery back from the
+ * (stand-in) provider, make a retry draft, pick a few people, type addresses in, edit one
+ * person, and checks at each step what left and what did not, that no key came back to a
+ * browser, at both widths and for every role.
+ *
+ * The delivery steps (MD1 to MD12, delivery spec §6.14) count the stand-in's mix for
+ * "Email 1": 256 accepted, 237 delivered, 18 that did not arrive, 10 on the stop list.
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -38,6 +42,14 @@ mkdirSync(SHOTS, { recursive: true });
 const PEOPLE = 293;
 const HELD = 37;
 const SENDABLE = PEOPLE - HELD;
+/** Of the 256 the stand-in provider "accepted" (delivery spec §5.6, "Email 1"). */
+const DELIVERED = 237;
+const DIDNT_ARRIVE = 18;
+const STOPPED_BY_READ = 10;
+const RETRY = 10;
+/** The one sentence Mail merge's home says about what is not read; nothing else may say so. */
+const NOT_READ_LINE =
+  "Opens and clicks are not read: privacy features open mail by themselves, so they say nothing about interest.";
 
 const BODY = `{Greeting}
 
@@ -113,6 +125,7 @@ try {
   const page = await context.newPage();
   const errors: string[] = [];
   const leaked: string[] = [];
+  const reasons: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text().slice(0, 240));
   });
@@ -122,11 +135,19 @@ try {
       .text()
       .then((body) => {
         if (body.includes(WALK_KEY)) leaked.push(response.url());
+        // A bounce's reason as the provider wrote it has the address in it; HQ's never has.
+        if (/@fund\d+\.example.{0,12}user unknown/.test(body)) reasons.push(response.url());
       })
       .catch(() => undefined);
   });
   const text = () => page.locator("main").innerText();
   const saveWords = () => page.locator('[data-section="merge-words"] button[type=submit]').click();
+  /** MD7: no page says anything about opens or clicks, but for the line that says they are not read. */
+  const pagesWithOpens: string[] = [];
+  const noOpens = async (name: string) => {
+    const words = (await text()).replaceAll(NOT_READ_LINE, "");
+    if (/opened|Opened|clicks/.test(words)) pagesWithOpens.push(name);
+  };
 
   console.log("Home, nothing set up");
   await page.goto(`${BASE}/dev/signin?as=owner%40hq.test&next=%2Fmail%2Fmerge`, {
@@ -290,10 +311,285 @@ try {
   check((await text()).includes("Held back:"), "the left-out view gives the reasons");
   await audit(page, "mailing-finished");
 
+  console.log("Delivery read back");
+  const deliverySection = page.locator('section[data-section="merge-delivery"]');
+  // A stat's label is drawn in capitals by CSS, so innerText reads it that way: compare in lower case.
+  const statsOf = async (section = deliverySection) =>
+    new Map(
+      (await section.locator(".stat").allInnerTexts()).map((stat) => {
+        const [label = "", value = ""] = stat.split("\n").map((part) => part.trim());
+        return [label.toLowerCase(), value] as const;
+      }),
+    );
+  await page.goto(mailingUrl, { waitUntil: "networkidle" });
+  // MD1
+  check(
+    (await deliverySection.innerText()).includes("Not read yet"),
+    "MD1 delivery is not read yet",
+  );
+  const runStat = (await page.locator(".stat").first().innerText()).replace(/\s+/g, " ");
+  check(
+    runStat.toLowerCase().startsWith(`accepted ${SENDABLE}`) && runStat.includes("by the provider"),
+    "MD1 the run's first stat reads Accepted",
+    runStat,
+  );
+  const recipients = page.locator('section[data-section="merge-recipients"] tbody tr');
+  const firstRow = (await recipients.first().innerText()).replace(/\s+/g, " ");
+  check(
+    firstRow.includes("Accepted") &&
+      firstRow.includes("Not read yet") &&
+      !/\bSent\b/.test(firstRow),
+    "MD1 a recipient's pill reads Accepted, and its delivery is not read yet",
+    firstRow,
+  );
+  await noOpens("the mailing before the read");
+  // MD2
+  const outboxBeforeRead = sent().length;
+  await deliverySection.locator("button", { hasText: "Check delivery now" }).click();
+  await says(page, `${DELIVERED} of ${SENDABLE} delivered`, 60_000);
+  check(true, `MD2 Check delivery now reads ${DELIVERED} of ${SENDABLE} delivered`);
+  await page.goto(mailingUrl, { waitUntil: "networkidle" });
+  // MD3
+  const stats = await statsOf();
+  const wanted: [string, number][] = [
+    ["Delivered", DELIVERED],
+    ["Not delivered yet", 1],
+    ["Hard bounces", 7],
+    ["Soft bounces", 8],
+    ["Blocked by the provider", 1],
+    ["Not a working address", 1],
+    ["Not sent by the provider", 1],
+    ["Spam complaints", 1],
+    ["Unsubscribed", 1],
+  ];
+  check(
+    wanted.every(([label, value]) => stats.get(label.toLowerCase()) === String(value)),
+    "MD3 the nine delivery stats read as the mix says",
+    [...stats].map(([label, value]) => `${label} ${value}`).join(" | "),
+  );
+  // MD4
+  words = await deliverySection.innerText();
+  check(
+    words.includes("2.7 per cent") &&
+      words.includes("0.42 per cent") &&
+      words.includes("Gmail") &&
+      words.includes("Yahoo") &&
+      words.includes("Nothing has been paused") &&
+      !words.includes("%"),
+    "MD4 both warnings, in words, with Gmail and Yahoo named and nothing paused",
+  );
+  check(
+    words.includes("Those addresses are on the stop list now.") &&
+      words.includes("Gmail does not tell senders who complained"),
+    "MD4 the warnings say what happens to the addresses, and that the complaint count is a floor",
+  );
+  check(
+    (await page.locator(".pill", { hasText: /^Sent$/ }).count()) === 1 &&
+      (await deliverySection.locator("button", { hasText: /Pause/ }).count()) === 0 &&
+      !(await text()).includes("Paused"),
+    "MD4 the mailing still reads Sent: a warning pauses nothing and offers no pause once it has gone",
+  );
+  check(sent().length === outboxBeforeRead, "MD4 reading delivery handed the provider nothing");
+  // MD5
+  const byPerson = page.locator("#table-delivery-by-person tbody tr");
+  check(
+    (await byPerson.count()) === DIDNT_ARRIVE,
+    "MD5 Didn't arrive lists 18",
+    await byPerson.count(),
+  );
+  const bounced = (
+    await byPerson.filter({ hasText: "partner36@fund36.example" }).innerText()
+  ).replace(/\s+/g, " ");
+  check(
+    bounced.includes("Hard bounce") &&
+      bounced.includes("550 5.1.1 <[address]>: user unknown") &&
+      bounced.includes("On the stop list since"),
+    "MD5 a hard bounce: its reason without the address, and on the stop list",
+    bounced,
+  );
+  check(
+    !(await page.content()).includes("&lt;partner36@fund36.example&gt;") &&
+      !(await text()).includes("<partner36@fund36.example>"),
+    "MD5 the provider's own words for it are not on the page",
+  );
+  const soft = (await byPerson.filter({ hasText: "partner29@fund29.example" }).innerText()).replace(
+    /\s+/g,
+    " ",
+  );
+  check(
+    soft.includes("Soft bounce") && soft.includes("Can be retried"),
+    "MD5 a soft bounce can be retried",
+    soft,
+  );
+  check(
+    (await deliverySection.innerText()).includes(`Didn’t arrive ${DIDNT_ARRIVE}`) &&
+      (await deliverySection.innerText()).includes(`For a retry ${RETRY}`) &&
+      (await deliverySection.innerText()).includes(`Everyone ${SENDABLE}`),
+    "MD5 the views carry their counts",
+  );
+  await noOpens("the mailing after the read");
+  // MD11 (wide)
+  await audit(page, "mailing-delivery");
+  await page.goto(`${mailingUrl}?dview=all&doffset=200#merge-delivery`, {
+    waitUntil: "networkidle",
+  });
+  check(
+    (await byPerson.count()) === SENDABLE - 200 && (await text()).includes("Arrived"),
+    "the Everyone view pages by its own keys",
+    await byPerson.count(),
+  );
+  await noOpens("the mailing, everyone");
+  // MD10
+  const [record] = await Promise.all([
+    page.waitForEvent("download"),
+    page.locator("a", { hasText: "Download as a CSV" }).click(),
+  ]);
+  // The record's lines end with CRLF, as every CSV HQ hands out does.
+  const recordLines = readFileSync(await record.path(), "utf8")
+    .trim()
+    .split(/\r?\n/);
+  check(
+    recordLines[0]!.endsWith(
+      "email,name,list,state,reason,at,delivery,delivery_reason,delivery_at",
+    ),
+    "MD10 the record has the three delivery columns",
+    recordLines[0],
+  );
+  const bouncedLine =
+    recordLines.find((line) => line.startsWith("partner36@fund36.example,")) ?? "";
+  check(
+    bouncedLine.includes(",Hard bounce,") &&
+      bouncedLine.includes("user unknown") &&
+      !bouncedLine.includes("<partner36"),
+    "MD10 the hard bounce's row reads Hard bounce",
+    bouncedLine,
+  );
+  check(
+    recordLines.length === PEOPLE + 1 &&
+      recordLines.filter((line) => line.includes(",skipped,")).length === HELD,
+    "MD10 the record still accounts for everyone",
+  );
+  // MD6
+  await page.goto(`${BASE}/mail/merge/setup`, { waitUntil: "networkidle" });
+  const stopRows = page.locator("#table-stop-list tbody tr");
+  const stopOf = async (email: string) =>
+    (await stopRows.filter({ hasText: email }).innerText()).replace(/\s+/g, " ");
+  check(
+    (await stopOf("partner36@fund36.example")).includes("Bounced Hard bounce · Email 1"),
+    "MD6 the hard bounce is on the stop list, with why",
+    await stopOf("partner36@fund36.example"),
+  );
+  check(
+    (await stopOf("partner41@fund41.example")).includes("Asked to stop Marked as spam · Email 1"),
+    "MD6 the spam complaint is on the stop list, with why",
+    await stopOf("partner41@fund41.example"),
+  );
+  check(
+    (await stopRows.filter({ hasText: "· Email 1" }).count()) === STOPPED_BY_READ &&
+      (await text()).includes(`Stop list (${STOPPED_BY_READ})`),
+    "MD6 ten read-back stops in all",
+    await stopRows.count(),
+  );
+  check(
+    (await text()).includes("Delivery read-back adds hard bounces, spam complaints, unsubscribes"),
+    "MD6 Setup says where they come from",
+  );
+  await noOpens("Setup");
+  // MD8
+  await page.goto(mailingUrl, { waitUntil: "networkidle" });
+  const outboxBeforeRetry = sent().length;
+  check(
+    (await deliverySection.innerText()).includes(
+      `${RETRY} soft bounces, blocked or not sent can be tried once more.`,
+    ),
+    "MD8 ten can be tried once more",
+  );
+  await deliverySection.locator("button", { hasText: "Make a retry mailing for these" }).click();
+  await page.waitForURL((url) => !mailingUrl.endsWith(url.pathname), { timeout: 30_000 });
+  await says(page, `People you pick (${RETRY} ticked)`);
+  words = await text();
+  check(
+    (await page.locator("h1").innerText()).includes("Email 1 (retry)") &&
+      (await page.locator(".pill", { hasText: /^Draft$/ }).count()) >= 1,
+    "MD8 the browser lands on the retry, a draft",
+  );
+  check(
+    !(await page.locator('input[name="skip_written"]').isChecked()),
+    "MD8 leaving out anyone another mailing reached is unticked",
+  );
+  check(
+    words.includes(
+      `${RETRY} people were already written to by "Email 1", and will be written to again`,
+    ) && words.includes("Send yourself a test of this wording"),
+    "MD8 the retry says who it writes to again, and still wants its own test",
+  );
+  check(sent().length === outboxBeforeRetry, "MD8 making the retry sent nothing");
+  await noOpens("the retry draft");
+  // MD9
+  await page.goto(`${BASE}/mail/merge`, { waitUntil: "networkidle" });
+  const homeDelivery = page.locator('section[data-section="merge-delivery-home"]');
+  words = await homeDelivery.innerText();
+  check(
+    words.includes(`Last 7 days: ${DELIVERED} of ${SENDABLE} delivered`) &&
+      words.includes(`${DIDNT_ARRIVE} didn’t arrive`) &&
+      words.includes("Delivery last read"),
+    "MD9 Mail merge's home has the week's delivery",
+    words.slice(0, 200),
+  );
+  check(
+    (await homeDelivery.locator(".callout").count()) === 2 &&
+      words.includes("in the last 7 days: 0.42 per cent") &&
+      words.includes("in the last 7 days: 2.7 per cent") &&
+      words.includes("Most of them: Email 1 (7)") &&
+      words.includes("Most of them: Email 1 (1)"),
+    "MD9 both of the week's warnings, and which mailing they come from",
+  );
+  check(
+    !words.includes("would go on the stop list") && !words.includes("Apply to the stop list"),
+    "MD9 nothing waits for a press: it all happened after the key was set",
+  );
+  const mailingsTable = page.locator('section[data-section="merge-mailings"]');
+  // Column heads are drawn in capitals by CSS; "Email 1 (retry)" is the newer row, so match the title exactly.
+  const heads = (await mailingsTable.locator("thead th").allInnerTexts()).map((head) =>
+    head.trim().toLowerCase(),
+  );
+  const sentRow = (
+    await mailingsTable
+      .locator("tbody tr")
+      .filter({ has: page.locator("a.table-title", { hasText: /^Email 1$/ }) })
+      .first()
+      .innerText()
+  ).replace(/\s+/g, " ");
+  check(
+    heads.includes("accepted") && heads.includes("delivered") && !heads.includes("sent"),
+    "MD9 the mailings table has Accepted and Delivered",
+    heads.join(" | "),
+  );
+  check(
+    sentRow.includes(`${DELIVERED} of ${SENDABLE}`) && sentRow.includes("Warning"),
+    "MD9 the mailing's row reads its delivered count, with a warning",
+    sentRow,
+  );
+  check(
+    (await mailingsTable.innerText()).includes("Accepted means the provider took the message."),
+    "MD9 the table says what Accepted and Delivered mean",
+  );
+  check(
+    (await homeDelivery.innerText()).includes(NOT_READ_LINE),
+    "MD9 the home says opens are not read",
+  );
+  await noOpens("Mail merge's home");
+  await audit(page, "home-delivery");
+
   console.log("A copy, and the stop list");
   await page.goto(mailingUrl, { waitUntil: "networkidle" });
   await page.locator("button", { hasText: "Make a copy" }).click();
-  await says(page, `${SENDABLE} people were already written to by`);
+  // The read put ten of them on the stop list, and the stop list comes before "already written to".
+  await says(page, `${SENDABLE - STOPPED_BY_READ} people were already written to by`);
+  check(
+    (await text()).includes(`${STOPPED_BY_READ} people are on the stop list and left out`),
+    "the copy leaves out the ten the read stopped",
+  );
   await page.goto(`${BASE}/mail/merge/setup`, { waitUntil: "networkidle" });
   await page.locator("summary", { hasText: "Add addresses" }).click();
   await page.fill("#merge-stop-emails", "stop.me@example.org nonsense");
@@ -446,6 +742,7 @@ try {
     ["phone-setup", `${BASE}/mail/merge/setup`],
     ["phone-list", listUrl],
     ["phone-mailing", mailingUrl],
+    ["phone-delivery", `${mailingUrl}?dview=all`],
     ["phone-picker", copyUrl],
   ] as const) {
     await small.goto(url, { waitUntil: "networkidle" });
@@ -472,6 +769,16 @@ try {
 
   check(errors.length === 0, "no console errors", errors.slice(0, 3).join(" | "));
   check(leaked.length === 0, "the key never came back", leaked.slice(0, 3).join(" "));
+  check(
+    pagesWithOpens.length === 0,
+    "MD7 no page says anything of opens or clicks",
+    pagesWithOpens.join(" | "),
+  );
+  check(
+    reasons.length === 0,
+    "MD12 no answer carried a provider's reason with an address in it",
+    reasons.slice(0, 3).join(" "),
+  );
 } finally {
   await browser.close();
 }

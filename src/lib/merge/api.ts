@@ -4,6 +4,12 @@ import { request } from "node:http";
 
 import { z } from "zod";
 
+import {
+  DELIVERY_KINDS,
+  type DeliveryStanding,
+  type Reaction,
+} from "@/lib/merge/delivery-contracts";
+
 /**
  * The portal's one way to the local sender behind Mail merge
  * (`scripts/mail-merge-service.ts`).
@@ -230,6 +236,77 @@ const stopsSchema = ok.extend({
 });
 export type MergeStops = z.infer<typeof stopsSchema>;
 
+// --- delivery read back from the provider (delivery spec §6.12) -------------------------
+
+const deliveryCountsSchema = z.object({
+  accepted: z.number(),
+  delivered: z.number(),
+  not_yet: z.number(),
+  soft_bounce: z.number(),
+  hard_bounce: z.number(),
+  blocked: z.number(),
+  invalid: z.number(),
+  error: z.number(),
+  didnt_arrive: z.number(),
+  complaint: z.number(),
+  unsubscribed: z.number(),
+  retry: z.number(),
+});
+export type MergeDeliveryCounts = z.infer<typeof deliveryCountsSchema>;
+
+const deliveryWarningSchema = z.object({
+  key: z.enum(["complaints", "hard_bounces"]),
+  level: z.enum(["attention", "danger"]),
+  title: z.string(),
+  body: z.string(),
+});
+export type MergeDeliveryWarning = z.infer<typeof deliveryWarningSchema>;
+
+const readViewSchema = z.object({
+  key_set: z.boolean(),
+  reading: z.boolean(),
+  last_read_at: z.string().nullable(),
+  scope: z.enum(["first", "recent", "older", "now"]).nullable(),
+  days: z.number().nullable(),
+  outcome: z.enum(["ok", "partial", "no_key", "refused", "unreachable", "slowed"]).nullable(),
+  detail: z.string(),
+  kept: z.number(),
+  next_at: z.string().nullable(),
+  wait_until: z.string().nullable(),
+  auto_stop_from: z.string().nullable(),
+  backlog_applied_at: z.string().nullable(),
+});
+export type MergeReadView = z.infer<typeof readViewSchema>;
+
+const REACTIONS = ["complaint", "unsubscribed"] as const satisfies readonly Reaction[];
+const STANDINGS = [
+  "delivered",
+  "deferred",
+  "soft_bounce",
+  "hard_bounce",
+  "blocked",
+  "invalid",
+  "error",
+  "not_yet",
+] as const satisfies readonly DeliveryStanding[];
+const deliveryStanding = z.enum(STANDINGS);
+const deliveryReaction = z.enum(REACTIONS);
+const deliveryShown = z.enum([...DELIVERY_KINDS, "not_yet"]);
+const stopKind = z.enum(["hard_bounce", "invalid", "complaint", "unsubscribed"]);
+
+/** What a mailing's summary says about its delivery; null before it has been read. */
+const deliveryBriefSchema = z.object({
+  accepted: z.number(),
+  delivered: z.number(),
+  not_yet: z.number(),
+  didnt_arrive: z.number(),
+  hard_bounce: z.number(),
+  complaint: z.number(),
+  unsubscribed: z.number(),
+  read_at: z.string().nullable(),
+  warning: z.enum(["attention", "danger"]).nullable(),
+});
+
 const mailingState = z.enum(["draft", "sending", "paused", "finished", "cancelled"]);
 const progressSchema = z.object({
   total: z.number(),
@@ -254,6 +331,8 @@ const mailingSchema = z.object({
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   editable: z.boolean(),
+  /** Optional: a sender from before the read-back does not send it. */
+  delivery: deliveryBriefSchema.nullable().optional(),
 });
 export type MergeMailing = z.infer<typeof mailingSchema>;
 
@@ -308,6 +387,7 @@ const mailingDetailSchema = ok.extend({
         state: recipientState,
         reason: z.string(),
         at: z.string().nullable(),
+        delivery: z.string().nullable().optional(),
       }),
     ),
     offset: z.number(),
@@ -352,9 +432,103 @@ const outcomesSchema = ok.extend({
       state: recipientState,
       reason: z.string(),
       at: z.string(),
+      delivery: z.string().optional(),
+      delivery_reason: z.string().optional(),
+      delivery_at: z.string().optional(),
     }),
   ),
 });
+
+const deliveryOverviewSchema = ok.extend({
+  read: readViewSchema,
+  week: z.object({
+    since: z.string(),
+    counts: deliveryCountsSchema,
+    warnings: z.array(deliveryWarningSchema),
+    by_mailing: z.array(
+      z.object({
+        mailing_id: z.string(),
+        name: z.string(),
+        hard_bounce: z.number(),
+        complaint: z.number(),
+      }),
+    ),
+  }),
+  backlog: z.object({
+    total: z.number(),
+    would_add: z.number(),
+    rows: z.array(
+      z.object({
+        email: z.string(),
+        kind: stopKind,
+        at: z.string(),
+        mailing_id: z.string(),
+        mailing: z.string(),
+        on_stop_list: z.boolean(),
+      }),
+    ),
+  }),
+});
+export type MergeDeliveryOverview = z.infer<typeof deliveryOverviewSchema>;
+
+const deliveryCheckSchema = ok.extend({
+  started: z.boolean(),
+  reading: z.boolean(),
+  days: z.number(),
+  read: readViewSchema,
+});
+
+const mailingDeliverySchema = ok.extend({
+  mailing: z.object({
+    id: z.string(),
+    name: z.string(),
+    state: mailingState,
+    mode: z.enum(["live", "practice"]).nullable(),
+  }),
+  delivery: z
+    .object({
+      mailing_id: z.string(),
+      name: z.string(),
+      first_sent_at: z.string(),
+      last_sent_at: z.string(),
+      read_at: z.string().nullable(),
+      counts: deliveryCountsSchema,
+    })
+    .nullable(),
+  warnings: z.array(deliveryWarningSchema),
+  read: readViewSchema,
+  rows: z.array(
+    z.object({
+      email: z.string(),
+      name: z.string(),
+      list: z.string(),
+      sent_at: z.string(),
+      shown: deliveryShown,
+      delivery: deliveryStanding,
+      delivery_at: z.string().nullable(),
+      reason: z.string(),
+      reaction: deliveryReaction.nullable(),
+      reaction_at: z.string().nullable(),
+      stop: z.object({
+        on: z.boolean(),
+        since: z.string().nullable(),
+        waiting: z.boolean(),
+      }),
+    }),
+  ),
+  offset: z.number(),
+  limit: z.number(),
+  total: z.number(),
+  counts_by_view: z.object({
+    didnt: z.number(),
+    not_yet: z.number(),
+    retry: z.number(),
+    all: z.number(),
+  }),
+  retry: z.object({ count: z.number(), on_stop_list: z.number() }),
+  waiting_stops: z.number().optional(),
+});
+export type MergeMailingDelivery = z.infer<typeof mailingDeliverySchema>;
 
 const id = (value: string) => encodeURIComponent(value);
 
@@ -489,3 +663,31 @@ export const resumeMergeMailing = (mailingId: string) =>
   ask(mailingEnvelope, "POST", `/mailings/${id(mailingId)}/resume`, {});
 export const cancelMergeMailing = (mailingId: string) =>
   ask(mailingEnvelope, "POST", `/mailings/${id(mailingId)}/cancel`, {});
+
+// --- delivery read back -----------------------------------------------------------------
+
+/** A sender from before the read-back answers 404 `no_such_route`: a `MergeRequestError`. */
+export const readMergeDelivery = () => ask(deliveryOverviewSchema, "GET", "/delivery");
+export const checkMergeDelivery = (input: { mailing_id?: string; wait?: boolean } = {}) =>
+  ask(deliveryCheckSchema, "POST", "/delivery/check", input);
+export const applyMergeDeliveryBacklog = (count: number) =>
+  ask(ok.extend({ added: z.number(), already: z.number() }), "POST", "/delivery/apply", {
+    count,
+  });
+export function readMergeMailingDelivery(
+  mailingId: string,
+  query: { view?: string; offset?: number } = {},
+) {
+  const search = new URLSearchParams();
+  if (query.view) search.set("view", query.view);
+  if (query.offset) search.set("offset", String(query.offset));
+  const suffix = search.size > 0 ? `?${search.toString()}` : "";
+  return ask(mailingDeliverySchema, "GET", `/mailings/${id(mailingId)}/delivery${suffix}`);
+}
+export const makeMergeRetryMailing = (mailingId: string) =>
+  ask(
+    ok.extend({ mailing: mailingSchema, picked: z.number(), not_on_lists: z.number() }),
+    "POST",
+    `/mailings/${id(mailingId)}/retry`,
+    {},
+  );

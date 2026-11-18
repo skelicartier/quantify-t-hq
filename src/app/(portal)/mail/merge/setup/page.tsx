@@ -335,6 +335,10 @@ export default async function MailMergeSetupPage({
                 </>
               }
             >
+              <p className="side-quiet">
+                Delivery read-back adds hard bounces, spam complaints, unsubscribes and addresses
+                that cannot take mail here by itself, dated when the provider saw them.
+              </p>
               <DataTable
                 caption="Stop list"
                 columns={STOP_COLUMNS}
@@ -350,7 +354,13 @@ export default async function MailMergeSetupPage({
                 {stops.stops.map((stop) => (
                   <tr key={stop.email}>
                     <td className="mono">{stop.email}</td>
-                    <td>{STOP_REASONS[stop.reason]}</td>
+                    <td>
+                      {STOP_REASONS[stop.reason]}
+                      {/* The read-back's own line ("Hard bounce · Waitlist 08"), not a provider code. */}
+                      {stop.detail.includes(" · ") && (
+                        <span className="table-sub">{stop.detail}</span>
+                      )}
+                    </td>
                     <td>
                       <Timestamp value={stop.at} now={now} mode="relative" />
                     </td>

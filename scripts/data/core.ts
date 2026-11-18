@@ -111,6 +111,8 @@ export const MODULES = [
   "pilots",
   "diligence",
   "closing",
+  "delivery",
+  "batches",
   "backup",
 ] as const;
 export type ModuleName = (typeof MODULES)[number];

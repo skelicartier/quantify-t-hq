@@ -163,6 +163,7 @@ const errors: string[] = [];
 const leaked: string[] = [];
 const demo: string[] = [];
 const meters: string[] = [];
+const overlaps: string[] = [];
 
 function watch(page: Page): void {
   page.on("console", (message) => {
@@ -195,7 +196,9 @@ function kitFor(page: Page, pass: Pass): WalkKit {
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
-      const axe = await new AxeBuilder({ page }).analyze();
+      // As the harness and Mail merge's walk do: an email's preview is the email, not the
+      // portal, and axe cannot run inside its sandboxed frame (it logs a blocked script).
+      const axe = await new AxeBuilder({ page }).exclude(".mail-preview__frame").analyze();
       const bad = axe.violations.filter(
         (violation) => violation.impact === "serious" || violation.impact === "critical",
       );
@@ -213,6 +216,20 @@ function kitFor(page: Page, pass: Pass): WalkKit {
           ).length,
       );
       if (stray > 0) meters.push(`${prefix}/${name}`);
+      // A record's header never sits on what follows it (it did at 412px until the delivery batch).
+      const overlap = await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        const head = document.querySelector("main .rhead");
+        if (!head) return 0;
+        let next = head.nextElementSibling;
+        while (next && next.getBoundingClientRect().height === 0) next = next.nextElementSibling;
+        if (!next) return 0;
+        return Math.max(
+          0,
+          Math.round(head.getBoundingClientRect().bottom - next.getBoundingClientRect().top),
+        );
+      });
+      if (overlap > 1) overlaps.push(`${prefix}/${name} ${overlap}px`);
       await page.screenshot({ path: `${SHOTS}/${prefix}-${name}.png`, fullPage: true });
     },
     outbox,
@@ -294,6 +311,7 @@ try {
   );
   check("no Data page says demo", demo.length === 0, demo.join(" "));
   check("no progress bar or meter outside the upload tray", meters.length === 0, meters.join(" "));
+  check("no record header overlaps what follows it", overlaps.length === 0, overlaps.join(" "));
 } finally {
   await browser.close();
 }

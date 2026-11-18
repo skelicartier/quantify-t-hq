@@ -54,6 +54,32 @@ export type SenderCheck = {
 
 export type Blocked = { email: string; reason: string; blocked_at: string };
 
+export type EventQuery = {
+  /** Days back including today, 1 to 90. */
+  days: number;
+  offset: number;
+  limit: number;
+  /** null: no tag filter. */
+  tags: readonly string[] | null;
+};
+
+/** One event as the provider wrote it; nothing here is trusted until the reader checks it. */
+export type ProviderEvent = {
+  email: string;
+  date: string;
+  message_id: string;
+  event: string;
+  reason: string;
+  tag: string;
+};
+
+export type EventPage =
+  | { status: "ok"; events: ProviderEvent[] }
+  | { status: "auth_failed" }
+  | { status: "rate_limited"; retry_after_seconds: number | null }
+  | { status: "refused"; code: string; http: number }
+  | { status: "unavailable" };
+
 export interface MailProvider {
   /** live: mail leaves. practice: it is written down and goes nowhere. */
   readonly kind: "live" | "practice";
@@ -61,6 +87,8 @@ export interface MailProvider {
   checkAccount(): Promise<AccountCheck>;
   checkSender(email: string): Promise<SenderCheck>;
   listBlocked(limit?: number): Promise<Blocked[]>;
+  /** Delivery events for HQ's mail, oldest first. Optional: a provider without it is never read. */
+  listEvents?(query: EventQuery): Promise<EventPage>;
 }
 
 const SEND = "https://api.brevo.com/v3/smtp/email";
@@ -68,6 +96,7 @@ const ACCOUNT = "https://api.brevo.com/v3/account";
 const BLOCKED = "https://api.brevo.com/v3/smtp/blockedContacts";
 const SENDERS = "https://api.brevo.com/v3/senders";
 const DOMAINS = "https://api.brevo.com/v3/senders/domains";
+const EVENTS = "https://api.brevo.com/v3/smtp/statistics/events";
 const TIMEOUT_MS = 15_000;
 
 export function domainOf(email: string): string {
@@ -121,6 +150,15 @@ export function senderCheckFromLists(
     domain_authenticated: Boolean(found?.authenticated),
   };
 }
+
+/** How long a "slow down" asks for: a whole number of seconds from 1 to an hour, or nothing. */
+function waitSeconds(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value.trim())) return null;
+  const seconds = Number.parseInt(value.trim(), 10);
+  return seconds >= 1 && seconds <= 3_600 ? seconds : null;
+}
+
+const text = (value: unknown, limit: number): string => String(value ?? "").slice(0, limit);
 
 type Fetcher = typeof fetch;
 
@@ -253,6 +291,64 @@ export class BrevoProvider implements MailProvider {
       return [];
     }
   }
+
+  /**
+   * One page of the provider's own delivery events, classified. Nothing is logged and no
+   * prose of a refusal is kept: only its machine code.
+   */
+  async listEvents(query: EventQuery): Promise<EventPage> {
+    if (!this.#key) return { status: "auth_failed" };
+    const limit = Math.max(1, Math.trunc(query.limit));
+    const url =
+      `${EVENTS}?limit=${limit}&offset=${Math.max(0, Math.trunc(query.offset))}` +
+      `&days=${Math.min(90, Math.max(1, Math.trunc(query.days)))}&sort=asc` +
+      (query.tags === null ? "" : `&tags=${encodeURIComponent(JSON.stringify(query.tags))}`);
+    let response: Response;
+    try {
+      response = await this.#call(url);
+    } catch {
+      return { status: "unavailable" };
+    }
+    if (response.status === 401 || response.status === 403) return { status: "auth_failed" };
+    if (response.status === 429)
+      return {
+        status: "rate_limited",
+        retry_after_seconds:
+          waitSeconds(response.headers.get("x-sib-ratelimit-reset")) ??
+          waitSeconds(response.headers.get("retry-after")),
+      };
+    if (response.status >= 400 && response.status < 500) {
+      const parsed = record(await response.json().catch(() => ({})));
+      return {
+        status: "refused",
+        code: text(parsed.code, 40) || String(response.status),
+        http: response.status,
+      };
+    }
+    if (!response.ok) return { status: "unavailable" };
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = record(await response.json());
+    } catch {
+      return { status: "unavailable" };
+    }
+    return {
+      status: "ok",
+      events: rows(parsed.events)
+        .slice(0, limit)
+        .map((row) => ({
+          email: text(row.email, 254),
+          date: text(row.date, 40),
+          message_id: text(row.messageId, 200),
+          event: text(row.event, 40),
+          reason: text(row.reason, 500),
+          tag: (Array.isArray(row.tag) ? row.tag.map(String).join(",") : text(row.tag, 200)).slice(
+            0,
+            200,
+          ),
+        })),
+    };
+  }
 }
 
 /**
@@ -297,5 +393,10 @@ export class PracticeProvider implements MailProvider {
 
   async listBlocked(): Promise<Blocked[]> {
     return [];
+  }
+
+  /** Practice mail goes nowhere, so nothing happened to it. */
+  async listEvents(): Promise<EventPage> {
+    return { status: "ok", events: [] };
   }
 }

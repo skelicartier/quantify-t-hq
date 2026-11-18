@@ -667,6 +667,23 @@ async function assertAccessible(page: Page, name: string) {
   }
 }
 
+/** A record's header never sits on what follows it (it did at 412px until the delivery batch). */
+async function assertHeaderClear(page: Page, name: string) {
+  const overlap = await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    const head = document.querySelector("main .rhead");
+    if (!head) return 0;
+    let next = head.nextElementSibling;
+    while (next && next.getBoundingClientRect().height === 0) next = next.nextElementSibling;
+    if (!next) return 0;
+    return Math.max(
+      0,
+      Math.round(head.getBoundingClientRect().bottom - next.getBoundingClientRect().top),
+    );
+  });
+  if (overlap > 1) report(name, `the record header overlaps what follows it by ${overlap}px`);
+}
+
 /**
  * Whether an error is the machine stalling under the walk, not the page: a navigation or
  * ready wait that ran out of time (a laptop on battery compiling beside the walk has
@@ -706,6 +723,7 @@ async function capture(page: Page, folder: string, shot: Shot) {
     return;
   }
   await assertNoOverflow(page, `${folder}/${shot.name}`);
+  await assertHeaderClear(page, `${folder}/${shot.name}`);
   await assertAccessible(page, `${folder}/${shot.name}`);
   for (const error of consoleErrors) report(`${folder}/${shot.name}`, `console: ${error}`);
   await page.screenshot({ path: `${OUT}/${folder}/${shot.name}.png`, fullPage: true });

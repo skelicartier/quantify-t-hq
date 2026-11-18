@@ -1,0 +1,90 @@
+/* Waitlist › Batches, and the overview's "Delivery, last 7 days" block: counts and "x of y"
+   in a table that scrolls inside its own frame. No bar, no meter, no target. Tokens only;
+   phone rules at 720px; no side stripe. Prefixed hqdata-. Printed, it is the tables. */
+@layer pages {
+  .hqdata-batches {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  /* Each part shrinks to the page; a wide table scrolls inside its own frame. */
+  .hqdata-batches > * {
+    min-width: 0;
+  }
+
+  .hqdata-batches__lines {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-batches__lines p {
+    margin: 0;
+  }
+
+  .hqdata-batches__total > td {
+    font-weight: 600;
+    border-top: 1px solid var(--line);
+  }
+
+  .hqdata-batches__outside > td {
+    color: var(--quiet);
+  }
+
+  .hqdata-batches__cell {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .hqdata-delivery {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .hqdata-delivery > .hqdata-sending {
+    margin: 0;
+  }
+
+  .hqdata-delivery__hint {
+    display: block;
+    margin-top: 4px;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-batches__cell {
+      row-gap: 6px;
+    }
+  }
+}
+
+/* On paper the fifteen columns must fit the sheet: the table gives up its screen width and
+   its cells wrap in smaller type, so nothing is cut off at the edge. */
+@media print {
+  .hqdata-batches .data-table {
+    min-width: 0 !important;
+    width: 100%;
+    font-size: 7pt;
+  }
+
+  .hqdata-batches .data-table th,
+  .hqdata-batches .data-table td {
+    padding: 3px;
+    font-size: 7pt;
+    letter-spacing: 0;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
+
+  .hqdata-batches .data-table th {
+    font-size: 5.5pt;
+  }
+
+  .hqdata-batches .data-table .table-sub {
+    font-size: 6.5pt;
+  }
+}

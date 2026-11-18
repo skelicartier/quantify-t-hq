@@ -8,6 +8,7 @@
 import { localDay } from "../days";
 import { toCsv } from "../text";
 import { LEAD_STATUSES, OUTCOMES, STOP_REASONS } from "../../../src/lib/data/labels";
+import { WHERE, whereOf } from "../../../src/lib/data/labels-outreach";
 import type { Stop } from "../sender-files";
 import type { Lead } from "./build";
 import type { ReplyMark } from "./types";
@@ -43,6 +44,10 @@ export const VIEW_COLUMNS = [
   "held_reason",
   "stop_reason",
   "tags",
+  // The delivery batch's three, at the end so nothing that reads the first columns moves.
+  "where",
+  "opted_out_on",
+  "delivery",
 ] as const;
 
 export const TRACKER_COLUMNS = [
@@ -64,6 +69,8 @@ export type ExportContext = {
   firstList: (lead: Lead) => string;
   /** The status line as the table shows it (with "may have gone" where the send's outcome is unknown). */
   detailOf: (lead: Lead) => string;
+  /** The newest send's delivery in words ("" when none was read); absent: not read here. */
+  deliveryOf?: (lead: Lead) => string;
 };
 
 /** The held-back reason as the tracker words it: "not a buyer", "firm already joined", or as typed. */
@@ -142,6 +149,9 @@ export function viewCsv(leads: readonly Lead[], context: ExportContext): string 
       lead.firm_hold ? lead.firm_hold.reason || "Firm already joined" : (lead.held?.reason ?? ""),
       stop ? STOP_REASONS[stop.reason] : "",
       lead.tags.join("; "),
+      WHERE[whereOf(f.country)].label,
+      stop && stop.reason === "asked" ? localDay(stop.at) : "",
+      context.deliveryOf?.(lead) ?? "",
     ];
   });
   return BOM + toCsv(VIEW_COLUMNS, rows);

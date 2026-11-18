@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { deliveryCountsSchema, deliveryWarningSchema } from "@/lib/data/api/batches";
 import { dataAsk, ok } from "@/lib/data/socket";
 
 /**
@@ -93,6 +94,16 @@ export const overviewSchema = ok.extend({
       dsc_soon: z.number(),
       rules_unconfirmed: z.number(),
       facts_missing: z.array(z.string()),
+    })
+    .optional(),
+  delivery: z
+    .object({
+      loaded: z.boolean(),
+      since: z.string(),
+      counts: deliveryCountsSchema,
+      warnings: z.array(deliveryWarningSchema),
+      read_at: z.string().nullable(),
+      waiting: z.number(),
     })
     .optional(),
 });

@@ -31,6 +31,8 @@ const MERGE_FILES = ["written.jsonl", "stop-list.json", "settings.json", "tests.
 const MERGE_FOLDERS = [
   { folder: "lists", endings: [".json"] },
   { folder: "mailings", endings: [".json", ".log"] },
+  { folder: "delivery", endings: [".json", ".jsonl"] },
+  { folder: "delivery/mailings", endings: [".json"] },
 ] as const;
 /** Never, whatever the folder holds. */
 export const NEVER_IN_BACKUP = new Set(["provider.key", "provider-status.json", "engine.sock"]);
@@ -239,7 +241,7 @@ export async function makeBackup(
         "- files/_versions/: the older versions, as v<n> and the name each was added with.",
         "- files/_trash/: files in the trash, in the folder they came from.",
         "- data/: Data's own records (folders, leads, replies, waitlist, investors and the round, key dates, notes, decisions and contacts, the calendar link's checksum, numbers and monthly updates, data-room packs).",
-        "- mail-merge/: Mail merge's lists, mailings, written log, stop list, settings and tests log.",
+        "- mail-merge/: Mail merge's lists, mailings, written log, stop list, settings, tests log and delivery read back from the provider.",
         input.body.people === true
           ? "- data/people/: the people ledger. The Owner made this backup: keep it as private as this Mac."
           : "- data/people/ is left out: only a backup the Owner makes holds the people ledger.",

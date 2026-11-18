@@ -18,6 +18,17 @@ import { LIMITS, clean, cleanText, isRouteId, normaliseEmail } from "../guard";
 import type { Staff } from "../protocol";
 import type { SenderChanges, Stop } from "../sender-files";
 import { DEFAULT_FOLDERS, LEAD_FIELDS } from "../../../src/lib/data/labels";
+import {
+  deliveryFilterOf,
+  whereOf,
+  type DeliveryFilter,
+} from "../../../src/lib/data/labels-outreach";
+import {
+  DELIVERY_SERVICE,
+  DELIVERY_WORDS,
+  type DeliveryFeed,
+  type RecipientStanding,
+} from "../../../src/lib/merge/delivery-contracts";
 import { LeadsIndex, MAX_LEADS, type Lead, type StatusContext } from "./build";
 import type {
   FilesService,
@@ -30,7 +41,7 @@ import type {
 } from "./contracts";
 import { LeadRecords } from "./edits";
 import { leftOutCsv, listCsv, trackerCsv, viewCsv, type ExportContext } from "./exports";
-import { PAGE, parseLeadQuery, queryString, runQuery } from "./query";
+import { PAGE, parseLeadQuery, queryString, runQuery, type QueryExtras } from "./query";
 import { detailOf, type LeadDetail } from "./record";
 import { registerLeadsSearch } from "./search";
 import { SeenLists } from "./seen-lists";
@@ -148,6 +159,29 @@ export class LeadsModule {
       : lead.detail;
   }
 
+  // ------------------------------------------------------------------ delivery (read by Mail merge)
+
+  /** The read-back of delivery, asked for at request time: null when it is not loaded here. */
+  deliveryFeed(): DeliveryFeed | null {
+    return this.core.need<DeliveryFeed>(DELIVERY_SERVICE);
+  }
+
+  /** What was read about the newest send to a lead; null when nothing was (or never written to). */
+  newestStanding(lead: Lead, feed: DeliveryFeed | null): RecipientStanding | null {
+    if (!feed || lead.times === 0) return null;
+    return feed.forEmail(lead.email)[0]?.standing ?? null;
+  }
+
+  /** How a query reads delivery: by each lead's newest send, or not at all without the feed. */
+  queryExtras(): QueryExtras {
+    const feed = this.deliveryFeed();
+    if (!feed) return { deliveryOf: null };
+    return {
+      deliveryOf: (lead): DeliveryFilter | "" =>
+        deliveryFilterOf(this.newestStanding(lead, feed), lead.times > 0),
+    };
+  }
+
   badgesOf(lead: Lead): string[] {
     const badges: string[] = [];
     if (lead.origin === "referral") badges.push("Referral");
@@ -187,6 +221,8 @@ export class LeadsModule {
       batches,
       tags: [...lead.tags],
       badges: this.badgesOf(lead),
+      where: whereOf(lead.fields.country),
+      delivery: this.newestStanding(lead, this.deliveryFeed())?.shown ?? null,
     };
   };
 
@@ -209,6 +245,10 @@ export class LeadsModule {
       listName: context.listName,
       firstList: (lead) => this.index.firstList(lead),
       detailOf: (lead) => this.detailLine(lead),
+      deliveryOf: (lead) => {
+        const standing = this.newestStanding(lead, this.deliveryFeed());
+        return standing ? DELIVERY_WORDS[standing.shown].label : "";
+      },
     };
   }
 
@@ -227,6 +267,8 @@ export class LeadsModule {
       waitlist: () => this.core.need<WaitlistService>("waitlist"),
       investors: () => this.core.need<InvestorsLookup>("investors"),
       today: this.core.day(),
+      delivery: () => this.deliveryFeed(),
+      dayOf: (at) => this.core.day(at),
     });
   }
 
@@ -644,9 +686,13 @@ export async function register(core: DataCore): Promise<void> {
   core.route("GET", "/data/leads", (ctx) => {
     fresh();
     const query = parseLeadQuery(ctx.query);
-    const result = runQuery(leads.index, query, leads.context(), {
-      source: (id) => leads.sourceTitle(id),
-    });
+    const result = runQuery(
+      leads.index,
+      query,
+      leads.context(),
+      { source: (id) => leads.sourceTitle(id) },
+      leads.queryExtras(),
+    );
     const stops = leads.stopsMap();
     return {
       leads: result.matches.slice(query.offset, query.offset + PAGE).map(leads.rowOf),
@@ -840,9 +886,13 @@ export async function register(core: DataCore): Promise<void> {
     const name = clean(json(ctx, "name"), LIMITS.name);
     if (!name) throw new Refused(400, "invalid", "Give the list a name.");
     const query = parseLeadQuery(new URLSearchParams(clean(json(ctx, "query"), 2_000)));
-    const result = runQuery(leads.index, query, leads.context(), {
-      source: (id) => leads.sourceTitle(id),
-    });
+    const result = runQuery(
+      leads.index,
+      query,
+      leads.context(),
+      { source: (id) => leads.sourceTitle(id) },
+      leads.queryExtras(),
+    );
     if (result.total === 0) throw new Refused(409, "empty", "Nobody is in this view.");
     const stops = leads.stopsMap();
     // Nobody on the stop list, and nobody whose "No" still stands even if the stop came off.
@@ -1001,9 +1051,13 @@ export async function register(core: DataCore): Promise<void> {
   core.builds.provide("leads_csv", async (handle, input) => {
     fresh();
     const query = parseLeadQuery(new URLSearchParams(input.query));
-    const result = runQuery(leads.index, query, leads.context(), {
-      source: (id) => leads.sourceTitle(id),
-    });
+    const result = runQuery(
+      leads.index,
+      query,
+      leads.context(),
+      { source: (id) => leads.sourceTitle(id) },
+      leads.queryExtras(),
+    );
     handle.setProgress(0, result.total);
     await core.yield();
     writeFile(handle.path, viewCsv(result.matches, leads.exportContext()));

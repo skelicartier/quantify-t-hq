@@ -33,13 +33,18 @@ export async function makePackAction(
 ): Promise<ActionState> {
   const context = await gate(formData, "/data/files/packs");
   if (refused(context)) return context;
+  const kind = fieldValue(formData, "kind", 20) === "trust" ? "trust" : "data_room";
+  // "For Labs too" belongs to a trust pack only; on a data-room pack the tick is left aside.
+  const labs = kind === "trust" && fieldValue(formData, "labs", 4) !== "";
   let name = "";
   try {
     name = (
       await api.makePack(
-        fieldValue(formData, "name", 80).trim() || "Data room",
+        fieldValue(formData, "name", 80).trim() || (kind === "trust" ? "Trust pack" : "Data room"),
         staffOf(context),
         attemptOf(formData),
+        kind,
+        labs,
       )
     ).pack.name;
   } catch (error) {
@@ -47,6 +52,25 @@ export async function makePackAction(
   }
   refreshPacks();
   return sent(`Made “${name}”.`);
+}
+
+/** "For Labs too" on a trust pack: its checklist gains or loses the data lines. */
+export async function setPackLabsAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/data/files/packs");
+  if (refused(context)) return context;
+  const packId = idFrom(formData, "pack_id");
+  if (!packId) return NO_PACK;
+  const labs = fieldValue(formData, "labs", 4) !== "";
+  try {
+    await api.setPackLabs(packId, labs, staffOf(context));
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshPacks(packId);
+  return sent(labs ? "Saved: for Labs too." : "Saved: not for Labs.");
 }
 
 export async function addPackItemsAction(
@@ -179,12 +203,15 @@ export async function recordPackShareAction(
   const packId = idFrom(formData, "pack_id");
   if (!packId) return NO_PACK;
   const investorId = idFrom(formData, "investor_id");
+  // A trust pack's share names a firm on the waitlist, or a firm typed beside it.
+  const entryId = idFrom(formData, "entry_id");
   let message = "";
   try {
     const { share } = await api.recordPackShare(
       packId,
       {
         ...(investorId ? { investor_id: investorId } : {}),
+        ...(entryId ? { entry_id: entryId } : {}),
         firm: fieldValue(formData, "firm", 120),
         how: fieldValue(formData, "how", 20),
         to: fieldValue(formData, "to", 4_000),

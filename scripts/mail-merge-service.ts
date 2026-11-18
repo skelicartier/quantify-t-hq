@@ -80,6 +80,8 @@ server.listen(socket, () => {
 });
 
 void engine.loop((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+// Delivery read back from the provider: its own loop, so a send never waits for a read.
+void engine.deliveryLoop((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {

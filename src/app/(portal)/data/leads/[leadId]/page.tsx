@@ -40,7 +40,16 @@ import {
   toneOf,
 } from "@/lib/data/labels";
 import { dataRead } from "@/lib/data/read";
+import {
+  CAME_FROM_GONE,
+  CONSENT_NOTE,
+  CONSENT_TITLE,
+  DELIVERY_NOT_READ_LINE,
+  WHERE,
+  lawLineOf,
+} from "@/lib/data/labels-outreach";
 import { formatDate, formatNumber } from "@/lib/format";
+import { DELIVERY_WORDS } from "@/lib/merge/delivery-contracts";
 import { requestNow } from "@/lib/request-time";
 
 import {
@@ -430,6 +439,10 @@ function Lead({
                     </>
                   )}
                 </p>
+                <DeliveryLine
+                  delivery={lead.delivery.find((item) => item.mailing_id === mail.mailing_id)}
+                  now={now}
+                />
                 {mail.gone ? (
                   <p className="page-note">
                     The words of this send are no longer on this computer: the mailing was deleted
@@ -563,6 +576,29 @@ function Lead({
   );
 }
 
+/** What the provider said happened to one send: "{label}{ · reason} · {when}", or not read yet. */
+function DeliveryLine({
+  delivery,
+  now,
+}: {
+  delivery: LeadDetail["delivery"][number] | undefined;
+  now: number;
+}) {
+  if (!delivery) return <p className="hqdata-mail__delivery">{DELIVERY_NOT_READ_LINE}</p>;
+  return (
+    <p className="hqdata-mail__delivery">
+      {DELIVERY_WORDS[delivery.shown].label}
+      {delivery.reason && ` · ${delivery.reason}`}
+      {delivery.at && (
+        <>
+          {" · "}
+          <Timestamp value={delivery.at} now={now} mode="relative" />
+        </>
+      )}
+    </p>
+  );
+}
+
 function Side({ lead: item, today: day }: { lead: LeadDetail; today: string }) {
   const inline = { action: updateLeadAction, idName: "lead_id", id: item.lead_id };
   return (
@@ -628,6 +664,29 @@ function Side({ lead: item, today: day }: { lead: LeadDetail; today: string }) {
         Changing a detail here does not change Mail merge lists; a send already made used the words
         it had.
       </p>
+      <Properties title={CONSENT_TITLE}>
+        <Property label="Came from">
+          {item.sources.length > 0 ? (
+            <ul className="hqdata-consent__from">
+              {item.sources.map((source, index) => (
+                <li key={`${source.label}-${index}`}>{source.label}</li>
+              ))}
+            </ul>
+          ) : (
+            CAME_FROM_GONE
+          )}
+        </Property>
+        <Property label="Country">{item.fields.country || "Not known"}</Property>
+        <Property label="Where">
+          {WHERE[item.consent.where].label}
+          <span className="table-sub">{lawLineOf(item.consent.where)}</span>
+        </Property>
+        <Property label="Opted out">{item.consent.stop_words}</Property>
+        <Property label="Asked to hear from us">
+          {item.consent.said_yes_on ? `Said yes on ${formatDate(item.consent.said_yes_on)}` : "No"}
+        </Property>
+      </Properties>
+      <p className="side-quiet">{CONSENT_NOTE}</p>
       <Properties title="The firm">
         <Property label="Domain">
           {item.firm.free_mail ? (

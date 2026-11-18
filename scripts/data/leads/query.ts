@@ -4,10 +4,24 @@
  * reply counts, the facets and the whole book's figures all come from one pass: each
  * dimension's counts are of the leads every *other* filter lets through, so a status link
  * or a select says how many it would show.
+ *
+ * Delivery batch (ws-notes/delivery/spec.md §7.5): "Where" (from the country field alone)
+ * and "Delivery" (what was read back about a lead's newest send) are two more dimensions.
+ * Delivery is counted only when the caller says how to read it; without that, its facet is
+ * empty and its filter is ignored.
  */
 
 import { findTerms, matchesTerms } from "../../../src/lib/merge/find";
 import { LEAD_STATUS_ORDER, OUTCOME_ORDER } from "../../../src/lib/data/labels";
+import {
+  DELIVERY_FILTERS,
+  WHERE,
+  isDeliveryFilter,
+  isWhereKey,
+  whereOf,
+  type DeliveryFilter,
+  type WhereKey,
+} from "../../../src/lib/data/labels-outreach";
 import { clean, wholeNumber } from "../guard";
 import {
   REPLY_STATUSES,
@@ -37,6 +51,10 @@ export type LeadQuery = {
   batch: string;
   source: string;
   tag: string;
+  /** "" (anywhere), or one of the `WHERE` keys. */
+  where: string;
+  /** "" (any), or one of the `DELIVERY_FILTERS` keys. */
+  delivery: string;
   domain: string;
   sort: SortKey;
   offset: number;
@@ -49,6 +67,8 @@ export function parseLeadQuery(params: URLSearchParams): LeadQuery {
   const status = clean(params.get("status"), 20);
   const reply = clean(params.get("reply"), 20);
   const sort = clean(params.get("sort"), 20) as SortKey;
+  const where = clean(params.get("where"), 20);
+  const delivery = clean(params.get("delivery"), 20);
   return {
     q,
     terms: findTerms(q),
@@ -60,6 +80,8 @@ export function parseLeadQuery(params: URLSearchParams): LeadQuery {
     batch: clean(params.get("batch"), 64),
     source: clean(params.get("source"), 64),
     tag: clean(params.get("tag"), 40).toLowerCase(),
+    where: isWhereKey(where) ? where : "",
+    delivery: isDeliveryFilter(delivery) ? delivery : "",
     domain: clean(params.get("domain"), 254).toLowerCase(),
     sort: SORT_KEYS.includes(sort) ? sort : "written",
     offset: Math.min(MAX_OFFSET, Math.max(0, wholeNumber(params.get("offset"), 0))),
@@ -79,6 +101,8 @@ export function queryString(query: LeadQuery): string {
     "batch",
     "source",
     "tag",
+    "where",
+    "delivery",
     "domain",
   ] as const)
     if (query[key]) params.set(key, query[key]);
@@ -94,6 +118,8 @@ export type Facets = {
   batch: FacetEntry[];
   source: FacetEntry[];
   tag: FacetEntry[];
+  where: FacetEntry[];
+  delivery: FacetEntry[];
 };
 
 export type Book = {
@@ -122,7 +148,17 @@ const EMAIL_KIND_LABELS: Record<string, string> = {
 };
 
 /** The dimensions a lead is filtered on, other than the search and the domain. */
-const DIMS = ["status", "firm_type", "country", "email_kind", "batch", "source", "tag"] as const;
+const DIMS = [
+  "status",
+  "firm_type",
+  "country",
+  "email_kind",
+  "batch",
+  "source",
+  "tag",
+  "where",
+  "delivery",
+] as const;
 type Dim = (typeof DIMS)[number];
 
 type Tally = Map<string, number>;
@@ -131,19 +167,52 @@ function bump(tally: Tally, key: string): void {
   tally.set(key, (tally.get(key) ?? 0) + 1);
 }
 
+/** What only the module can say about a lead: here, the delivery of its newest send. */
+export type QueryExtras = {
+  /** The delivery filter's value for a lead ("" for someone never written to); null: not read here. */
+  deliveryOf?: ((lead: Lead) => DeliveryFilter | "") | null;
+};
+
 export function runQuery(
   index: LeadsIndex,
   query: LeadQuery,
   context: StatusContext,
   labels: { source: (id: string) => string },
+  extras: QueryExtras = {},
 ): QueryResult {
   const ordered = index.sorted(query.sort, context);
   // A batch holds who is on it now; a list deleted in Mail merge, who was on it when it went.
   const inBatch = (member: Lead["lists"][number]): boolean =>
     !member.gone || index.goneLists.has(member.list_id);
+  const readDelivery = extras.deliveryOf ?? null;
+  // Without a reading of delivery the filter is ignored, so nobody is hidden by it.
   const active: Dim[] = DIMS.filter((dim) =>
-    dim === "status" ? Boolean(query.status) : Boolean(query[dim]),
+    dim === "status"
+      ? Boolean(query.status)
+      : dim === "delivery"
+        ? readDelivery !== null && Boolean(query.delivery)
+        : Boolean(query[dim]),
   );
+  const wheres = new Map<string, WhereKey>();
+  const whereFor = (lead: Lead): WhereKey => {
+    const country = lead.fields.country;
+    let where = wheres.get(country);
+    if (where === undefined) {
+      where = whereOf(country);
+      wheres.set(country, where);
+    }
+    return where;
+  };
+  const deliveries = new Map<Lead, DeliveryFilter | "">();
+  const deliveryFor = (lead: Lead): DeliveryFilter | "" => {
+    if (!readDelivery) return "";
+    let value = deliveries.get(lead);
+    if (value === undefined) {
+      value = readDelivery(lead);
+      deliveries.set(lead, value);
+    }
+    return value;
+  };
   const statusCounts = Object.fromEntries(
     [...LEAD_STATUS_ORDER, "replied"].map((key) => [key, 0]),
   ) as Record<LeadStatus | "replied", number>;
@@ -159,6 +228,8 @@ export function runQuery(
     batch: new Map(),
     source: new Map(),
     tag: new Map(),
+    where: new Map(),
+    delivery: new Map(),
   };
   const tagLabels = new Map<string, string>();
   const matches: Lead[] = [];
@@ -184,6 +255,10 @@ export function runQuery(
         return lead.files.some((ref) => ref.source_id === query.source);
       case "tag":
         return lead.tags.some((tag) => tag.toLowerCase() === query.tag);
+      case "where":
+        return whereFor(lead) === query.where;
+      case "delivery":
+        return deliveryFor(lead) === query.delivery;
     }
   };
 
@@ -219,6 +294,14 @@ export function runQuery(
           bump(tallies.tag, key);
         }
         return;
+      case "where":
+        bump(tallies.where, whereFor(lead));
+        return;
+      case "delivery": {
+        const value = deliveryFor(lead);
+        if (value) bump(tallies.delivery, value);
+        return;
+      }
     }
   };
 
@@ -274,6 +357,10 @@ export function runQuery(
       }),
       source: entries("source", (value) => labels.source(value)),
       tag: entries("tag", (value) => tagLabels.get(value) ?? value),
+      where: entries("where", (value) => (isWhereKey(value) ? WHERE[value].label : value)),
+      delivery: entries("delivery", (value) =>
+        isDeliveryFilter(value) ? DELIVERY_FILTERS[value] : value,
+      ),
     },
   };
 }

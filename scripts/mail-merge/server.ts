@@ -107,6 +107,17 @@ const ROUTES: JsonRoute[] = [
     run: (engine, _p, body) => engine.removeStop(body),
   },
   { method: "POST", pattern: /^\/stops\/sync$/, run: (engine) => engine.syncStops() },
+  { method: "GET", pattern: /^\/delivery$/, run: (engine) => engine.deliveryOverview() },
+  {
+    method: "POST",
+    pattern: /^\/delivery\/check$/,
+    run: (engine, _p, body) => engine.checkDelivery(body),
+  },
+  {
+    method: "POST",
+    pattern: /^\/delivery\/apply$/,
+    run: (engine, _p, body) => engine.applyDeliveryBacklog(body),
+  },
   { method: "GET", pattern: /^\/mailings$/, run: (engine) => engine.mailings() },
   {
     method: "POST",
@@ -147,6 +158,20 @@ const ROUTES: JsonRoute[] = [
     method: "GET",
     pattern: new RegExp(`^/mailings/${ID}/outcomes$`),
     run: (engine, [id]) => engine.outcomes(id!),
+  },
+  {
+    method: "GET",
+    pattern: new RegExp(`^/mailings/${ID}/delivery$`),
+    run: (engine, [id], _b, query) =>
+      engine.mailingDelivery(id!, {
+        offset: number(query, "offset"),
+        ...(query.get("view") ? { view: query.get("view")! } : {}),
+      }),
+  },
+  {
+    method: "POST",
+    pattern: new RegExp(`^/mailings/${ID}/retry$`),
+    run: (engine, [id]) => engine.retryMailing(id!),
   },
   {
     method: "POST",

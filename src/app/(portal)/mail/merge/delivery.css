@@ -1,0 +1,92 @@
+/* Delivery read back from the provider, on Mail merge's home and on a mailing's page: the
+   read line, the warnings, the week's sentence, the backlog waiting for a press and the
+   retry. Tokens only; phone rules at 720px; no side bars; radius 0. */
+@layer pages {
+  .merge-delivery {
+    display: grid;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  /* A table scrolls inside its own frame; the grid must not widen for it. */
+  .merge-delivery > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .merge-delivery p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .merge-delivery__read,
+  .merge-delivery__warnings,
+  .merge-delivery__backlog,
+  .merge-delivery__retry {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .merge-delivery__warnings {
+    gap: 10px;
+  }
+
+  /* The complaints hint sits on the warning's tinted ground, where the quiet colour is too faint. */
+  .merge-delivery__warnings .callout .side-quiet {
+    color: var(--muted);
+  }
+
+  .merge-delivery__sentence {
+    font-size: var(--fs-ui);
+  }
+
+  /* A button with the line that says what it does. */
+  .merge-delivery__act {
+    display: grid;
+    gap: 6px;
+    justify-items: start;
+    margin-top: 8px;
+  }
+
+  .merge-delivery__act .form-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .merge-delivery__delivered {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px 8px;
+  }
+
+  /* A line that exists only on paper: which people a printed table was narrowed to. */
+  .merge-delivery__print {
+    display: none;
+  }
+
+  @media (max-width: 720px) {
+    .merge-delivery {
+      gap: 12px;
+    }
+
+    .merge-delivery__delivered {
+      justify-content: flex-start;
+    }
+  }
+}
+
+/* On paper: the counts, the warnings and the people, and nothing that can be pressed. */
+@media print {
+  .merge-delivery__act,
+  .merge-delivery .live-refresh {
+    display: none !important;
+  }
+
+  .merge-delivery__print {
+    display: block;
+  }
+}

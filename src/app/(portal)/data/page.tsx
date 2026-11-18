@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { TheDelivery } from "@/components/data/batches/the-delivery";
 import { DataUnavailable } from "@/components/data/data-down";
 import { DueList } from "@/components/data/due-list";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -277,6 +278,8 @@ function Overview({ overview, now }: { overview: DataOverview; now: number }) {
       {overview.raise && <TheRaise raise={overview.raise} />}
 
       {overview.company && <TheCompany company={overview.company} />}
+
+      {overview.delivery && <TheDelivery delivery={overview.delivery} now={now} />}
 
       {overview.backup && (
         <div className="hqdata-print-hide">

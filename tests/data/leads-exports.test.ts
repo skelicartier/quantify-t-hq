@@ -124,7 +124,7 @@ describe("This view", () => {
     const { header, rows } = rowsOf(text);
     expect(header).toEqual([...VIEW_COLUMNS]);
     expect(header.join(",")).toBe(
-      "email,name,first_name,last_name,title,company,firm_type,website,country,city,phone,registration_no,source,source_url,email_kind,notes,status,status_detail,first_written_on,last_written_on,times_written,last_mailing,batches,reply,reply_on,held_reason,stop_reason,tags",
+      "email,name,first_name,last_name,title,company,firm_type,website,country,city,phone,registration_no,source,source_url,email_kind,notes,status,status_detail,first_written_on,last_written_on,times_written,last_mailing,batches,reply,reply_on,held_reason,stop_reason,tags,where,opted_out_on,delivery",
     );
     expect(rows).toHaveLength(290);
     const first = rows.find((row) => row.email === "partner1@fund1.example")!;

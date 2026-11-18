@@ -21,7 +21,9 @@ const engine = new MergeEngine({
   dir,
   liveProvider: (key) =>
     new WalkProvider(key, (mail) => appendFileSync(outbox, `${JSON.stringify(mail)}\n`)),
+  delivery: { tickMs: 500, minGapMs: 1_000, pageGapMs: 0, recentEveryMs: 3_600_000 },
 });
 rmSync(socket, { force: true });
 createMergeServer(engine, false).listen(socket, () => console.log(`[walk] listening on ${socket}`));
 void engine.loop((ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 100))));
+void engine.deliveryLoop((ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 500))));

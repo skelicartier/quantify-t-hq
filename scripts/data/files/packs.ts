@@ -8,6 +8,13 @@
  * Packs live in `files/packs.json` (rewritten whole) and the shares in
  * `files/pack-shares.jsonl` (one line each, never changed). A pack names files by id: the
  * zip and the index always take each file's current version.
+ *
+ * Delivery batch (ws-notes/delivery/spec.md §7.6): a second kind of pack, the trust pack,
+ * for a buyer's security and compliance team. It has its own checklist (more lines when it
+ * is "For Labs too"), its shares are recorded against waitlist firms, and its index says
+ * "trust pack" on its first line. A pack stored before kinds existed reads as a data-room
+ * pack, and an old share line as one with no waitlist firm; a data-room pack's index is
+ * byte for byte what it was.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -20,10 +27,22 @@ import {
   type PackNeed,
   type PackShareHow,
 } from "../../../src/lib/data/labels";
+import {
+  TRUST_CHECKLIST,
+  TRUST_FIRST_FOLDERS,
+  type PackKind,
+  type TrustCover,
+  type TrustFor,
+} from "../../../src/lib/data/labels-trust";
 import type { Answer, DataCore } from "../core";
 import { LIMITS, clean, cleanText, isDay, normaliseEmail } from "../guard";
 import type { Staff } from "../protocol";
-import { RAISE_SERVICES, type InvestorsRaise, type PacksLookup } from "../raise-contracts";
+import {
+  RAISE_SERVICES,
+  type InvestorsRaise,
+  type PacksLookup,
+  type WaitlistFeed,
+} from "../raise-contracts";
 import { ZipLimitError, ZipWriter, zipEntryName } from "../zip";
 import { matchFile, termsOf } from "./search";
 import { bytesInWords } from "./share";
@@ -34,7 +53,8 @@ import { blobName, type FileMeta, type FileRow, type Vault } from "./vault";
 export type PackItem = {
   item_id: string;
   file_id: string;
-  covers: PackCover;
+  /** A line of this pack's own checklist (data-room or trust), or "other". */
+  covers: PackCover | TrustCover;
   note: string;
   added_at: string;
   added_by: Staff;
@@ -43,6 +63,10 @@ export type PackItem = {
 export type Pack = {
   pack_id: string;
   name: string;
+  /** What it is for: investors (a data-room pack) or a buyer's diligence (a trust pack). */
+  kind: PackKind;
+  /** A trust pack "For Labs too": its checklist gains the data lines. Always false otherwise. */
+  labs: boolean;
   /** In order: the first is number 1. */
   items: PackItem[];
   /** Goes up by one at every change to the items (not a rename). */
@@ -59,6 +83,8 @@ export type PackShare = {
   pack_id: string;
   version: number;
   investor_id: string | null;
+  /** The waitlist firm a trust pack was shared with; null for a typed firm and for old lines. */
+  entry_id: string | null;
   firm: string;
   how: PackShareHow;
   to: string[];
@@ -86,6 +112,8 @@ const PACKS = "files/packs.json";
 const SHARES = "files/pack-shares.jsonl";
 /** The walk's pack, pinned so the harness can open its page (test routes only). */
 export const WALK_PACK_ID = "walk-pack";
+/** The walk's trust pack, pinned the same way. */
+export const WALK_TRUST_PACK_ID = "walk-trust-pack";
 
 export const KYC_REFUSAL = "Files in “13 Directors' KYC” never go in a pack.";
 const BOARD_WARNING = "Board papers usually stay out until someone asks.";
@@ -94,14 +122,39 @@ const GONE_WARNING = "No longer in Files: take it out of the pack.";
 const KYC_WARNING = "Now in “13 Directors' KYC”: take it out of the pack.";
 
 const COVERS = new Set<string>([...Object.keys(PACK_CHECKLIST), "other"]);
+const TRUST_COVERS = new Set<string>([...Object.keys(TRUST_CHECKLIST), "other"]);
 const CHECKLIST = Object.entries(PACK_CHECKLIST) as [
   keyof typeof PACK_CHECKLIST,
   { label: string; need: PackNeed; why: string },
 ][];
+const TRUST_LINES = Object.entries(TRUST_CHECKLIST) as [
+  TrustCover,
+  { label: string; need: PackNeed; for: TrustFor; why: string },
+][];
+
+export const NOT_ON_CHECKLIST = "That is not on this pack's checklist.";
+export const LABS_ONLY_TRUST = "Only a trust pack can be for Labs.";
+const FIRST_LABEL: Record<PackKind, string> = {
+  data_room: "From 10 Fundraising and investors",
+  trust: "From 05, 06, 07 and 08",
+};
+
+/** Which checklist a pack is held to; a pack with no kind (an old one) is a data-room pack. */
+export type PackShape = { kind?: PackKind; labs?: boolean };
+
+/** The lines of a pack's own checklist, in order. */
+function linesOf(pack: PackShape): [string, { label: string; need: PackNeed; why: string }][] {
+  if (pack.kind !== "trust") return CHECKLIST;
+  return TRUST_LINES.filter(([, line]) => line.for === "all" || pack.labs === true);
+}
 
 /** What an item covers, in words: its checklist label, or "Other". */
-export const coverLabel = (covers: PackCover): string =>
-  covers === "other" ? "Other" : PACK_CHECKLIST[covers].label;
+export const coverLabel = (covers: PackCover | TrustCover): string => {
+  if (covers === "other") return "Other";
+  if (Object.hasOwn(PACK_CHECKLIST, covers))
+    return PACK_CHECKLIST[covers as PackCover & keyof typeof PACK_CHECKLIST].label;
+  return TRUST_CHECKLIST[covers as TrustCover]?.label ?? "Other";
+};
 
 const SHORT_MONTHS = [
   "Jan",
@@ -144,15 +197,22 @@ export function entryNameOf(n: number, title: string, originalName: string): str
   return `${String(n).padStart(2, "0")} ${stem}${ext ? `.${ext}` : ""}`;
 }
 
-/** The checklist with the items that cover each line; a file gone or in the trash covers nothing. */
-export function checklistOf(entries: readonly PackEntry[]): {
+/**
+ * The pack's own checklist with the items that cover each line; a file gone or in the trash
+ * covers nothing. A trust pack's lines are the trust list's, with the Labs lines only when
+ * it is "For Labs too".
+ */
+export function checklistOf(
+  entries: readonly PackEntry[],
+  pack: PackShape = {},
+): {
   key: string;
   label: string;
   need: PackNeed;
   why: string;
   covered_by: number[];
 }[] {
-  return CHECKLIST.map(([key, line]) => ({
+  return linesOf(pack).map(([key, line]) => ({
     key,
     label: line.label,
     need: line.need,
@@ -164,19 +224,23 @@ export function checklistOf(entries: readonly PackEntry[]): {
 }
 
 /** Every Needed or Expected line nothing covers; "When there is some" lines are never missing. */
-export function missingOf(entries: readonly PackEntry[]): string[] {
-  return checklistOf(entries)
+export function missingOf(entries: readonly PackEntry[], pack: PackShape = {}): string[] {
+  return checklistOf(entries, pack)
     .filter((line) => line.need !== "if_any" && line.covered_by.length === 0)
     .map((line) => line.label);
 }
 
-/** `00 Index.txt`, word for word (raise spec §8.10.2). */
+/**
+ * `00 Index.txt`, word for word (raise spec §8.10.2). A data-room pack's is unchanged; a
+ * trust pack's first line says what it is.
+ */
 export function indexText(
-  pack: Pick<Pack, "name" | "version">,
+  pack: Pick<Pack, "name" | "version"> & PackShape,
   entries: readonly PackEntry[],
   day: string,
 ): string {
-  const lines = [`${pack.name} · version ${pack.version} · ${dayWords(day)}`, ""];
+  const what = pack.kind === "trust" ? " · trust pack" : "";
+  const lines = [`${pack.name}${what} · version ${pack.version} · ${dayWords(day)}`, ""];
   for (const entry of entries) {
     const label = coverLabel(entry.item.covers);
     if (!entry.file) {
@@ -189,7 +253,7 @@ export function indexText(
     );
   }
   if (entries.length) lines.push("");
-  const missing = missingOf(entries);
+  const missing = missingOf(entries, pack);
   lines.push(
     missing.length ? `Missing: ${missing.join(", ")}.` : "Nothing on the checklist is missing.",
   );
@@ -212,14 +276,26 @@ export function registerPacks(
 ): void {
   const store = core.store;
   const stored = store.readJson<Partial<PacksFile>>(PACKS, {});
+  // A pack stored before kinds existed is a data-room pack; it is written back so on its next save.
   const packs: Pack[] = Array.isArray(stored.packs)
-    ? stored.packs.filter((pack) => typeof pack?.pack_id === "string")
+    ? stored.packs
+        .filter((pack) => typeof pack?.pack_id === "string")
+        .map((pack) => {
+          const kind: PackKind = pack.kind === "trust" ? "trust" : "data_room";
+          return { ...pack, kind, labs: kind === "trust" && pack.labs === true };
+        })
     : [];
+  // An old share line has no waitlist firm.
   const shares: PackShare[] = store
     .readLines<PackShare>(SHARES)
-    .filter((share) => typeof share?.share_id === "string");
+    .filter((share) => typeof share?.share_id === "string")
+    .map((share) => ({
+      ...share,
+      entry_id: typeof share.entry_id === "string" ? share.entry_id : null,
+    }));
   const save = () => store.writeJson(PACKS, { format: 1, packs });
   const raise = () => core.need<InvestorsRaise>(RAISE_SERVICES.investorsRaise);
+  const waitlistFeed = () => core.need<WaitlistFeed>(RAISE_SERVICES.waitlistFeed);
 
   // ---------------------------------------------------------------- folders by their kind
 
@@ -272,7 +348,7 @@ export function registerPacks(
   const summaryOf = (pack: Pack): Answer => ({
     ...pack,
     files: pack.items.length,
-    missing: missingOf(entriesOf(pack)),
+    missing: missingOf(entriesOf(pack), pack),
     last_shared_on: lastShared(pack.pack_id),
   });
 
@@ -280,6 +356,7 @@ export function registerPacks(
     const entries = entriesOf(pack);
     const today = core.day();
     const service = raise();
+    const feed = pack.kind === "trust" ? waitlistFeed() : null;
     return {
       pack,
       items: entries.map((entry) => ({
@@ -288,13 +365,20 @@ export function registerPacks(
         file: entry.file ? vault.row(entry.file) : null,
         warning: warningOf(entry.file),
       })),
-      checklist: checklistOf(entries),
-      missing: missingOf(entries),
+      checklist: checklistOf(entries, pack),
+      missing: missingOf(entries, pack),
       index_text: indexText(pack, entries, today),
       shares: shares
         .filter((share) => share.pack_id === pack.pack_id)
         .sort((a, b) => b.shared_on.localeCompare(a.shared_on) || b.at.localeCompare(a.at)),
       firms: service ? service.firmOptions() : null,
+      // A trust pack is shared with buyers: the firms on the waitlist.
+      buyers: feed
+        ? feed
+            .entries()
+            .map((entry) => ({ entry_id: entry.entry_id, firm: entry.firm, stage: entry.stage }))
+            .sort((a, b) => a.firm.localeCompare(b.firm, "en", { numeric: true }))
+        : null,
       today,
     };
   };
@@ -307,22 +391,40 @@ export function registerPacks(
     save();
   };
 
-  const coverOf = (value: unknown): PackCover => {
+  /** A line of this pack's own checklist, or "other": never a line of the other kind's. */
+  const coverOf = (value: unknown, pack: Pack): PackCover | TrustCover => {
     const covers = clean(value, 20) || "other";
-    if (!COVERS.has(covers))
-      throw new Refused(400, "invalid", "Choose what it covers from the checklist.");
-    return covers as PackCover;
+    if (!(pack.kind === "trust" ? TRUST_COVERS : COVERS).has(covers))
+      throw new Refused(400, "invalid", NOT_ON_CHECKLIST);
+    return covers as PackCover | TrustCover;
   };
 
-  const nameOf = (value: unknown): string => cleanText(value, 80) || "Data room";
+  const nameOf = (value: unknown, kind: PackKind = "data_room"): string =>
+    cleanText(value, 80) || (kind === "trust" ? "Trust pack" : "Data room");
 
-  const make = (name: unknown, by: Staff, pinned?: string): Pack => {
+  const kindOf = (value: unknown): PackKind => {
+    if (value === undefined || value === null || value === "") return "data_room";
+    if (value !== "data_room" && value !== "trust")
+      throw new Refused(400, "invalid", "Choose the kind of pack.");
+    return value;
+  };
+
+  const make = (
+    name: unknown,
+    by: Staff,
+    pinned?: string,
+    kind: PackKind = "data_room",
+    labs = false,
+  ): Pack => {
+    if (labs && kind !== "trust") throw new Refused(400, "invalid", LABS_ONLY_TRUST);
     if (packs.filter((pack) => !pack.archived).length >= PACK_MAX_PACKS)
       throw new Refused(409, "too_many", "Twenty packs at most. Archive one first.");
     const now = core.now();
     const pack: Pack = {
       pack_id: pinned ?? randomUUID(),
-      name: nameOf(name),
+      name: nameOf(name, kind),
+      kind,
+      labs,
       items: [],
       version: 1,
       created_at: now,
@@ -347,9 +449,11 @@ export function registerPacks(
     if (ids.length === 0) throw new Refused(400, "invalid", "Choose the files to add.");
     if (ids.length > PACK_ADD_MAX)
       throw new Refused(400, "invalid", "Fifty files at most at a time.");
-    const each = Array.isArray(coversValue) ? coversValue.map(coverOf) : null;
-    const all = each ? null : coverOf(coversValue);
-    const fresh: { file_id: string; covers: PackCover }[] = [];
+    const each = Array.isArray(coversValue)
+      ? coversValue.map((value) => coverOf(value, pack))
+      : null;
+    const all = each ? null : coverOf(coversValue, pack);
+    const fresh: { file_id: string; covers: PackCover | TrustCover }[] = [];
     let skipped = 0;
     for (const [index, id] of ids.entries()) {
       const file = vault.mustFile(id);
@@ -392,8 +496,12 @@ export function registerPacks(
 
   core.route("GET", "/data/packs", (ctx) => {
     const archived = ctx.query.has("archived") && ctx.query.get("archived") !== "0";
+    // One kind when asked for by name; both without it.
+    const asked = ctx.query.get("kind");
+    const kind: PackKind | null = asked === "data_room" || asked === "trust" ? asked : null;
     return {
       packs: packs
+        .filter((pack) => kind === null || pack.kind === kind)
         .filter((pack) => (archived ? pack.archived !== null : pack.archived === null))
         .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
         .map(summaryOf),
@@ -401,7 +509,25 @@ export function registerPacks(
     };
   });
 
-  core.route("POST", "/data/packs", (ctx) => ({ pack: make(ctx.body.name, ctx.staff()) }));
+  core.route("POST", "/data/packs", (ctx) => {
+    const by = ctx.staff();
+    const kind = kindOf(ctx.body.kind);
+    return { pack: make(ctx.body.name, by, undefined, kind, ctx.body.labs === true) };
+  });
+
+  // "For Labs too" on a trust pack: its checklist gains or loses the data lines.
+  core.route("POST", "/data/packs/:id/labs", (ctx) => {
+    const by = ctx.staff();
+    const pack = mustPack(ctx.params[0]!);
+    if (pack.kind !== "trust") throw new Refused(400, "invalid", LABS_ONLY_TRUST);
+    if (typeof ctx.body.labs !== "boolean")
+      throw new Refused(400, "invalid", "Say whether the pack is for Labs too.");
+    if (pack.labs !== ctx.body.labs) {
+      pack.labs = ctx.body.labs;
+      changed(pack, by);
+    }
+    return { pack };
+  });
 
   core.route("GET", "/data/packs/:id", (ctx) => detailOf(mustPack(ctx.params[0]!)));
 
@@ -424,13 +550,18 @@ export function registerPacks(
         );
       })
       .sort((a, b) => a.title.localeCompare(b.title, "en", { numeric: true }));
-    for (const file of files)
-      (within(file, "fundraising") ? fundraising : other).push(vault.row(file));
+    // The first group is where this kind of pack's files usually are; the keys stay as they were.
+    const first = (file: FileMeta) =>
+      pack.kind === "trust"
+        ? TRUST_FIRST_FOLDERS.some((key) => within(file, key))
+        : within(file, "fundraising");
+    for (const file of files) (first(file) ? fundraising : other).push(vault.row(file));
     const kept = fundraising.slice(0, CANDIDATES_MAX);
     return {
       fundraising: kept,
       other: other.slice(0, Math.max(0, CANDIDATES_MAX - kept.length)),
       total: fundraising.length + other.length,
+      first_label: FIRST_LABEL[pack.kind],
     };
   });
 
@@ -460,7 +591,7 @@ export function registerPacks(
     const by = ctx.staff();
     const pack = mustPack(ctx.params[0]!);
     const item = pack.items[mustItem(pack, ctx.params[1]!)]!;
-    const covers = coverOf(ctx.body.covers);
+    const covers = coverOf(ctx.body.covers, pack);
     if (item.covers !== covers) {
       item.covers = covers;
       changed(pack, by);
@@ -479,7 +610,7 @@ export function registerPacks(
   core.route("POST", "/data/packs/:id/rename", (ctx) => {
     const by = ctx.staff();
     const pack = mustPack(ctx.params[0]!);
-    pack.name = nameOf(ctx.body.name);
+    pack.name = nameOf(ctx.body.name, pack.kind);
     pack.updated_at = core.now();
     pack.updated_by = by;
     save();
@@ -518,10 +649,19 @@ export function registerPacks(
     if (pack.items.length === 0) throw new Refused(409, "empty", "The pack is empty.");
     const body = ctx.body;
     const service = raise();
-    const asked = clean(body.investor_id, 64);
+    const asked = pack.kind === "trust" ? "" : clean(body.investor_id, 64);
+    const askedEntry = pack.kind === "trust" ? clean(body.entry_id, 64) : "";
+    const feed = askedEntry ? waitlistFeed() : null;
     let investor_id: string | null = null;
+    let entry_id: string | null = null;
     let firm = "";
-    if (asked && service) {
+    if (askedEntry && feed) {
+      // A trust pack goes to a buyer: a firm on the waitlist, or one typed below.
+      const entry = feed.entries().find((item) => item.entry_id === askedEntry);
+      if (!entry) throw new Refused(404, "not_found", "That firm is not on the waitlist.");
+      entry_id = entry.entry_id;
+      firm = entry.firm;
+    } else if (asked && service) {
       const name = service.name(asked);
       if (name === null) throw new Refused(404, "not_found", "That firm is not here.");
       investor_id = asked;
@@ -551,6 +691,7 @@ export function registerPacks(
       pack_id: pack.pack_id,
       version: pack.version,
       investor_id,
+      entry_id,
       firm,
       how: how as PackShareHow,
       to,
@@ -577,7 +718,8 @@ export function registerPacks(
   core.route("POST", "/data/packs/:id/save-index", async (ctx) => {
     const by = ctx.staff();
     const pack = mustPack(ctx.params[0]!);
-    const folder = defaultFolder("fundraising");
+    // A data-room pack's index goes beside the deck; a trust pack's beside its policies.
+    const folder = defaultFolder(pack.kind === "trust" ? "ip" : "fundraising");
     const textOf = indexText(pack, entriesOf(pack), core.day());
     const file = await putFile({
       folderPath: folder ? vault.pathOf(folder.folder_id).map((step) => step.name) : [],
@@ -698,8 +840,63 @@ export function registerPacks(
       changed(pack, by);
       return { pack, made: true };
     });
+    // The walk's trust pack: three invented files in "07 IP, product and data".
+    core.route("POST", "/data/_test/packs/seed-trust", async (ctx) => {
+      const by = ctx.staff();
+      const known = packs.find((pack) => pack.pack_id === WALK_TRUST_PACK_ID);
+      if (known) return { pack: known, made: false };
+      const folder = defaultFolder("ip");
+      const path = folder ? vault.pathOf(folder.folder_id).map((step) => step.name) : [];
+      const made: { file: FileRow; covers: TrustCover }[] = [];
+      for (const seed of WALK_TRUST_FILES)
+        made.push({
+          file: await putFile({
+            folderPath: path,
+            title: seed.title,
+            originalName: seed.name,
+            bytes: new TextEncoder().encode(seed.text),
+            by,
+          }),
+          covers: seed.covers,
+        });
+      const pack = make("Walk trust pack", by, WALK_TRUST_PACK_ID, "trust", false);
+      const now = core.now();
+      for (const { file, covers } of made)
+        pack.items.push({
+          item_id: randomUUID(),
+          file_id: file.file_id,
+          covers,
+          note: "",
+          added_at: now,
+          added_by: by,
+        });
+      changed(pack, by);
+      return { pack, made: true };
+    });
   }
 }
+
+/** The walk's three invented trust files, in "07 IP, product and data". */
+const WALK_TRUST_FILES: { title: string; name: string; text: string; covers: TrustCover }[] = [
+  {
+    title: "Walk information security policy",
+    name: "walk-information-security-policy.txt",
+    text: "Invented information security policy for the walk.\n",
+    covers: "infosec_policy",
+  },
+  {
+    title: "Walk security questionnaire answers",
+    name: "walk-security-questionnaire-answers.txt",
+    text: "Invented standard answers to a buyer's security questionnaire, for the walk.\n",
+    covers: "questionnaire",
+  },
+  {
+    title: "Walk audit status and plan",
+    name: "walk-audit-status-and-plan.txt",
+    text: "Invented note for the walk: working towards an audit, with an invented auditor.\n",
+    covers: "certification",
+  },
+];
 
 /** The walk's three invented files, in "10 Fundraising and investors". */
 const WALK_PACK_FILES: { title: string; name: string; text: string; covers: PackCover }[] = [

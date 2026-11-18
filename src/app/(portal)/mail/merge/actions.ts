@@ -552,3 +552,77 @@ export async function resumeMailingAction(_previous: ActionState, formData: Form
 export async function cancelMailingAction(_previous: ActionState, formData: FormData) {
   return transition(formData, merge.cancelMergeMailing);
 }
+
+// --- delivery read back -----------------------------------------------------------------
+
+/** "Check delivery now": asks the sender to read the provider's events, and waits a little. */
+export async function checkDeliveryAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const mailingId = fieldValue(formData, "mailing_id", 64);
+  // The page to refresh is the one the button is on: a mailing's, or Mail merge's home.
+  const path = mailingId ? mailingPath(mailingId) : "/mail/merge";
+  const context = await gate(formData, path);
+  if (refused(context)) return context;
+  let answer: Awaited<ReturnType<typeof merge.checkMergeDelivery>>;
+  try {
+    answer = await merge.checkMergeDelivery({
+      ...(mailingId ? { mailing_id: mailingId } : {}),
+      wait: true,
+    });
+  } catch (error) {
+    return refusal(error);
+  }
+  refresh(path);
+  if (!answer.started) return sent("A read is already going; this page refreshes when it ends.");
+  if (answer.reading) return sent("Still reading; this page refreshes when it ends.");
+  if (answer.read.outcome !== "ok")
+    return {
+      status: "error",
+      message: `The read did not work. ${answer.read.detail}`.trim(),
+    };
+  const kept = answer.read.kept;
+  return sent(
+    `Delivery read: ${kept.toLocaleString("en-GB")} ${kept === 1 ? "event" : "events"} about mail from this computer.`,
+  );
+}
+
+/** The one press that lets what happened before the read-back began onto the stop list. */
+export async function applyBacklogAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const context = await gate(formData, "/mail/merge");
+  if (refused(context)) return context;
+  const raw = fieldValue(formData, "count", 12).trim();
+  if (!/^\d+$/.test(raw)) return { status: "error", message: "Say how many." };
+  let answer: { added: number; already: number };
+  try {
+    answer = await merge.applyMergeDeliveryBacklog(Number.parseInt(raw, 10));
+  } catch (error) {
+    return refusal(error);
+  }
+  refresh("/mail/merge/setup");
+  return sent(
+    `${answer.added.toLocaleString("en-GB")} added to the stop list; ${answer.already.toLocaleString("en-GB")} were on it already.`,
+  );
+}
+
+/** "Make a retry mailing for these": a draft, and the browser goes to it. Nothing is sent. */
+export async function retryMailingAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const mailingId = fieldValue(formData, "mailing_id", 64);
+  const context = await gate(formData, mailingPath(mailingId));
+  if (refused(context)) return context;
+  let draftId: string;
+  try {
+    draftId = (await merge.makeMergeRetryMailing(mailingId)).mailing.id;
+  } catch (error) {
+    return refusal(error);
+  }
+  refresh();
+  redirect(mailingPath(draftId));
+}

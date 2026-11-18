@@ -14,6 +14,10 @@ import { dataAsk, id, ok } from "@/lib/data/socket";
 
 const staffSchema = z.object({ staff_id: z.string(), name: z.string() });
 
+export const packKindSchema = z.enum(["data_room", "trust"]);
+export type PackKindValue = z.infer<typeof packKindSchema>;
+
+/** A line of a data-room pack's checklist, of a trust pack's, or "other". */
 export const packCoverSchema = z.enum([
   "deck",
   "team",
@@ -22,6 +26,22 @@ export const packCoverSchema = z.enum([
   "pilot_data",
   "burn",
   "other",
+  "questionnaire",
+  "infosec_policy",
+  "access_policy",
+  "incident_policy",
+  "data_policy",
+  "continuity",
+  "certification",
+  "pen_test",
+  "insurance",
+  "accounts",
+  "references",
+  "regulated_buyers",
+  "provenance",
+  "dictionary",
+  "mnpi_policy",
+  "alt_data_answers",
 ]);
 export type PackCoverValue = z.infer<typeof packCoverSchema>;
 export const packShareHowSchema = z.enum(["mailbox", "meeting", "link"]);
@@ -39,6 +59,8 @@ export const packItemSchema = z.object({
 export const packSchema = z.object({
   pack_id: z.string(),
   name: z.string(),
+  kind: packKindSchema,
+  labs: z.boolean(),
   items: z.array(packItemSchema),
   version: z.number(),
   created_at: z.string(),
@@ -54,6 +76,7 @@ export const packShareSchema = z.object({
   pack_id: z.string(),
   version: z.number(),
   investor_id: z.string().nullable(),
+  entry_id: z.string().nullable(),
   firm: z.string(),
   how: packShareHowSchema,
   to: z.array(z.string()),
@@ -110,6 +133,10 @@ export const packPageSchema = ok.extend({
   firms: z
     .array(z.object({ investor_id: z.string(), firm: z.string(), stage: z.string() }))
     .nullable(),
+  // For a trust pack: the firms on the waitlist; null for a data-room pack or without the waitlist.
+  buyers: z
+    .array(z.object({ entry_id: z.string(), firm: z.string(), stage: z.string() }))
+    .nullable(),
   today: z.string(),
 });
 export type DataPackPage = z.infer<typeof packPageSchema>;
@@ -118,16 +145,39 @@ export const packCandidatesSchema = ok.extend({
   fundraising: z.array(fileRowSchema),
   other: z.array(fileRowSchema),
   total: z.number(),
+  first_label: z.string(),
 });
 export type DataPackCandidates = z.infer<typeof packCandidatesSchema>;
 
 const packAnswer = ok.extend({ pack: packSchema });
 
-export const readPacks = (archived = false) =>
-  dataAsk(packsListSchema, "GET", archived ? "/data/packs?archived=1" : "/data/packs");
+export const readPacks = (archived = false, kind: PackKindValue | null = null) => {
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  if (archived) params.set("archived", "1");
+  const rendered = params.toString();
+  return dataAsk(packsListSchema, "GET", `/data/packs${rendered ? `?${rendered}` : ""}`);
+};
 
-export const makePack = (name: string, by: Staff, attempt: string) =>
-  dataAsk(packAnswer, "POST", "/data/packs", { name, by, attempt });
+/** A data-room pack unless `kind` says a trust pack; `labs` only for a trust pack. */
+export const makePack = (
+  name: string,
+  by: Staff,
+  attempt: string,
+  kind: PackKindValue = "data_room",
+  labs = false,
+) =>
+  dataAsk(packAnswer, "POST", "/data/packs", {
+    name,
+    kind,
+    ...(kind === "trust" ? { labs } : {}),
+    by,
+    attempt,
+  });
+
+/** "For Labs too" on a trust pack: its checklist gains or loses the data lines. */
+export const setPackLabs = (packId: string, labs: boolean, by: Staff) =>
+  dataAsk(packAnswer, "POST", `/data/packs/${id(packId)}/labs`, { labs, by });
 
 export const readPack = (packId: string) =>
   dataAsk(packPageSchema, "GET", `/data/packs/${id(packId)}`);
@@ -176,6 +226,7 @@ export const recordPackShare = (
   packId: string,
   input: {
     investor_id?: string;
+    entry_id?: string;
     firm?: string;
     how: string;
     to: string;
