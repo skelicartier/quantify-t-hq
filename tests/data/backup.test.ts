@@ -267,9 +267,83 @@ describe("the backup zip (B1, B2)", () => {
     }
     const said = entry(others, "README.txt").toString();
     expect(said).toContain(
-      "- data/people/ is left out: only a backup the Owner makes holds the people ledger.",
+      "- data/people/ is left out: only a backup the Owner makes holds the people ledger. data/statements/ and data/close/owner/ are left out too: only a backup the Owner makes holds the bank statements and the MIS's people figures.",
     );
     expect(said).not.toContain("keep it as private as this Mac");
+  });
+
+  it("holds the bank statements and the MIS's people part only when the Owner makes it (duties spec §9.10)", async () => {
+    // The walk's statement (invented), and October locked so its MIS and the Owner's part are written.
+    const seeded = await stack.ask("POST", "/data/_test/close/seed", {
+      by: WALKER,
+      statements: true,
+    });
+    expect(seeded.status).toBe(200);
+    for (const key of [
+      "statements",
+      "sales_invoices",
+      "bills",
+      "stipend_sheet",
+      "tds_challans",
+      "gst_returns",
+      "firas",
+    ])
+      await stack.ask("POST", `/data/close/2026-10/items/${key}`, { by: WALKER, state: "ready" });
+    await stack.ask("POST", "/data/close/2026-10/sent", {
+      by: WALKER,
+      on: "2026-11-06",
+      to_name: "Walk CA",
+    });
+    expect((await stack.ask("POST", "/data/close/2026-10/lock", { by: WALKER })).status).toBe(200);
+    const listed = (await stack.ask("GET", "/data/statements?owner=1")).json as {
+      accounts: { statements: { statement_id: string; file: { stored: string } }[] }[];
+    };
+    const stored = listed.accounts[0]!.statements[0]!.file.stored;
+    expect(stored).toMatch(/\.csv$/);
+    const made = async (people: boolean): Promise<string> => {
+      const started = await stack.ask("POST", "/data/builds", {
+        kind: "backup",
+        people,
+        by: WALKER,
+      });
+      const buildId = String((started.json!.build as Body).build_id);
+      await until(
+        async () =>
+          ((await stack.ask("GET", `/data/builds/${buildId}`)).json!.build as Body).state ===
+          "ready",
+        "the backup",
+      );
+      const file = await stack.raw(stack.socket, "GET", `/data/builds/${buildId}/bytes`);
+      const path = join(out, `statements-${String(people)}-${buildId}.zip`);
+      writeFileSync(path, file.bytes);
+      return path;
+    };
+    const owners = entries(await made(true));
+    expect(owners).toContain("data/statements/accounts.json");
+    expect(owners).toContain("data/statements/statements.json");
+    expect(owners).toContain(`data/statements/files/${stored}`);
+    expect(owners.some((name) => name.startsWith("data/people/"))).toBe(true);
+    expect(owners).toContain("data/close/months/2026-10.json");
+    expect(owners).toContain("data/close/owner/2026-10.json");
+    const othersPath = await made(false);
+    const others = entries(othersPath);
+    expect(others.some((name) => name.startsWith("data/statements/"))).toBe(false);
+    expect(others.some((name) => name.startsWith("data/people/"))).toBe(false);
+    expect(others.some((name) => name.startsWith("data/close/owner/"))).toBe(false);
+    expect(others).toContain("data/close/months/2026-10.json");
+    expect(others).toContain("data/close/mis/2026-10.json");
+    for (const name of others) {
+      const bytes = entry(othersPath, name);
+      expect(
+        bytes.includes("WALK LEGAL LLP") ||
+          bytes.includes("WALK-UTR-0007") ||
+          bytes.includes("Walk Intern One"),
+        name,
+      ).toBe(false);
+    }
+    expect(entry(othersPath, "README.txt").toString()).toContain(
+      "- data/people/ is left out: only a backup the Owner makes holds the people ledger. data/statements/ and data/close/owner/ are left out too: only a backup the Owner makes holds the bank statements and the MIS's people figures.",
+    );
   });
 
   it("holds delivery read back from the provider, with no address inside a bounce's reason (delivery spec §6.10)", async () => {

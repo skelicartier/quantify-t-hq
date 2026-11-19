@@ -9,6 +9,15 @@
 
 import { COMPANY_SERVICES, NO_EVIDENCE } from "../company-contracts";
 import type { DataCore } from "../core";
+import {
+  DUTIES_SERVICES,
+  ruleLineOf,
+  type DutyRuleKey,
+  type DutyRulesService,
+  type RuleLine,
+} from "../duties-contracts";
+import { clean } from "../guard";
+import { checkCopy, copyGiven, fileChoices, fileLink, keepCopy } from "../meetings/copy";
 import { addDays } from "../days";
 import type { Staff } from "../protocol";
 import { firstFyEndOptions } from "../../../src/lib/data/labels-company";
@@ -16,7 +25,7 @@ import type { Facts as CatalogueFacts } from "../dates/catalogue";
 import { changeItem, changeOrigin, decides, dscOrigin, kycDue, kycOrigin } from "../dates/facts";
 import type { KeyDatesInternal } from "../dates/from-records";
 import { CompanyBook, dscSoon, factsEmpty, inOffice } from "./book";
-import { checksOf } from "./checks";
+import { checksOf, dutyChecksOf } from "./checks";
 import type { CompanyInternal, ContactChange, Director } from "./types";
 import { WALK_DIRECTOR_ID, walkDirector } from "./walk-seed";
 
@@ -31,8 +40,32 @@ const FACTS_NEEDED: readonly [string, (facts: CompanyBook["facts"]) => boolean][
 
 const ticked = (value: unknown): boolean => value === true || value === "on" || value === "true";
 
+/** Where a copy goes in Files, and the field that points at it. */
+const CERT_IN_COPY = {
+  folder: ["Security", "CERT-In"],
+  title: "Point of contact sent to CERT-In",
+  note: "The point of contact as sent to CERT-In",
+  field: "cert_in_sent_file_id",
+};
+const DPIIT_COPY = {
+  folder: ["Company", "DPIIT"],
+  title: "DPIIT recognition certificate",
+  note: "The DPIIT recognition certificate",
+  field: "dpiit_certificate_file_id",
+};
+
 export function register(core: DataCore): void {
   const book = new CompanyBook(core);
+
+  /** A duty rule's line for the page, or null when the rule book is not loaded here. */
+  const ruleLine = (key: DutyRuleKey): RuleLine | null => {
+    try {
+      const rules = core.need<DutyRulesService>(DUTIES_SERVICES.dutyRules);
+      return rules ? ruleLineOf(rules.state(key)) : null;
+    } catch {
+      return null;
+    }
+  };
   const keyDates = () => core.need<KeyDatesInternal>(COMPANY_SERVICES.keyDates);
 
   const lookup: CompanyInternal = {
@@ -121,14 +154,34 @@ export function register(core: DataCore): void {
       directors_in_office: inOfficeNow.length,
       last_agm: lastAgm,
       contacts_here: core.need("contacts") !== null,
+      duty_checks: dutyChecksOf(book.facts, today),
+      rules: { cert_in_contact: ruleLine("cert-in-contact") },
+      cert_in_file: fileLink(core, book.facts.cert_in.sent_file_id),
+      dpiit_file: fileLink(core, book.facts.dpiit.certificate_file_id),
+      files: fileChoices(core),
+      files_here: core.need("files") !== null,
       today,
     };
   });
 
-  core.route("POST", "/data/company/facts", (ctx) => {
+  /**
+   * One group of facts. The CERT-In message as sent and the DPIIT certificate may come as a
+   * copy (`content` and `name`), kept in Files once every field has passed its checks.
+   */
+  core.route("POST", "/data/company/facts", async (ctx) => {
     const by = ctx.staff();
-    const facts = book.saveFacts(ctx.body.group, ctx.body, by);
-    return { facts, checks: checksOf(facts) };
+    const group = ctx.body.group;
+    const place =
+      group === "cert_in" ? CERT_IN_COPY : group === "registrations" ? DPIIT_COPY : null;
+    const input = { ...ctx.body };
+    if (place && copyGiven(input) && !clean(input.file_id, 64)) {
+      book.checkFacts(group, input);
+      checkCopy(core, input);
+      const file = await keepCopy(core, input, place, by);
+      input[place.field] = file.file_id;
+    } else if (place && clean(input.file_id, 64)) input[place.field] = input.file_id;
+    const facts = book.saveFacts(group, input, by);
+    return { facts, checks: checksOf(facts), duty_checks: dutyChecksOf(facts, core.day()) };
   });
 
   // ---------------------------------------------------------------- directors

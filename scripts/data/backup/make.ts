@@ -39,7 +39,7 @@ export const NEVER_IN_BACKUP = new Set(["provider.key", "provider-status.json", 
 
 /** Data's folders that are not records: the bytes (zipped from Files), the uploads, the read text. */
 const DATA_SKIP = new Set(["tmp", "files/blobs", "files/uploads", "files/text"]);
-const DATA_SKIP_PEOPLE = new Set([...DATA_SKIP, "people"]);
+const DATA_SKIP_PEOPLE = new Set([...DATA_SKIP, "people", "statements", "close/owner"]);
 
 type Entry =
   | { name: string; kind: "blob"; path: string; bytes: number; sha256: string }
@@ -165,6 +165,28 @@ export function planBackup(core: DataCore, options: { people?: boolean } = {}): 
     }
   }
 
+  // The bank statements' own files (never in Files): only in a backup the Owner makes.
+  if (options.people === true) {
+    let statements: string[] = [];
+    try {
+      statements = readdirSync(join(core.store.root, "statements", "files")).sort();
+    } catch {
+      statements = [];
+    }
+    for (const name of statements) {
+      if (name.endsWith(".writing")) continue;
+      const path = join(core.store.root, "statements", "files", name);
+      const bytes = fileSize(path);
+      if (bytes !== null)
+        entries.push({
+          name: claim(zipEntryName("data", "statements", "files", name)),
+          kind: "record",
+          path,
+          bytes,
+        });
+    }
+  }
+
   // Mail merge's files: an allow-list, never the key.
   const merge = (rel: string) => {
     const base = rel.split("/").pop() ?? rel;
@@ -242,9 +264,10 @@ export async function makeBackup(
         "- files/_trash/: files in the trash, in the folder they came from.",
         "- data/: Data's own records (folders, leads, replies, waitlist, investors and the round, key dates, notes, decisions and contacts, the calendar link's checksum, numbers and monthly updates, data-room packs).",
         "- mail-merge/: Mail merge's lists, mailings, written log, stop list, settings, tests log and delivery read back from the provider.",
+        "- data/statements/, data/close/, data/money/, data/incidents/, data/marks/, data/domains/, data/holidays/, data/cash/: this batch's records.",
         input.body.people === true
-          ? "- data/people/: the people ledger. The Owner made this backup: keep it as private as this Mac."
-          : "- data/people/ is left out: only a backup the Owner makes holds the people ledger.",
+          ? "- data/people/: the people ledger. The Owner made this backup: keep it as private as this Mac. It holds the people ledger and the bank statements."
+          : "- data/people/ is left out: only a backup the Owner makes holds the people ledger. data/statements/ and data/close/owner/ are left out too: only a backup the Owner makes holds the bank statements and the MIS's people figures.",
         "- manifest-sha256.txt: the SHA-256 of every file here, to check none changed.",
         "",
         "Mail merge's provider key is never in a backup: set it again in Mail merge's Setup.",

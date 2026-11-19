@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { ruleLineSchema } from "@/lib/data/api/holidays";
 import { staffSchema } from "@/lib/data/api/replies";
 import type { Staff } from "@/lib/data/gate";
 import { dataAsk, id, ok } from "@/lib/data/socket";
@@ -9,7 +10,8 @@ import { dataAsk, id, ok } from "@/lib/data/socket";
 /**
  * The people ledger (ws-notes/company/spec.md §8): interns, employees and contractors, their
  * documents, evaluations, certificate, stipend payments and access, kept on this computer by
- * the local service. For the Owner only: every caller checks the role before it asks.
+ * the local service. For the Owner only: every caller checks the role before it asks. The
+ * duties batch adds the tax block, challans and the year lines (duties spec §7.5).
  */
 
 export const engagementKindSchema = z.enum(["intern", "employee", "contractor"]);
@@ -82,8 +84,51 @@ export const paymentSchema = z.object({
   at: z.string(),
   by: staffSchema,
   withdrawn: z.object({ at: z.string(), by: staffSchema, why: z.string() }).nullable(),
+  challan: z
+    .object({ number: z.string(), bsr: z.string(), deposited_on: z.string().nullable() })
+    .nullable(),
 });
 export type StipendPayment = z.infer<typeof paymentSchema>;
+
+export const taxClassificationSchema = z.enum(["", "salary", "professional_fee", "exempt"]);
+export const taxDeciderSchema = z.enum(["", "CA", "lawyer", "founder"]);
+
+export const taxCertificateSchema = z.object({
+  certificate_id: z.string(),
+  form: z.enum(["130", "131"]),
+  period: z.string(),
+  issued_on: z.string(),
+  number: z.string(),
+  copy: personCopySchema.nullable(),
+  at: z.string(),
+  by: staffSchema,
+});
+export type TaxCertificate = z.infer<typeof taxCertificateSchema>;
+
+/** How the stipend is treated for tax, as the CA decided it (duties spec §7.5). */
+export const personTaxSchema = z.object({
+  classification: taxClassificationSchema,
+  decided_by: z.string(),
+  decided_role: taxDeciderSchema,
+  decided_on: z.string().nullable(),
+  decided_note: z.string(),
+  pan: z.string(),
+  letter_document_id: z.string().nullable(),
+  certificates: z.array(taxCertificateSchema),
+});
+export type PersonTax = z.infer<typeof personTaxSchema>;
+
+/** A financial year's line: what was paid, and the comparison once the rule may be used. */
+export const taxYearSchema = z.object({
+  fy: z.string(),
+  paid_minor: z.number(),
+  other: z.record(z.string(), z.number()),
+  tds_deducted_minor: z.number(),
+  challans_missing: z.number(),
+  words: z.string(),
+  rule: ruleLineSchema.nullable(),
+});
+export type TaxYear = z.infer<typeof taxYearSchema>;
 
 export const accessGrantSchema = z.object({
   access_id: z.string(),
@@ -127,6 +172,7 @@ const personFields = {
   hq_staff_id: z.string().nullable(),
   notes: z.string(),
   payments: z.array(paymentSchema),
+  tax: personTaxSchema,
   created_at: z.string(),
   created_by: staffSchema,
   updated_at: z.string(),
@@ -141,6 +187,7 @@ const nextSchema = z.object({ what: z.string(), on: z.string() }).nullable();
 /** A list row: the person with their state, letter, what is next, and the grants as counts. */
 export const personRowSchema = z.object({
   ...personFields,
+  tax_classification: taxClassificationSchema,
   state: personStateSchema,
   letter: z.enum(["signed", "missing"]),
   letter_on: z.string().nullable(),
@@ -193,6 +240,8 @@ export const personPageSchema = ok.extend({
   warnings: z.array(z.string()),
   next: nextSchema,
   events: z.array(peopleEventSchema),
+  tax: personTaxSchema,
+  tax_years: z.array(taxYearSchema),
   today: z.string(),
 });
 export type PersonPage = z.infer<typeof personPageSchema>;
@@ -310,6 +359,53 @@ export const withdrawPayment = (personId: string, paymentId: string, why: string
   dataAsk(personAnswer, "POST", `/data/people/${id(personId)}/payments/${id(paymentId)}/withdraw`, {
     why,
     by,
+  });
+
+export type ChallanInput = { number: string; bsr: string; deposited_on: string };
+
+export const recordChallan = (
+  personId: string,
+  paymentId: string,
+  input: ChallanInput,
+  by: Staff,
+) =>
+  dataAsk(personAnswer, "POST", `/data/people/${id(personId)}/payments/${id(paymentId)}/challan`, {
+    ...input,
+    by,
+  });
+
+export type TaxInput = {
+  classification: string;
+  decided_by: string;
+  decided_role: string;
+  decided_on: string;
+  decided_note: string;
+  pan: string;
+  letter_document_id: string;
+};
+
+export const recordTax = (personId: string, input: Partial<TaxInput>, by: Staff) =>
+  dataAsk(personAnswer, "POST", `/data/people/${id(personId)}/tax`, { ...input, by });
+
+export type TaxCertificateInput = {
+  form: string;
+  period: string;
+  issued_on: string;
+  number: string;
+};
+
+export const addTaxCertificate = (
+  personId: string,
+  input: TaxCertificateInput,
+  copy: CopyInput,
+  by: Staff,
+  attempt: string,
+) =>
+  dataAsk(personAnswer, "POST", `/data/people/${id(personId)}/tax/certificates`, {
+    ...input,
+    ...copyFields(copy),
+    by,
+    attempt,
   });
 
 export type AccessInput = {

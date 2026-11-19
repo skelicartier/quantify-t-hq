@@ -15,6 +15,7 @@ import { Refused } from "../mail-merge/engine";
 import { Builds } from "./builds";
 import { localDay } from "./days";
 import type { CompanyDueKind } from "./company-contracts";
+import type { DutiesDueKind } from "./duties-contracts";
 import { attemptOf, staffOf } from "./guard";
 import {
   type DataState,
@@ -72,7 +73,14 @@ type RouteEntry =
   | { kind: "stream"; method: "GET" | "POST"; pattern: RegExp; handler: StreamHandler };
 
 export type DueKind =
-  "follow_up" | "waitlist" | "investor" | "key_date" | "file_review" | "action" | CompanyDueKind;
+  | "follow_up"
+  | "waitlist"
+  | "investor"
+  | "key_date"
+  | "file_review"
+  | "action"
+  | CompanyDueKind
+  | DutiesDueKind;
 export type DueItem = {
   key: string;
   kind: DueKind;
@@ -113,6 +121,14 @@ export const MODULES = [
   "closing",
   "delivery",
   "batches",
+  "holidays",
+  "incidents",
+  "marks",
+  "domains",
+  "money",
+  "statements",
+  "close",
+  "cash",
   "backup",
 ] as const;
 export type ModuleName = (typeof MODULES)[number];
@@ -397,22 +413,36 @@ export class DataCore {
   }
 
   /**
-   * What is owed, from every module: overdue first, then by date; at most 30. Owner-only rows
+   * What is owed, from every module: overdue first, then by date. Every row due today or
+   * earlier is always in the list; later rows fill it up to 30, and `more` counts the later
+   * rows left out, so nothing owed now is ever cut. `all` gives every row. Owner-only rows
    * only when asked as the Owner.
    */
-  async dueItems(options: { owner?: boolean } = {}): Promise<DueItem[]> {
-    const items: DueItem[] = [];
+  async dueList(
+    options: { owner?: boolean; all?: boolean } = {},
+  ): Promise<{ items: DueItem[]; more: number }> {
+    const found: DueItem[] = [];
     for (const provider of this.#due) {
       try {
-        items.push(...(await provider()));
+        found.push(...(await provider()));
       } catch (error) {
         this.#log(`a due provider failed: ${errorName(error)}`);
       }
     }
-    return items
+    const sorted = found
       .filter((item) => options.owner === true || item.owner_only !== true)
-      .sort((a, b) => a.due_on.localeCompare(b.due_on) || a.title.localeCompare(b.title))
-      .slice(0, DUE_ROWS);
+      .sort((a, b) => a.due_on.localeCompare(b.due_on) || a.title.localeCompare(b.title));
+    if (options.all === true) return { items: sorted, more: 0 };
+    const today = this.day();
+    const owed = sorted.filter((item) => item.due_on <= today);
+    const later = sorted.filter((item) => item.due_on > today);
+    const items = [...owed, ...later.slice(0, Math.max(0, DUE_ROWS - owed.length))];
+    return { items, more: sorted.length - items.length };
+  }
+
+  /** The rows of `dueList`, for a caller that does not show the count left out. */
+  async dueItems(options: { owner?: boolean; all?: boolean } = {}): Promise<DueItem[]> {
+    return (await this.dueList(options)).items;
   }
 
   // ------------------------------------------------------------------ jobs and pills

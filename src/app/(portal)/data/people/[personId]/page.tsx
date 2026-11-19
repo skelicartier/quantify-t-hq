@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 
 import { DueChip } from "@/components/crm/pills";
 import { DataUnavailable } from "@/components/data/data-down";
+import { RuleLineNote } from "@/components/data/duties/rule-line";
 import {
   AccessFields,
   DocumentFields,
@@ -35,7 +36,10 @@ import {
   type PersonPage,
   type StipendPayment,
   type StipendPeriod,
+  type TaxYear,
 } from "@/lib/data/api/people";
+import { NOT_ADVICE_DUTIES } from "@/lib/data/labels-calendar";
+import { minorWords, minorWordsBy } from "@/lib/data/labels-duties";
 import {
   DOCUMENT_KINDS,
   ENGAGEMENT_KINDS,
@@ -46,10 +50,16 @@ import {
   PAYS_ON_WORDS,
   PERSON_STATES,
   STIPEND_CURRENCIES,
+  TAX_ABOUT,
+  TAX_CLASSIFICATIONS,
+  TAX_DECIDERS,
+  TAX_FORMS,
   TAX_HINT,
-  TAX_LINE,
+  TAX_NOT_DECIDED,
+  classificationWords,
   periodWords,
   shortDay,
+  taxLine,
 } from "@/lib/data/labels-people";
 import { notOwnerLine, requireDataOwner } from "@/lib/data/owner";
 import { dataRead } from "@/lib/data/read";
@@ -59,11 +69,14 @@ import { requestNow } from "@/lib/request-time";
 import {
   accessStateAction,
   addDocumentAction,
+  addTaxCertificateAction,
   cancelOffboardingAction,
   grantAccessAction,
   recordCertificateAction,
+  recordChallanAction,
   recordEvaluationAction,
   recordPaymentAction,
+  recordTaxAction,
   startOffboardingAction,
   updatePersonAction,
   withdrawPaymentAction,
@@ -128,6 +141,9 @@ const EVENT_WORDS: Record<string, string> = {
   "offboarding started": "Offboarding started",
   "offboarding cancelled": "Offboarding cancelled",
   ended: "Ended",
+  "tax recorded": "Tax decision recorded",
+  "tax certificate added": "Tax certificate added",
+  "challan recorded": "Challan recorded",
 };
 
 /** Days and months in an event's detail, as the pages print them. */
@@ -461,6 +477,8 @@ function PersonRecord({ page, now }: { page: PersonPage; now: number }) {
 
         <StipendSection page={page} />
 
+        <TaxSection page={page} />
+
         <AccessSection page={page} />
 
         {person.offboarding && <OffboardingSection page={page} />}
@@ -648,7 +666,7 @@ function StipendSection({ page }: { page: PersonPage }) {
       }
     >
       <p className="hqdata-person__terms">
-        {stipendTerms(person)} <StatusPill value="tax" label={TAX_LINE} tone="neutral" />
+        {stipendTerms(person)} <StatusPill value="tax" label={taxLine(person.tax)} tone="neutral" />
       </p>
       <p className="field__hint">{TAX_HINT}</p>
       {lines.length > 0 && (
@@ -660,7 +678,8 @@ function StipendSection({ page }: { page: PersonPage }) {
               { key: "due", label: "Due" },
               { key: "paid", label: "Paid" },
               { key: "amount", label: "Amount", align: "end" as const },
-              { key: "tds", label: "TDS deducted", align: "end" as const },
+              { key: "tds", label: "Tax deducted", align: "end" as const },
+              { key: "challan", label: "Challan" },
             ]}
             columnMenu={false}
           >
@@ -717,6 +736,9 @@ function StipendSection({ page }: { page: PersonPage }) {
                       ? money(line.payment.tds_deducted, line.payment.currency)
                       : "—"}
                   </td>
+                  <td>
+                    <ChallanCell person={person} payment={line.payment} today={today} />
+                  </td>
                 </tr>
               );
             })}
@@ -726,6 +748,285 @@ function StipendSection({ page }: { page: PersonPage }) {
           </p>
         </>
       )}
+    </RecordSection>
+  );
+}
+
+/** A payment's challan: its number and day, or "Record the challan" while tax was deducted. */
+function ChallanCell({
+  person,
+  payment,
+  today,
+}: {
+  person: Person;
+  payment: StipendPayment | null;
+  today: string;
+}) {
+  if (!payment || payment.withdrawn) return <span className="quiet">—</span>;
+  if (payment.challan)
+    return (
+      <span>
+        {payment.challan.number}
+        {payment.challan.deposited_on && (
+          <span className="table-sub">Deposited {formatDate(payment.challan.deposited_on)}</span>
+        )}
+      </span>
+    );
+  if (!payment.tds_deducted) return <span className="quiet">—</span>;
+  const prefix = `challan-${payment.payment_id}`;
+  return (
+    <Popover label="Record the challan" width="wide" align="end">
+      <MailForm
+        action={recordChallanAction}
+        fields={{ person_id: person.person_id, payment_id: payment.payment_id }}
+        submitLabel="Save the challan"
+        pendingLabel="Saving…"
+      >
+        <Field id={`${prefix}-number`} label="Challan number">
+          <Input id={`${prefix}-number`} name="number" required maxLength={40} />
+        </Field>
+        <Field id={`${prefix}-bsr`} label="BSR code" hint="Seven digits, on the challan.">
+          <Input id={`${prefix}-bsr`} name="bsr" inputMode="numeric" maxLength={7} />
+        </Field>
+        <Field id={`${prefix}-on`} label="Deposited on">
+          <Input id={`${prefix}-on`} name="deposited_on" type="date" max={today} />
+        </Field>
+      </MailForm>
+    </Popover>
+  );
+}
+
+// ------------------------------------------------------------------ tax (duties spec §7.5)
+
+function TaxYearLine({ year }: { year: TaxYear }) {
+  return (
+    <li className="hqdata-person__tax-year" data-fy={year.fy}>
+      <span>{year.words}</span> <RuleLineNote line={year.rule} />
+      {year.tds_deducted_minor > 0 && (
+        <span className="table-sub">
+          Tax deducted: {minorWords(year.tds_deducted_minor, "INR")}
+          {year.challans_missing > 0
+            ? `; ${year.challans_missing} ${year.challans_missing === 1 ? "payment has" : "payments have"} no challan yet`
+            : ""}
+          .
+        </span>
+      )}
+      {Object.keys(year.other).length > 0 && (
+        <span className="table-sub">Other currencies: {minorWordsBy(year.other)}</span>
+      )}
+    </li>
+  );
+}
+
+function TaxSection({ page }: { page: PersonPage }) {
+  const { person, today } = page;
+  const tax = page.tax;
+  const letter = tax.letter_document_id
+    ? (person.documents.find((document) => document.document_id === tax.letter_document_id) ?? null)
+    : null;
+  const base = { person_id: person.person_id };
+  return (
+    <RecordSection
+      id="person-tax"
+      title="Tax"
+      actions={
+        <>
+          <Popover label="Record the decision" width="wide" align="end">
+            <MailForm
+              action={recordTaxAction}
+              fields={base}
+              submitLabel="Save the decision"
+              pendingLabel="Saving…"
+            >
+              <Field id="tax-classification" label="Classification">
+                <Select
+                  id="tax-classification"
+                  name="classification"
+                  defaultValue={tax.classification}
+                >
+                  <option value="">{TAX_NOT_DECIDED}</option>
+                  {Object.entries(TAX_CLASSIFICATIONS).map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field id="tax-decided-by" label="Decided by">
+                <Input
+                  id="tax-decided-by"
+                  name="decided_by"
+                  maxLength={120}
+                  defaultValue={tax.decided_by}
+                />
+              </Field>
+              <Field id="tax-decided-role" label="Their role">
+                <Select
+                  id="tax-decided-role"
+                  name="decided_role"
+                  defaultValue={tax.decided_role || "CA"}
+                >
+                  {Object.entries(TAX_DECIDERS).map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field id="tax-decided-on" label="On">
+                <Input
+                  id="tax-decided-on"
+                  name="decided_on"
+                  type="date"
+                  max={today}
+                  defaultValue={tax.decided_on ?? today}
+                />
+              </Field>
+              <Field id="tax-note" label="Note">
+                <Input
+                  id="tax-note"
+                  name="decided_note"
+                  maxLength={1_000}
+                  defaultValue={tax.decided_note}
+                />
+              </Field>
+              <Field id="tax-pan" label="PAN" hint="Ten letters and digits, as on the card.">
+                <Input id="tax-pan" name="pan" maxLength={10} defaultValue={tax.pan} />
+              </Field>
+              <Field id="tax-letter" label="Engagement letter">
+                <Select
+                  id="tax-letter"
+                  name="letter_document_id"
+                  defaultValue={tax.letter_document_id ?? ""}
+                >
+                  <option value="">None chosen</option>
+                  {person.documents.map((document) => (
+                    <option key={document.document_id} value={document.document_id}>
+                      {document.title}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </MailForm>
+          </Popover>
+          <Popover label="Add a certificate" width="wide" align="end">
+            <MailForm
+              action={addTaxCertificateAction}
+              fields={base}
+              submitLabel="Add the certificate"
+              pendingLabel="Adding…"
+            >
+              <Field id="tax-cert-form" label="Form">
+                <Select id="tax-cert-form" name="form" defaultValue="131">
+                  {Object.entries(TAX_FORMS).map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field
+                id="tax-cert-period"
+                label="Period"
+                hint="A financial year such as 2026-27, or a quarter such as 2026-27 Q3."
+              >
+                <Input id="tax-cert-period" name="period" required maxLength={10} />
+              </Field>
+              <Field id="tax-cert-issued" label="Issued on">
+                <Input id="tax-cert-issued" name="issued_on" type="date" max={today} required />
+              </Field>
+              <Field id="tax-cert-number" label="Number">
+                <Input id="tax-cert-number" name="number" required maxLength={40} />
+              </Field>
+              <Field id="tax-cert-file" label="Copy">
+                <Input id="tax-cert-file" name="file" type="file" />
+              </Field>
+            </MailForm>
+          </Popover>
+        </>
+      }
+    >
+      <p className="page-note">{TAX_ABOUT}</p>
+      <p className="page-note">{NOT_ADVICE_DUTIES}</p>
+      <dl className="hqdata-person__tax">
+        <div>
+          <dt>Classification</dt>
+          <dd>{classificationWords(tax.classification)}</dd>
+        </div>
+        <div>
+          <dt>Decided by</dt>
+          <dd>
+            {tax.decided_by
+              ? `${tax.decided_by} (${(TAX_DECIDERS as Record<string, string>)[tax.decided_role] ?? tax.decided_role})`
+              : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt>On</dt>
+          <dd>{tax.decided_on ? formatDate(tax.decided_on) : "—"}</dd>
+        </div>
+        <div>
+          <dt>PAN</dt>
+          <dd>{tax.pan || "Not given"}</dd>
+        </div>
+        <div>
+          <dt>Engagement letter</dt>
+          <dd>
+            {letter ? (
+              letter.copy ? (
+                <a className="text-link" href={copyHref(person, letter.copy)}>
+                  {letter.title}
+                </a>
+              ) : (
+                letter.title
+              )
+            ) : (
+              "None chosen"
+            )}
+          </dd>
+        </div>
+      </dl>
+      {tax.decided_note && <p className="field__hint">{tax.decided_note}</p>}
+      {page.tax_years.length === 0 ? (
+        <p className="page-note">Nothing paid yet, so there is nothing to add up.</p>
+      ) : (
+        <ul className="hqdata-person__tax-years">
+          {page.tax_years.map((year) => (
+            <TaxYearLine key={year.fy} year={year} />
+          ))}
+        </ul>
+      )}
+      <DataTable
+        caption="Certificates"
+        columns={[
+          { key: "form", label: "Form" },
+          { key: "period", label: "Period" },
+          { key: "issued", label: "Issued" },
+          { key: "number", label: "Number" },
+          { key: "copy", label: "Copy" },
+        ]}
+        columnMenu={false}
+        isEmpty={tax.certificates.length === 0}
+        empty={<p className="page-note">No certificates yet.</p>}
+      >
+        {tax.certificates.map((certificate) => (
+          <tr key={certificate.certificate_id} id={`tax-certificate-${certificate.certificate_id}`}>
+            <td>{TAX_FORMS[certificate.form]}</td>
+            <td>{certificate.period}</td>
+            <td className="nowrap">{formatDate(certificate.issued_on)}</td>
+            <td>{certificate.number}</td>
+            <td>
+              {certificate.copy ? (
+                <a className="text-link" href={copyHref(person, certificate.copy)}>
+                  Download
+                </a>
+              ) : (
+                <span className="quiet">None kept</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </DataTable>
     </RecordSection>
   );
 }

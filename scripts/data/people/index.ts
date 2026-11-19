@@ -9,8 +9,16 @@
  * For the Owner only. The portal checks the role on every page, action and route; this
  * module adds what it can: every Due row is `owner_only` (core leaves them out unless the
  * Owner asks), and nothing of the ledger is given to search, the agenda, a file's "Used
- * for" or the overview. The one service it provides, `people-letters`, answers four counts
- * and never a name, an amount or an id.
+ * for" or the overview. `people-letters` answers four counts and never a name, an amount or
+ * an id.
+ *
+ * The duties batch (duties spec §7.5) adds the tax block, challans, the year lines and the
+ * month lock, and one more service, `people-pay`, the only door through which a figure of
+ * the ledger leaves it. Its `paid` and `owed` carry names and amounts: a caller passes them
+ * on only in an answer asked as the Owner (a GET with `owner=1`, a POST with `owner: true`,
+ * which only the portal sets, from `context.me.role === "owner"`), and leaves them out of
+ * every other answer, every agenda, search text, file and backup an Admin can reach. Its
+ * `headcount` gives counts only, so any answer may carry it.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -20,12 +28,29 @@ import { dirname } from "node:path";
 import { Refused } from "../../mail-merge/engine";
 import { COMPANY_SERVICES, type PeopleLetters } from "../company-contracts";
 import type { Answer, Ctx, DataCore } from "../core";
+import {
+  DUTIES_SERVICES,
+  standInDutyRules,
+  standInMonthLock,
+  type DutyRulesService,
+  type DutyRuleKey,
+  type DutyStored,
+  type MonthLock,
+  type PayLine,
+  type PayOwed,
+  type PeoplePay,
+} from "../duties-contracts";
 import { LIMITS, clean } from "../guard";
 import { extensionOf, servedType, sniff } from "../files/sniff";
 import type { Staff } from "../protocol";
 import { syncFolder, writeAll } from "../store";
 import { toCsv } from "../text";
-import { ENGAGEMENT_KINDS, PEOPLE_TABS, TAX_TREATMENT } from "../../../src/lib/data/labels-people";
+import {
+  ENGAGEMENT_KINDS,
+  PEOPLE_TABS,
+  TAX_CLASSIFICATIONS,
+  TAX_TREATMENT,
+} from "../../../src/lib/data/labels-people";
 import {
   PeopleBook,
   deadlinesOf,
@@ -40,6 +65,7 @@ import {
   warningsOf,
 } from "./book";
 import { COPY_FOLDER, COPY_MAX_BYTES, WALK_PERSON_ID } from "./limits";
+import { taxYearsOf } from "./tax";
 import type { Person, PersonCopy } from "./types";
 
 const BOM = "\uFEFF";
@@ -115,6 +141,76 @@ export async function register(core: DataCore): Promise<void> {
   };
   core.provide(COMPANY_SERVICES.peopleLetters, letters);
 
+  /**
+   * `people-pay` (duties spec §3.3): what was paid and what is owed, in minor units, from the
+   * ledger as it stands. OWNER-ONLY: `paid` and `owed` name people and amounts; a caller passes
+   * them on only in an answer asked as the Owner. `headcount` is counts only.
+   */
+  const pay: PeoplePay = {
+    paid: (from, to) =>
+      book.people
+        .flatMap((person) =>
+          person.payments
+            .filter(
+              (payment) =>
+                payment.withdrawn === null && payment.paid_on >= from && payment.paid_on <= to,
+            )
+            .map((payment): PayLine => ({
+              payment_id: payment.payment_id,
+              person_id: person.person_id,
+              name: person.name,
+              kind: person.kind,
+              period: payment.period,
+              amount_minor: payment.amount * 100,
+              currency: payment.currency,
+              paid_on: payment.paid_on,
+              reference: payment.reference,
+              tds_deducted_minor: payment.tds_deducted === null ? null : payment.tds_deducted * 100,
+            })),
+        )
+        .sort((a, b) => a.paid_on.localeCompare(b.paid_on) || a.name.localeCompare(b.name)),
+    owed: (from, to) => {
+      const today = core.day();
+      // Months run to the end of the window, so an open-ended engagement's next stipends count.
+      const through = to > today ? to : today;
+      return book.people
+        .flatMap((person) =>
+          person.stipend
+            ? periodsOf(person, through)
+                .filter(
+                  (period) =>
+                    period.open &&
+                    period.due_on !== null &&
+                    period.due_on >= from &&
+                    period.due_on <= to,
+                )
+                .map((period): PayOwed => ({
+                  person_id: person.person_id,
+                  name: person.name,
+                  period: period.period,
+                  due_on: period.due_on!,
+                  amount_minor: person.stipend!.amount * 100,
+                  currency: person.stipend!.currency,
+                }))
+            : [],
+        )
+        .sort((a, b) => a.due_on.localeCompare(b.due_on) || a.name.localeCompare(b.name));
+    },
+    headcount: (day) => {
+      const counts = { employees: 0, interns: 0, contractors: 0 };
+      for (const person of book.people) {
+        if (!engagedOn(person, day)) continue;
+        if (person.kind === "employee") counts.employees += 1;
+        else if (person.kind === "intern") counts.interns += 1;
+        else counts.contractors += 1;
+      }
+      return counts;
+    },
+  };
+  core.provide(DUTIES_SERVICES.peoplePay, pay);
+
+  const dutyRules = () => core.need<DutyRulesService>(DUTIES_SERVICES.dutyRules);
+
   // ---------------------------------------------------------------- copies kept with the ledger
 
   /**
@@ -175,6 +271,7 @@ export async function register(core: DataCore): Promise<void> {
     const letterOn = letterSignedOn(person);
     return {
       ...person,
+      tax_classification: person.tax.classification,
       state: stateOf(person, today),
       letter: letterOn ? ("signed" as const) : ("missing" as const),
       letter_on: letterOn,
@@ -225,6 +322,8 @@ export async function register(core: DataCore): Promise<void> {
       warnings: warningsOf(person, today),
       next: nextOf(person, today),
       events: book.eventsOf(person.person_id),
+      tax: person.tax,
+      tax_years: taxYearsOf(person, dutyRules(), today),
       today,
     };
   });
@@ -276,6 +375,25 @@ export async function register(core: DataCore): Promise<void> {
   post("/data/people/:id/payments", (ctx) => {
     const by = ctx.staff();
     return personAnswer(book.recordPayment(book.person(ctx.params[0]), ctx.body, by, core.day()));
+  });
+
+  post("/data/people/:id/payments/:paymentId/challan", (ctx) => {
+    const by = ctx.staff();
+    return personAnswer(
+      book.recordChallan(book.person(ctx.params[0]), ctx.params[1], ctx.body, by, core.day()),
+    );
+  });
+
+  post("/data/people/:id/tax", (ctx) => {
+    const by = ctx.staff();
+    return personAnswer(book.recordTax(book.person(ctx.params[0]), ctx.body, by, core.day()));
+  });
+
+  post("/data/people/:id/tax/certificates", (ctx) => {
+    const by = ctx.staff();
+    const person = book.person(ctx.params[0]);
+    const fields = book.certificateTaxFields(person, ctx.body, core.day());
+    return personAnswer(book.addTaxCertificate(person, fields, keepCopy(ctx.body, by), by));
   });
 
   post("/data/people/:id/payments/:paymentId/withdraw", (ctx) => {
@@ -336,10 +454,13 @@ export async function register(core: DataCore): Promise<void> {
             payment.paid_on,
             payment.reference,
             payment.tds_deducted ?? "",
-            TAX_TREATMENT,
+            (TAX_CLASSIFICATIONS as Record<string, string>)[person.tax.classification] ??
+              TAX_TREATMENT,
             payment.withdrawn
               ? `Withdrawn ${payment.withdrawn.at.slice(0, 10)}: ${payment.withdrawn.why}`
               : "",
+            payment.challan?.number ?? "",
+            payment.challan?.deposited_on ?? "",
           ]);
     handle.setProgress(0, rows.length);
     await core.yield();
@@ -359,6 +480,8 @@ export async function register(core: DataCore): Promise<void> {
             "tds_deducted",
             "tax_treatment",
             "withdrawn",
+            "challan_number",
+            "challan_deposited_on",
           ],
           rows,
         ),
@@ -382,6 +505,63 @@ export async function register(core: DataCore): Promise<void> {
       ctx.staff();
       const person = book.pin(clean(ctx.body.id, 64), WALK_PERSON_ID);
       return { person_id: person.person_id };
+    });
+
+    /**
+     * What `people-pay` answers, as another unit reads it (`?from=&to=&day=`). A test route: the
+     * real readers pass `paid` and `owed` on only in an Owner's answer.
+     */
+    core.route("GET", "/data/_test/people/pay", (ctx) => {
+      const day = clean(ctx.query.get("day"), 10) || core.day();
+      const from = clean(ctx.query.get("from"), 10) || "2000-01-01";
+      const to = clean(ctx.query.get("to"), 10) || "2099-12-31";
+      const service = core.need<PeoplePay>(DUTIES_SERVICES.peoplePay);
+      return {
+        paid: service?.paid(from, to) ?? null,
+        owed: service?.owed(from, to) ?? null,
+        headcount: service?.headcount(day) ?? null,
+      };
+    });
+
+    /** A stand-in `month-lock` (spec §3.3) while U4's close module is absent. */
+    let fakeLock: MonthLock | null = null;
+    core.route("POST", "/data/_test/people/month-lock", (ctx) => {
+      ctx.staff();
+      const current = core.need<MonthLock>(DUTIES_SERVICES.monthLock);
+      if (ctx.body.on === false) {
+        if (current && current === fakeLock) core.provide(DUTIES_SERVICES.monthLock, null);
+        fakeLock = null;
+        return { installed: false };
+      }
+      if (current && current !== fakeLock) return { installed: false, real: true };
+      const locked = Array.isArray(ctx.body.locked)
+        ? (ctx.body.locked as unknown[]).filter(
+            (value): value is string => typeof value === "string" && /^\d{4}-\d{2}$/.test(value),
+          )
+        : [];
+      fakeLock = standInMonthLock(locked);
+      core.provide(DUTIES_SERVICES.monthLock, fakeLock);
+      return { installed: true, locked };
+    });
+
+    /** A stand-in `duty-rules` (spec §3.3) while the dates module is absent. */
+    let fakeRules: DutyRulesService | null = null;
+    core.route("POST", "/data/_test/people/duty-rules", (ctx) => {
+      ctx.staff();
+      const current = dutyRules();
+      if (ctx.body.on === false) {
+        if (current && current === fakeRules) core.provide(DUTIES_SERVICES.dutyRules, null);
+        fakeRules = null;
+        return { installed: false };
+      }
+      if (current && current !== fakeRules) return { installed: false, real: true };
+      const stored =
+        ctx.body.stored && typeof ctx.body.stored === "object" && !Array.isArray(ctx.body.stored)
+          ? (ctx.body.stored as Partial<Record<DutyRuleKey, DutyStored>>)
+          : {};
+      fakeRules = standInDutyRules(() => core.day(), stored);
+      core.provide(DUTIES_SERVICES.dutyRules, fakeRules);
+      return { installed: true };
     });
 
     /** What `people-letters` answers today (or on `?day=`), as another module would read it. */

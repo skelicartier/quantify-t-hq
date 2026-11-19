@@ -1,0 +1,95 @@
+/* Holidays (duties spec §7.4): the year's table, the checks, the working week with its two
+   rule lines, and the working-day count. Tokens only, radius 0, no side bars; phone rules at
+   720px. Printed, it is the year's list and the working week: no button, no form control. */
+@layer pages {
+  .hqdata-holidays {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-holidays__checks {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+  }
+
+  .hqdata-holidays__empty {
+    margin: 0;
+  }
+
+  .hqdata-holidays__acts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .hqdata-holidays__week {
+    max-width: 560px;
+  }
+
+  .hqdata-holidays__days {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px 12px;
+  }
+
+  .hqdata-holidays__rules {
+    margin: 12px 0 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-holidays__count {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+  }
+
+  .hqdata-holidays__count .field {
+    min-width: 160px;
+  }
+
+  .hqdata-holidays__answer {
+    margin-top: 12px;
+    display: grid;
+    gap: 4px;
+  }
+
+  .hqdata-holidays__answer p {
+    margin: 0;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-holidays__acts {
+      justify-content: flex-start;
+    }
+
+    .hqdata-holidays__week {
+      max-width: none;
+    }
+
+    .hqdata-holidays__count .field {
+      min-width: 0;
+      flex: 1 1 100%;
+    }
+  }
+}
+
+@media print {
+  .hqdata-holidays .segmented,
+  .hqdata-holidays .popover,
+  .hqdata-holidays__acts,
+  .hqdata-holidays__count,
+  .hqdata-holidays__week button,
+  .hqdata-holidays .data-table th:last-child,
+  .hqdata-holidays .data-table td:last-child {
+    display: none !important;
+  }
+}

@@ -7,6 +7,11 @@
  * window. Records that start a statutory clock add their dates through `key-dates`
  * (`from-records.ts`). Every rule shows its source and "Confirm with your CA/CS" until he
  * records who confirmed it; nothing here is legal advice and nothing is filed from here.
+ *
+ * The duties batch (ws-notes/duties/spec.md §7.2, §7.3): the rule book also holds the duty
+ * rules and provides them as `duty-rules` (his amount, the reading he confirmed, who
+ * confirmed it; no duty day is stored here), and three renewal rows hide once a register
+ * holds what they ask for (a domain, a signing certificate, a mark).
  */
 
 import { writeFileSync } from "node:fs";
@@ -24,11 +29,20 @@ import {
   type RuleKey,
 } from "../company-contracts";
 import type { DataCore, DueItem } from "../core";
+import {
+  DUTIES_SERVICES,
+  isDutyRuleKey,
+  ruleLineOf,
+  type DomainsLookup,
+  type DutyRulesService,
+  type RegisterLookup,
+} from "../duties-contracts";
 import { LIMITS, clean, isDay } from "../guard";
 import type { Staff } from "../protocol";
 import { toCsv } from "../text";
 import { DATE_KINDS, DATE_STATES, DEFAULT_FOLDERS, REPEATS } from "../../../src/lib/data/labels";
 import { CONFIRM_ROLES, OWNER_ROLES, dayWords, rupees } from "../../../src/lib/data/labels-company";
+import { DUTY_CONFIRM_ROLES } from "../../../src/lib/data/labels-calendar";
 import type { FilesService } from "../leads/contracts";
 import { readVault } from "../backup/vault-index";
 import type { CompanyInternal } from "../company/types";
@@ -46,7 +60,7 @@ import {
 import { DEFAULT_ENTITY, DatesBook, inWindow, openDate, shownState, type KeyDate } from "./book";
 import { directorSuggestions, type RecordSuggestion } from "./facts";
 import { keyDatesService } from "./from-records";
-import { RuleBook, clockWords, isCalendarRule, type RuleView } from "./rules";
+import { RuleBook, clockWords, isCalendarRule, isDutyOnly, type RuleView } from "./rules";
 
 const BOM = "﻿";
 const FILES_SHOWN = 500;
@@ -90,6 +104,16 @@ export async function register(core: DataCore): Promise<void> {
   const book = new DatesBook(core);
   const rules = new RuleBook(core);
   registerDatesAgenda(core, book);
+
+  /**
+   * The duty rules, for every unit that works a day or a comparison out (spec §3.3). Answered
+   * at request time from what the book holds, so a changed amount or a confirmation shows on
+   * the next read; `tds-deposit` reads the calendar date's own confirmation.
+   */
+  const dutyRules: DutyRulesService = {
+    state: (key, on) => rules.dutyState(key, on ?? core.day()),
+  };
+  core.provide(DUTIES_SERVICES.dutyRules, dutyRules);
   const files = () => core.need<FilesService>("files");
   const company = () => core.need<CompanyInternal>(COMPANY_SERVICES.company);
   const meetings = () => core.need<MeetingsLookup>(COMPANY_SERVICES.meetings);
@@ -129,6 +153,25 @@ export async function register(core: DataCore): Promise<void> {
     }
   };
 
+  /** What the registers hold (U1's services), for the three renewal rows: 0 when absent or failing. */
+  const countOf = (ask: () => number | undefined): number => {
+    try {
+      const value = ask();
+      return typeof value === "number" && Number.isFinite(value) ? value : 0;
+    } catch {
+      return 0;
+    }
+  };
+  const registerCounts = (): Pick<Facts, "domains" | "signing" | "marks"> => {
+    const domains = core.need<DomainsLookup>(DUTIES_SERVICES.domains);
+    const marks = core.need<RegisterLookup>(DUTIES_SERVICES.marks);
+    return {
+      domains: countOf(() => domains?.count()),
+      signing: countOf(() => domains?.signingCount()),
+      marks: countOf(() => marks?.count()),
+    };
+  };
+
   const factsNow = (): Facts => {
     const today = core.day();
     const known = record();
@@ -144,6 +187,7 @@ export async function register(core: DataCore): Promise<void> {
       last_board_on: heldOn("board"),
       amounts: rules.amounts(),
       directors: known?.directors.filter((director) => inOffice(director, today)).length ?? 0,
+      ...registerCounts(),
     };
   };
 
@@ -315,7 +359,8 @@ export async function register(core: DataCore): Promise<void> {
     return { used_by: on.length, movable };
   };
 
-  const ruleViewOf = (key: string, today: string): RuleView => rules.view(key, usedOf(key, today));
+  const ruleViewOf = (key: string, today: string): RuleView =>
+    rules.view(key, isDutyOnly(key) ? { used_by: 0, movable: 0 } : usedOf(key, today), today);
 
   const lateOf = (date: KeyDate, today: string) => {
     if (!date.statutory || !date.rule_key) return null;
@@ -578,6 +623,8 @@ export async function register(core: DataCore): Promise<void> {
         all: views.length,
         confirmed: views.filter((view) => view.confirmed !== null).length,
         changed: views.filter((view) => view.changed).length,
+        /** The rules someone can confirm: the count line reads "{confirmed} of {confirmable}". */
+        confirmable: views.filter((view) => view.confirm_with !== null).length,
       },
     };
   });
@@ -607,7 +654,8 @@ export async function register(core: DataCore): Promise<void> {
     ctx.staff();
     const key = ctx.params[0]!;
     if (!isRuleKey(key)) {
-      if (isCalendarRule(key)) return { moved: 0 };
+      // No duty day is stored anywhere: each unit works its days out on the next read.
+      if (isCalendarRule(key) || isDutyRuleKey(key)) return { moved: 0 };
       throw new Refused(404, "not_found", "That rule is not here.");
     }
     let moved = 0;
@@ -684,7 +732,7 @@ export async function register(core: DataCore): Promise<void> {
             view ? view.sources.map((source) => source.url).join(" ; ") : "",
             view?.verified_on ?? "",
             view?.confirmed
-              ? `${view.confirmed.name} (${CONFIRM_ROLES[view.confirmed.role]}), ${view.confirmed.on}`
+              ? `${view.confirmed.name} (${DUTY_CONFIRM_ROLES[view.confirmed.role]}), ${view.confirmed.on}`
               : "",
             date.owner_role ? OWNER_ROLES[date.owner_role] : "",
             evidence.srn,
@@ -711,6 +759,59 @@ export async function register(core: DataCore): Promise<void> {
   // ---------------------------------------------------------------- test routes
 
   if (core.testRoutes) {
+    /** What `duty-rules` answers for one rule (today, or `?on=`), as another unit reads it. */
+    core.route("GET", "/data/_test/dates/duty-state", (ctx) => {
+      const key = clean(ctx.query.get("key"), 40);
+      const on = clean(ctx.query.get("on"), 10);
+      if (!isDutyRuleKey(key)) throw new Refused(404, "not_found", "That rule is not here.");
+      const service = core.need<DutyRulesService>(DUTIES_SERVICES.dutyRules);
+      if (!service) return { state: null, line: null };
+      const state = service.state(key, isDay(on) ? on : core.day());
+      return { state, line: ruleLineOf(state) };
+    });
+
+    /**
+     * Stand-in registers (spec §7.3) while U1's `domains` and `marks` are absent: counts only,
+     * for the three renewal rows. `{ on: false }` takes away only these fakes.
+     */
+    let fakeDomains: DomainsLookup | null = null;
+    let fakeMarks: RegisterLookup | null = null;
+    core.route("POST", "/data/_test/dates/registers", (ctx) => {
+      ctx.staff();
+      const domains = core.need<DomainsLookup>(DUTIES_SERVICES.domains);
+      const marks = core.need<RegisterLookup>(DUTIES_SERVICES.marks);
+      if (ctx.body.on === false) {
+        if (domains && domains === fakeDomains) core.provide(DUTIES_SERVICES.domains, null);
+        if (marks && marks === fakeMarks) core.provide(DUTIES_SERVICES.marks, null);
+        fakeDomains = null;
+        fakeMarks = null;
+        return { installed: false };
+      }
+      const realDomains = domains !== null && domains !== fakeDomains;
+      const realMarks = marks !== null && marks !== fakeMarks;
+      if (realDomains && realMarks) return { installed: false, real: true };
+      const count = (value: unknown) =>
+        typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+      const given = {
+        domains: count(ctx.body.domains),
+        signing: count(ctx.body.signing),
+        marks: count(ctx.body.marks),
+      };
+      if (!realDomains) {
+        fakeDomains = {
+          usedFor: () => [],
+          count: () => given.domains,
+          signingCount: () => given.signing,
+        };
+        core.provide(DUTIES_SERVICES.domains, fakeDomains);
+      }
+      if (!realMarks) {
+        fakeMarks = { usedFor: () => [], count: () => given.marks };
+        core.provide(DUTIES_SERVICES.marks, fakeMarks);
+      }
+      return { installed: true, ...given };
+    });
+
     /** What the `key-dates` service answers, call by call, for the tests and the walk. */
     core.route("POST", "/data/_test/key-dates", (ctx) => {
       const by: Staff = ctx.staff();

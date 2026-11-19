@@ -42,6 +42,10 @@
     white-space: nowrap;
   }
 
+  .hqdata-due__more {
+    margin: 8px 0 0;
+  }
+
   /* Two columns at desk width, one on a phone; each child may hold a table that scrolls. */
   .hqdata-two {
     display: grid;

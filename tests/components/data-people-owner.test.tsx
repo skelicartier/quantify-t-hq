@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   readPeople: vi.fn(),
   readPerson: vi.fn(),
   addPerson: vi.fn(),
+  recordTax: vi.fn(),
+  addTaxCertificate: vi.fn(),
+  recordChallan: vi.fn(),
   readCopy: vi.fn(),
   startBuild: vi.fn(),
 }));
@@ -38,6 +41,9 @@ vi.mock("@/lib/data/api/people", async (importOriginal) => ({
   readPeople: mocks.readPeople,
   readPerson: mocks.readPerson,
   addPerson: mocks.addPerson,
+  recordTax: mocks.recordTax,
+  addTaxCertificate: mocks.addTaxCertificate,
+  recordChallan: mocks.recordChallan,
   readCopy: mocks.readCopy,
 }));
 vi.mock("@/lib/data/api/builds", () => ({
@@ -46,7 +52,12 @@ vi.mock("@/lib/data/api/builds", () => ({
   openBuild: vi.fn(),
 }));
 
-import { addPersonAction } from "@/app/(portal)/data/people/actions";
+import {
+  addPersonAction,
+  addTaxCertificateAction,
+  recordChallanAction,
+  recordTaxAction,
+} from "@/app/(portal)/data/people/actions";
 import PersonRecordPage from "@/app/(portal)/data/people/[personId]/page";
 import PeoplePage from "@/app/(portal)/data/people/page";
 import { GET as personCopy } from "@/app/(portal)/data/people/[personId]/copies/[copyId]/route";
@@ -90,10 +101,21 @@ function row(): PersonRow {
     hq_staff_id: null,
     notes: "",
     payments: [],
+    tax: {
+      classification: "",
+      decided_by: "",
+      decided_role: "",
+      decided_on: null,
+      decided_note: "",
+      pan: "",
+      letter_document_id: null,
+      certificates: [],
+    },
     created_at: "2026-11-14T06:00:00.000Z",
     created_by: WALKER,
     updated_at: "2026-11-14T06:00:00.000Z",
     updated_by: WALKER,
+    tax_classification: "",
     state: "starting",
     letter: "missing",
     letter_on: null,
@@ -183,6 +205,114 @@ describe("one person's page, the actions and the CSV", () => {
     const state = await addPersonAction(INITIAL_ACTION_STATE, form);
     expect(state).toEqual({ status: "error", message: DATA_OWNER_LINE });
     expect(mocks.addPerson).not.toHaveBeenCalled();
+  });
+
+  it("refuses an Admin's Tax actions with the owner line before anything is sent", async () => {
+    mocks.requireStaff.mockResolvedValue(ADMIN);
+    const tax = new FormData();
+    tax.set("person_id", "walk-intern");
+    tax.set("classification", "professional_fee");
+    tax.set("decided_by", "Walk CA");
+    tax.set("decided_role", "CA");
+    tax.set("decided_on", "2026-11-14");
+    tax.set("pan", "ZZZPZ0000Z");
+    expect(await recordTaxAction(INITIAL_ACTION_STATE, tax)).toEqual({
+      status: "error",
+      message: DATA_OWNER_LINE,
+    });
+    const certificate = new FormData();
+    certificate.set("person_id", "walk-intern");
+    certificate.set("form", "131");
+    certificate.set("period", "2026-27 Q3");
+    certificate.set("issued_on", "2026-11-14");
+    certificate.set("number", "WALK-CERT-1");
+    expect(await addTaxCertificateAction(INITIAL_ACTION_STATE, certificate)).toEqual({
+      status: "error",
+      message: DATA_OWNER_LINE,
+    });
+    const challan = new FormData();
+    challan.set("person_id", "walk-intern");
+    challan.set("payment_id", "walk-payment");
+    challan.set("number", "WALK-CHALLAN-1");
+    expect(await recordChallanAction(INITIAL_ACTION_STATE, challan)).toEqual({
+      status: "error",
+      message: DATA_OWNER_LINE,
+    });
+    expect(mocks.recordTax).not.toHaveBeenCalled();
+    expect(mocks.addTaxCertificate).not.toHaveBeenCalled();
+    expect(mocks.recordChallan).not.toHaveBeenCalled();
+  });
+
+  it("as the Owner draws the Tax section with the year line and both readings", async () => {
+    mocks.requireData.mockResolvedValue({ context: OWNER, allowed: true });
+    const { tax_classification, state, letter, letter_on, next, access, ...person } = row();
+    void tax_classification;
+    void letter;
+    void letter_on;
+    void next;
+    void access;
+    mocks.readPerson.mockResolvedValue({
+      ok: true,
+      person: {
+        ...person,
+        access: [],
+        tax: {
+          ...person.tax,
+          classification: "professional_fee",
+          decided_by: "Walk CA",
+          decided_role: "CA",
+          decided_on: "2026-11-14",
+        },
+      },
+      state,
+      periods: [],
+      deadlines: [],
+      warnings: [],
+      next: null,
+      events: [],
+      tax: {
+        ...person.tax,
+        classification: "professional_fee",
+        decided_by: "Walk CA",
+        decided_role: "CA",
+        decided_on: "2026-11-14",
+      },
+      tax_years: [
+        {
+          fy: "2026-27",
+          paid_minor: 6_000_000,
+          other: {},
+          tds_deducted_minor: 0,
+          challans_missing: 0,
+          words: "₹60,000 paid in 2026-27.",
+          rule: {
+            key: "tds-professional-year",
+            title: "Professional fees",
+            confirm_with: "CA",
+            confirmed_by: null,
+            confirmed_on: null,
+            usable: false,
+            starts_on: null,
+            readings: ["₹50,000", "₹30,000"],
+          },
+        },
+      ],
+      today: "2026-11-14",
+    });
+    const { container } = render(
+      await PersonRecordPage({ params: Promise.resolve({ personId: "walk-intern" }) }),
+    );
+    const section = container.querySelector('[data-section="person-tax"]');
+    expect(section?.textContent).toContain(
+      "₹60,000 paid in 2026-27. The sources give ₹50,000 and ₹30,000. Nothing is worked out until your CA confirms one.",
+    );
+    expect(section?.textContent).toContain(
+      "The classification is your CA's decision. HQ records it and adds up what was paid; it deducts nothing.",
+    );
+    expect(container.textContent).toContain(
+      "Tax: Professional fee, decided by Walk CA (CA) on 14 Nov 2026",
+    );
+    expect(container.textContent).not.toContain("%");
   });
 
   it("answers an Admin's stipends CSV with 403 and starts no build", async () => {

@@ -8,6 +8,7 @@ import { readDataOverview } from "@/lib/data/api/overview";
 import {
   addDocument,
   addPerson,
+  addTaxCertificate,
   cancelOffboarding,
   grantAccess,
   neverHadAccess,
@@ -15,8 +16,10 @@ import {
   readPeople,
   readPerson,
   recordCertificate,
+  recordChallan,
   recordEvaluation,
   recordPayment,
+  recordTax,
   revokeAccess,
   startOffboarding,
   updatePerson,
@@ -151,6 +154,70 @@ describe("the people ledger's client", () => {
     expect(detail.state).toBe("ended");
     expect(detail.periods.find((item) => item.period === period)?.open).toBe(true);
     expect(detail.events.map((event) => event.verb)).toContain("ended");
+  });
+
+  it("passes the tax answers through their schemas (duties spec §7.5)", async () => {
+    const { person } = await addPerson(input({ name: "Walk Tax Contract" }), WALKER, randomUUID());
+    const id = person.person_id;
+    expect(person.tax.classification).toBe("");
+    const decided = await recordTax(
+      id,
+      {
+        classification: "salary",
+        decided_by: "Walk CA",
+        decided_role: "CA",
+        decided_on: today,
+        pan: "ZZZPZ0000Z",
+      },
+      WALKER,
+    );
+    expect(decided.person.tax).toMatchObject({ classification: "salary", pan: "ZZZPZ0000Z" });
+    const period = addDays(today, -30).slice(0, 7);
+    const paid = await recordPayment(
+      id,
+      {
+        period,
+        amount: "15000",
+        currency: "INR",
+        paid_on: today,
+        reference: "WALK-UTR-TAX",
+        tds_deducted: "1500",
+        note: "",
+      },
+      WALKER,
+      randomUUID(),
+    );
+    const payment = paid.person.payments[0]!;
+    expect(payment.challan).toBeNull();
+    const challan = await recordChallan(
+      id,
+      payment.payment_id,
+      { number: "WALK-CHALLAN-9", bsr: "0000000", deposited_on: today },
+      WALKER,
+    );
+    expect(challan.person.payments[0]!.challan).toEqual({
+      number: "WALK-CHALLAN-9",
+      bsr: "0000000",
+      deposited_on: today,
+    });
+    const certificate = await addTaxCertificate(
+      id,
+      { form: "130", period: "2026-27", issued_on: today, number: "WALK-CERT-130" },
+      null,
+      WALKER,
+      randomUUID(),
+    );
+    expect(certificate.person.tax.certificates[0]).toMatchObject({ form: "130", copy: null });
+    const detail = await readPerson(id);
+    expect(detail.tax_years[0]).toMatchObject({
+      paid_minor: 1_500_000,
+      tds_deducted_minor: 150_000,
+      challans_missing: 0,
+      rule: null,
+    });
+    expect(
+      (await readPeople("all")).people.find((row) => row.person_id === id)?.tax_classification,
+    ).toBe("salary");
   });
 
   it("gives the Owner the person rows in Due, and nobody else", async () => {

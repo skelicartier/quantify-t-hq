@@ -72,6 +72,32 @@
     display: inline;
   }
 
+  /* A duty rule the sources disagree on: each reading on its own line, under the rule. */
+  .hqdata-rules__readings {
+    display: grid;
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  .hqdata-rules__reading--chosen {
+    color: var(--text);
+  }
+
+  .hqdata-rules__choose {
+    margin-bottom: 4px;
+  }
+
+  .hqdata-rules__radio input[type="radio"] {
+    width: 16px;
+    height: 16px;
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+  }
+
+  .hqdata-rules__count {
+    margin: 0;
+  }
+
   .hqdata-source-url {
     display: none;
   }

@@ -1,0 +1,13 @@
+/* The rule line beside a day or a comparison worked out from a duty rule
+   (ws-notes/duties/spec.md §3.4): muted words, the link to the rule underlined. Tokens only.
+   Prefixed hqdata-. It prints as it shows. */
+@layer pages {
+  .hqdata-rule-line {
+    color: var(--muted);
+  }
+
+  .hqdata-rule-line a {
+    color: inherit;
+    text-decoration: underline;
+  }
+}

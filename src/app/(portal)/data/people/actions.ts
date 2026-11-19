@@ -272,6 +272,100 @@ export async function withdrawPaymentAction(
   return sent("Withdrawn. The month is owed again.");
 }
 
+// ------------------------------------------------------------------ tax (duties spec §7.5)
+
+export async function recordTaxAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const personId = idOf(formData, "person_id");
+  const context = await gateOwner(formData, `${BASE}/${personId}`);
+  if (refused(context)) return context;
+  if (!personId) return NO_PERSON;
+  const decidedOn = typedDay(formData, "decided_on");
+  if (decidedOn === null) return NOT_A_DAY;
+  try {
+    await api.recordTax(
+      personId,
+      {
+        classification: fieldValue(formData, "classification", 20),
+        decided_by: fieldValue(formData, "decided_by", 120),
+        decided_role: fieldValue(formData, "decided_role", 10),
+        decided_on: decidedOn,
+        decided_note: fieldValue(formData, "decided_note", 1_000),
+        pan: fieldValue(formData, "pan", 12).trim(),
+        letter_document_id: idOf(formData, "letter_document_id"),
+      },
+      staffOf(context),
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshPerson(personId);
+  return sent("Recorded the decision.");
+}
+
+export async function addTaxCertificateAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const personId = idOf(formData, "person_id");
+  const context = await gateOwner(formData, `${BASE}/${personId}`);
+  if (refused(context)) return context;
+  if (!personId) return NO_PERSON;
+  const issuedOn = typedDay(formData, "issued_on");
+  if (issuedOn === null) return NOT_A_DAY;
+  const copy = await copyOf(formData);
+  if (copy && isState(copy)) return copy;
+  try {
+    await api.addTaxCertificate(
+      personId,
+      {
+        form: fieldValue(formData, "form", 3),
+        period: fieldValue(formData, "period", 10).trim(),
+        issued_on: issuedOn,
+        number: fieldValue(formData, "number", 40),
+      },
+      copy,
+      staffOf(context),
+      attemptOf(formData),
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshPerson(personId);
+  return sent("Added the certificate.");
+}
+
+export async function recordChallanAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const personId = idOf(formData, "person_id");
+  const context = await gateOwner(formData, `${BASE}/${personId}`);
+  if (refused(context)) return context;
+  const paymentId = idOf(formData, "payment_id");
+  if (!personId || !paymentId) return NO_PERSON;
+  const depositedOn = typedDay(formData, "deposited_on");
+  if (depositedOn === null) return NOT_A_DAY;
+  try {
+    await api.recordChallan(
+      personId,
+      paymentId,
+      {
+        number: fieldValue(formData, "number", 40),
+        bsr: fieldValue(formData, "bsr", 7).trim(),
+        deposited_on: depositedOn,
+      },
+      staffOf(context),
+    );
+  } catch (error) {
+    return refusal(error);
+  }
+  refreshPerson(personId);
+  return sent("Recorded the challan.");
+}
+
 export async function grantAccessAction(
   _previous: ActionState,
   formData: FormData,

@@ -13,6 +13,12 @@
  * one with a note as before (KD4); the late fee and the evidence of a filing, its copy kept
  * in Files (KD5); "In progress" still in Due (KD6); the rule book's amounts and
  * confirmations (KD7, KD8), printed with its sources (KD9), and the intern (KD10).
+ *
+ * The duties batch (duties spec §7.7): the Rules view's "Export invoices" table with "Sources
+ * disagree" and both readings (KD11); confirming "15 months" for Walk Bank, role Bank, the row
+ * then reading "Confirmed by" (KD12); changing `close-by` to 4, the row reading "Changed"
+ * (KD13). KD12 and KD13 put the rule book back afterwards (the confirmation taken back, the
+ * amount back to 5), so every later walk finds the rules as they ship.
  */
 
 import { execFileSync } from "node:child_process";
@@ -27,6 +33,13 @@ import { WALKER, type Shot, type WalkKit } from "./kit";
 
 export const shots: Shot[] = [
   { name: "data-dates", path: "/data/dates", ready: ".hqdata-dates" },
+  // The duty rows before the plain Rules view: opened straight after it, the same address with
+  // only a "#" added is a jump within the page, and the browser answers no response to it.
+  {
+    name: "data-dates-rules-duties",
+    path: "/data/dates?view=rules#rule-export-realisation",
+    ready: "#rule-export-realisation",
+  },
   { name: "data-dates-rules", path: "/data/dates?view=rules", ready: "#table-rules-the-company" },
 ];
 
@@ -232,7 +245,9 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
     (await dates(kit)).dates.some((date) => date.title === title),
   );
   kit.check("dates: Add a date adds it", made, title);
-  await page.goto(`${kit.base}/data`, { waitUntil: "networkidle" });
+  // Due keeps every owed row and fills the rest to 30; a later row (this one is due in two
+  // days) may be past those 30 once every module adds its own, so the walk reads every row.
+  await page.goto(`${kit.base}/data?due=all`, { waitUntil: "networkidle" });
   await page.waitForSelector(".hqdata-due", { timeout: 30_000 });
   const rows = await page.locator(".hqdata-due__row", { hasText: title }).allInnerTexts();
   kit.check(
@@ -276,6 +291,9 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
 
   // ---------------------------------------------------------------- KD4–KD10: the company batch
   await evidenceAndRules(page, kit, today);
+
+  // ---------------------------------------------------------------- KD11–KD13: the duty rules
+  await dutyRules(page, kit);
 
   // ---------------------------------------------------------------- B3: the backup, from the overview
   await page.goto(`${kit.base}/data`, { waitUntil: "networkidle" });
@@ -582,7 +600,8 @@ async function evidenceAndRules(page: Page, kit: WalkKit, today: string): Promis
   await page.goto(`${kit.base}/data/dates`, { waitUntil: "networkidle" });
   const progress = page.locator("tr", { hasText: "Walk filing in progress" });
   const pill = (await progress.count()) > 0 ? flat(await progress.first().innerText()) : "";
-  await page.goto(`${kit.base}/data`, { waitUntil: "networkidle" });
+  // A later row (due in three days): every row, as K4 reads them.
+  await page.goto(`${kit.base}/data?due=all`, { waitUntil: "networkidle" });
   await page.waitForSelector(".hqdata-due", { timeout: 30_000 });
   const owed = await page
     .locator(".hqdata-due__row", { hasText: "Walk filing in progress" })
@@ -687,4 +706,94 @@ async function evidenceAndRules(page: Page, kit: WalkKit, today: string): Promis
       await other.close();
     }
   }
+}
+
+// ------------------------------------------------------------------ the duties batch (KD11–KD13)
+
+type RuleBody = {
+  key?: string;
+  amount?: number | null;
+  confirmed?: { name: string } | null;
+  changed?: boolean;
+};
+
+/** KD11–KD13: a rule the sources disagree on, its confirmation as a reading, a changed amount. */
+async function dutyRules(page: Page, kit: WalkKit): Promise<void> {
+  const rulesPath = `${kit.base}/data/dates?view=rules`;
+  const ruleBody = async (key: string): Promise<RuleBody> =>
+    (
+      ((await kit.socket.ask("GET", "/data/dates/rules")).body.rules as RuleBody[] | undefined) ??
+      []
+    ).find((item) => item.key === key) ?? {};
+  if (!(await ruleBody("export-realisation")).key) {
+    kit.check("dates KD11–KD13: the duty rules are not in this rule book", true);
+    return;
+  }
+  const row = async (key: string) => {
+    await page.goto(rulesPath, { waitUntil: "networkidle" });
+    await page.waitForSelector(`#rule-${key}`, { timeout: 30_000 });
+    return flat(await page.locator(`#rule-${key}`).innerText());
+  };
+
+  // KD11: "Export invoices" with "Sources disagree" and both readings, while unconfirmed.
+  const before = await row("export-realisation");
+  const table = flat(
+    await page.locator('section[aria-labelledby="rules-export"]').first().innerText(),
+  );
+  const unconfirmed = (await ruleBody("export-realisation")).confirmed === null;
+  kit.check(
+    "dates KD11: the Rules view has Export invoices, and the realisation rule shows Sources disagree and both readings",
+    table.startsWith("Export invoices") &&
+      (unconfirmed
+        ? before.includes("Sources disagree") &&
+          before.includes("9 months") &&
+          before.includes("15 months") &&
+          before.includes("Nothing is worked out from this rule until it is confirmed.") &&
+          before.includes("The sources give 9 months and 15 months.")
+        : before.includes("Confirmed by")),
+    before.slice(0, 240),
+  );
+  if (!kit.pass.first) return;
+
+  // KD12: confirm "15 months" for Walk Bank, role Bank.
+  const realisation = page.locator("#rule-export-realisation");
+  await realisation.locator("summary", { hasText: "Record a confirmation" }).click();
+  await realisation.locator('input[name="reading"][value="1"]').check();
+  await realisation.locator('input[name="name"]').fill("Walk Bank");
+  await realisation.locator('select[name="role"]').selectOption("bank");
+  await realisation.locator("form button", { hasText: "Record it" }).click();
+  const confirmed = await until(
+    page,
+    async () => (await ruleBody("export-realisation")).confirmed?.name === "Walk Bank",
+  );
+  const after = await row("export-realisation");
+  kit.check(
+    "dates KD12: confirmed as 15 months by Walk Bank (Bank), the row reads Confirmed by and works out 15 months",
+    confirmed &&
+      after.includes("Confirmed by Walk Bank, Bank") &&
+      after.includes("15 months after the invoice date") &&
+      !after.includes("Sources disagree"),
+    after.slice(0, 240),
+  );
+  await kit.socket.ask("POST", "/data/dates/rules/export-realisation/unconfirm", { by: WALKER });
+
+  // KD13: change close-by to 4.
+  const close = page.locator("#rule-close-by");
+  await close.locator("summary", { hasText: "Change the amount" }).click();
+  await close.locator('input[name="amount"]').fill("4");
+  await close.locator("form button", { hasText: "Save" }).click();
+  const moved = await until(page, async () => (await ruleBody("close-by")).amount === 4);
+  const changed = await row("close-by");
+  kit.check(
+    "dates KD13: close-by changed to 4 reads Changed from 5, and nobody confirms it",
+    moved &&
+      changed.includes("4 working days after the end of the month") &&
+      changed.includes("Changed from 5") &&
+      changed.includes("Your own practice") &&
+      (await page
+        .locator("#rule-close-by summary", { hasText: "Record a confirmation" })
+        .count()) === 0,
+    changed.slice(0, 240),
+  );
+  await kit.socket.ask("POST", "/data/dates/rules/close-by/amount", { amount: 5, by: WALKER });
 }

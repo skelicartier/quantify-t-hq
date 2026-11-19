@@ -16,6 +16,12 @@ export const LIMIT = {
   address: 400,
   directors: 50,
   changes: 2_000,
+  /** The duties batch (ws-notes/duties/spec.md §6.2). */
+  cert_in_name: 120,
+  cert_in_address: 400,
+  books_text: 120,
+  disclosed_note: 200,
+  plan_limit_max: 1_000_000_000_000,
 } as const;
 
 export const SHAPE = {
@@ -54,6 +60,13 @@ export const SAY = {
   change: "That contact change is not here.",
   ceased: "That director has ceased already.",
   filedAlready: "That change is recorded as filed already.",
+  access: "Choose the CA's access from the list.",
+  dpiitStatus: "Choose the DPIIT status from the list.",
+  validBefore: "Valid until cannot be before the day it was recognised.",
+  planLimit: "Type a whole number from 1 to 1,000,000,000,000, or leave it empty.",
+  phone: "Type the office phone with digits, spaces and + only.",
+  notInFiles: "That file is not in Files.",
+  filesMissing: "Files is not set up here yet, so a copy cannot be kept.",
 } as const;
 
 /** "Data holds 50 at most." */

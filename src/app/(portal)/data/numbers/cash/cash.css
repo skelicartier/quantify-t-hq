@@ -1,0 +1,79 @@
+/* The cash view (duties spec §7.6): the weeks as rows (so they read at 412px), what is in
+   them, the scenarios and the thresholds. Tokens only, radius 0, no meter, no bar, no side
+   stripe; phone rules at 720px. Printed: all four sections, no button and no form. */
+@layer pages {
+  .hqdata-cash {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-cash > * {
+    min-width: 0;
+  }
+
+  /* Two buttons beside "Scenarios" and "Thresholds to watch": they wrap under the heading
+     rather than run off the side at 412px. */
+  .hqdata-cash .rsection__head,
+  .hqdata-cash .rsection__actions {
+    flex-wrap: wrap;
+  }
+
+  .hqdata-cash__table {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin-bottom: 12px;
+  }
+
+  .hqdata-cash__opening {
+    margin: 0;
+  }
+
+  .hqdata-cash__closing {
+    font-weight: 600;
+  }
+
+  .hqdata-cash__items,
+  .hqdata-cash__sentences,
+  .hqdata-cash__events,
+  .hqdata-cash__tiles {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 12px;
+    padding-left: 18px;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-cash__item-week,
+  .hqdata-cash__tile-name {
+    color: var(--muted);
+  }
+
+  .hqdata-cash__act {
+    display: inline-flex;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  .hqdata-cash__assumptions {
+    margin: 0 0 8px;
+    font-size: var(--fs-ui);
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-cash__act {
+      margin-left: 0;
+      display: flex;
+      margin-top: 4px;
+    }
+  }
+}
+
+@media print {
+  .hqdata-cash .segmented,
+  .hqdata-cash .popover,
+  .hqdata-cash__act {
+    display: none !important;
+  }
+}

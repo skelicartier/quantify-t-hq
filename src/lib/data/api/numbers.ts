@@ -46,8 +46,44 @@ export const moneyEntrySchema = z.object({
   note: z.string(),
   recorded_at: z.string(),
   recorded_by: staffSchema,
+  /** Typed over the statements' figure, with the reason in the note (duties spec §9.6). */
+  override: z.literal(true).optional(),
 });
 export type MoneyEntry = z.infer<typeof moneyEntrySchema>;
+
+/** What the statements give per currency: totals only (duties spec §9.6). */
+export const computedCashSchema = z.object({
+  currency: z.string(),
+  as_of: z.string(),
+  cash_minor: z.number(),
+  gross_burn_minor: z.number().nullable(),
+  avg_net_burn_minor: z.number().nullable(),
+  months: z.number(),
+  collected_minor: z.number().nullable(),
+  uncategorised: z.number(),
+  runway_months: z.number().nullable(),
+  zero_on: z.string().nullable(),
+  words: z.string(),
+  last_whole: z.string().nullable().default(null),
+  age_days: z.number().default(0),
+  stale: z.boolean().default(false),
+  stale_words: z.string().nullable().default(null),
+});
+export type ComputedCash = z.infer<typeof computedCashSchema>;
+
+/** The figure used per currency, in whole units as the update carries it. */
+export const usedCashSchema = z.object({
+  currency: z.string(),
+  source: z.enum(["statements", "typed"]),
+  cash: z.number(),
+  burn_per_month: z.number().nullable(),
+  as_of: z.string(),
+  runway_months: z.number().nullable(),
+  zero_on: z.string().nullable(),
+  gross_burn: z.number().nullable().default(null),
+  months: z.number().default(0),
+});
+export type UsedCash = z.infer<typeof usedCashSchema>;
 
 const amountSchema = z.object({ amount: z.number(), firms: z.number() });
 const moneyByStateSchema = z.record(
@@ -96,6 +132,9 @@ export const numbersPageSchema = ok.extend({
     ),
     entries: z.array(moneyEntrySchema),
     stale_days: z.number(),
+    computed: z.array(computedCashSchema).default([]),
+    used: z.array(usedCashSchema).default([]),
+    statements_here: z.boolean().default(false),
   }),
   buyer_types: z.array(z.string()),
   firm_types: z.array(z.string()),
@@ -137,6 +176,10 @@ export const updateNumbersSchema = z.object({
       burn_per_month: z.number(),
       as_of: z.string(),
       runway_months: z.number(),
+      source: z.enum(["statements", "typed", "mis"]).optional(),
+      gross_burn: z.number().optional(),
+      zero_on: z.string().nullable().optional(),
+      months: z.number().optional(),
     }),
   ),
   counted_on: z.string(),

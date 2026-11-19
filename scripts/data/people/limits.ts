@@ -50,5 +50,24 @@ export const LETTER_LEAD_DAYS = 7;
 export const CRITICAL_DAYS = 1;
 export const OTHER_DAYS = 5;
 
+/** The tax fields (duties spec §7.5). */
+export const TAX_LIMITS = {
+  decided_by: 120,
+  decided_note: 1_000,
+  certificate_number: 40,
+  challan_number: 40,
+  certificates: 40,
+} as const;
+
+/** A PAN: five letters, four digits, a letter (the company record's `SHAPE.pan`, declared again). */
+export const PAN_PATTERN = /^[A-Z]{5}\d{4}[A-Z]$/;
+/** A bank branch's BSR code: seven digits. */
+export const BSR_PATTERN = /^\d{7}$/;
+/** "2026-27" or "2026-27 Q3". */
+export const TAX_PERIOD_PATTERN = /^(\d{4})-(\d{2})( Q[1-4])?$/;
+
+/** A challan is due on the Due list from this many days before its deposit day. */
+export const CHALLAN_LEAD_DAYS = 7;
+
 /** The person the walk pins under test routes, so the harness can open them by a fixed path. */
 export const WALK_PERSON_ID = "walk-intern";

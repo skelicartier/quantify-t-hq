@@ -25,6 +25,7 @@ function overview(due: DataOverview["due"]): DataOverview {
     week: [],
     sending: null,
     due,
+    due_more: 0,
     replies: { today: 2, yes_today: 1, yes_total: 4, latest: [] },
     follow_ups: { due: 3, overdue: 1 },
   };

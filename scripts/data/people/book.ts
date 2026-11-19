@@ -6,6 +6,11 @@
  * Nothing is deleted. A payment is withdrawn with a reason and stays, struck through, and its
  * month is owed again; a grant is revoked or marked never held; an engagement ends once every
  * grant is revoked or never held after offboarding starts, and the person stays in the list.
+ *
+ * The duties batch (duties spec §7.5) adds the tax block (the CA's classification, the PAN,
+ * the engagement letter, the certificates issued), a challan on each payment with tax
+ * deducted, a Due row for each such payment still without one, and the month lock: a payment
+ * whose month is locked on Month close is neither recorded nor withdrawn until it is reopened.
  */
 
 import { randomUUID } from "node:crypto";
@@ -13,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { Refused } from "../../mail-merge/engine";
 import type { DataCore, DueItem } from "../core";
 import { addDays } from "../days";
+import { DUTIES_SERVICES, periodOf, tdsDepositDue, type MonthLock } from "../duties-contracts";
 import { clean, cleanText, isDay, normaliseEmail } from "../guard";
 import type { Staff } from "../protocol";
 import {
@@ -23,6 +29,11 @@ import {
   OUTCOMES_FOR,
   REVOKE_CRITICAL,
   REVOKE_OTHER,
+  TAX_CLASSIFICATIONS,
+  TAX_DECIDERS,
+  TAX_DECIDE_REFUSAL,
+  classificationWords,
+  longDay,
   moneyText,
   periodMonth,
   periodWords,
@@ -30,16 +41,22 @@ import {
 import { engagementMonths, endOf, evaluationDays, revokeBy, stipendDueOn } from "./dates";
 import {
   AMOUNT_MAX,
+  BSR_PATTERN,
+  CHALLAN_LEAD_DAYS,
   EVALUATION_LEAD_DAYS,
   LETTER_LEAD_DAYS,
+  PAN_PATTERN,
   PEOPLE_LIMITS,
   PEOPLE_TOTALS,
   PIN_PATTERN,
   STIPEND_LEAD_DAYS,
   STIPEND_MAX,
+  TAX_LIMITS,
+  TAX_PERIOD_PATTERN,
 } from "./limits";
 import type {
   AccessGrant,
+  Challan,
   EngagementKind,
   Evaluation,
   PeopleEvent,
@@ -47,9 +64,11 @@ import type {
   Person,
   PersonDocument,
   PersonState,
+  PersonTax,
   StipendPayment,
   StipendPeriod,
   Stipend,
+  TaxCertificate,
 } from "./types";
 
 const PEOPLE = "people/people.json";
@@ -279,6 +298,20 @@ export function dueRowsOf(person: Person, today: string): DueItem[] {
             period.due_on,
           ),
         );
+  // Tax deducted and no challan yet: the deposit is due by the 7th of the next month.
+  for (const payment of person.payments) {
+    if (payment.withdrawn || !(payment.tds_deducted ?? 0) || payment.challan) continue;
+    const due = tdsDepositDue(payment.paid_on);
+    if (addDays(due, -CHALLAN_LEAD_DAYS) > today) continue;
+    rows.push(
+      row(
+        `challan:${payment.payment_id}`,
+        `Deposit the tax deducted from ${person.name}'s stipend`,
+        `${periodWords(payment.period)} · paid ${longDay(payment.paid_on)}`,
+        due,
+      ),
+    );
+  }
   const state = stateOf(person, today);
   if (state !== "ended") {
     for (const { which, evaluation } of owedEvaluations(person))
@@ -306,6 +339,54 @@ const copyOrNull = (value: unknown): PersonCopy | null =>
   value && typeof value === "object" && typeof (value as PersonCopy).copy_id === "string"
     ? (value as PersonCopy)
     : null;
+
+/** The tax block of a person nothing has been recorded for. */
+export const EMPTY_TAX = (): PersonTax => ({
+  classification: "",
+  decided_by: "",
+  decided_role: "",
+  decided_on: null,
+  decided_note: "",
+  pan: "",
+  letter_document_id: null,
+  certificates: [],
+});
+
+/** A stored tax block, read field by field: a record from before the duties batch has none. */
+function taxOf(value: unknown): PersonTax {
+  const stored = recordOf(value);
+  const empty = EMPTY_TAX();
+  const classification = String(stored.classification ?? "");
+  const role = String(stored.decided_role ?? "");
+  return {
+    classification:
+      classification in TAX_CLASSIFICATIONS
+        ? (classification as PersonTax["classification"])
+        : empty.classification,
+    decided_by: typeof stored.decided_by === "string" ? stored.decided_by : "",
+    decided_role: role in TAX_DECIDERS ? (role as PersonTax["decided_role"]) : "",
+    decided_on: isDay(stored.decided_on) ? stored.decided_on : null,
+    decided_note: typeof stored.decided_note === "string" ? stored.decided_note : "",
+    pan: typeof stored.pan === "string" ? stored.pan : "",
+    letter_document_id:
+      typeof stored.letter_document_id === "string" ? stored.letter_document_id : null,
+    certificates: Array.isArray(stored.certificates)
+      ? (stored.certificates as TaxCertificate[]).filter(
+          (item) => typeof item?.certificate_id === "string",
+        )
+      : [],
+  };
+}
+
+function challanOf(value: unknown): Challan | null {
+  const stored = recordOf(value);
+  if (typeof stored.number !== "string") return null;
+  return {
+    number: stored.number,
+    bsr: typeof stored.bsr === "string" ? stored.bsr : "",
+    deposited_on: isDay(stored.deposited_on) ? stored.deposited_on : null,
+  };
+}
 
 const EMPTY_EVALUATION = (due_on: string | null): Evaluation => ({
   due_on,
@@ -355,6 +436,11 @@ export class PeopleBook {
     for (const person of this.people) {
       for (const document of person.documents) document.copy = copyOrNull(document.copy);
       if (person.certificate) person.certificate.copy = copyOrNull(person.certificate.copy);
+      // Records from before the duties batch read with the empty tax form and no challans.
+      person.tax = taxOf(person.tax);
+      for (const certificate of person.tax.certificates)
+        certificate.copy = copyOrNull(certificate.copy);
+      for (const payment of person.payments) payment.challan = challanOf(payment.challan);
     }
     this.events = core.store
       .readLines<PeopleEvent>(EVENTS)
@@ -399,6 +485,7 @@ export class PeopleBook {
     const copies = [
       ...person.documents.map((document) => document.copy),
       person.certificate?.copy ?? null,
+      ...person.tax.certificates.map((certificate) => certificate.copy),
     ];
     const copy = copyId ? copies.find((item) => item?.copy_id === copyId) : undefined;
     if (!copy) throw new Refused(404, "not_found", "That copy is not in the ledger.");
@@ -518,6 +605,7 @@ export class PeopleBook {
       ended_on: null,
       hq_staff_id: null,
       payments: [],
+      tax: EMPTY_TAX(),
       created_at: now,
       created_by: by,
       updated_at: now,
@@ -652,6 +740,13 @@ export class PeopleBook {
 
   // ---------------------------------------------------------------- the stipend ledger
 
+  /** A payment dated in a month locked on Month close is refused until it is reopened. */
+  #unlocked(day: string): void {
+    const lock = this.#core.need<MonthLock>(DUTIES_SERVICES.monthLock);
+    const period = periodOf(day);
+    if (lock?.isLocked(period)) throw new Refused(409, "month_locked", lock.refusal(period));
+  }
+
   recordPayment(person: Person, input: Input, by: Staff, today: string): Person {
     const total = this.people.reduce((sum, item) => sum + item.payments.length, 0);
     if (total >= PEOPLE_TOTALS.payments)
@@ -678,6 +773,7 @@ export class PeopleBook {
         throw new Refused(400, "invalid", "Type the TDS deducted as a number, or leave it empty.");
     }
     const note = cleanText(input.note, PEOPLE_LIMITS.payment_note);
+    this.#unlocked(paid_on);
     person.payments.push({
       payment_id: randomUUID(),
       period,
@@ -690,6 +786,7 @@ export class PeopleBook {
       at: this.#core.now(),
       by,
       withdrawn: null,
+      challan: null,
     });
     this.#touch(person, by);
     this.save();
@@ -706,10 +803,156 @@ export class PeopleBook {
       throw new Refused(409, "withdrawn", "That payment is withdrawn already.");
     const why = cleanText(input.why, PEOPLE_LIMITS.why);
     if (!why) throw new Refused(400, "invalid", "Say why it is withdrawn.");
+    this.#unlocked(payment.paid_on);
     payment.withdrawn = { at: this.#core.now(), by, why };
     this.#touch(person, by);
     this.save();
     this.event(person, "payment withdrawn", `${payment.period}: ${why}`, by);
+    return person;
+  }
+
+  // ---------------------------------------------------------------- tax (duties spec §7.5)
+
+  /** The CA's classification, who decided it, the PAN and the engagement letter. */
+  recordTax(person: Person, input: Input, by: Staff, today: string): Person {
+    const tax = person.tax;
+    const classification = has(input, "classification")
+      ? clean(input.classification, 20)
+      : tax.classification;
+    if (classification && !(classification in TAX_CLASSIFICATIONS))
+      throw new Refused(400, "invalid", "Choose salary, professional fee, exempt or not decided.");
+    const decidedBy = has(input, "decided_by")
+      ? cleanText(input.decided_by, TAX_LIMITS.decided_by)
+      : tax.decided_by;
+    const role = has(input, "decided_role") ? clean(input.decided_role, 10) : tax.decided_role;
+    const decidedOn = has(input, "decided_on")
+      ? dayOrNull(input.decided_on, today)
+      : tax.decided_on;
+    if (classification && (!decidedBy || !(role in TAX_DECIDERS) || !decidedOn))
+      throw new Refused(400, "invalid", TAX_DECIDE_REFUSAL);
+    const note = has(input, "decided_note")
+      ? cleanText(input.decided_note, TAX_LIMITS.decided_note)
+      : tax.decided_note;
+    const pan = has(input, "pan") ? clean(input.pan, 12).toUpperCase() : tax.pan;
+    if (pan && !PAN_PATTERN.test(pan))
+      throw new Refused(
+        400,
+        "invalid",
+        "Type the PAN as ten letters and digits: five letters, four digits and a letter.",
+      );
+    let letter = tax.letter_document_id;
+    if (has(input, "letter_document_id")) {
+      letter = clean(input.letter_document_id, 64) || null;
+      if (letter && !person.documents.some((document) => document.document_id === letter))
+        throw new Refused(404, "not_found", "That document is not among this person's.");
+    }
+    person.tax = {
+      ...tax,
+      classification: classification as PersonTax["classification"],
+      decided_by: classification ? decidedBy : "",
+      decided_role: classification ? (role as PersonTax["decided_role"]) : "",
+      decided_on: classification ? decidedOn : null,
+      decided_note: note,
+      pan,
+      letter_document_id: letter,
+    };
+    this.#touch(person, by);
+    this.save();
+    this.event(
+      person,
+      "tax recorded",
+      classification
+        ? `${classificationWords(classification)}, decided by ${decidedBy} on ${decidedOn ?? ""}`
+        : "Not decided",
+      by,
+    );
+    return person;
+  }
+
+  /** A certificate's fields, checked before its copy is kept. */
+  certificateTaxFields(
+    person: Person,
+    input: Input,
+    today: string,
+  ): Pick<TaxCertificate, "form" | "period" | "issued_on" | "number"> {
+    if (person.tax.certificates.length >= TAX_LIMITS.certificates)
+      throw new Refused(400, "invalid", atMost(TAX_LIMITS.certificates));
+    const form = clean(input.form, 3);
+    if (form !== "130" && form !== "131")
+      throw new Refused(400, "invalid", "Choose Form 130 or Form 131.");
+    const period = clean(input.period, 10);
+    const match = TAX_PERIOD_PATTERN.exec(period);
+    if (!match || (Number(match[1]) + 1) % 100 !== Number(match[2]))
+      throw new Refused(
+        400,
+        "invalid",
+        "Give the period: a financial year such as 2026-27, or a quarter such as 2026-27 Q3.",
+      );
+    const issued_on = dayOrNull(input.issued_on, today);
+    if (!issued_on) throw new Refused(400, "invalid", "Give the day it was issued.");
+    const number = cleanText(input.number, TAX_LIMITS.certificate_number);
+    if (!number) throw new Refused(400, "invalid", "Give the certificate's number.");
+    return { form, period, issued_on, number };
+  }
+
+  addTaxCertificate(
+    person: Person,
+    fields: Pick<TaxCertificate, "form" | "period" | "issued_on" | "number">,
+    copy: PersonCopy | null,
+    by: Staff,
+  ): Person {
+    person.tax.certificates.push({
+      certificate_id: randomUUID(),
+      ...fields,
+      copy,
+      at: this.#core.now(),
+      by,
+    });
+    this.#touch(person, by);
+    this.save();
+    this.event(
+      person,
+      "tax certificate added",
+      `Form ${fields.form}, ${fields.period}, issued ${fields.issued_on}`,
+      by,
+    );
+    return person;
+  }
+
+  /** The challan the tax deducted from a payment was deposited with. */
+  recordChallan(
+    person: Person,
+    paymentId: string | undefined,
+    input: Input,
+    by: Staff,
+    today: string,
+  ): Person {
+    const payment = paymentId
+      ? person.payments.find((item) => item.payment_id === paymentId)
+      : undefined;
+    if (!payment) throw new Refused(404, "not_found", "That payment is not here.");
+    if (payment.withdrawn)
+      throw new Refused(409, "withdrawn", "That payment is withdrawn already.");
+    if (!(payment.tds_deducted ?? 0))
+      throw new Refused(409, "no_tds", "Record the tax deducted on this payment first.");
+    // A challan number is a reference: kept as typed, never read as a secret.
+    const number = clean(input.number, TAX_LIMITS.challan_number);
+    if (!number) throw new Refused(400, "invalid", "Give the challan's number.");
+    if (PIN_PATTERN.test(number))
+      throw new Refused(400, "invalid", "Write the challan's number, never a password.");
+    const bsr = clean(input.bsr, 7);
+    if (bsr && !BSR_PATTERN.test(bsr))
+      throw new Refused(400, "invalid", "The BSR code is seven digits.");
+    const deposited_on = dayOrNull(input.deposited_on, today);
+    payment.challan = { number, bsr, deposited_on };
+    this.#touch(person, by);
+    this.save();
+    this.event(
+      person,
+      "challan recorded",
+      `${payment.period}${deposited_on ? `, deposited ${deposited_on}` : ""}`,
+      by,
+    );
     return person;
   }
 

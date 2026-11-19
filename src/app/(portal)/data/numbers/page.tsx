@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { DataUnavailable } from "@/components/data/data-down";
 import { NumbersTable } from "@/components/data/numbers/numbers-table";
+import { NumbersTabs } from "@/components/data/numbers/numbers-tabs";
+import { StatementsCash } from "@/components/data/numbers/statements-cash";
 import { ReminderForm } from "@/components/data/numbers/reminder-form";
 import { MailForm } from "@/components/mail/mail-form";
 import { PageHeader } from "@/components/shell/page-header";
@@ -18,6 +20,13 @@ import { DATA_ROLE_LINE, requireData } from "@/lib/data/access";
 import { readDates } from "@/lib/data/api/dates";
 import { readNumbers, type NumbersPage } from "@/lib/data/api/numbers";
 import { AMOUNT_STATES, UPDATE_STATUSES, labelOf, toneOf } from "@/lib/data/labels";
+import {
+  NOT_ADVICE,
+  NUMBERS_ABOUT,
+  TYPE_CASH,
+  TYPE_OVER,
+  TYPE_OVER_NOTE,
+} from "@/lib/data/labels-statements";
 import { dataRead, isDataError } from "@/lib/data/read";
 import { formatDate, formatMoney, formatNumber } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
@@ -28,8 +37,8 @@ import "./numbers.css";
 export const metadata = { title: "Numbers" };
 export const dynamic = "force-dynamic";
 
-const ABOUT =
-  "Counted from Data's own records each time you open it: replies, the waitlist and the investors. Cash and burn are what you type, with the day they are true on; figures older than 35 days are not used. There are no targets here.";
+/** The About line (duties spec §9.6): cash and burn come from the statements once imported. */
+const ABOUT = NUMBERS_ABOUT;
 
 const CASH_COLUMNS = [
   { key: "currency", label: "Currency" },
@@ -93,8 +102,8 @@ export default async function NumbersRoute() {
               >
                 Write this month&rsquo;s update
               </ButtonLink>
-              <Popover label="Type cash and burn" width="wide">
-                <MoneyForm today={data.today} />
+              <Popover label={overStatements(data) ? TYPE_OVER : TYPE_CASH} width="wide">
+                <MoneyForm today={data.today} over={overStatements(data)} />
               </Popover>
               <Popover label="Buyer firm types" width="wide">
                 <BuyerTypesForm page={data} />
@@ -116,7 +125,10 @@ export default async function NumbersRoute() {
   );
 }
 
-function MoneyForm({ today }: { today: string }) {
+/** Whether the statements give a figure he would be typing over. */
+const overStatements = (page: NumbersPage) => page.money.computed.some((item) => !item.stale);
+
+function MoneyForm({ today, over }: { today: string; over: boolean }) {
   return (
     <MailForm action={saveMoneyAction} submitLabel="Save" pendingLabel="Saving…">
       <Field id="money-currency" label="Currency">
@@ -150,8 +162,15 @@ function MoneyForm({ today }: { today: string }) {
       <Field id="money-on" label="True on">
         <Input id="money-on" name="as_of" type="date" defaultValue={today} max={today} required />
       </Field>
-      <Field id="money-note" label="Note">
-        <Input id="money-note" name="note" maxLength={500} autoComplete="off" />
+      <Field id="money-note" label={over ? TYPE_OVER_NOTE : "Note"}>
+        <Input
+          id="money-note"
+          name="note"
+          maxLength={500}
+          minLength={over ? 5 : undefined}
+          required={over}
+          autoComplete="off"
+        />
       </Field>
     </MailForm>
   );
@@ -200,6 +219,7 @@ function Numbers({ page, reminder, now }: { page: NumbersPage; reminder: boolean
   };
   return (
     <div className="hqdata-numbers">
+      <NumbersTabs current="numbers" />
       <StatGrid label="This week" columns={4}>
         <Stat label="People who said yes" value={formatNumber(thisWeek.yeses)} />
         <Stat
@@ -358,6 +378,19 @@ function Raise({ page }: { page: NumbersPage }) {
 
 function Cash({ page, now }: { page: NumbersPage; now: number }) {
   const { rows, entries } = page.money;
+  if (page.money.statements_here)
+    return (
+      <>
+        <StatementsCash money={page.money} />
+        <p className="page-note">
+          Runway is the cash divided by the average net burn of the last whole months, rounded down
+          to one decimal, in each currency on its own. Net burn is money out less money collected
+          from customers; transfers between your own accounts and cards count in neither.{" "}
+          {NOT_ADVICE}
+        </p>
+        {entries.length > 0 && <Entries entries={entries} now={now} />}
+      </>
+    );
   if (rows.length === 0)
     return (
       <p className="page-note">
@@ -392,6 +425,14 @@ function Cash({ page, now }: { page: NumbersPage; now: number }) {
         Runway is the cash divided by the monthly burn, rounded down to one decimal, in each
         currency on its own.
       </p>
+      <Entries entries={entries} now={now} />
+    </>
+  );
+}
+
+function Entries({ entries, now }: { entries: NumbersPage["money"]["entries"]; now: number }) {
+  return (
+    <>
       <DataTable caption="Cash entries" columns={ENTRY_COLUMNS} columnMenu={false}>
         {entries.map((entry) => (
           <tr key={entry.entry_id}>

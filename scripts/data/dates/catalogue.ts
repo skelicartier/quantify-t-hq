@@ -41,6 +41,10 @@ export type Facts = {
   amounts?: Partial<Record<RuleKey, number>>;
   /** Any director in office is recorded on the company record. */
   directors?: number;
+  /** What the registers hold (duties spec §7.3): domains, signing certificates and marks. */
+  domains?: number;
+  signing?: number;
+  marks?: number;
 };
 
 export type Group = "monthly" | "quarterly" | "yearly" | "renewal";
@@ -621,7 +625,8 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     remind_days: 14,
     ...renewal,
     next: typed,
-    hidden: shown,
+    hidden: (facts) =>
+      (facts.domains ?? 0) > 0 ? "Each domain has its own row in Registers." : null,
   },
   {
     key: "mailbox",
@@ -681,7 +686,8 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     remind_days: 14,
     ...renewal,
     next: typed,
-    hidden: shown,
+    hidden: (facts) =>
+      (facts.signing ?? 0) > 0 ? "Each signing certificate has its own row in Registers." : null,
   },
   {
     key: "director-dsc",
@@ -712,7 +718,7 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     remind_days: 14,
     ...renewal,
     next: typed,
-    hidden: shown,
+    hidden: (facts) => ((facts.marks ?? 0) > 0 ? "Each mark has its own row in Registers." : null),
   },
 ];
 

@@ -210,3 +210,54 @@ export function optionsWords(options: readonly string[]): string {
 export function daysWords(count: number): string {
   return `${count.toLocaleString("en")} ${count === 1 ? "day" : "days"}`;
 }
+
+// ------------------------------------------------------------------ the duties batch's facts
+
+/** The new facts' fields, in words, for the "Changes" table (ws-notes/duties/spec.md §6.2). */
+export const DUTY_FACT_WORDS: Record<string, string> = {
+  cert_in_name: "CERT-In contact's name",
+  cert_in_designation: "CERT-In contact's designation",
+  cert_in_email: "CERT-In contact's email",
+  cert_in_mobile: "CERT-In contact's mobile",
+  cert_in_office_phone: "CERT-In contact's office phone",
+  cert_in_address: "CERT-In contact's office address",
+  cert_in_sent_on: "Sent to CERT-In on",
+  cert_in_sent_file_id: "The message sent to CERT-In",
+  books_software: "Books software",
+  books_kept_by: "Books kept by",
+  books_contact_id: "Books keeper's contact",
+  books_access: "The CA's access",
+  books_started_on: "Books start on",
+  books_provider_disclosed: "Provider disclosed to the ROC",
+  books_disclosed_note: "Where it is disclosed",
+  books_free_revenue_limit: "Free plan: revenue up to",
+  books_free_invoice_limit: "Free plan: invoices a year",
+  dpiit_status: "DPIIT status",
+  dpiit_applied_on: "DPIIT applied on",
+  dpiit_valid_until: "DPIIT valid until",
+  dpiit_certificate_file_id: "DPIIT certificate",
+};
+
+/** The CA's access to the books software. */
+export const BOOKS_ACCESS = {
+  owner: "Owner",
+  accountant: "Accountant",
+  view: "View only",
+  none: "None",
+  "": "Not known",
+} as const;
+export type BooksAccessKey = keyof typeof BOOKS_ACCESS;
+
+export const DPIIT_STATUSES = {
+  not_applied: "Not applied",
+  applied: "Applied",
+  recognised: "Recognised",
+  "": "Not known",
+} as const;
+export type DpiitStatusKey = keyof typeof DPIIT_STATUSES;
+
+export const CERT_IN_EMPTY =
+  "Nobody is recorded. CERT-In asks every company for a point of contact, sent to info@cert-in.org.in and kept current.";
+
+export const BOOKS_ABOUT =
+  "HQ is not the books of account. It keeps the vouchers and hands them to your CA each month.";

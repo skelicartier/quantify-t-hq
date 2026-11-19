@@ -243,6 +243,7 @@ function Dates({
         ) : (
           <RulesView
             rules={rules.data.rules}
+            counts={rules.data.counts}
             today={page.today}
             actions={{
               amount: ruleAmountAction,

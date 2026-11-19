@@ -9,8 +9,10 @@
  * with this month so far.
  */
 
-import { MONEY_STALE_DAYS, type NumbersRow } from "../../../src/lib/data/labels";
+import { CURRENCIES, MONEY_STALE_DAYS, type NumbersRow } from "../../../src/lib/data/labels";
 import { addDays, daysBetween } from "../days";
+import { addPeriods, periodEnd, periodOf, type CashNow } from "../duties-contracts";
+import { runwayOf as runwayOfMinor } from "../statements/cash";
 import {
   mondayOf,
   type FunnelSummary,
@@ -288,6 +290,160 @@ export function moneyRows(entries: readonly MoneyEntry[], today: string): MoneyR
     });
 }
 
+// ------------------------------------------------------------------ cash from the statements (duties spec §9.6)
+
+/** What the statements give for a currency, with its runway and cash-out day worked out. */
+export type FeedCash = CashNow & { runway_months: number | null; zero_on: string | null };
+
+export const feedCashOf = (cash: CashNow): FeedCash => ({
+  ...cash,
+  ...runwayOfMinor(cash.cash_minor, cash.avg_net_burn_minor, cash.as_of),
+});
+
+/** The month the statements' last whole month is: the `as_of` month when it ends it, else the one before. */
+export function lastWholeMonth(cash: Pick<CashNow, "as_of" | "months">): string | null {
+  if (cash.months === 0) return null;
+  const month = periodOf(cash.as_of);
+  return periodEnd(month) === cash.as_of ? month : addPeriods(month, -1);
+}
+
+/** The figure Numbers uses for one currency, in whole units as the raise batch's shapes keep them. */
+export type UsedCash = {
+  currency: string;
+  source: "statements" | "typed";
+  cash: number;
+  burn_per_month: number | null;
+  as_of: string;
+  runway_months: number | null;
+  zero_on: string | null;
+  /** The last whole month's money out, whole units rounded up; null for a typed figure. */
+  gross_burn: number | null;
+  months: number;
+};
+
+/** Whole currency units of a minor amount: cash is floored, a burn is rounded up. */
+const floorUnits = (minor: number) => Math.floor(minor / 100);
+const ceilUnits = (minor: number) => -Math.floor(-minor / 100);
+
+/**
+ * Per currency (sorted by code): a typed entry marked `override` whose day is on or after the
+ * statements' day, and not stale; else the statements' figure when its day is at most 35 days
+ * old; else a typed entry as before (not stale); else nothing.
+ */
+export function usedCash(
+  today: string,
+  typedRows: readonly MoneyRow[],
+  feed: readonly CashNow[],
+): UsedCash[] {
+  const currencies = [
+    ...new Set([...typedRows.map((row) => row.currency), ...feed.map((item) => item.currency)]),
+  ].sort((a, b) => a.localeCompare(b));
+  const used: UsedCash[] = [];
+  for (const currency of currencies) {
+    const typed = typedRows.find((row) => row.currency === currency) ?? null;
+    const given = feed.find((item) => item.currency === currency) ?? null;
+    const typedUse = (row: MoneyRow): UsedCash => ({
+      currency,
+      source: "typed",
+      cash: row.entry.cash,
+      burn_per_month: row.entry.burn_per_month,
+      as_of: row.entry.as_of,
+      runway_months: row.runway_months,
+      zero_on: null,
+      gross_burn: null,
+      months: 0,
+    });
+    if (
+      typed &&
+      typed.used &&
+      typed.entry.override === true &&
+      given &&
+      typed.entry.as_of >= given.as_of
+    ) {
+      used.push(typedUse(typed));
+      continue;
+    }
+    if (given && daysBetween(given.as_of, today) <= MONEY_STALE_DAYS) {
+      const worked = feedCashOf(given);
+      used.push({
+        currency,
+        source: "statements",
+        cash: floorUnits(given.cash_minor),
+        burn_per_month:
+          given.avg_net_burn_minor === null ? null : ceilUnits(given.avg_net_burn_minor),
+        as_of: given.as_of,
+        runway_months: worked.runway_months,
+        zero_on: worked.zero_on,
+        gross_burn: given.gross_burn_minor === null ? null : ceilUnits(given.gross_burn_minor),
+        months: given.months,
+      });
+      continue;
+    }
+    if (typed && typed.used) used.push(typedUse(typed));
+  }
+  return used;
+}
+
+/** The cash a frozen MIS gives for its month (its part 3), as the update carries it. */
+export type MisCash = {
+  currency: string;
+  as_of: string;
+  cash_minor: number;
+  gross_minor: number;
+  avg_net_minor: number | null;
+  months: number;
+  runway_months: number | null;
+  zero_on: string | null;
+};
+
+/** The close module's answer for a month whose MIS is frozen: its part 3; null when it is not frozen. */
+export type CloseMis = { frozenCash(period: string): MisCash[] | null };
+
+const isCurrency = (code: string): code is Currency =>
+  (CURRENCIES as readonly string[]).includes(code);
+
+/** The update's cash rows from what is used, or from a frozen MIS: whole units, a runway each. */
+export function updateCashOf(
+  rows: readonly UsedCash[] | null,
+  mis: readonly MisCash[] | null,
+): UpdateNumbers["cash"] {
+  if (mis)
+    return mis
+      .filter(
+        (row) =>
+          isCurrency(row.currency) && row.runway_months !== null && row.avg_net_minor !== null,
+      )
+      .map((row) => ({
+        currency: row.currency as Currency,
+        cash: floorUnits(row.cash_minor),
+        burn_per_month: ceilUnits(row.avg_net_minor!),
+        as_of: row.as_of,
+        runway_months: row.runway_months!,
+        source: "mis" as const,
+        gross_burn: ceilUnits(row.gross_minor),
+        zero_on: row.zero_on,
+        months: row.months,
+      }));
+  return (rows ?? [])
+    .filter(
+      (row) =>
+        isCurrency(row.currency) && row.runway_months !== null && row.burn_per_month !== null,
+    )
+    .map((row) => {
+      const base = {
+        currency: row.currency as Currency,
+        cash: row.cash,
+        burn_per_month: row.burn_per_month!,
+        as_of: row.as_of,
+        runway_months: row.runway_months!,
+        source: row.source,
+      };
+      return row.source === "statements"
+        ? { ...base, gross_burn: row.gross_burn ?? 0, zero_on: row.zero_on, months: row.months }
+        : base;
+    });
+}
+
 // ------------------------------------------------------------------ one month's update
 
 /** The figures one month's update carries: the month's counts, the readouts now, the raise, the cash. */
@@ -296,6 +452,11 @@ export function updateNumbersOf(
   period: string,
   funnel: FunnelSummary | null,
   money: readonly MoneyEntry[],
+  /**
+   * The cash rows to carry instead of the typed entries (duties spec §9.6): what `usedCash`
+   * gives once statements are here, or a frozen MIS's. Left out, the update reads as before.
+   */
+  cash?: UpdateNumbers["cash"],
 ): UpdateNumbers {
   const month = monthPeriod(period, input.today);
   const byRow = daysByRow(input);
@@ -328,15 +489,17 @@ export function updateNumbersOf(
           money_in_amounts: moneyIn,
         }
       : null,
-    cash: moneyRows(money, input.today)
-      .filter((row) => row.used && row.runway_months !== null)
-      .map((row) => ({
-        currency: row.currency,
-        cash: row.entry.cash,
-        burn_per_month: row.entry.burn_per_month,
-        as_of: row.entry.as_of,
-        runway_months: row.runway_months!,
-      })),
+    cash:
+      cash ??
+      moneyRows(money, input.today)
+        .filter((row) => row.used && row.runway_months !== null)
+        .map((row) => ({
+          currency: row.currency,
+          cash: row.entry.cash,
+          burn_per_month: row.entry.burn_per_month,
+          as_of: row.entry.as_of,
+          runway_months: row.runway_months!,
+        })),
     counted_on: input.today,
   };
 }

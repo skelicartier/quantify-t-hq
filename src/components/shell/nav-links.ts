@@ -18,6 +18,7 @@ import {
   FileSpreadsheet,
   Handshake,
   Inbox,
+  IndianRupee,
   LayoutDashboard,
   PanelsTopLeft,
   LifeBuoy,
@@ -61,6 +62,7 @@ import {
   Milestone,
   type LucideIcon,
   Stamp,
+  BookMarked,
 } from "lucide-react";
 
 export type NavLink = {
@@ -102,6 +104,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     // capability is made up by the layout where the local service is set up (Owners and
     // Admins only); every page checks `mail:send` for itself. The company record is for
     // Owners and Admins; the people ledger only for the Owner, through `local:data:owner`.
+    // Registers holds incidents, trademarks, domains and holidays; Money holds the bills and
+    // the month's handover to the CA.
     label: "Data",
     links: [
       { href: "/data", label: "Data", icon: Briefcase, capability: "local:data" },
@@ -175,6 +179,20 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: IdCard,
         activePrefix: "/data/people/",
         capability: "local:data:owner",
+      },
+      {
+        href: "/data/registers",
+        label: "Registers",
+        icon: BookMarked,
+        activePrefix: "/data/registers/",
+        capability: "local:data",
+      },
+      {
+        href: "/data/money",
+        label: "Money",
+        icon: IndianRupee,
+        activePrefix: "/data/money/",
+        capability: "local:data",
       },
       {
         href: "/data/dates",

@@ -19,6 +19,8 @@ export type MoneyEntry = {
   note: string;
   recorded_at: string;
   recorded_by: Staff;
+  /** Typed over a figure the statements give, with the reason in `note` (duties spec §9.6). */
+  override?: true;
 };
 
 export type NumbersSetup = {
@@ -54,6 +56,14 @@ export type UpdateNumbers = {
     burn_per_month: number;
     as_of: string;
     runway_months: number;
+    /** Where the figure came from; absent on an update made before the statements (duties spec §9.6). */
+    source?: "statements" | "typed" | "mis";
+    /** The last whole month's money out, in whole units, rounded up. */
+    gross_burn?: number;
+    /** The day the cash runs out at this rate. */
+    zero_on?: string | null;
+    /** How many whole months the burn is averaged over. */
+    months?: number;
   }[];
   counted_on: string;
 };
@@ -106,3 +116,8 @@ export type Period = {
 
 /** Each row's counts, one per period, oldest first. */
 export type RowCounts = Partial<Record<NumbersRow, number[]>>;
+
+/** What the numbers module gives its own unit's MIS: one month's counts (`numbers-month`). */
+export type NumbersMonth = { month(period: string): UpdateNumbers };
+export const NUMBERS_MONTH = "numbers-month";
+export const CLOSE_MIS = "close-mis";

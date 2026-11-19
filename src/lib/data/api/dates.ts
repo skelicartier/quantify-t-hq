@@ -11,7 +11,8 @@ import { dataAsk, id, ok } from "@/lib/data/socket";
  * suggested for an Indian private company, worked out from the company record where it
  * can. A suggestion is only a row until he adds it; each one says where its rule comes
  * from, when it was checked and to confirm it with the CA or CS. The rule book holds every
- * clock with his amounts and who confirmed them (company spec §6.4, §6.8).
+ * clock with his amounts and who confirmed them (company spec §6.4, §6.8), and the duty
+ * rules of the duties batch with their readings, units and start days (duties spec §7.2).
  */
 
 export const dateKindSchema = z.enum(["filing", "tax", "board", "renewal", "other"]);
@@ -31,6 +32,8 @@ export const shownStateSchema = z.enum([
   "taken_back",
 ]);
 export const confirmRoleSchema = z.enum(["CA", "CS", "lawyer"]);
+/** A duty rule may also be confirmed by a trademark agent or the AD bank. */
+export const dutyConfirmRoleSchema = z.enum(["CA", "CS", "lawyer", "agent", "bank"]);
 export const ownerRoleSchema = z.enum(["founder", "ca", "cs", "lawyer", "other", ""]);
 
 export const evidenceSchema = z.object({
@@ -45,27 +48,60 @@ export type Evidence = z.infer<typeof evidenceSchema>;
 
 export const sourceSchema = z.object({ name: z.string(), url: z.string() });
 
-/** One clock of the rule book, as the Rules view shows it (company spec §6.4). */
+export const dutyAreaSchema = z.enum([
+  "security",
+  "marks",
+  "certificates",
+  "holidays",
+  "tds",
+  "msme",
+  "foreign",
+  "export",
+  "books",
+  "thresholds",
+]);
+export type DutyAreaKey = z.infer<typeof dutyAreaSchema>;
+
+/** One of the amounts, or answers in words, the sources give for a duty rule. */
+export const ruleReadingSchema = z.object({
+  label: z.string(),
+  words: z.string(),
+  sources: z.array(sourceSchema),
+});
+
+/**
+ * One clock of the rule book, as the Rules view shows it (company spec §6.4). A duty rule
+ * (duties spec §7.2) also carries `duty`, its sense, whether it may be used today, its start
+ * day and its readings; its `confirm_with` is null when nobody confirms it.
+ */
 export const ruleViewSchema = z.object({
   key: z.string(),
-  area: z.enum(["company", "meetings", "close", "calendar"]),
+  area: z.union([z.enum(["company", "meetings", "close", "calendar"]), dutyAreaSchema]),
   title: z.string(),
   from: z.string(),
   clock: z.string(),
   amount: z.number().nullable(),
   default_amount: z.number().nullable(),
-  unit: z.enum(["days", "months", "years", "people"]).nullable(),
+  unit: z
+    .enum(["hours", "days", "working_days", "months", "years", "rupees", "per_cent", "people"])
+    .nullable(),
   changed: z.boolean(),
   sources: z.array(sourceSchema),
   verified_on: z.string(),
-  confirm_with: confirmRoleSchema,
-  confirmed: z.object({ name: z.string(), role: confirmRoleSchema, on: z.string() }).nullable(),
+  confirm_with: dutyConfirmRoleSchema.nullable(),
+  confirmed: z.object({ name: z.string(), role: dutyConfirmRoleSchema, on: z.string() }).nullable(),
   confirmation_dropped: z.boolean(),
   late_words: z.string(),
   only_when_confirmed: z.boolean(),
   note: z.string(),
   used_by: z.number(),
   movable: z.number(),
+  duty: z.literal(true).optional(),
+  sense: z.enum(["within", "before", "at_most", "at_least", "over", "rate", "words"]).optional(),
+  usable: z.boolean().optional(),
+  starts_on: z.string().nullable().optional(),
+  reading: z.number().nullable().optional(),
+  readings: z.array(ruleReadingSchema).optional(),
 });
 export type RuleView = z.infer<typeof ruleViewSchema>;
 
@@ -174,7 +210,13 @@ export const readDates = (view: "upcoming" | "all" | "done" | "rules" = "upcomin
 
 export const rulesPageSchema = ok.extend({
   rules: z.array(ruleViewSchema),
-  counts: z.object({ all: z.number(), confirmed: z.number(), changed: z.number() }),
+  counts: z.object({
+    all: z.number(),
+    confirmed: z.number(),
+    changed: z.number(),
+    /** The rules someone can confirm (a duty rule nobody confirms is left out). */
+    confirmable: z.number(),
+  }),
 });
 export type RulesPage = z.infer<typeof rulesPageSchema>;
 
@@ -185,7 +227,18 @@ export const readRules = () => dataAsk(rulesPageSchema, "GET", "/data/dates/rule
 export const setRuleAmount = (key: string, amount: string | number, by: Staff) =>
   dataAsk(ruleAnswer, "POST", `/data/dates/rules/${id(key)}/amount`, { amount, by });
 
-export type ConfirmInput = { name: string; role: string; on: string; contact_id?: string };
+/**
+ * Who confirmed a rule. A duty rule the sources disagree on is confirmed as one of its
+ * readings (`reading`, its index) or as his own amount (`amount`).
+ */
+export type ConfirmInput = {
+  name: string;
+  role: string;
+  on: string;
+  contact_id?: string;
+  reading?: number;
+  amount?: string;
+};
 
 export const confirmRule = (key: string, input: ConfirmInput, by: Staff) =>
   dataAsk(ruleAnswer, "POST", `/data/dates/rules/${id(key)}/confirm`, { ...input, by });

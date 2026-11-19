@@ -8,6 +8,13 @@
  * Key date (M7); and no target, goal, bar or meter anywhere, the intern seeing only the
  * role line (M8).
  *
+ * With the statements (ws-notes/duties/spec.md §9.12): with none imported the page is as it
+ * was and its button reads "Type cash and burn" (NU-C1, first pass, before the statements
+ * walk imports the walk statement); once it is imported and sorted, "From the statements, on
+ * 3 months", "8.0 months" and "about 1 Jul 2027" (NU-C2, desktop light, before M3 types over
+ * it); "Type over the statements" refuses to go without a reason (NU-C3). M3 types over the
+ * statements with a reason when they give a figure: every check of M3 stays.
+ *
  * Without a real investor list the seed installs the stand-in `investors-raise` (test
  * routes only) with three invented firms at Soft commit, Signed and Set aside; one of
  * their people is `partner285@fund285.example`, whom the investors walk puts on the stop
@@ -18,6 +25,7 @@ import { request } from "node:http";
 
 import type { Page } from "playwright";
 
+import { OVERRIDE_NEEDS_NOTE, TYPE_CASH, TYPE_OVER } from "../../src/lib/data/labels-statements";
 import { WALKER, type Shot, type WalkKit } from "./kit";
 
 export const shots: Shot[] = [
@@ -307,6 +315,57 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
   await noTarget(page, kit, "Numbers");
   await kit.audit("numbers");
 
+  // ---------------------------------------------------------------- NU-C1 to NU-C3: cash from the statements
+  const money = (await kit.socket.ask("GET", "/data/numbers")).body.money as {
+    statements_here?: boolean;
+  };
+  if (kit.pass.first) {
+    const buttons = await page.locator("summary", { hasText: TYPE_CASH }).count();
+    const heads = await page.locator("#table-cash-and-runway thead th").allInnerTexts();
+    kit.check(
+      "numbers NU-C1: with no statement imported the page is as before, its button Type cash and burn",
+      money.statements_here === true || (buttons === 1 && !heads.includes("From")),
+      money.statements_here === true ? "a statement was already here" : heads,
+    );
+  }
+  if (!kit.pass.first && kit.pass.width === "desktop" && kit.pass.theme === "light") {
+    if (money.statements_here === true) {
+      await open(page, kit, "/data/numbers", "#table-cash-and-runway");
+      const table = flat(await page.locator("#table-cash-and-runway").innerText());
+      const text = flat(await kit.text());
+      kit.check(
+        "numbers NU-C2: from the statements, on 3 months, 8.0 months, about 1 Jul 2027",
+        table.includes("From the statements, on 3 months") &&
+          table.includes("8.0 months") &&
+          text.includes("At this rate the cash runs out about 1 Jul 2027."),
+        table.slice(0, 300),
+      );
+      await page.locator("summary", { hasText: TYPE_OVER }).click();
+      const required = await page.locator("#money-note").getAttribute("required");
+      const bare = await kit.socket.ask("POST", "/data/numbers/money", {
+        currency: "INR",
+        cash: "1200000",
+        burn_per_month: "150000",
+        as_of: today,
+        note: "",
+        by: WALKER,
+      });
+      kit.check(
+        "numbers NU-C3: Type over the statements refuses without a reason",
+        required !== null &&
+          bare.status === 400 &&
+          JSON.stringify(bare.body).includes(OVERRIDE_NEEDS_NOTE),
+        bare.body,
+      );
+      await open(page, kit, "/data/numbers", "#table-six-weeks");
+    } else
+      kit.check(
+        "numbers NU-C2: no statement here; the statements walk did not import one",
+        false,
+        money,
+      );
+  }
+
   // ---------------------------------------------------------------- M2: one more yes, and a no that changes nothing
   if (kit.pass.first) {
     const before = numbers.weekly.yeses?.at(-1) ?? 0;
@@ -343,11 +402,17 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
 
   // ---------------------------------------------------------------- M3: cash and burn
   const moneyForm = page.locator("form", { has: page.locator("#money-cash") });
-  await page.locator("summary", { hasText: "Type cash and burn" }).click();
+  /** Once the statements give a figure the button reads "Type over the statements" and wants a reason. */
+  const typeOver = async () => {
+    if ((await moneyForm.locator("#money-note").getAttribute("required")) !== null)
+      await moneyForm.locator("#money-note").fill("Walk: typed over to check the runway.");
+  };
+  await page.locator("summary", { hasText: new RegExp(`${TYPE_CASH}|${TYPE_OVER}`) }).click();
   await moneyForm.locator("#money-currency").selectOption("INR");
   await moneyForm.locator("#money-cash").fill("1200000");
   await moneyForm.locator("#money-burn").fill("150000");
   await moneyForm.locator("#money-on").fill(today);
+  await typeOver();
   await moneyForm.locator("button", { hasText: "Save" }).click();
   let said = await until(page, async () =>
     (await moneyForm.innerText()).includes("Saved. Runway 8.0 months."),
@@ -361,10 +426,11 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
   );
   const [year = 0, mon = 1, date = 1] = today.split("-").map(Number);
   const old = new Date(Date.UTC(year, mon - 1, date - 40)).toISOString().slice(0, 10);
-  await page.locator("summary", { hasText: "Type cash and burn" }).click();
+  await page.locator("summary", { hasText: new RegExp(`${TYPE_CASH}|${TYPE_OVER}`) }).click();
   await moneyForm.locator("#money-cash").fill("1200000");
   await moneyForm.locator("#money-burn").fill("150000");
   await moneyForm.locator("#money-on").fill(old);
+  await typeOver();
   await moneyForm.locator("button", { hasText: "Save" }).click();
   said = await until(page, async () =>
     (await moneyForm.innerText()).includes(

@@ -3,8 +3,9 @@
  * "Checks", never a refusal, so a typo is caught and a real oddity is still saved. Pure.
  */
 
-import { FLAGS, STATES } from "../../../src/lib/data/labels-company";
-import type { Facts } from "./types";
+import { daysBetween } from "../days";
+import { DPIIT_STATUSES, FLAGS, STATES, dayWords } from "../../../src/lib/data/labels-company";
+import type { DutyCheck, Facts } from "./types";
 
 const ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -65,5 +66,62 @@ export function checksOf(facts: Facts): string[] {
     lines.push(
       `There is a DPIIT number, but DPIIT-recognised startup says ${flagWords(facts.flags.startup)}.`,
     );
+  return lines;
+}
+
+/**
+ * The duties batch's check lines (ws-notes/duties/spec.md §6.2): the CERT-In point of
+ * contact, the books of record and DPIIT, each a sentence with who to confirm it with.
+ * Never a refusal. `today` is this Mac's day.
+ */
+export function dutyChecksOf(facts: Facts, today: string): DutyCheck[] {
+  const lines: DutyCheck[] = [];
+  const contact = facts.cert_in;
+  if (!contact.name || !contact.sent_on)
+    lines.push({
+      key: "cert-in-none",
+      words: "No point of contact is recorded as sent to CERT-In. Every company keeps one current.",
+      confirm: "lawyer",
+    });
+  if (contact.sent_on && daysBetween(contact.sent_on, today) > 365)
+    lines.push({
+      key: "cert-in-old",
+      words: `The point of contact was last sent on ${dayWords(contact.sent_on)}. Check it is still current.`,
+      confirm: null,
+    });
+  if (contact.name && (!contact.email || !contact.mobile)) {
+    const missing = [!contact.email ? "email" : "", !contact.mobile ? "mobile" : ""].filter(
+      Boolean,
+    );
+    lines.push({
+      key: "cert-in-incomplete",
+      words: `The point of contact has no ${missing.join(" or ")}.`,
+      confirm: null,
+    });
+  }
+  if (!facts.books.software)
+    lines.push({
+      key: "books-none",
+      words:
+        "Which software keeps the books is not recorded. HQ is not the books: your CA keeps them.",
+      confirm: "CA",
+    });
+  else if (facts.books.provider_disclosed !== "yes")
+    lines.push({
+      key: "books-undisclosed",
+      words: "The books software's provider is not recorded as disclosed to the ROC.",
+      confirm: "CS",
+    });
+  const flag = facts.flags.startup;
+  const status = facts.dpiit.status;
+  if (
+    (flag === "yes" && (status === "not_applied" || status === "applied")) ||
+    (flag === "no" && status === "recognised")
+  )
+    lines.push({
+      key: "dpiit-mismatch",
+      words: `Recognised startup is ${FLAGS[flag]} but the DPIIT status is ${DPIIT_STATUSES[status]}.`,
+      confirm: null,
+    });
   return lines;
 }

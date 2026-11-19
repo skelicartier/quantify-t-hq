@@ -62,11 +62,14 @@ function tileCount(overview: DataOverview): 2 | 3 | 4 {
  * written log for sending, and what was recorded here for the rest. A block whose module
  * is not loaded is absent, never zero.
  */
-export default async function DataPage() {
+type Params = Record<string, string | string[] | undefined>;
+
+export default async function DataPage({ searchParams }: { searchParams: Promise<Params> }) {
   const { allowed, context } = await requireData("/data");
   const now = requestNow();
+  const allDue = (await searchParams).due === "all";
   const read = allowed
-    ? await dataRead(() => readDataOverview({ owner: context.me.role === "owner" }))
+    ? await dataRead(() => readDataOverview({ owner: context.me.role === "owner", allDue }))
     : null;
   const overview = read?.ok ? read.data : null;
   return (
@@ -130,7 +133,12 @@ function Overview({ overview, now }: { overview: DataOverview; now: number }) {
       </StatGrid>
 
       <RecordSection id="data-due" title="Due">
-        <DueList items={overview.due} today={overview.today} />
+        <DueList
+          items={overview.due}
+          today={overview.today}
+          more={overview.due_more}
+          moreHref="/data?due=all#data-due"
+        />
       </RecordSection>
 
       <div className="hqdata-two">

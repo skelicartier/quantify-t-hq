@@ -8975,6 +8975,12 @@
     padding-top: 1px;
   }
 
+  /* Data's block on Home leads each row with a due chip ("Overdue · 14 Nov"), wider than a
+     label: its column fits the chip, and on a phone the chip sits above the title. */
+  .hqdata-home .agenda--labelled .agenda__row {
+    grid-template-columns: 136px minmax(0, 1fr);
+  }
+
   .agenda__title:hover {
     color: var(--accent);
   }
@@ -9034,6 +9040,11 @@
       white-space: normal;
       overflow: visible;
       text-overflow: clip;
+    }
+
+    .hqdata-home .agenda--labelled .agenda__row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 4px;
     }
 
     .briefing__block--keys {

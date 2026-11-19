@@ -4,6 +4,12 @@ import { z } from "zod";
 
 import { staffSchema } from "@/lib/data/api/replies";
 import { evidenceSchema } from "@/lib/data/api/dates";
+import {
+  confirmWithSchema,
+  fileChoiceSchema,
+  fileLinkSchema,
+  ruleLineSchema,
+} from "@/lib/data/api/registers";
 import type { Staff } from "@/lib/data/gate";
 import { dataAsk, id, ok } from "@/lib/data/socket";
 
@@ -35,7 +41,35 @@ export const factsSchema = z.object({
   }),
   bank: z.object({ name: z.string(), branch: z.string(), contact_id: z.string().nullable() }),
   firms: z.object({ registered_on: z.string().nullable(), user_note: z.string() }),
-  dpiit: z.object({ number: z.string(), recognised_on: z.string().nullable() }),
+  dpiit: z.object({
+    number: z.string(),
+    recognised_on: z.string().nullable(),
+    status: z.enum(["", "not_applied", "applied", "recognised"]),
+    applied_on: z.string().nullable(),
+    valid_until: z.string().nullable(),
+    certificate_file_id: z.string().nullable(),
+  }),
+  cert_in: z.object({
+    name: z.string(),
+    designation: z.string(),
+    email: z.string(),
+    mobile: z.string(),
+    office_phone: z.string(),
+    address: z.string(),
+    sent_on: z.string().nullable(),
+    sent_file_id: z.string().nullable(),
+  }),
+  books: z.object({
+    software: z.string(),
+    kept_by: z.string(),
+    contact_id: z.string().nullable(),
+    access: z.enum(["", "owner", "accountant", "view", "none"]),
+    started_on: z.string().nullable(),
+    provider_disclosed: flagSchema,
+    disclosed_note: z.string(),
+    free_revenue_limit: z.number().nullable(),
+    free_invoice_limit: z.number().nullable(),
+  }),
   flags: z.object({
     small: flagSchema,
     startup: flagSchema,
@@ -123,6 +157,21 @@ export const keyDateLinkSchema = z.object({
 });
 export type KeyDateLink = z.infer<typeof keyDateLinkSchema>;
 
+/** A check line of the duties batch: a sentence, and who to confirm it with. */
+export const dutyCheckSchema = z.object({
+  key: z.enum([
+    "cert-in-none",
+    "cert-in-old",
+    "cert-in-incomplete",
+    "books-none",
+    "books-undisclosed",
+    "dpiit-mismatch",
+  ]),
+  words: z.string(),
+  confirm: confirmWithSchema.nullable(),
+});
+export type DutyCheck = z.infer<typeof dutyCheckSchema>;
+
 export const companyPageSchema = ok.extend({
   facts: factsSchema,
   empty: z.boolean(),
@@ -133,6 +182,12 @@ export const companyPageSchema = ok.extend({
   directors_in_office: z.number(),
   last_agm: z.object({ on: z.string(), from: z.enum(["meetings", "typed"]) }).nullable(),
   contacts_here: z.boolean(),
+  duty_checks: z.array(dutyCheckSchema),
+  rules: z.object({ cert_in_contact: ruleLineSchema.nullable() }),
+  cert_in_file: fileLinkSchema.nullable(),
+  dpiit_file: fileLinkSchema.nullable(),
+  files: z.array(fileChoiceSchema),
+  files_here: z.boolean(),
   today: z.string(),
 });
 export type CompanyPage = z.infer<typeof companyPageSchema>;
@@ -158,11 +213,16 @@ const directorAnswer = ok.extend({ director: directorRowSchema });
 
 export const readCompany = () => dataAsk(companyPageSchema, "GET", "/data/company");
 
-export type FactsGroup = "identity" | "dates" | "class" | "registrations";
+export type FactsGroup = "identity" | "dates" | "class" | "registrations" | "cert_in" | "books";
 
+/** One group's fields as the form typed them; a copy as `file_id`, or `content` and `name`. */
 export const saveFacts = (group: FactsGroup, input: Record<string, string>, by: Staff) =>
   dataAsk(
-    ok.extend({ facts: factsSchema, checks: z.array(z.string()) }),
+    ok.extend({
+      facts: factsSchema,
+      checks: z.array(z.string()),
+      duty_checks: z.array(dutyCheckSchema),
+    }),
     "POST",
     "/data/company/facts",
     { ...input, group, by },

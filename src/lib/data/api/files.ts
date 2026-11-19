@@ -324,7 +324,7 @@ export const deleteForever = (fileId: string, by: Staff) =>
 
 export const emptyTrash = (confirm: string, by: Staff) =>
   dataAsk(
-    ok.extend({ deleted: z.number(), bytes_freed: z.number() }),
+    ok.extend({ deleted: z.number(), kept: z.number().optional(), bytes_freed: z.number() }),
     "POST",
     "/data/trash/empty",
     {

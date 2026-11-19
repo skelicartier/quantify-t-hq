@@ -418,6 +418,46 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
+**As of the duties batch: Registers, the rule book's duty rules, holidays, stipend tax, a cash
+view, Money records, statements, the monthly close and the MIS** (2026-11-19). Portal and the local
+sender; no service change, no migration. Spec: `ws-notes/duties/spec.md` in `~/Library/Caches/hq-work`;
+waves A–B of the second research report (`~/Documents/evm/reports/HQ complete company platform.md`).
+
+- **What it adds.** Eight Data modules (now 31): `holidays`, `incidents`, `marks`, `domains`, `money`,
+  `statements`, `close`, `cash`. Data › Registers: incidents with the CERT-In six-hour clock (the 20
+  kinds are Annexure I of the 28 April 2022 directions, checked against the PDF), trademarks with
+  their deadlines, domains and certificates with expiry checks, holidays by year and state. Key dates
+  › Rules gains 45 duty rules (TDS, MSME payment days, export realisation, PF/ESI, GST, trademark and certificate clocks; the
+  `tds-deposit` rule is the existing calendar row, not a second copy); a rule whose sources disagree
+  shows both readings and works nothing out until he or his CA confirms one. Money: bills with TDS
+  hints and MSME pay-by days, vendors, the ledger map, export invoices with FIRA and realise-by
+  days, a tamper-evident edit log, and an eight-year hold on finance files (Files' trash keeps held
+  files and says how many it kept). Statements (CSV/TSV/OFX import, matching lines to bills), Month
+  close with the CA's pack and a lock that every unit honours, the MIS in eight parts, and cash,
+  burn and runway computed from statements in Numbers; a cash view with three scenarios.
+- **Owner only.** Bank statements and their lines, stipends and the people ledger's tax fields
+  (PAN, challans), and the MIS's people figures: never in an Admin's pages, packs, search, calendar
+  or backup, proven per path in tests.
+- **Due no longer cuts silently.** Every row due today or earlier is always on Data's Due list; later
+  rows fill it to 30 and the rest are counted, with "Show every row" (`/data?due=all`). Home's Data
+  chip no longer covers long titles on a phone.
+- **On his real data at ship:** Rules reads "0 of 80 rules confirmed" (nothing had been confirmed or
+  changed before; `data/dates/` was empty); Registers, Money and Statements are empty; Numbers is
+  unchanged until a statement is imported. Sender: nothing sending, 292 sent today, stop list 144
+  before and after.
+- **Verified on a copy** (`hq-du`, next 3140, mocks 7110/7111): vitest 180 files / 1,581 tests
+  (1,583 in the live clone with the unsubscribe tests); `check:data` 1,898 / 0; harness data 308,
+  find 44; `check:mail-merge` 105 / 0. One real bug fixed in the merge (withdrawing a statement in a
+  locked month now says the month is locked). Rollback:
+  `~/Library/Caches/hq-work/ship-backup-20261119-duties/`.
+- **Only he or a professional can settle:** stipend classification; TDS and forms for each foreign
+  vendor; the export purpose code, the realisation period (9 or 15 months) and how EDFs are filed;
+  which state's holidays apply; which marks and classes to file; who the CERT-In point of contact is.
+  Also open: the ₹30,000 and ₹9,000 TDS readings carry no source link; whether the worker may open
+  port 443 for the expiry checks (else he types each expiry); his bank's real export format (the
+  first import teaches the columns; save `.xls` as CSV); and the About popover runs off the side at
+  412px on pages that have one (a shared component, older than this batch).
+
 **Added 2026-11-19: an unsubscribe link under every Mail merge message.** The founder asked for a
 visible link. A message's words may now carry a link that writes an email,
 `[Unsubscribe](mailto:you@firm.example?subject=unsubscribe)` (`scripts/mail-merge/template.ts`:

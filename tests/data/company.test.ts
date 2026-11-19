@@ -18,13 +18,16 @@ import { WALKER, codeOf, startStack, type Stack } from "./helpers";
 type Body = Record<string, unknown>;
 const today = () => localDay(new Date());
 
-type FactsChange = Partial<Omit<Facts, "flags">> & { flags?: Partial<Facts["flags"]> };
+type FactsChange = Partial<Omit<Facts, "flags" | "dpiit">> & {
+  flags?: Partial<Facts["flags"]>;
+  dpiit?: Partial<Facts["dpiit"]>;
+};
 
 const facts = (change: FactsChange = {}): Facts => ({
   ...structuredClone(EMPTY_FACTS),
   ...change,
   flags: { ...EMPTY_FACTS.flags, ...(change.flags ?? {}) },
-  dpiit: change.dpiit ?? { number: "", recognised_on: null },
+  dpiit: { ...EMPTY_FACTS.dpiit, ...(change.dpiit ?? {}) },
 });
 
 describe("the checks, pure", () => {

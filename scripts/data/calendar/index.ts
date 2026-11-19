@@ -42,6 +42,12 @@ const KINDS: ReadonlySet<AgendaKind> = new Set([
   "agreement",
   "pilot",
   "diligence",
+  "mark",
+  "domain",
+  "bill",
+  "export",
+  "close",
+  "holiday",
 ]);
 
 export type Detail = "full" | "plain";

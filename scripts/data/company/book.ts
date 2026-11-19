@@ -14,11 +14,13 @@ import type { Flag } from "../company-contracts";
 import type { DataCore } from "../core";
 import { addDays } from "../days";
 import { clean, cleanText, isDay, normaliseEmail } from "../guard";
+import type { FilesService } from "../leads/contracts";
 import type { Staff } from "../protocol";
 import {
   CONTACT_FIELDS,
   DESIGNATIONS,
   DIRECTOR_WORDS,
+  DUTY_FACT_WORDS,
   FACT_WORDS,
   STATES,
   dayWords,
@@ -58,8 +60,38 @@ export const GROUP_FIELDS: Record<FactsGroup, readonly string[]> = {
     "firms_user_note",
     "dpiit_number",
     "dpiit_recognised_on",
+    "dpiit_status",
+    "dpiit_applied_on",
+    "dpiit_valid_until",
+    "dpiit_certificate_file_id",
+  ],
+  cert_in: [
+    "cert_in_name",
+    "cert_in_designation",
+    "cert_in_email",
+    "cert_in_mobile",
+    "cert_in_office_phone",
+    "cert_in_address",
+    "cert_in_sent_on",
+    "cert_in_sent_file_id",
+  ],
+  books: [
+    "books_software",
+    "books_kept_by",
+    "books_contact_id",
+    "books_access",
+    "books_started_on",
+    "books_provider_disclosed",
+    "books_disclosed_note",
+    "books_free_revenue_limit",
+    "books_free_invoice_limit",
   ],
 };
+
+const ACCESS = new Set<string>(["", "owner", "accountant", "view", "none"]);
+const DPIIT = new Set<string>(["", "not_applied", "applied", "recognised"]);
+const limitOrNull = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
 
 const isGroup = (value: unknown): value is FactsGroup =>
   typeof value === "string" && Object.prototype.hasOwnProperty.call(GROUP_FIELDS, value);
@@ -87,7 +119,11 @@ export function factsOf(raw: unknown): Facts {
   const bank = part("bank");
   const firms = part("firms");
   const dpiit = part("dpiit");
+  const certIn = part("cert_in");
+  const books = part("books");
   const flags = part("flags");
+  const access = textOf(books.access);
+  const status = textOf(dpiit.status);
   const by = auditor.appointed_by;
   return {
     ...EMPTY_FACTS,
@@ -113,7 +149,35 @@ export function factsOf(raw: unknown): Facts {
       contact_id: textOf(bank.contact_id) || null,
     },
     firms: { registered_on: dayOrNull(firms.registered_on), user_note: textOf(firms.user_note) },
-    dpiit: { number: textOf(dpiit.number), recognised_on: dayOrNull(dpiit.recognised_on) },
+    dpiit: {
+      number: textOf(dpiit.number),
+      recognised_on: dayOrNull(dpiit.recognised_on),
+      status: DPIIT.has(status) ? (status as Facts["dpiit"]["status"]) : "",
+      applied_on: dayOrNull(dpiit.applied_on),
+      valid_until: dayOrNull(dpiit.valid_until),
+      certificate_file_id: textOf(dpiit.certificate_file_id) || null,
+    },
+    cert_in: {
+      name: textOf(certIn.name),
+      designation: textOf(certIn.designation),
+      email: textOf(certIn.email),
+      mobile: textOf(certIn.mobile),
+      office_phone: textOf(certIn.office_phone),
+      address: textOf(certIn.address),
+      sent_on: dayOrNull(certIn.sent_on),
+      sent_file_id: textOf(certIn.sent_file_id) || null,
+    },
+    books: {
+      software: textOf(books.software),
+      kept_by: textOf(books.kept_by),
+      contact_id: textOf(books.contact_id) || null,
+      access: ACCESS.has(access) ? (access as Facts["books"]["access"]) : "",
+      started_on: dayOrNull(books.started_on),
+      provider_disclosed: flagOf(books.provider_disclosed),
+      disclosed_note: textOf(books.disclosed_note),
+      free_revenue_limit: limitOrNull(books.free_revenue_limit),
+      free_invoice_limit: limitOrNull(books.free_invoice_limit),
+    },
     flags: {
       small: flagOf(flags.small),
       startup: flagOf(flags.startup),
@@ -162,6 +226,29 @@ export function flatFacts(facts: Facts): Record<string, string> {
     firms_user_note: facts.firms.user_note,
     dpiit_number: facts.dpiit.number,
     dpiit_recognised_on: facts.dpiit.recognised_on ?? "",
+    dpiit_status: facts.dpiit.status,
+    dpiit_applied_on: facts.dpiit.applied_on ?? "",
+    dpiit_valid_until: facts.dpiit.valid_until ?? "",
+    dpiit_certificate_file_id: facts.dpiit.certificate_file_id ?? "",
+    cert_in_name: facts.cert_in.name,
+    cert_in_designation: facts.cert_in.designation,
+    cert_in_email: facts.cert_in.email,
+    cert_in_mobile: facts.cert_in.mobile,
+    cert_in_office_phone: facts.cert_in.office_phone,
+    cert_in_address: facts.cert_in.address,
+    cert_in_sent_on: facts.cert_in.sent_on ?? "",
+    cert_in_sent_file_id: facts.cert_in.sent_file_id ?? "",
+    books_software: facts.books.software,
+    books_kept_by: facts.books.kept_by,
+    books_contact_id: facts.books.contact_id ?? "",
+    books_access: facts.books.access,
+    books_started_on: facts.books.started_on ?? "",
+    books_provider_disclosed: facts.books.provider_disclosed,
+    books_disclosed_note: facts.books.disclosed_note,
+    books_free_revenue_limit:
+      facts.books.free_revenue_limit === null ? "" : String(facts.books.free_revenue_limit),
+    books_free_invoice_limit:
+      facts.books.free_invoice_limit === null ? "" : String(facts.books.free_invoice_limit),
   };
 }
 
@@ -322,8 +409,59 @@ export class CompanyBook {
 
   // ---------------------------------------------------------------- the facts
 
+  #fileId(value: unknown): string | null {
+    const id = clean(value, 64);
+    if (!id) return null;
+    const files = this.#core.need<FilesService>("files");
+    if (!files) throw new Refused(409, "files_missing", SAY.filesMissing);
+    const row = files.fileRow(id);
+    if (!row || row.trashed_at) throw new Refused(404, "not_found", SAY.notInFiles);
+    return id;
+  }
+
+  #planLimit(value: unknown): number | null {
+    const text = clean(value, 20).replace(/[,\s]/g, "");
+    if (!text) return null;
+    const number = /^\d+$/.test(text) ? Number(text) : NaN;
+    if (!Number.isSafeInteger(number) || number < 1 || number > LIMIT.plan_limit_max)
+      throw new Refused(400, "invalid", SAY.planLimit);
+    return number;
+  }
+
+  #phone(value: unknown): string {
+    const text = clean(value, 40);
+    if (text && !SHAPE.mobile.test(text)) throw new Refused(400, "invalid", SAY.phone);
+    return text;
+  }
+
+  /** Checks one group without saving it: the duties batch checks before keeping a copy. */
+  checkFacts(group: unknown, input: Record<string, unknown>): Facts {
+    return this.#nextFacts(group, input);
+  }
+
   /** One group of facts, checked; the other groups stay as they are. */
   saveFacts(group: unknown, input: Record<string, unknown>, by: Staff): Facts {
+    const next = this.#nextFacts(group, input);
+    const before = flatFacts(this.facts);
+    const after = flatFacts(next);
+    const changed = Object.keys(after).filter((key) => after[key] !== before[key]);
+    next.updated_at = this.#core.now();
+    next.updated_by = by;
+    this.facts = next;
+    this.#saveFacts();
+    this.log({
+      target: "facts",
+      id: "facts",
+      verb: "changed",
+      detail: changed.length
+        ? changed.map((key) => FACT_WORDS[key] ?? DUTY_FACT_WORDS[key] ?? key).join(", ")
+        : "Nothing",
+      by,
+    });
+    return this.facts;
+  }
+
+  #nextFacts(group: unknown, input: Record<string, unknown>): Facts {
     if (!isGroup(group)) throw new Refused(400, "invalid", SAY.group);
     const has = (name: string) => Object.prototype.hasOwnProperty.call(input, name);
     const next: Facts = structuredClone(this.facts);
@@ -361,7 +499,7 @@ export class CompanyBook {
         if (!FLAG_VALUES.has(value)) throw new Refused(400, "invalid", SAY.flag);
         next.flags[key as keyof Facts["flags"]] = value as Flag;
       }
-    } else {
+    } else if (group === "registrations") {
       if (has("auditor_name"))
         next.auditor.name = cleanText(input.auditor_name, LIMIT.auditor_name);
       if (has("auditor_firm_number"))
@@ -387,22 +525,59 @@ export class CompanyBook {
         next.dpiit.number = cleanText(input.dpiit_number, LIMIT.dpiit_number).toUpperCase();
       if (has("dpiit_recognised_on"))
         next.dpiit.recognised_on = this.#pastDay(input.dpiit_recognised_on);
+      if (has("dpiit_status")) {
+        const status = clean(input.dpiit_status, 20);
+        if (!DPIIT.has(status)) throw new Refused(400, "invalid", SAY.dpiitStatus);
+        next.dpiit.status = status as Facts["dpiit"]["status"];
+      }
+      if (has("dpiit_applied_on")) next.dpiit.applied_on = this.#pastDay(input.dpiit_applied_on);
+      if (has("dpiit_valid_until")) next.dpiit.valid_until = this.#anyDay(input.dpiit_valid_until);
+      if (has("dpiit_certificate_file_id"))
+        next.dpiit.certificate_file_id = this.#fileId(input.dpiit_certificate_file_id);
+      if (
+        next.dpiit.valid_until &&
+        next.dpiit.recognised_on &&
+        next.dpiit.valid_until < next.dpiit.recognised_on
+      )
+        throw new Refused(400, "invalid", SAY.validBefore);
+    } else if (group === "cert_in") {
+      const contact = next.cert_in;
+      if (has("cert_in_name")) contact.name = cleanText(input.cert_in_name, LIMIT.cert_in_name);
+      if (has("cert_in_designation"))
+        contact.designation = cleanText(input.cert_in_designation, LIMIT.cert_in_name);
+      if (has("cert_in_email")) contact.email = this.#email(input.cert_in_email);
+      if (has("cert_in_mobile")) contact.mobile = this.#mobile(input.cert_in_mobile);
+      if (has("cert_in_office_phone"))
+        contact.office_phone = this.#phone(input.cert_in_office_phone);
+      if (has("cert_in_address"))
+        contact.address = cleanText(input.cert_in_address, LIMIT.cert_in_address);
+      if (has("cert_in_sent_on")) contact.sent_on = this.#pastDay(input.cert_in_sent_on);
+      if (has("cert_in_sent_file_id"))
+        contact.sent_file_id = this.#fileId(input.cert_in_sent_file_id);
+    } else if (group === "books") {
+      const books = next.books;
+      if (has("books_software")) books.software = cleanText(input.books_software, LIMIT.books_text);
+      if (has("books_kept_by")) books.kept_by = cleanText(input.books_kept_by, LIMIT.books_text);
+      if (has("books_contact_id")) books.contact_id = this.#contact(input.books_contact_id);
+      if (has("books_access")) {
+        const access = clean(input.books_access, 20);
+        if (!ACCESS.has(access)) throw new Refused(400, "invalid", SAY.access);
+        books.access = access as Facts["books"]["access"];
+      }
+      if (has("books_started_on")) books.started_on = this.#pastDay(input.books_started_on);
+      if (has("books_provider_disclosed")) {
+        const value = clean(input.books_provider_disclosed, 4);
+        if (!FLAG_VALUES.has(value)) throw new Refused(400, "invalid", SAY.flag);
+        books.provider_disclosed = value as Flag;
+      }
+      if (has("books_disclosed_note"))
+        books.disclosed_note = this.#note(input.books_disclosed_note, LIMIT.disclosed_note);
+      if (has("books_free_revenue_limit"))
+        books.free_revenue_limit = this.#planLimit(input.books_free_revenue_limit);
+      if (has("books_free_invoice_limit"))
+        books.free_invoice_limit = this.#planLimit(input.books_free_invoice_limit);
     }
-    const before = flatFacts(this.facts);
-    const after = flatFacts(next);
-    const changed = Object.keys(after).filter((key) => after[key] !== before[key]);
-    next.updated_at = this.#core.now();
-    next.updated_by = by;
-    this.facts = next;
-    this.#saveFacts();
-    this.log({
-      target: "facts",
-      id: "facts",
-      verb: "changed",
-      detail: changed.length ? changed.map((key) => FACT_WORDS[key] ?? key).join(", ") : "Nothing",
-      by,
-    });
-    return this.facts;
+    return next;
   }
 
   // ---------------------------------------------------------------- directors

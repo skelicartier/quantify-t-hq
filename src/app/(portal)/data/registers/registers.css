@@ -1,0 +1,195 @@
+/* Registers: the Summary, Incidents and one incident, Trademarks and one mark, Domains and
+   certificates (ws-notes/duties/spec.md §6.3–§6.5). One column that never grows past the
+   page; dense tables; forms in popovers. Tokens only; radius 0; no side stripe on anything;
+   phone rules at 720px. Prefixed hqdata-. Printed, each page is its data without the
+   controls, each source's address after its link, and a clock's words as of the print. */
+@layer pages {
+  .hqdata-registers,
+  .hqdata-incidents,
+  .hqdata-incident,
+  .hqdata-marks,
+  .hqdata-mark,
+  .hqdata-domains {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    min-width: 0;
+  }
+
+  .hqdata-registers > *,
+  .hqdata-incidents > *,
+  .hqdata-incident > *,
+  .hqdata-marks > *,
+  .hqdata-mark > *,
+  .hqdata-domains > *,
+  .hqdata-incidents section,
+  .hqdata-marks section,
+  .hqdata-domains section {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hqdata-registers__heading {
+    margin: 0;
+    font-size: var(--fs-section, 1rem);
+    font-weight: 600;
+  }
+
+  .hqdata-registers__subheading {
+    margin: 0;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  /* "If something is wrong now": a bordered block, never a side stripe. */
+  .hqdata-registers__now {
+    padding: 12px 14px;
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+  }
+
+  .hqdata-registers__now p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-registers__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    min-width: 0;
+  }
+
+  .hqdata-registers__tools > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hqdata-registers__links,
+  .hqdata-registers__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .hqdata-registers__inline {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+  }
+
+  .hqdata-registers__block {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .hqdata-registers__block:last-child {
+    border-bottom: 0;
+  }
+
+  .hqdata-registers__block p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-registers__list {
+    margin: 0;
+    padding-left: 1.2em;
+  }
+
+  .hqdata-registers__prose {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-registers__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-registers__late,
+  .hqdata-registers__check {
+    color: var(--attention);
+  }
+
+  .hqdata-registers__check {
+    display: block;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-registers__gone {
+    color: var(--muted);
+  }
+
+  .hqdata-registers td .table-sub,
+  .hqdata-incidents td .table-sub,
+  .hqdata-incident td .table-sub,
+  .hqdata-marks td .table-sub,
+  .hqdata-mark td .table-sub,
+  .hqdata-domains td .table-sub {
+    display: block;
+  }
+
+  .hqdata-incident-clock__as-of {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  /* A copy chosen from Files or attached. */
+  .hqdata-copy {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-copy legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-registers__pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* A record's clocks come first on a phone. */
+    .hqdata-incident [data-section="incident-clocks"] {
+      order: -1;
+    }
+  }
+}
+
+@media print {
+  .hqdata-registers .popover,
+  .hqdata-incidents .popover,
+  .hqdata-incident .popover,
+  .hqdata-marks .popover,
+  .hqdata-mark .popover,
+  .hqdata-domains .popover,
+  .hqdata-registers form,
+  .hqdata-incidents form,
+  .hqdata-incident form,
+  .hqdata-marks form,
+  .hqdata-mark form,
+  .hqdata-domains form,
+  .hqdata-registers__acts,
+  .hqdata-registers__links,
+  .hqdata-registers__inline {
+    display: none !important;
+  }
+}

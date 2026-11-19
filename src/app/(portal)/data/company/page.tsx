@@ -3,12 +3,15 @@ import Link from "next/link";
 import { CompanyTabs } from "@/components/data/company/company-tabs";
 import { DatesFields } from "@/components/data/company/dates-fields";
 import {
+  BooksFields,
+  CertInFields,
   ClassFields,
   IdentityFields,
   RegistrationsFields,
   type ContactOption,
 } from "@/components/data/company/fact-fields";
 import { DataUnavailable } from "@/components/data/data-down";
+import { RuleLineNote } from "@/components/data/duties/rule-line";
 import { MailForm } from "@/components/mail/mail-form";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
@@ -22,9 +25,20 @@ import { DATA_ROLE_LINE, requireData } from "@/lib/data/access";
 import { readCompany, type CompanyFacts, type CompanyPage } from "@/lib/data/api/company";
 import { readContacts } from "@/lib/data/api/contacts";
 import { CONTACT_ROLES, labelOf } from "@/lib/data/labels";
-import { FLAGS, FLAG_FACTS, FLAG_ORDER, NOT_ADVICE, STATES } from "@/lib/data/labels-company";
+import {
+  BOOKS_ABOUT,
+  BOOKS_ACCESS,
+  CERT_IN_EMPTY,
+  DPIIT_STATUSES,
+  FLAGS,
+  FLAG_FACTS,
+  FLAG_ORDER,
+  NOT_ADVICE,
+  STATES,
+  rupees,
+} from "@/lib/data/labels-company";
 import { dataRead } from "@/lib/data/read";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatNumber } from "@/lib/format";
 import { requestNow } from "@/lib/request-time";
 
 import { saveFactsAction } from "./actions";
@@ -96,6 +110,84 @@ export default async function CompanyFactsPage() {
         )}
       </div>
     </>
+  );
+}
+
+const CONFIRM_WHO = {
+  CA: "CA",
+  CS: "CS",
+  lawyer: "lawyer",
+  agent: "trademark agent",
+  bank: "bank",
+} as const;
+
+/** The CERT-In point of contact (ws-notes/duties/spec.md §6.2), with its rule line. */
+function CertInSection({ page }: { page: CompanyPage }) {
+  const contact = page.facts.cert_in;
+  const form = (
+    <MailForm action={saveFactsAction} submitLabel="Save" pendingLabel="Saving…">
+      <CertInFields
+        facts={page.facts}
+        today={page.today}
+        files={page.files}
+        filesHere={page.files_here}
+      />
+    </MailForm>
+  );
+  return (
+    <RecordSection
+      id="company-cert-in"
+      title="CERT-In point of contact"
+      actions={
+        contact.name ? (
+          <Popover label="Edit" align="end" width="wide">
+            {form}
+          </Popover>
+        ) : undefined
+      }
+    >
+      {contact.name ? (
+        <KeyValue columns={2}>
+          <KeyValueRow label="Name">{contact.name}</KeyValueRow>
+          <KeyValueRow label="Designation">{known(contact.designation)}</KeyValueRow>
+          <KeyValueRow label="Email">{known(contact.email)}</KeyValueRow>
+          <KeyValueRow label="Mobile">{known(contact.mobile)}</KeyValueRow>
+          <KeyValueRow label="Office phone">{known(contact.office_phone)}</KeyValueRow>
+          <KeyValueRow label="Office address">
+            {contact.address || "The registered office"}
+          </KeyValueRow>
+          <KeyValueRow label="Sent to CERT-In on">
+            {contact.sent_on ? formatDate(contact.sent_on) : "Not sent"}
+          </KeyValueRow>
+          <KeyValueRow label="The message as sent">
+            {page.cert_in_file ? (
+              <Link className="text-link" href={`/data/files/${page.cert_in_file.file_id}`}>
+                {page.cert_in_file.title}
+              </Link>
+            ) : (
+              <span className="quiet">None kept</span>
+            )}
+          </KeyValueRow>
+        </KeyValue>
+      ) : (
+        <EmptyState
+          compact
+          title="No point of contact"
+          description={CERT_IN_EMPTY}
+          action={
+            <Popover label="Record the point of contact" align="start" width="wide">
+              {form}
+            </Popover>
+          }
+        />
+      )}
+      <p className="page-note hqdata-company__rule">
+        <RuleLineNote line={page.rules.cert_in_contact} />{" "}
+        <Link className="text-link" href="/data/registers/incidents">
+          Log an incident
+        </Link>
+      </p>
+    </RecordSection>
   );
 }
 
@@ -238,7 +330,13 @@ function Facts({
         actions={
           <Popover label="Edit" align="end" width="wide">
             <MailForm action={saveFactsAction} submitLabel="Save" pendingLabel="Saving…">
-              <RegistrationsFields facts={facts} today={page.today} contacts={contacts} />
+              <RegistrationsFields
+                facts={facts}
+                today={page.today}
+                contacts={contacts}
+                files={page.files}
+                filesHere={page.files_here}
+              />
             </MailForm>
           </Popover>
         }
@@ -287,17 +385,83 @@ function Facts({
               known("")
             )}
           </KeyValueRow>
+          <KeyValueRow label="DPIIT recognition">
+            {DPIIT_STATUSES[facts.dpiit.status]}
+            {facts.dpiit.applied_on && (
+              <span className="table-sub">Applied on {formatDate(facts.dpiit.applied_on)}</span>
+            )}
+            {facts.dpiit.valid_until && (
+              <span className="table-sub">Valid until {formatDate(facts.dpiit.valid_until)}</span>
+            )}
+            <span className="table-sub">
+              {page.dpiit_file ? (
+                <Link className="text-link" href={`/data/files/${page.dpiit_file.file_id}`}>
+                  {page.dpiit_file.title}
+                </Link>
+              ) : (
+                "No certificate kept"
+              )}
+            </span>
+          </KeyValueRow>
+        </KeyValue>
+      </RecordSection>
+
+      <CertInSection page={page} />
+
+      <RecordSection
+        id="company-books"
+        title="Books of record"
+        actions={
+          <Popover label="Edit" align="end" width="wide">
+            <MailForm action={saveFactsAction} submitLabel="Save" pendingLabel="Saving…">
+              <BooksFields facts={facts} today={page.today} contacts={contacts} />
+            </MailForm>
+          </Popover>
+        }
+      >
+        <p className="page-note">{BOOKS_ABOUT}</p>
+        <KeyValue columns={2}>
+          <KeyValueRow label="Books software">{known(facts.books.software)}</KeyValueRow>
+          <KeyValueRow label="Kept by">{known(facts.books.kept_by)}</KeyValueRow>
+          <KeyValueRow label="The CA's access">{BOOKS_ACCESS[facts.books.access]}</KeyValueRow>
+          <KeyValueRow label="Books start on">
+            {facts.books.started_on ? formatDate(facts.books.started_on) : known("")}
+          </KeyValueRow>
+          <KeyValueRow label="Provider disclosed to the ROC">
+            {FLAGS[facts.books.provider_disclosed]}
+          </KeyValueRow>
+          <KeyValueRow label="Where it is disclosed">
+            {known(facts.books.disclosed_note)}
+          </KeyValueRow>
+          <KeyValueRow label="Free plan: revenue up to">
+            {facts.books.free_revenue_limit === null
+              ? "None typed"
+              : rupees(facts.books.free_revenue_limit)}
+          </KeyValueRow>
+          <KeyValueRow label="Free plan: invoices a year">
+            {facts.books.free_invoice_limit === null
+              ? "None typed"
+              : formatNumber(facts.books.free_invoice_limit)}
+          </KeyValueRow>
         </KeyValue>
       </RecordSection>
 
       <RecordSection id="company-checks" title="Checks">
-        {page.checks.length === 0 ? (
+        {page.checks.length === 0 && page.duty_checks.length === 0 ? (
           <p className="page-note">Nothing to check.</p>
         ) : (
           <div className="hqdata-company__checks">
             {page.checks.map((line) => (
               <Callout key={line} tone="attention" compact>
                 {line}
+              </Callout>
+            ))}
+            {page.duty_checks.map((line) => (
+              <Callout key={line.key} tone="attention" compact>
+                <span data-check={line.key}>
+                  {line.words}
+                  {line.confirm ? ` Confirm with your ${CONFIRM_WHO[line.confirm]}.` : ""}
+                </span>
               </Callout>
             ))}
           </div>

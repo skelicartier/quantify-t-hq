@@ -64,7 +64,9 @@ type OwedRow = {
     | "Investor"
     | "Action"
     | "Pilot"
-    | "People";
+    | "People"
+    | "Incident"
+    | "Bill";
   href: string;
   title: string;
   sub: string;

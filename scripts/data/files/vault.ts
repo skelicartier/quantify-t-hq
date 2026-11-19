@@ -795,7 +795,14 @@ export class Vault {
     return [...this.#files.values()].filter((file) => file.trashed);
   }
 
-  emptyTrash(confirm: unknown): { deleted: number; bytes_freed: number } {
+  /**
+   * Delete forever everything in the trash that `keep` does not hold back. The count to type is
+   * the whole trash, as the page shows it; a kept file simply stays in the trash.
+   */
+  emptyTrash(
+    confirm: unknown,
+    keep: (fileId: string) => boolean = () => false,
+  ): { deleted: number; kept: number; bytes_freed: number } {
     const inTrash = this.trashed();
     const typed = Number(String(confirm ?? "").replace(/[\s,]/g, ""));
     if (!Number.isSafeInteger(typed) || typed !== inTrash.length)
@@ -805,8 +812,17 @@ export class Vault {
         `Type ${inTrash.length.toLocaleString("en-GB")} to delete ${inTrash.length.toLocaleString("en-GB")} ${inTrash.length === 1 ? "file" : "files"} forever.`,
       );
     let freed = 0;
-    for (const file of inTrash) freed += this.deleteForever(file.file_id).bytes_freed;
-    return { deleted: inTrash.length, bytes_freed: freed };
+    let deleted = 0;
+    let kept = 0;
+    for (const file of inTrash) {
+      if (keep(file.file_id)) {
+        kept += 1;
+        continue;
+      }
+      freed += this.deleteForever(file.file_id).bytes_freed;
+      deleted += 1;
+    }
+    return { deleted, kept, bytes_freed: freed };
   }
 
   bulk(

@@ -1,0 +1,188 @@
+/* Money: bills, one bill, vendors, one vendor, the ledger map, export invoices and one export
+   invoice. Tokens only; radius 0; no side stripe on anything; phone rules at 720px. Prefixed
+   hqdata-money. Printed, each page is its data without the controls, sources' addresses after
+   their links. */
+@layer pages {
+  .hqdata-money {
+    display: grid;
+    gap: 20px;
+    min-width: 0;
+  }
+
+  .hqdata-money > *,
+  .hqdata-money section {
+    min-width: 0;
+  }
+
+  .hqdata-money__block {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hqdata-money__heading {
+    margin: 0;
+    font-size: var(--fs-section, 1rem);
+    font-weight: 600;
+  }
+
+  .hqdata-money__line {
+    margin: 0;
+    font-size: var(--fs-body);
+  }
+
+  .hqdata-money__line + .hqdata-money__line {
+    margin-top: -4px;
+  }
+
+  .hqdata-money__figure {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .hqdata-money__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .hqdata-money__tools > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hqdata-money__filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px 12px;
+  }
+
+  .hqdata-money__filters .field {
+    min-width: 10rem;
+  }
+
+  .hqdata-money__checks {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  .hqdata-money-wrap {
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-money-edit--first td {
+    border-top: 1px solid var(--line);
+  }
+
+  .hqdata-money-attention {
+    color: var(--attention);
+  }
+
+  .hqdata-money-danger {
+    color: var(--danger);
+  }
+
+  /* A record's figures and clocks, every one in words. */
+  .hqdata-money-terms {
+    display: grid;
+    grid-template-columns: minmax(10rem, max-content) minmax(0, 1fr);
+    gap: 6px 16px;
+    margin: 0;
+  }
+
+  .hqdata-money-terms dt {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-money-terms dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-money-terms dd > .hqdata-rule-line,
+  .hqdata-money__line > .hqdata-rule-line {
+    display: block;
+  }
+
+  .hqdata-money-terms__figure {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hqdata-money-terms__line {
+    display: block;
+  }
+
+  .hqdata-money-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* The forms inside popovers. */
+  .hqdata-money-form__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-money-form__three {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-money-form .hqdata-copy,
+  .hqdata-money-form .hqdata-radios {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-money-form .hqdata-copy legend,
+  .hqdata-money-form .hqdata-radios legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-money-form .hqdata-radios__item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-ui);
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-money-form__pair,
+    .hqdata-money-form__three,
+    .hqdata-money-terms {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hqdata-money-terms dd {
+      margin-bottom: 6px;
+    }
+
+    .hqdata-money__filters .field {
+      min-width: 0;
+      flex: 1 1 100%;
+    }
+  }
+}
+
+@media print {
+  .hqdata-money__filters,
+  .hqdata-money-actions,
+  .hqdata-money .popover {
+    display: none;
+  }
+}

@@ -49,7 +49,16 @@ export async function readDataHome(allowed: boolean, owner = false): Promise<Dat
 
 export type DataOwedRow = {
   key: string;
-  kind: "Follow-up" | "Waitlist" | "Investor" | "Action" | "Meeting" | "Pilot" | "People";
+  kind:
+    | "Follow-up"
+    | "Waitlist"
+    | "Investor"
+    | "Action"
+    | "Meeting"
+    | "Pilot"
+    | "People"
+    | "Incident"
+    | "Bill";
   href: string;
   title: string;
   sub: string;
@@ -66,13 +75,16 @@ const OWED_KINDS: Partial<Record<DueItem["kind"], DataOwedRow["kind"]>> = {
   meeting: "Meeting",
   pilot: "Pilot",
   person: "People",
+  incident: "Incident",
+  bill: "Bill",
 };
 
 /**
  * Follow-ups, waitlist next steps, investor next steps, actions from notes, meeting steps,
- * pilots and (for the Owner only) the people ledger's rows due today or earlier, as rows of
- * Home's queue: overdue first, then by day and title. Key dates, agreements, diligence and file
- * reviews stay in Data's own Due list.
+ * pilots, incidents, bills and (for the Owner only) the people ledger's rows due today or
+ * earlier, as rows of Home's queue: overdue first, then by day and title. Key dates,
+ * agreements, diligence, trademarks, domains, export invoices, the close and file reviews
+ * stay in Data's own Due list.
  */
 export function dataOwedRows(overview: Pick<DataOverview, "due" | "today">): DataOwedRow[] {
   const rows: DataOwedRow[] = [];

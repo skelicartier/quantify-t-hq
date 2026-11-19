@@ -102,6 +102,15 @@ async function freshKit(dir?: string): Promise<Kit> {
 
 const today = () => localDay(new Date());
 
+/** An instant `ago` ms before now, but never before this Mac's local midnight: a reply
+ * stamped "an hour ago" just after midnight would otherwise fall on yesterday. */
+const earlierToday = (ago: number): string => {
+  const now = Date.now();
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  return new Date(Math.max(now - ago, Math.min(now, midnight.getTime() + 1_000))).toISOString();
+};
+
 async function yes(kit: Kit, email: string, extra: Body = {}): Promise<Answer> {
   return kit.ask("POST", "/data/replies", {
     by: WALKER,
@@ -109,7 +118,7 @@ async function yes(kit: Kit, email: string, extra: Body = {}): Promise<Answer> {
     outcome: "replied_positive",
     words: "Yes, please add us. A call next week works.",
     subject: "Re: A note for the firm",
-    received_at: new Date(Date.now() - 3_600_000).toISOString(),
+    received_at: earlierToday(3_600_000),
     add_if_missing: false,
     ...extra,
   });
@@ -135,7 +144,7 @@ const codeOf = (answer: Answer) =>
 describe("a yes joins the firm", () => {
   it("makes a new firm at Joined with the quote, subject and received time (R1)", async () => {
     const kit = await freshKit();
-    const received = new Date(Date.now() - 3_600_000).toISOString();
+    const received = earlierToday(3_600_000);
     const answer = await yes(kit, "partner1@fund1.example", {
       words: "Yes, count us in.",
       subject: "Re: A note for Walk Fund 1",
@@ -649,7 +658,7 @@ describe("the downloads", () => {
       await yes(kit, "partner1@fund1.example", {
         words: "Yes, count us in.",
         subject: "Re: A note for Walk Fund 1",
-        received_at: new Date(Date.now() - 60_000).toISOString(),
+        received_at: earlierToday(60_000),
       }),
     );
     const csv = await kit.build("waitlist_csv");

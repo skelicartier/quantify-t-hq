@@ -732,11 +732,11 @@ describe("people-letters and the stipends CSV", () => {
     expect(text.charCodeAt(0)).toBe(0xfeff);
     const lines = text.slice(1).trim().split("\r\n");
     expect(lines[0]).toBe(
-      "person,kind,period,due_on,amount,currency,paid_on,reference,tds_deducted,tax_treatment,withdrawn",
+      "person,kind,period,due_on,amount,currency,paid_on,reference,tds_deducted,tax_treatment,withdrawn,challan_number,challan_deposited_on",
     );
     const row = lines.find((line) => line.startsWith("Walk Csv Intern,"));
     expect(row).toBe(
-      `Walk Csv Intern,Intern,2026-12,2027-01-07,15000,INR,${today},WALK-UTR-3,0,CA to confirm,`,
+      `Walk Csv Intern,Intern,2026-12,2027-01-07,15000,INR,${today},WALK-UTR-3,0,CA to confirm,,,`,
     );
     expect(lines.slice(1).every((line) => line.includes(",CA to confirm,"))).toBe(true);
   });

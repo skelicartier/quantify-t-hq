@@ -46,6 +46,22 @@
     overflow-wrap: anywhere;
   }
 
+  /* The CERT-In message and the DPIIT certificate: chosen from Files or attached. */
+  .hqdata-company .hqdata-copy {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-company .hqdata-copy legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
   @media (max-width: 720px) {
     .hqdata-company__acts {
       row-gap: 6px;

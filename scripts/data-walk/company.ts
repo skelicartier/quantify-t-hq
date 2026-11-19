@@ -5,8 +5,10 @@
  * reserved numbers no real company holds, and the checks they fail on purpose (CO3); a
  * malformed CIN refused (CO4); a subsidiary marked small, and the check that says so (CO5);
  * the walk's director listed (CO6); a contact change whose KYC-Web filing lands in Key dates
- * (CO7) and is then recorded as filed (CO8); the overview's "The company" block (CO9); and
- * the intern seeing only the role line (CO10). Every name and number is invented.
+ * (CO7) and is then recorded as filed (CO8); the overview's "The company" block (CO9); the
+ * intern seeing only the role line (CO10); the CERT-In point of contact empty, then recorded,
+ * its check line gone (CO11); and the books of record with their two check lines (CO12,
+ * ws-notes/duties/spec.md §6.6). Every name and number is invented.
  */
 
 import { request } from "node:http";
@@ -332,4 +334,89 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
       await other.close();
     }
   }
+
+  // ---------------------------------------------------------------- CO11: the CERT-In contact
+  const checksText = async () =>
+    flat(await page.locator('[data-section="company-checks"]').innerText());
+  const NO_CONTACT =
+    "No point of contact is recorded as sent to CERT-In. Every company keeps one current.";
+  if (kit.pass.first) {
+    await open(page, kit, "/data/company", ".hqdata-company");
+    const section = page.locator('[data-section="company-cert-in"]');
+    const empty = flat(await section.innerText());
+    const before = await checksText();
+    await section.locator("summary", { hasText: "Record the point of contact" }).click();
+    await page.fill("#cert-in-name", "Walk Contact");
+    await page.fill("#cert-in-designation", "Director");
+    await page.fill("#cert-in-email", "contact@walk-company.example");
+    await page.fill("#cert-in-mobile", "+91 00000 00000");
+    await page.fill("#cert-in-sent", today);
+    await section.locator("button", { hasText: "Save" }).click();
+    const saved = await until(
+      page,
+      async () =>
+        (((await company(kit)).facts as Body | undefined)?.cert_in as Body | undefined)?.name ===
+        "Walk Contact",
+    );
+    await open(page, kit, "/data/company", ".hqdata-company");
+    const after = await checksText();
+    kit.check(
+      "company CO11: the CERT-In section starts empty with its check line; once recorded, the line is gone",
+      empty.includes("Nobody is recorded. CERT-In asks every company for a point of contact") &&
+        before.includes(NO_CONTACT) &&
+        saved &&
+        !after.includes(NO_CONTACT),
+      { empty: empty.slice(0, 160), before: before.slice(0, 200), after: after.slice(0, 200) },
+    );
+  }
+  await open(page, kit, "/data/company", ".hqdata-company");
+  const certIn = flat(await page.locator('[data-section="company-cert-in"]').innerText());
+  kit.check(
+    "company CO11: the point of contact shows with the registered office, its rule line and a link to log an incident",
+    certIn.includes("Walk Contact") &&
+      certIn.includes("The registered office") &&
+      certIn.includes("Log an incident") &&
+      (await page
+        .locator('[data-section="company-cert-in"] a[href="/data/registers/incidents"]')
+        .count()) === 1,
+    certIn.slice(0, 240),
+  );
+
+  // ---------------------------------------------------------------- CO12: the books of record
+  const NO_BOOKS = "Which software keeps the books is not recorded.";
+  const UNDISCLOSED = "The books software's provider is not recorded as disclosed to the ROC.";
+  if (kit.pass.first) {
+    const before = await checksText();
+    const section = page.locator('[data-section="company-books"]');
+    await section.locator("summary", { hasText: "Edit" }).click();
+    await page.fill("#books-software", "Walk Books");
+    await page.fill("#books-kept-by", "Walk Accountants LLP");
+    await section
+      .locator('input[name="books_provider_disclosed"][value="no"]')
+      .check({ force: true });
+    await section.locator("button", { hasText: "Save" }).click();
+    await until(
+      page,
+      async () =>
+        (((await company(kit)).facts as Body | undefined)?.books as Body | undefined)?.software ===
+        "Walk Books",
+    );
+    await open(page, kit, "/data/company", ".hqdata-company");
+    const after = await checksText();
+    kit.check(
+      "company CO12: no books software reads its check line; recorded but not disclosed reads the other",
+      before.includes(NO_BOOKS) &&
+        !before.includes(UNDISCLOSED) &&
+        !after.includes(NO_BOOKS) &&
+        after.includes(UNDISCLOSED),
+      { before: before.slice(0, 240), after: after.slice(0, 240) },
+    );
+  }
+  const books = flat(await page.locator('[data-section="company-books"]').innerText());
+  kit.check(
+    "company CO12: the books section says HQ is not the books, and shows the software",
+    books.includes("HQ is not the books of account.") && books.includes("Walk Books"),
+    books.slice(0, 200),
+  );
+  await kit.audit("company-duties");
 }

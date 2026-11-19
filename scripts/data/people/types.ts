@@ -4,7 +4,9 @@
  * access and offboarding. They follow the HQ service's own team records
  * (`src/lib/api/team.ts`: staff kind, the access register's system, level, granted and
  * revoked days, the certificate's serial and issued day), so a later move maps field for
- * field. For the Owner only: nothing here leaves the module but `people-letters`' counts.
+ * field. For the Owner only: nothing here leaves the module but `people-letters`' counts and
+ * `people-pay` (duties spec §7.5), whose `paid` and `owed` a caller passes on only in an
+ * answer asked as the Owner.
  */
 
 import type { Staff } from "../protocol";
@@ -53,6 +55,15 @@ export type Evaluation = {
   summary: string;
 };
 
+/** The challan the tax deducted from a payment was deposited with (duties spec §7.5). */
+export type Challan = {
+  /** The challan's serial or CIN, as typed; never a password. */
+  number: string;
+  /** The bank's seven-digit BSR code, or "". */
+  bsr: string;
+  deposited_on: string | null;
+};
+
 export type StipendPayment = {
   payment_id: string;
   /** "2027-01": the month it pays for. */
@@ -67,6 +78,38 @@ export type StipendPayment = {
   at: string;
   by: Staff;
   withdrawn: { at: string; by: Staff; why: string } | null;
+  /** Null until recorded; only a payment with tax deducted takes one. */
+  challan: Challan | null;
+};
+
+export type TaxClassification = "" | "salary" | "professional_fee" | "exempt";
+export type TaxDecider = "" | "CA" | "lawyer" | "founder";
+
+/** A tax certificate issued to the person: Form 130 (was Form 16) or 131 (was Form 16A). */
+export type TaxCertificate = {
+  certificate_id: string;
+  form: "130" | "131";
+  /** "2026-27", or "2026-27 Q3". */
+  period: string;
+  issued_on: string;
+  number: string;
+  copy: PersonCopy | null;
+  at: string;
+  by: Staff;
+};
+
+/** How the person's stipend is treated for tax, as the CA decided it: HQ records, never decides. */
+export type PersonTax = {
+  classification: TaxClassification;
+  decided_by: string;
+  decided_role: TaxDecider;
+  decided_on: string | null;
+  decided_note: string;
+  /** Ten letters and digits; "" until given. */
+  pan: string;
+  /** The engagement letter among this person's documents. */
+  letter_document_id: string | null;
+  certificates: TaxCertificate[];
 };
 
 export type AccessGrant = {
@@ -109,6 +152,8 @@ export type Person = {
   hq_staff_id: string | null;
   notes: string;
   payments: StipendPayment[];
+  /** Read as the empty form for a record written before the duties batch. */
+  tax: PersonTax;
   created_at: string;
   created_by: Staff;
   updated_at: string;

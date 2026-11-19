@@ -1,5 +1,6 @@
 "use server";
 
+import { copyFrom, isState } from "@/components/data/meetings/form-values";
 import { fieldValue } from "@/lib/auth/forms";
 import * as api from "@/lib/data/api/company";
 import { gate, refreshData, refusal, refused, sent, staffOf } from "@/lib/data/gate";
@@ -35,8 +36,34 @@ const GROUP_FIELDS: Record<api.FactsGroup, readonly string[]> = {
     "firms_user_note",
     "dpiit_number",
     "dpiit_recognised_on",
+    "dpiit_status",
+    "dpiit_applied_on",
+    "dpiit_valid_until",
+  ],
+  cert_in: [
+    "cert_in_name",
+    "cert_in_designation",
+    "cert_in_email",
+    "cert_in_mobile",
+    "cert_in_office_phone",
+    "cert_in_address",
+    "cert_in_sent_on",
+  ],
+  books: [
+    "books_software",
+    "books_kept_by",
+    "books_contact_id",
+    "books_access",
+    "books_started_on",
+    "books_provider_disclosed",
+    "books_disclosed_note",
+    "books_free_revenue_limit",
+    "books_free_invoice_limit",
   ],
 };
+
+/** The groups whose form may carry a copy: the CERT-In message, the DPIIT certificate. */
+const COPY_GROUPS = new Set<api.FactsGroup>(["cert_in", "registrations"]);
 
 const DIRECTOR_FIELDS = [
   "name",
@@ -78,6 +105,11 @@ export async function saveFactsAction(
   if (!fields) return { status: "error", message: "Choose which facts to save." };
   const input: Record<string, string> = {};
   for (const name of fields) if (formData.has(name)) input[name] = fieldValue(formData, name, 400);
+  if (COPY_GROUPS.has(group)) {
+    const copy = await copyFrom(formData);
+    if (isState(copy)) return copy;
+    Object.assign(input, copy);
+  }
   try {
     await api.saveFacts(group, input, staffOf(context));
   } catch (error) {

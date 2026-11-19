@@ -1,0 +1,77 @@
+/* Money › Month close: the pack as one dense table, the facts a line each, the lock's
+   reasons as a plain list. Tokens only; radius 0; phone rules at 720px. Printed, it is the
+   pack's table, sent, acknowledged and the history, never a button or a form. hqdata-. */
+@layer pages {
+  .hqdata-close {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-close > * {
+    min-width: 0;
+  }
+
+  .hqdata-close__line {
+    margin: 0 0 8px;
+    font-size: var(--fs-body);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-close__what {
+    font-weight: 400;
+    text-align: start;
+  }
+
+  .hqdata-close__fact {
+    display: block;
+  }
+
+  .hqdata-close__acts {
+    display: grid;
+    gap: 6px;
+    margin-top: 6px;
+    justify-items: start;
+  }
+
+  .hqdata-close__row-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .hqdata-close__row-form .form-actions,
+  .hqdata-close__detach .form-actions {
+    margin: 0;
+  }
+
+  .hqdata-close__reasons,
+  .hqdata-close__history {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+    font-size: var(--fs-ui);
+  }
+
+  /* A row with its controls is tall: every cell reads from the top. */
+  .hqdata-close .data-table td,
+  .hqdata-close .data-table th {
+    vertical-align: top;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-close__row-form {
+      display: grid;
+    }
+  }
+}
+
+@media print {
+  .hqdata-close form,
+  .hqdata-close .popover,
+  .hqdata-close__acts {
+    display: none;
+  }
+}

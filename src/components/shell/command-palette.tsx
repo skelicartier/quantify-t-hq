@@ -2,6 +2,7 @@
 
 import {
   ArrowRight,
+  BadgeCheck,
   BookOpen,
   BookUser,
   Building2,
@@ -13,6 +14,7 @@ import {
   FileText,
   FolderOpen,
   Gavel,
+  Globe,
   HandCoins,
   Handshake,
   Inbox,
@@ -24,9 +26,12 @@ import {
   NotebookText,
   Plus,
   Receipt,
+  ReceiptText,
   Search,
+  Siren,
   SquareUser,
   StickyNote,
+  Store,
   Sun,
   UsersRound,
 } from "lucide-react";
@@ -75,6 +80,11 @@ const KIND_ICON: Record<SearchHit["kind"], typeof Search> = {
   data_meeting: Gavel,
   data_agreement: FileSignature,
   data_member: UsersRound,
+  data_incident: Siren,
+  data_mark: BadgeCheck,
+  data_domain: Globe,
+  data_vendor: Store,
+  data_bill: ReceiptText,
 };
 
 const KIND_LABEL: Record<SearchHit["kind"], string> = {
@@ -100,6 +110,11 @@ const KIND_LABEL: Record<SearchHit["kind"], string> = {
   data_meeting: "Meetings",
   data_agreement: "Agreements",
   data_member: "Members",
+  data_incident: "Incidents",
+  data_mark: "Trademarks",
+  data_domain: "Domains",
+  data_vendor: "Vendors",
+  data_bill: "Bills",
 };
 
 /**

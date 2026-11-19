@@ -1,0 +1,38 @@
+/* Numbers › MIS: eight parts in plain sections, figures in dense tables per currency, one
+   after another; never a bar or a meter. Tokens only; radius 0. Printed whole. hqdata-. */
+@layer pages {
+  .hqdata-mis {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-mis > * {
+    min-width: 0;
+  }
+
+  .hqdata-mis__state,
+  .hqdata-mis__line {
+    margin: 0 0 8px;
+    font-size: var(--fs-body);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-mis__head {
+    font-weight: 400;
+    text-align: start;
+  }
+
+  .hqdata-mis__total th,
+  .hqdata-mis__total td {
+    font-weight: 600;
+  }
+
+  .hqdata-mis__list {
+    margin: 0 0 8px;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+    font-size: var(--fs-ui);
+  }
+}

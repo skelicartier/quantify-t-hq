@@ -685,9 +685,11 @@ async function raise(page: Page, kit: WalkKit, pass: number): Promise<void> {
     async () => (await detailOf(kit, firmId)).investor?.offer_deadline === deadlineDay,
   );
   const firmName = (await detailOf(kit, firmId)).investor?.firm ?? "";
-  await openAt(page, `${kit.base}/data`, '[data-section="data-due"]');
+  // A later row (due in two days): Due keeps every owed row and fills the rest to 30, so with
+  // every module's rows it may be past those 30. Every row, as the page's "Show every row" gives.
+  await openAt(page, `${kit.base}/data?due=all`, '[data-section="data-due"]');
   const due = flat(await page.locator('[data-section="data-due"]').innerText());
-  const dueService = ((await kit.socket.ask("GET", "/data/overview")).body.due ?? []) as {
+  const dueService = ((await kit.socket.ask("GET", "/data/overview?due=all")).body.due ?? []) as {
     key: string;
   }[];
   kit.check(

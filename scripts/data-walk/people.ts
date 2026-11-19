@@ -8,6 +8,12 @@
  * revoke that ends the engagement (PL7); the Admin, who sees none of it anywhere (PL8); the
  * intern (PL9); and the stipends CSV (PL10). Every person is invented, on `.example`
  * addresses; the bank reference starts WALK-.
+ *
+ * The duties batch (duties spec §7.7), on a person of its own, "Walk Intern One", so the
+ * checks above stay as they were: the Tax section empty (PE-T1); "Record the decision" as a
+ * professional fee decided by Walk CA (PE-T2); the year line with both readings while the
+ * professional-fee limit is not confirmed (PE-T3); and the Admin, who sees only the Owner
+ * line on that person's page (PE-T4). The PAN is the reserved ZZZPZ0000Z.
  */
 
 import type { Page } from "playwright";
@@ -378,6 +384,155 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
         text.includes("WALK-UTR-1,,CA to confirm"),
       text.slice(0, 200),
     );
+  }
+
+  // ---------------------------------------------------------------- PE-T1–PE-T4: stipend tax
+  await taxWalk(page, kit, today);
+}
+
+const TAX_PERSON = "Walk Intern One";
+type TaxPage = PersonPage & {
+  tax: { classification: string; pan: string };
+  tax_years: { fy: string; words: string; rule: { readings: string[]; usable: boolean } | null }[];
+};
+
+/** PE-T1–PE-T4 (duties spec §7.7): the Tax section of a person of its own. */
+async function taxWalk(page: Page, kit: WalkKit, today: string): Promise<void> {
+  const find = async (): Promise<string> =>
+    (((await kit.socket.ask("GET", "/data/people")).body.people as Person[]) ?? []).find(
+      (person) => person.name === TAX_PERSON,
+    )?.person_id ?? "";
+  let id = await find();
+  if (!id && kit.pass.first) {
+    const added = await kit.socket.ask("POST", "/data/people", {
+      name: TAX_PERSON,
+      email: "one@walkintern.example",
+      kind: "intern",
+      role_title: "Research intern",
+      starts_on: addDays(today, -60),
+      ends_on: addDays(today, 30),
+      mentor: "Walk Mentor",
+      by: WALKER,
+    });
+    id = String((added.body.person as Person | undefined)?.person_id ?? "");
+    // A signed internship letter and IP assignment, as every walk intern has: Agreements' people
+    // rows (the company batch's merged walk, M5) count every person engaged, this one included.
+    if (id)
+      for (const [kind, title] of [
+        ["internship", "Walk Intern One internship letter"],
+        ["ip_assignment", "Walk Intern One IP assignment"],
+      ] as const)
+        await kit.socket.ask("POST", `/data/people/${id}/documents`, {
+          kind,
+          title,
+          signed_on: addDays(today, -60),
+          by: WALKER,
+        });
+  }
+  if (!id) {
+    kit.check("people PE-T: Walk Intern One is in the ledger", false);
+    return;
+  }
+  const path = `${kit.base}/data/people/${id}`;
+  const taxOf = async () =>
+    (await kit.socket.ask("GET", `/data/people/${id}`)).body as unknown as TaxPage;
+  const section = async () => {
+    await page.goto(path, { waitUntil: "networkidle" });
+    if (!(await shown(page, kit, '[data-section="person-tax"]'))) return "";
+    return flat(await page.locator('[data-section="person-tax"]').innerText());
+  };
+
+  if (kit.pass.first) {
+    // PE-T1: nothing recorded yet.
+    const empty = await section();
+    kit.check(
+      "people PE-T1: the Tax section is empty: not decided, nothing paid, no certificates, and the CA's line",
+      empty.includes("Not decided") &&
+        empty.includes("Nothing paid yet, so there is nothing to add up.") &&
+        empty.includes("No certificates yet.") &&
+        empty.includes(
+          "The classification is your CA's decision. HQ records it and adds up what was paid; it deducts nothing.",
+        ),
+      empty.slice(0, 240),
+    );
+
+    // PE-T2: record the decision through the page.
+    const tax = page.locator('[data-section="person-tax"]');
+    await tax.locator("summary", { hasText: "Record the decision" }).click();
+    await page.selectOption("#tax-classification", "professional_fee");
+    await page.fill("#tax-decided-by", "Walk CA");
+    await page.selectOption("#tax-decided-role", "CA");
+    await page.fill("#tax-decided-on", today);
+    await page.fill("#tax-pan", "ZZZPZ0000Z");
+    await tax.locator("form button", { hasText: "Save the decision" }).click();
+    await until(page, async () => (await taxOf()).tax?.classification === "professional_fee");
+    const decided = await section();
+    const stipend = flat(await page.locator('[data-section="person-stipend"]').innerText());
+    kit.check(
+      "people PE-T2: recorded as a professional fee decided by Walk CA, the stipend line says so",
+      decided.includes("Professional fee") &&
+        decided.includes("Walk CA (CA)") &&
+        decided.includes("ZZZPZ0000Z") &&
+        stipend.includes(`Tax: Professional fee, decided by Walk CA (CA) on ${dayWords(today)}`),
+      `${decided.slice(0, 160)} · ${stipend.slice(0, 120)}`,
+    );
+
+    // A payment for the year line.
+    const month = addDays(`${today.slice(0, 7)}-01`, -1).slice(0, 7);
+    await kit.socket.ask("POST", `/data/people/${id}/payments`, {
+      period: month,
+      amount: 15000,
+      currency: "INR",
+      paid_on: today,
+      reference: "WALK-UTR-T1",
+      by: WALKER,
+    });
+  }
+
+  // PE-T3: the year line, with both readings while the limit is not confirmed.
+  const current = await taxOf();
+  const year = current.tax_years?.[0];
+  const line = await section();
+  const expected = year
+    ? year.rule && !year.rule.usable && year.rule.readings.length > 0
+      ? `${year.words} The sources give ₹50,000 and ₹30,000. Nothing is worked out until your CA confirms one.`
+      : year.words
+    : "";
+  kit.check(
+    "people PE-T3: the year line prints what was paid and, until the limit is confirmed, both readings",
+    Boolean(year) && line.includes(expected) && !line.includes("%"),
+    { expected, line: line.slice(0, 300) },
+  );
+  await kit.audit("person-tax");
+
+  // PE-T4: the Admin sees only the Owner line.
+  if (kit.pass.first) {
+    const browser = page.context().browser();
+    if (!browser) {
+      kit.check("people PE-T4: a browser for the Admin", false);
+      return;
+    }
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const admin = await context.newPage();
+    try {
+      await admin.goto(
+        `${kit.base}/dev/signin?as=admin%40hq.test&next=${encodeURIComponent(`/data/people/${id}`)}`,
+        { waitUntil: "networkidle" },
+      );
+      await admin.goto(path, { waitUntil: "networkidle" });
+      const body = flat(await admin.locator("main").first().innerText());
+      kit.check(
+        "people PE-T4: as the Admin, Walk Intern One's page says only the Owner line",
+        body.includes(OWNER_LINE) &&
+          !body.includes(TAX_PERSON) &&
+          !body.includes("Professional fee") &&
+          !body.includes("ZZZPZ0000Z") &&
+          !body.includes("15,000"),
+        body.slice(0, 160),
+      );
+    } finally {
+      await context.close();
+    }
   }
 }
 

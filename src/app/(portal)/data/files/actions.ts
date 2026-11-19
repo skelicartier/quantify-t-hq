@@ -360,15 +360,19 @@ export async function emptyTrashAction(
   const context = await gate(formData, "/data/files?view=trash");
   if (refused(context)) return context;
   let deleted = 0;
+  let kept = 0;
   try {
-    deleted = (await files.emptyTrash(fieldValue(formData, "confirm", 12), staffOf(context)))
-      .deleted;
+    const answer = await files.emptyTrash(fieldValue(formData, "confirm", 12), staffOf(context));
+    deleted = answer.deleted;
+    kept = answer.kept ?? 0;
   } catch (error) {
     return refusal(error);
   }
   refreshData("/data/files");
+  const gone = `${deleted.toLocaleString("en-GB")} ${deleted === 1 ? "file" : "files"} deleted forever.`;
+  if (kept === 0) return sent(gone);
   return sent(
-    `${deleted.toLocaleString("en-GB")} ${deleted === 1 ? "file" : "files"} deleted forever.`,
+    `${gone} ${kept.toLocaleString("en-GB")} ${kept === 1 ? "finance record stays" : "finance records stay"} in the trash, because ${kept === 1 ? "it must" : "they must"} be kept for eight years.`,
   );
 }
 

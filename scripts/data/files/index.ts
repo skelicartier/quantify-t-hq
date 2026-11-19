@@ -15,6 +15,8 @@ import { SHARE_MAX_BYTES } from "../protocol";
 import { decode, toCsv } from "../text";
 import { ZipLimitError, ZipWriter, zipEntryName } from "../zip";
 import { USED_FOR_SOURCES } from "../company-contracts";
+import { DUTIES_USED_FOR, HOLD_SOURCES, type FileHold, type HoldsFiles } from "../duties-contracts";
+import { dayWords } from "../../../src/lib/data/labels-company";
 import { Checker } from "./check";
 import { registerPacks } from "./packs";
 import { registerFileSources } from "./providers";
@@ -90,6 +92,15 @@ export function register(core: DataCore): void {
   text.resume();
 
   const detail = (file: FileMeta) => detailOf(core, vault, text, file);
+  /** A finance record's copy is kept for eight financial years: the module that holds it says until when. */
+  const heldOf = (fileId: string): FileHold | null => {
+    const today = core.day();
+    for (const name of HOLD_SOURCES) {
+      const hold = core.need<HoldsFiles>(name)?.heldUntil(fileId) ?? null;
+      if (hold && hold.until >= today) return hold;
+    }
+    return null;
+  };
 
   // ------------------------------------------------------------------ folders
 
@@ -230,7 +241,8 @@ export function register(core: DataCore): void {
   core.route("POST", "/data/files/check", (ctx) => ({ job: checker.start(ctx.staff()) }));
   core.route("POST", "/data/trash/empty", (ctx) => {
     ctx.staff();
-    return vault.emptyTrash(ctx.body.confirm);
+    // A finance record that must be kept stays in the trash; everything else goes (duties §15).
+    return vault.emptyTrash(ctx.body.confirm, (fileId) => heldOf(fileId) !== null);
   });
 
   // ------------------------------------------------------------------ one file
@@ -252,6 +264,13 @@ export function register(core: DataCore): void {
   }));
   core.route("POST", "/data/files/:id/delete-forever", (ctx) => {
     ctx.staff();
+    const hold = heldOf(ctx.params[0]!);
+    if (hold)
+      throw new Refused(
+        409,
+        "held",
+        `${hold.why} is kept until ${dayWords(hold.until)}, so it cannot be deleted. It can stay in the trash.`,
+      );
     const { bytes_freed } = vault.deleteForever(ctx.params[0]!);
     return { deleted: true, bytes_freed };
   });
@@ -575,7 +594,7 @@ function previewOf(text: TextJobs, version: Version): Preview {
 function detailOf(core: DataCore, vault: Vault, text: TextJobs, file: FileMeta): Answer {
   const current = vault.current(file);
   const used: { label: string; href: string }[] = [];
-  for (const name of ["leads", "waitlist", ...USED_FOR_SOURCES]) {
+  for (const name of ["leads", "waitlist", ...USED_FOR_SOURCES, ...DUTIES_USED_FOR]) {
     try {
       used.push(...(core.need<UsedFor>(name)?.usedFor?.(file.file_id) ?? []));
     } catch (error) {

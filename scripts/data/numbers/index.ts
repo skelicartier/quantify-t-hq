@@ -22,6 +22,12 @@ import {
 } from "../../../src/lib/data/labels";
 import type { Answer, DataCore } from "../core";
 import { daysBetween } from "../days";
+import { DUTIES_SERVICES, type CashNow, type StatementsFeed } from "../duties-contracts";
+import {
+  OVERRIDE_NEEDS_NOTE,
+  fromStatementsWords,
+  staleStatementsWords,
+} from "../../../src/lib/data/labels-statements";
 import { clean, cleanText, isDay, isRouteId, normaliseEmail } from "../guard";
 import type { Staff } from "../protocol";
 import {
@@ -35,15 +41,29 @@ import {
 } from "../raise-contracts";
 import { toCsv } from "../text";
 import {
+  feedCashOf,
+  lastWholeMonth,
   monthName,
   moneyRows,
   numbersOf,
+  updateCashOf,
   updateNumbersOf,
+  usedCash,
+  type CloseMis,
   type MoneyRow,
   type NumbersInput,
 } from "./count";
 import { linesOf, updateText } from "./text";
-import type { Currency, InvestorUpdate, MoneyEntry, NumbersSetup, UpdateNumbers } from "./types";
+import {
+  CLOSE_MIS,
+  NUMBERS_MONTH,
+  type Currency,
+  type InvestorUpdate,
+  type MoneyEntry,
+  type NumbersMonth,
+  type NumbersSetup,
+  type UpdateNumbers,
+} from "./types";
 
 const MONEY = "numbers/money.jsonl";
 const SETUP = "numbers/setup.json";
@@ -188,12 +208,54 @@ export function register(core: DataCore): void {
     return made;
   };
 
-  const liveNumbers = (period: string): UpdateNumbers => {
+  // ---------------------------------------------------------------- cash from the statements (duties §9.6)
+
+  /** The statements' cash per currency, asked now; [] without the module or a statement. */
+  const feed = (): CashNow[] => {
+    try {
+      return core.need<StatementsFeed>(DUTIES_SERVICES.statements)?.cash() ?? [];
+    } catch (error) {
+      core.log(
+        `the statements could not be read: ${error instanceof Error ? error.name : "error"}`,
+      );
+      return [];
+    }
+  };
+  /** A month's frozen MIS part 3, when the close module has one. */
+  const frozenCash = (period: string) => {
+    try {
+      return core.need<CloseMis>(CLOSE_MIS)?.frozenCash(period) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  /** The update's cash: the frozen MIS's, else what is used once statements are here, else as before. */
+  const cashFor = (period: string, today: string): UpdateNumbers["cash"] | undefined => {
+    const mis = frozenCash(period);
+    if (mis) return updateCashOf(null, mis);
+    const given = feed();
+    if (given.length === 0) return undefined;
+    return updateCashOf(usedCash(today, moneyRows(money, today), given), null);
+  };
+
+  const countsFor = (period: string): UpdateNumbers => {
     const summary = funnel();
     return updateNumbersOf(inputOf(summary), period, summary, money);
   };
-  const numbersFor = (update: InvestorUpdate): UpdateNumbers =>
-    update.snapshot ?? liveNumbers(update.period);
+  const liveNumbers = (period: string): UpdateNumbers => {
+    const summary = funnel();
+    const input = inputOf(summary);
+    return updateNumbersOf(input, period, summary, money, cashFor(period, input.today));
+  };
+  /** A frozen month's update and its MIS never disagree: the MIS's cash wins until it is handed over. */
+  const numbersFor = (update: InvestorUpdate): UpdateNumbers => {
+    const numbers = update.snapshot ?? liveNumbers(update.period);
+    if (update.status === "handed_over") return numbers;
+    const mis = frozenCash(update.period);
+    return mis ? { ...numbers, cash: updateCashOf(null, mis) } : numbers;
+  };
+  const month: NumbersMonth = { month: (period) => countsFor(period) };
+  core.provide(NUMBERS_MONTH, month);
   const shown = (update: InvestorUpdate): Answer => {
     const numbers = numbersFor(update);
     return { update, numbers, text: updateText(update, numbers) };
@@ -231,6 +293,27 @@ export function register(core: DataCore): void {
   };
 
   // ---------------------------------------------------------------- routes: the page
+
+  /** What Numbers adds once statements are here: totals only, never a line or a name. */
+  const cashParts = (today: string, rows: MoneyRow[]) => {
+    const given = feed();
+    const computed = given.map((item) => {
+      const age = daysBetween(item.as_of, today);
+      return {
+        ...feedCashOf(item),
+        words: fromStatementsWords(item.months),
+        last_whole: lastWholeMonth(item),
+        age_days: age,
+        stale: age > MONEY_STALE_DAYS,
+        stale_words: age > MONEY_STALE_DAYS ? staleStatementsWords(item.as_of) : null,
+      };
+    });
+    return {
+      computed,
+      used: usedCash(today, rows, given),
+      statements_here: given.length > 0,
+    };
+  };
 
   core.route("GET", "/data/numbers", () => {
     const summary = funnel();
@@ -270,6 +353,7 @@ export function register(core: DataCore): void {
           )
           .slice(0, ENTRIES_SHOWN),
         stale_days: MONEY_STALE_DAYS,
+        ...cashParts(input.today, rows),
       },
       buyer_types: [...setup.buyer_types],
       firm_types: [...types.values()].sort((a, b) => a.localeCompare(b, "en")),
@@ -309,15 +393,21 @@ export function register(core: DataCore): void {
         "invalid",
         "That is more than 35 days ago. Type figures that are true this month.",
       );
+    const note = cleanText(ctx.body.note, 500);
+    const given = feed().find(
+      (item) => item.currency === currency && daysBetween(item.as_of, today) <= MONEY_STALE_DAYS,
+    );
+    if (given && note.length < 5) throw new Refused(400, "invalid", OVERRIDE_NEEDS_NOTE);
     const entry: MoneyEntry = {
       entry_id: randomUUID(),
       currency: currency as Currency,
       as_of: asOf,
       cash,
       burn_per_month: burn,
-      note: cleanText(ctx.body.note, 500),
+      note,
       recorded_at: core.now(),
       recorded_by: by,
+      ...(given ? { override: true as const } : {}),
     };
     store.appendLine(MONEY, entry);
     money.push(entry);

@@ -17,6 +17,8 @@ export type Overview = {
   week: { day: string; sent: number }[];
   sending: { mailing_id: string; name: string } | null;
   due: DueItem[];
+  /** Later rows the Due list leaves out (never a row due today or earlier). */
+  due_more: number;
   [block: string]: unknown;
 };
 
@@ -26,6 +28,7 @@ export function overviewOf(input: {
   written: readonly Written[];
   sending: { mailing_id: string; name: string } | null;
   due: DueItem[];
+  due_more?: number;
   parts: Record<string, unknown>;
 }): Overview {
   const days = lastDays(input.today, 7);
@@ -38,7 +41,7 @@ export function overviewOf(input: {
   const blocks: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input.parts)) {
     // The figures of the core are the core's; a block may not overwrite them.
-    if (["today", "sent_today", "week", "sending", "due"].includes(key)) continue;
+    if (["today", "sent_today", "week", "sending", "due", "due_more"].includes(key)) continue;
     blocks[key] = value;
   }
   return {
@@ -48,6 +51,7 @@ export function overviewOf(input: {
     week: days.map((day) => ({ day, sent: counts.get(day) ?? 0 })),
     sending: input.sending,
     due: input.due,
+    due_more: input.due_more ?? 0,
   };
 }
 
@@ -58,7 +62,9 @@ export function registerOverview(core: DataCore): void {
       today: core.day(),
       written: core.sender.written(),
       sending: core.sender.sending(),
-      due: await core.dueItems({ owner: ctx.query.get("owner") === "1" }),
+      ...(await core
+        .dueList({ owner: ctx.query.get("owner") === "1", all: ctx.query.get("due") === "all" })
+        .then(({ items, more }) => ({ due: items, due_more: more }))),
       parts: await core.overviewParts(),
     });
   });

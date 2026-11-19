@@ -85,8 +85,51 @@ export const PAYS_ON_WORDS = (pays: number | "month_end"): string =>
 export const TAX_LINE = "Tax: CA to confirm";
 export const TAX_HINT =
   "Whether TDS applies to a stipend, and under which section, is your CA's call. Record what was deducted.";
-/** The CSV's `tax_treatment`, on every row. */
+/** The CSV's `tax_treatment` while the classification is not decided. */
 export const TAX_TREATMENT = "CA to confirm";
+
+/** How a stipend is treated for tax (duties spec §7.5): his CA's decision, recorded here. */
+export const TAX_CLASSIFICATIONS = {
+  salary: "Salary",
+  professional_fee: "Professional fee",
+  exempt: "Exempt (a scholarship)",
+} as const;
+export type TaxClassificationKey = keyof typeof TAX_CLASSIFICATIONS;
+export const TAX_NOT_DECIDED = "Not decided";
+
+/** Who decided it. */
+export const TAX_DECIDERS = { CA: "CA", lawyer: "Lawyer", founder: "Founder" } as const;
+export type TaxDeciderKey = keyof typeof TAX_DECIDERS;
+
+/** The certificates of tax deducted, by their 2025 Act numbers. */
+export const TAX_FORMS = {
+  "130": "Form 130 (was Form 16)",
+  "131": "Form 131 (was Form 16A)",
+} as const;
+export type TaxFormKey = keyof typeof TAX_FORMS;
+
+export const TAX_ABOUT =
+  "The classification is your CA's decision. HQ records it and adds up what was paid; it deducts nothing.";
+export const TAX_DECIDE_REFUSAL = "Say who decided this, their role and the day.";
+export const TAX_CA_DECIDES = "Your CA decides whether tax is deducted.";
+
+/** The classification's label, or "Not decided". */
+export function classificationWords(classification: string): string {
+  return (TAX_CLASSIFICATIONS as Record<string, string>)[classification] ?? TAX_NOT_DECIDED;
+}
+
+/** "Tax: Professional fee, decided by Walk CA (CA) on 14 Nov 2026", or the line until decided. */
+export function taxLine(tax: {
+  classification: string;
+  decided_by: string;
+  decided_role: string;
+  decided_on: string | null;
+}): string {
+  if (!tax.classification) return TAX_LINE;
+  const role = (TAX_DECIDERS as Record<string, string>)[tax.decided_role] ?? tax.decided_role;
+  const on = tax.decided_on ? ` on ${longDay(tax.decided_on)}` : "";
+  return `Tax: ${classificationWords(tax.classification)}, decided by ${tax.decided_by} (${role})${on}`;
+}
 
 export const SYSTEM_SUGGESTIONS = [
   "Email and sign-in",

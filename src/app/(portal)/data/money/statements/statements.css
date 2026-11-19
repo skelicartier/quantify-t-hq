@@ -1,0 +1,155 @@
+/* Money › Statements and one account's lines: dense tables in their own frames, the
+   suggestions as plain buttons under a narration, check lines in the attention colour, a
+   withdrawn statement greyed. Tokens only; radius 0; phone rules at 720px. Printed, it is
+   the tables and their lines, never a button or a form. Prefixed hqdata-. */
+@layer pages {
+  .hqdata-statements {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-statements > *,
+  .hqdata-import > * {
+    min-width: 0;
+  }
+
+  .hqdata-statements__account {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .hqdata-statements__title {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 600;
+  }
+
+  .hqdata-statements__check {
+    margin: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    color: var(--attention, var(--text));
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-statements__withdrawn td {
+    color: var(--muted);
+  }
+
+  .hqdata-statements__acts,
+  .hqdata-statements__suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .hqdata-statements__suggestions form,
+  .hqdata-statements__acts form {
+    margin: 0;
+  }
+
+  .hqdata-statements__match .form-actions,
+  .hqdata-statements__unmatch .form-actions,
+  .hqdata-statements__sure .form-actions {
+    margin: 0;
+  }
+
+  .hqdata-statements__match button {
+    white-space: normal;
+    text-align: start;
+    max-width: 100%;
+  }
+
+  .hqdata-statements__category {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-top: 6px;
+  }
+
+  .hqdata-statements__category .form-actions {
+    margin: 0;
+  }
+
+  .hqdata-statements__figures {
+    margin: 0;
+    font-size: var(--fs-body);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-import {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hqdata-import__step {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+
+  .hqdata-import__said {
+    margin: 0;
+    font-size: var(--fs-ui);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-import__warn {
+    margin: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-import__days,
+  .hqdata-import__columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px 12px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .hqdata-import__days legend,
+  .hqdata-import__columns legend {
+    padding: 0;
+    margin-bottom: 6px;
+    font-size: 13.5px;
+  }
+
+  .hqdata-import__days .page-note {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+
+  /* A row with its controls is tall: every cell reads from the top. */
+  .hqdata-statements .data-table td,
+  .hqdata-statements .data-table th {
+    vertical-align: top;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-import__days,
+    .hqdata-import__columns {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
+@media print {
+  .hqdata-statements form,
+  .hqdata-statements .popover,
+  .hqdata-statements__acts,
+  .hqdata-statements__suggestions {
+    display: none;
+  }
+}

@@ -3,9 +3,10 @@
  * (`search:<name>`) at request time, every word having to match somewhere in a record, as
  * Mail merge's find does. The answer is grouped by kind in one fixed order (leads,
  * investors, files, notes, the FAQ, decisions, contacts, then the company batch's meetings,
- * agreements and members), each group with its exact count
- * and its best few hits. A module that is not loaded is skipped; one that fails is logged
- * and skipped, so search never fails for one part of Data.
+ * agreements and members, then the duties batch's incidents, trademarks, domains, vendors
+ * and bills), each group with its exact count and its best few hits. A module that is not
+ * loaded is skipped; one that fails is logged and skipped, so search never fails for one
+ * part of Data.
  */
 
 import { Refused } from "../../mail-merge/engine";
@@ -33,6 +34,11 @@ export const KIND_ORDER: readonly DataSearchKind[] = [
   "meeting",
   "agreement",
   "member",
+  "incident",
+  "mark",
+  "domain",
+  "vendor",
+  "bill",
 ];
 const KINDS: ReadonlySet<string> = new Set(KIND_ORDER);
 export const OVERVIEW_LIMIT = 5;
@@ -48,6 +54,10 @@ const SOURCE_KINDS: Record<SearchSourceName, readonly DataSearchKind[]> = {
   meetings: ["meeting"],
   agreements: ["agreement"],
   members: ["member"],
+  incidents: ["incident"],
+  marks: ["mark"],
+  domains: ["domain"],
+  money: ["vendor", "bill"],
 };
 
 const isKind = (value: unknown): value is DataSearchKind =>

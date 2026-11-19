@@ -73,6 +73,31 @@
     gap: 6px;
   }
 
+  /* The Tax section (duties spec §7.5): the decision as a short list, then the year lines. */
+  .hqdata-person__tax {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px 16px;
+    margin: 8px 0 12px;
+  }
+
+  .hqdata-person__tax dt {
+    color: var(--muted);
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-person__tax dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-person__tax-years {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 12px;
+    padding-left: 18px;
+  }
+
   @media (max-width: 720px) {
     .hqdata-person-form__pair,
     .hqdata-person-form__triple {
@@ -81,7 +106,9 @@
   }
 
   @media print {
-    .hqdata-person__row-actions {
+    .hqdata-person__row-actions,
+    [data-section="person-tax"] .popover,
+    [data-section="person-stipend"] .popover {
       display: none;
     }
   }

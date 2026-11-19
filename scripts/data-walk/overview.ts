@@ -122,7 +122,8 @@ export async function walk(page: Page, kit: WalkKit): Promise<void> {
           !text.includes("Yes today") &&
           !text.includes("Follow-ups due"),
   );
-  const due = ((await kit.socket.ask("GET", "/data/overview")).body.due as unknown[]) ?? [];
+  // The walk is the Owner, whose Due also holds the people ledger's Owner-only rows.
+  const due = ((await kit.socket.ask("GET", "/data/overview?owner=1")).body.due as unknown[]) ?? [];
   kit.check(
     due.length ? "overview: Due lists what is owed" : "overview: Due is empty with its sentence",
     due.length

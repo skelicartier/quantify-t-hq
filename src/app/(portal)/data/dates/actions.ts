@@ -339,6 +339,16 @@ export async function confirmRuleAction(
   if (refused(context)) return context;
   const key = ruleKeyFrom(formData);
   if (!key) return NO_RULE;
+  // A rule the sources disagree on: which reading was confirmed, or his own amount.
+  const reading = fieldValue(formData, "reading", 4);
+  const choice: Pick<api.ConfirmInput, "reading" | "amount"> =
+    reading === "own"
+      ? { amount: fieldValue(formData, "own_amount", 14).trim() }
+      : /^\d{1,2}$/.test(reading)
+        ? { reading: Number(reading) }
+        : {};
+  if (reading === "own" && !choice.amount)
+    return { status: "error", message: "Type your own amount, or choose a reading." };
   let name = "";
   try {
     name =
@@ -349,6 +359,7 @@ export async function confirmRuleAction(
             name: fieldValue(formData, "name", 120),
             role: fieldValue(formData, "role", 10),
             on: fieldValue(formData, "on", 10),
+            ...choice,
           },
           staffOf(context),
         )

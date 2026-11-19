@@ -23,6 +23,12 @@ export const dueKindSchema = z.enum([
   "person",
   "pilot",
   "diligence",
+  "incident",
+  "mark",
+  "domain",
+  "bill",
+  "export",
+  "close",
 ]);
 export type DueKind = z.infer<typeof dueKindSchema>;
 
@@ -67,6 +73,8 @@ export const overviewSchema = ok.extend({
   week: z.array(z.object({ day: z.string(), sent: z.number() })),
   sending: z.object({ mailing_id: z.string(), name: z.string() }).nullable(),
   due: z.array(dueItemSchema).default([]),
+  /** Later rows the Due list left out; a row due today or earlier is never left out. */
+  due_more: z.number().default(0),
   replies: z
     .object({
       today: z.number(),
@@ -109,6 +117,14 @@ export const overviewSchema = ok.extend({
 });
 export type DataOverview = z.infer<typeof overviewSchema>;
 
-/** The Owner asks as the Owner, and only then are the people ledger's Due rows in the answer. */
-export const readDataOverview = (options: { owner?: boolean } = {}) =>
-  dataAsk(overviewSchema, "GET", options.owner ? "/data/overview?owner=1" : "/data/overview");
+/**
+ * The Owner asks as the Owner, and only then are the people ledger's Due rows in the answer.
+ * `allDue` asks for every Due row, the later ones past the first 30 included.
+ */
+export const readDataOverview = (options: { owner?: boolean; allDue?: boolean } = {}) => {
+  const query = new URLSearchParams();
+  if (options.owner) query.set("owner", "1");
+  if (options.allDue) query.set("due", "all");
+  const search = query.toString();
+  return dataAsk(overviewSchema, "GET", search ? `/data/overview?${search}` : "/data/overview");
+};
