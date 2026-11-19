@@ -418,6 +418,21 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
+**Added 2026-11-19: an unsubscribe link under every Mail merge message.** The founder asked for a
+visible link. A message's words may now carry a link that writes an email,
+`[Unsubscribe](mailto:you@firm.example?subject=unsubscribe)` (`scripts/mail-merge/template.ts`:
+the named link takes `https://` or a strict `mailto:` address with an optional query; the plain
+part reads "Unsubscribe: email … with the subject "unsubscribe""; `javascript:`, `data:` and a
+malformed `mailto:` stay text). It is set once, in Setup → "Under every message", so every draft
+carries it; the hint there says how to write it. Why a `mailto:` and not a web page: nothing on the
+public web answers for this computer, and the provider's own `{{ unsubscribe }}` tag is refused in
+the content of a message sent by its API ("Template Render Error", its community forum, April
+2025). The provider already adds its own unsubscribe header to every message, so mail apps show
+their Unsubscribe button; a press there comes back as an "unsubscribed" delivery event and goes
+on the stop list by itself. An unsubscribe that arrives as an email is recorded by hand (Data →
+Replies → No). Checked: vitest 141 files, 1,279 tests; the next draft's preview shows the link in
+both parts.
+
 **As of the delivery batch: Mail merge reads delivery back; Batches, lead source, trust packs**
 (2026-11-18). Portal and the local sender; no service change. Spec: `ws-notes/delivery/spec.md` in
 `~/Library/Caches/hq-work`; from the second research report

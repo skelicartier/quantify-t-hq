@@ -8,6 +8,10 @@
  * words, as a person writes an email: a blank line starts a paragraph, an address becomes
  * a link, `[words](https://…)` is a link with words, `**words**` is bold. Nothing else is
  * read as anything. What a cell holds is never read as a field: it goes in once, as text.
+ *
+ * A link may also write an email: `[Unsubscribe](mailto:you@firm.example?subject=unsubscribe)`
+ * opens the reader's own mail with the address and subject filled in. It is how a message
+ * carries an unsubscribe link when nothing on the public web answers for this computer.
  */
 
 const FIELD = /\{\{\s*([^{}|]+?)\s*(?:\|([^{}]*))?\}\}|\{([A-Za-z][A-Za-z0-9_ ]{0,40})\}/g;
@@ -75,7 +79,8 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-const NAMED_LINK = /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]{1,2000})\)/g;
+const NAMED_LINK =
+  /\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]{1,2000}|mailto:[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}(?:\?[A-Za-z0-9=&%+._-]{1,300})?)\)/g;
 const BARE_LINK = /https?:\/\/[^\s<>"']+/g;
 
 /** A line of plain words as HTML: escaped, links linked, `**bold**` bold. */
@@ -127,11 +132,27 @@ export function wordsToHtml(words: string): string {
     .join("\n");
 }
 
+/** A link that writes an email, as the plain part says it: who to write to, and the subject. */
+function mailtoInWords(words: string, target: string): string {
+  const [address = "", query = ""] = target.slice("mailto:".length).split("?");
+  let subject = "";
+  try {
+    subject = new URLSearchParams(query).get("subject") ?? "";
+  } catch {
+    subject = "";
+  }
+  return subject
+    ? `${words}: email ${address} with the subject "${subject}"`
+    : `${words}: email ${address}`;
+}
+
 /** The words as the plain part: a named link reads "words (address)". */
 export function wordsToText(words: string): string {
   return words
     .replace(/\r\n?/g, "\n")
-    .replace(NAMED_LINK, "$1 ($2)")
+    .replace(NAMED_LINK, (_whole, label: string, target: string) =>
+      target.startsWith("mailto:") ? mailtoInWords(label, target) : `${label} (${target})`,
+    )
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
     .trim();
 }

@@ -101,6 +101,36 @@ describe("a message made out to each person", () => {
     );
   });
 
+  it("makes an unsubscribe link that writes an email, in both parts", () => {
+    const footer = "[Unsubscribe](mailto:founders@walk.example?subject=unsubscribe)";
+    const made = render({ subject: "Hello", body: "Hi {{first_name|there}}", footer }, {});
+    expect(made.html).toBe(
+      '<p>Hi there</p>\n<p><a href="mailto:founders@walk.example?subject=unsubscribe">Unsubscribe</a></p>',
+    );
+    expect(made.text).toBe(
+      'Hi there\n\nUnsubscribe: email founders@walk.example with the subject "unsubscribe"',
+    );
+    expect(made.missing).toEqual([]);
+    expect(blanksIn(footer)).toEqual([]);
+    expect(wordsToText("[Write to us](mailto:desk@walk.example)")).toBe(
+      "Write to us: email desk@walk.example",
+    );
+  });
+
+  it("links nothing but a web address or an email to write", () => {
+    for (const target of [
+      "javascript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "mailto:not-an-address",
+      'mailto:a@walk.example?subject="><script>alert(1)</script>',
+      "mailto:a@walk.example?body=one two",
+    ]) {
+      const html = wordsToHtml(`[Unsubscribe](${target})`);
+      expect(html, target).not.toContain("<a ");
+      expect(html, target).not.toContain("<script");
+    }
+  });
+
   it("puts the footer under the message and keeps the subject to one line", () => {
     const made = render(
       {

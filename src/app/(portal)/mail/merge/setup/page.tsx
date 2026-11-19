@@ -289,7 +289,7 @@ export default async function MailMergeSetupPage({
                 <Field
                   id="merge-footer"
                   label="Under every message"
-                  hint="Who you are and how to stop hearing from you. Columns work here too."
+                  hint="Who you are and how to stop hearing from you. Columns work here too. An unsubscribe link is written [Unsubscribe](mailto:you@yourfirm.com?subject=unsubscribe): it opens their mail with the address and subject filled in."
                 >
                   <Textarea
                     id="merge-footer"
