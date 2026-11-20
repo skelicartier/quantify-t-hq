@@ -2045,6 +2045,8 @@
     border-left: 1px solid var(--line-soft);
   }
 
+  /* A label wraps under itself rather than running into the next figure: "Compound monthly
+     growth" is wider than a sixth of the strip until about 1400px. */
   .stat__label {
     color: var(--quiet);
     font-family: var(--font-mono);
@@ -2052,7 +2054,7 @@
     font-weight: 600;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    white-space: nowrap;
+    overflow-wrap: break-word;
   }
 
   .stat__value {
@@ -3383,6 +3385,23 @@
     .stat-grid,
     .stat-grid--6 {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    /* The two columns above only take hold once the strip is a grid; it stayed one flex row
+       until 720px, so between a phone and a desk a strip of four or more ran its last
+       figures up to 84px past the right edge (Home, Numbers, Revenue, Privacy). */
+    .stat-grid:not(.stat-grid--2):not(.stat-grid--3) {
+      display: grid;
+    }
+
+    .stat-grid:not(.stat-grid--2):not(.stat-grid--3) > .stat + .stat {
+      padding-left: 0;
+      border-left: 0;
+    }
+
+    .stat-grid:not(.stat-grid--2):not(.stat-grid--3) > .stat:nth-child(2n) {
+      padding-left: 14px;
+      border-left: 1px solid var(--line-soft);
     }
 
     .card-grid--3 {
@@ -13282,6 +13301,19 @@
     }
 
     .pagebar__actions .popover > .popover__panel {
+      right: 0;
+      left: 0;
+      width: auto;
+    }
+
+    /* The About sentence hung from its own link, which sits after the title and its
+       readouts, so it ran up to 250px past the right edge. Anchored to the bar instead,
+       it spans the bar from gutter to gutter. */
+    .pagebar__about {
+      position: static;
+    }
+
+    .pagebar__about > p {
       right: 0;
       left: 0;
       width: auto;
