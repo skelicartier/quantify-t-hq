@@ -48,6 +48,11 @@ const KINDS: ReadonlySet<AgendaKind> = new Set([
   "export",
   "close",
   "holiday",
+  "tool",
+  "backup",
+  "certification",
+  "insurance",
+  "management_review",
 ]);
 
 export type Detail = "full" | "plain";

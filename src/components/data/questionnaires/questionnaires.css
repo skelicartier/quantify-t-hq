@@ -1,0 +1,284 @@
+/* Questionnaires, the answer library, regulatory profiles and Customer duties
+   (ws-notes/security/spec.md §9.7). Tokens only; radius 0; no side stripe, no bar and no meter;
+   phone rules at 720px. A long question is prose: it wraps and is never cut. Printed, each page
+   is its data with the answers and without the controls. Prefixed hqdata-. */
+@layer pages {
+  .hqdata-questionnaires {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-qtabs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+  }
+
+  .hqdata-qtabs__back {
+    font-size: var(--fs-ui);
+  }
+
+  /* The counts beside the table: words and numbers, never a bar. */
+  .hqdata-qcounts {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--fs-body);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  /* The interval and the form that changes it, on one wrapping line. */
+  .hqdata-practice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .hqdata-qviews {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+  }
+
+  .hqdata-qfilters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px 12px;
+  }
+
+  .hqdata-qfilters .field {
+    min-width: min(220px, 100%);
+    margin: 0;
+  }
+
+  /* A question is a declared prose column: it wraps, it is never cut. */
+  .hqdata-qtext {
+    display: block;
+    min-width: 16ch;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-questionnaires .data-table td {
+    vertical-align: top;
+  }
+
+  .hqdata-qid {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    white-space: nowrap;
+  }
+
+  .hqdata-qanswer {
+    display: grid;
+    gap: 6px;
+    min-width: 22ch;
+  }
+
+  .hqdata-qanswer__text {
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-suggestions {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hqdata-suggestion {
+    display: grid;
+    gap: 4px;
+    padding: 6px 8px;
+    border: 1px solid var(--line-soft);
+  }
+
+  .hqdata-suggestion__how {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .hqdata-suggestion__how--id,
+  .hqdata-suggestion__how--likely {
+    color: var(--text);
+  }
+
+  /* An inline disclosure: it opens in place, so a scrolling table never clips it. */
+  .hqdata-disclose > summary {
+    width: fit-content;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .hqdata-disclose > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .hqdata-disclose[open] > summary {
+    margin-bottom: 8px;
+  }
+
+  .hqdata-disclose__panel {
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .hqdata-disclose__panel .stack-form {
+    max-width: none;
+  }
+
+  /* The import's steps, its first rows as read, and the column map. */
+  .hqdata-qimport {
+    display: grid;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-qimport__step {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  .hqdata-qimport__map {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px 12px;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-qimport__map legend {
+    padding: 0 4px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.04em;
+  }
+
+  .hqdata-qimport__said {
+    margin: 0;
+    font-size: var(--fs-body);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-qimport__cell {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-evidence {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .hqdata-evidence__item {
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-evidence-picks {
+    display: grid;
+    gap: 6px;
+    max-height: 240px;
+    margin: 0;
+    padding: 8px 10px;
+    overflow: auto;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-evidence-picks legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+  }
+
+  /* The profile's rules, its duties' words and their sources. */
+  .hqdata-profile {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hqdata-duty {
+    display: grid;
+    gap: 2px;
+    min-width: 24ch;
+  }
+
+  .hqdata-duty__words {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-duty__withdrawn {
+    color: var(--quiet);
+  }
+
+  .hqdata-effects {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  .hqdata-regimes {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-regimes legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-qimport__map {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media print {
+    .hqdata-qtabs,
+    .hqdata-questionnaires form,
+    .hqdata-questionnaires button,
+    .hqdata-questionnaires .popover,
+    .hqdata-questionnaires .hqdata-disclose,
+    .hqdata-questionnaires .table-tools,
+    .hqdata-qviews,
+    .hqdata-qfilters,
+    .hqdata-profile form,
+    .hqdata-profile button,
+    .hqdata-profile .popover,
+    .hqdata-profile .hqdata-disclose,
+    .hqdata-profile .table-tools {
+      display: none !important;
+    }
+
+    .hqdata-suggestions {
+      display: none;
+    }
+  }
+}

@@ -91,7 +91,24 @@ export const trialSchema = z.object({
 });
 export type Trial = z.infer<typeof trialSchema>;
 
-export const diligenceRowSchema = diligenceSchema.extend({ entry_stage: z.string().nullable() });
+/** The questionnaire imported for a diligence, with its count (security spec §9.6); null without one. */
+export const linkedQuestionnaireSchema = z
+  .object({
+    questionnaire_id: z.string(),
+    title: z.string(),
+    answered: z.number(),
+    total: z.number(),
+    state: z.enum(["open", "sent", "closed"]),
+    href: z.string(),
+  })
+  .nullable()
+  .default(null);
+export type LinkedQuestionnaire = z.infer<typeof linkedQuestionnaireSchema>;
+
+export const diligenceRowSchema = diligenceSchema.extend({
+  entry_stage: z.string().nullable(),
+  linked: linkedQuestionnaireSchema,
+});
 export type DiligenceRow = z.infer<typeof diligenceRowSchema>;
 export const trialRowSchema = trialSchema.extend({ entry_stage: z.string().nullable() });
 export type TrialRow = z.infer<typeof trialRowSchema>;
@@ -111,6 +128,7 @@ export type DiligencePage = z.infer<typeof diligencePageSchema>;
 
 export const entryDiligenceSchema = ok.extend({
   diligence: diligenceSchema.nullable(),
+  linked: linkedQuestionnaireSchema,
   closed: z.number(),
   trials: z.array(trialSchema),
   agreements: z.array(agreementViewSchema).nullable(),

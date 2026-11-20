@@ -63,6 +63,8 @@ import {
   type LucideIcon,
   Stamp,
   BookMarked,
+  Server,
+  ShieldHalf,
 } from "lucide-react";
 
 export type NavLink = {
@@ -105,7 +107,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     // Admins only); every page checks `mail:send` for itself. The company record is for
     // Owners and Admins; the people ledger only for the Owner, through `local:data:owner`.
     // Registers holds incidents, trademarks, domains and holidays; Money holds the bills and
-    // the month's handover to the CA.
+    // the month's handover to the CA. Systems holds the tools, accounts, devices, logs and
+    // backups; Assurance holds the policies, pen tests and findings, certification,
+    // insurance, management reviews and customers' duties.
     label: "Data",
     links: [
       { href: "/data", label: "Data", icon: Briefcase, capability: "local:data" },
@@ -192,6 +196,20 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: "Money",
         icon: IndianRupee,
         activePrefix: "/data/money/",
+        capability: "local:data",
+      },
+      {
+        href: "/data/systems",
+        label: "Systems",
+        icon: Server,
+        activePrefix: "/data/systems/",
+        capability: "local:data",
+      },
+      {
+        href: "/data/assurance",
+        label: "Assurance",
+        icon: ShieldHalf,
+        activePrefix: "/data/assurance/",
         capability: "local:data",
       },
       {

@@ -40,6 +40,9 @@ export const AGENDA_SOURCES = [
   "money",
   "close",
   "holidays",
+  "tools",
+  "recovery",
+  "assurance",
 ] as const;
 export type AgendaSourceName = (typeof AGENDA_SOURCES)[number];
 export const agendaService = (name: AgendaSourceName): string => `agenda:${name}`;
@@ -58,6 +61,9 @@ export const SEARCH_SOURCES = [
   "marks",
   "domains",
   "money",
+  "tools",
+  "findings",
+  "questionnaires",
 ] as const;
 export type SearchSourceName = (typeof SEARCH_SOURCES)[number];
 export const searchService = (name: SearchSourceName): string => `search:${name}`;
@@ -81,7 +87,12 @@ export type AgendaKind =
   | "bill"
   | "export"
   | "close"
-  | "holiday";
+  | "holiday"
+  | "tool"
+  | "backup"
+  | "certification"
+  | "insurance"
+  | "management_review";
 
 export type AgendaItem = {
   /** Stable from one read to the next: "<kind>:<record id>", plus ":<part>" when one record gives two. */
@@ -121,7 +132,10 @@ export type DataSearchKind =
   | "mark"
   | "domain"
   | "vendor"
-  | "bill";
+  | "bill"
+  | "tool"
+  | "finding"
+  | "answer";
 
 export type DataSearchHit = {
   kind: DataSearchKind;

@@ -29,6 +29,16 @@ export const dueKindSchema = z.enum([
   "bill",
   "export",
   "close",
+  "tool",
+  "account",
+  "device",
+  "log",
+  "backup",
+  "pen_test",
+  "finding",
+  "certification",
+  "insurance",
+  "management_review",
 ]);
 export type DueKind = z.infer<typeof dueKindSchema>;
 

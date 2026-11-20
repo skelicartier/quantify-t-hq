@@ -6,7 +6,7 @@ import { DUE_KINDS } from "@/lib/data/labels";
 import { formatNumber } from "@/lib/format";
 
 export const NOTHING_DUE =
-  "Nothing is due. Follow-ups, next steps, actions from notes, key dates, meetings, agreements, pilots, incidents, trademarks, domains, bills, export invoices, the month's close and file reviews land here on their day.";
+  "Nothing is due. Follow-ups, next steps, actions from notes, key dates, meetings, agreements, pilots, incidents, trademarks, domains, bills, export invoices, the month's close, file reviews, tool renewals, device checks, log checks, restore tests, findings, pen tests, certification audits, insurance renewals and management reviews land here on their day.";
 
 /** The line under a Due list that left later rows out; every row owed now is always shown. */
 export function dueMoreLine(more: number): string {

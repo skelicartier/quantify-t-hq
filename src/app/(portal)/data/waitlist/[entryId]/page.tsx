@@ -5,6 +5,7 @@ import { DataUnavailable } from "@/components/data/data-down";
 import { EntryDiligenceSections } from "@/components/data/diligence/entry-diligence-sections";
 import { NotesSection } from "@/components/data/notes/notes-section";
 import { EntryPilotSection } from "@/components/data/pilots/entry-pilot-section";
+import { EntryProfileSection } from "@/components/data/profiles/entry-profile-section";
 import { Colleagues } from "@/components/data/waitlist/colleagues";
 import { HoldPreview } from "@/components/data/waitlist/hold-preview";
 import { StageForm } from "@/components/data/waitlist/stage-form";
@@ -176,6 +177,7 @@ function Entry({
           entry={{ entry_id: entry.entry_id, firm: entry.firm }}
           today={today}
         />
+        <EntryProfileSection entryId={entry.entry_id} />
         {/* Notes are written here now (raise spec §6.6.7); older notes stay in Activity. */}
         <NotesSection
           subject={{ kind: "waitlist", id: entry.entry_id, name: entry.firm }}

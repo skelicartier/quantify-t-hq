@@ -10,6 +10,7 @@ import {
   PersonFields,
 } from "@/components/data/people/person-fields";
 import { datesWords } from "@/components/data/people/people-words";
+import { SystemsSection } from "@/components/data/people/systems-section";
 import { SourceLink } from "@/components/data/touches/source-link";
 import { MailForm } from "@/components/mail/mail-form";
 import { PageHeader } from "@/components/shell/page-header";
@@ -480,6 +481,8 @@ function PersonRecord({ page, now }: { page: PersonPage; now: number }) {
         <TaxSection page={page} />
 
         <AccessSection page={page} />
+
+        <SystemsSection personId={person.person_id} />
 
         {person.offboarding && <OffboardingSection page={page} />}
 

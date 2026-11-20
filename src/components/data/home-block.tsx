@@ -58,7 +58,9 @@ export type DataOwedRow = {
     | "Pilot"
     | "People"
     | "Incident"
-    | "Bill";
+    | "Bill"
+    | "Finding"
+    | "Account";
   href: string;
   title: string;
   sub: string;
@@ -77,14 +79,18 @@ const OWED_KINDS: Partial<Record<DueItem["kind"], DataOwedRow["kind"]>> = {
   person: "People",
   incident: "Incident",
   bill: "Bill",
+  finding: "Finding",
+  account: "Account",
 };
 
 /**
  * Follow-ups, waitlist next steps, investor next steps, actions from notes, meeting steps,
- * pilots, incidents, bills and (for the Owner only) the people ledger's rows due today or
- * earlier, as rows of Home's queue: overdue first, then by day and title. Key dates,
- * agreements, diligence, trademarks, domains, export invoices, the close and file reviews
- * stay in Data's own Due list.
+ * pilots, incidents, bills, findings and (for the Owner only) the people ledger's rows and
+ * the accounts to close for a leaver, due today or earlier, as rows of Home's queue: overdue
+ * first, then by day and title. Key dates, agreements, diligence, trademarks, domains,
+ * export invoices, the close, tool renewals, device checks, log checks, restore tests, pen
+ * tests, certification audits, insurance renewals, management reviews and file reviews stay
+ * in Data's own Due list.
  */
 export function dataOwedRows(overview: Pick<DataOverview, "due" | "today">): DataOwedRow[] {
   const rows: DataOwedRow[] = [];

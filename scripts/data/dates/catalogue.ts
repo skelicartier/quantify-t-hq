@@ -45,6 +45,8 @@ export type Facts = {
   domains?: number;
   signing?: number;
   marks?: number;
+  /** Key dates suggestions a tool in Systems stands for. */
+  tool_covers?: readonly string[];
 };
 
 export type Group = "monthly" | "quarterly" | "yearly" | "renewal";
@@ -641,7 +643,10 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     remind_days: 14,
     ...renewal,
     next: typed,
-    hidden: shown,
+    hidden: (facts) =>
+      (facts.tool_covers ?? []).includes("mailbox")
+        ? "This renewal is on its tool's row in Systems."
+        : null,
   },
   {
     key: "mail-plan",
@@ -656,7 +661,10 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     remind_days: 14,
     ...renewal,
     next: typed,
-    hidden: shown,
+    hidden: (facts) =>
+      (facts.tool_covers ?? []).includes("mail-plan")
+        ? "This renewal is on its tool's row in Systems."
+        : null,
   },
   {
     key: "developer-programme",
@@ -671,7 +679,10 @@ export const CATALOGUE: readonly CatalogueItem[] = [
     remind_days: 14,
     ...renewal,
     next: typed,
-    hidden: shown,
+    hidden: (facts) =>
+      (facts.tool_covers ?? []).includes("developer-programme")
+        ? "This renewal is on its tool's row in Systems."
+        : null,
   },
   {
     key: "code-signing",

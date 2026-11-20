@@ -38,6 +38,7 @@ import {
   type AgendaSource,
   type SearchSource,
 } from "../raise-contracts";
+import { SECURITY_SERVICES, type DomainSenders } from "../security-contracts";
 import { toCsv } from "../text";
 import { findTerms, matchesTerms } from "../../../src/lib/merge/find";
 import { dayWords } from "../../../src/lib/data/labels-company";
@@ -420,6 +421,21 @@ export async function register(core: DataCore): Promise<void> {
     summary,
   };
   core.provide(DUTIES_SERVICES.domains, service);
+
+  /** For Systems' tools (security spec §6.6): which services send mail as each live domain. */
+  const senders: DomainSenders = {
+    senders: () =>
+      book.domains
+        .filter((domain) => !domain.released)
+        .map((domain) => ({
+          domain_id: domain.domain_id,
+          name: domain.name,
+          sends_as: [...domain.sends_as],
+          href: PAGE,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+  core.provide(SECURITY_SERVICES.domainSenders, senders);
 
   // ---------------------------------------------------------------- the Registers Summary
 

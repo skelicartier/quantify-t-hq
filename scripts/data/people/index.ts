@@ -43,6 +43,7 @@ import {
 import { LIMITS, clean } from "../guard";
 import { extensionOf, servedType, sniff } from "../files/sniff";
 import type { Staff } from "../protocol";
+import { SECURITY_SERVICES, type PeopleRoster, type RosterPerson } from "../security-contracts";
 import { syncFolder, writeAll } from "../store";
 import { toCsv } from "../text";
 import {
@@ -208,6 +209,34 @@ export async function register(core: DataCore): Promise<void> {
     },
   };
   core.provide(DUTIES_SERVICES.peoplePay, pay);
+
+  /**
+   * `people-roster` (security spec §3.1): who is in the ledger, their state and the offboarding's
+   * last day, for Systems' account and device links. OWNER-ONLY: a caller passes it on only in
+   * an answer asked as the Owner, never to search, the agenda, a file's "Used for", an export,
+   * a backup, the overview or a log line an Admin can reach.
+   */
+  const rosterOf = (person: Person, today: string): RosterPerson => ({
+    person_id: person.person_id,
+    name: person.name,
+    email: person.email,
+    kind: person.kind,
+    state: stateOf(person, today),
+    starts_on: person.starts_on,
+    last_day: person.offboarding?.last_day ?? null,
+    href: `/data/people/${person.person_id}`,
+  });
+  const roster: PeopleRoster = {
+    people: (today) =>
+      book.people
+        .map((person) => rosterOf(person, today))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    person: (personId, today) => {
+      const found = book.people.find((person) => person.person_id === personId);
+      return found ? rosterOf(found, today) : null;
+    },
+  };
+  core.provide(SECURITY_SERVICES.peopleRoster, roster);
 
   const dutyRules = () => core.need<DutyRulesService>(DUTIES_SERVICES.dutyRules);
 

@@ -43,6 +43,7 @@ import {
   type ContactsLookup,
   type SearchSource,
 } from "../raise-contracts";
+import { SECURITY_SERVICES, type MoneyVendors } from "../security-contracts";
 import { toCsv } from "../text";
 import { findTerms, matchesTerms } from "../../../src/lib/merge/find";
 import { dayWords } from "../../../src/lib/data/labels-company";
@@ -1074,6 +1075,33 @@ export async function register(core: DataCore): Promise<void> {
     },
   };
   core.provide(DUTIES_SERVICES.money, service);
+
+  /** For Systems' tools (security spec §6.6): vendors, and what each billed. Totals only. */
+  const vendorsForTools: MoneyVendors = {
+    vendors: () =>
+      book.vendors
+        .map((vendor) => ({
+          vendor_id: vendor.vendor_id,
+          name: vendor.name,
+          retired: vendor.retired,
+          href: `/data/money/vendors/${vendor.vendor_id}`,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    billedSince: (vendorId, from) => {
+      const by = new Map<string, { total_minor: number; bills: number }>();
+      for (const bill of book.bills) {
+        if (bill.vendor_id !== vendorId || bill.cancelled || bill.invoice_on < from) continue;
+        const sum = by.get(bill.currency) ?? { total_minor: 0, bills: 0 };
+        sum.total_minor += bill.total_minor;
+        sum.bills += 1;
+        by.set(bill.currency, sum);
+      }
+      return [...by.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([currency, sum]) => ({ currency, ...sum }));
+    },
+  };
+  core.provide(SECURITY_SERVICES.moneyVendors, vendorsForTools);
 
   // ---------------------------------------------------------------- the overview block
 

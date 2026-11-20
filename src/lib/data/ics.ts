@@ -27,7 +27,12 @@ export type IcsKind =
   | "bill"
   | "export"
   | "close"
-  | "holiday";
+  | "holiday"
+  | "tool"
+  | "backup"
+  | "certification"
+  | "insurance"
+  | "management_review";
 
 /** An agenda item, as the service gives it (`AgendaItem` in the service's contract). */
 export type IcsItem = {
@@ -65,6 +70,11 @@ const KIND_WORDS: Record<IcsKind, string> = {
   export: "Export invoice",
   close: "Month close",
   holiday: "Holiday",
+  tool: "Tool renewal",
+  backup: "Restore test",
+  certification: "Certification",
+  insurance: "Insurance renewal",
+  management_review: "Management review",
 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

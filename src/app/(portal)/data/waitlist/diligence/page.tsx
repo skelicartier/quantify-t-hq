@@ -17,6 +17,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { DATA_ROLE_LINE, requireData } from "@/lib/data/access";
 import { readDiligence } from "@/lib/data/api/diligence";
 import { TRIAL_DECISIONS, TRIAL_RENEWAL_LINE, dayShort, termWords } from "@/lib/data/labels-close";
+import { answeredWords } from "@/lib/data/labels-questionnaires";
 import { dataRead } from "@/lib/data/read";
 import { formatNumber } from "@/lib/format";
 
@@ -62,9 +63,17 @@ export default async function DiligencePage() {
           data ? <span className="quiet">{formatNumber(data.counts.open)} open</span> : undefined
         }
         actions={
-          <ButtonLink href="/data/files/packs?kind=trust" size="small">
-            Trust packs
-          </ButtonLink>
+          <>
+            <ButtonLink href="/data/waitlist/diligence/questionnaires" size="small">
+              Questionnaires
+            </ButtonLink>
+            <ButtonLink href="/data/waitlist/diligence/answers" size="small">
+              Answer library
+            </ButtonLink>
+            <ButtonLink href="/data/files/packs?kind=trust" size="small">
+              Trust packs
+            </ButtonLink>
+          </>
         }
       />
       <div className="page-content">
@@ -96,7 +105,14 @@ export default async function DiligencePage() {
                         {item.firm}
                       </Link>
                     </td>
-                    <td>{questionnaireWords(item.questionnaire)}</td>
+                    <td>
+                      {questionnaireWords(item.questionnaire)}
+                      {item.linked && (
+                        <Link className="table-sub text-link" href={item.linked.href}>
+                          {answeredWords(item.linked.answered, item.linked.total)}
+                        </Link>
+                      )}
+                    </td>
                     <td>{reviewWords(item.security_review)}</td>
                     <td>{referencesWords(item.references)}</td>
                     <td>{redlineWords(item.redlines)}</td>

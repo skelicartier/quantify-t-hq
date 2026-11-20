@@ -418,7 +418,66 @@ and app password without either).
 
 ## 7. Checkpoint — update at the end of every wave
 
-**As of the duties batch: Registers, the rule book's duty rules, holidays, stipend tax, a cash
+**As of the security batch: Systems and Assurance, for a buyer's security review** (2026-11-20).
+Portal and the local sender; no service change, no migration. Spec: `ws-notes/security/spec.md` in
+`~/Library/Caches/hq-work`; wave D of the second research report
+(`~/Documents/evm/reports/HQ complete company platform.md`).
+
+- **What it adds.** Nine Data modules (now 40): `tools`, `devices`, `logs`, `recovery`, `policies`,
+  `findings`, `assurance`, `profiles`, `questionnaires`. Two rail links after Money: **Systems**
+  (Tools · Accounts · Devices · Logs and time · Backups) and **Assurance** (Summary · Policies · Pen
+  tests and findings · Certification · Insurance · Management review · Customer duties). Systems keeps
+  the tools register (owner, plan, renewal and notice, two-step sign-in, critical or not, the data it
+  holds, the sub-processor block, how to leave), accounts per tool, devices with monthly self-checks
+  and the personal-device acknowledgement against the policy's version in Files, each system's logs
+  and time source, the backup inventory and restore tests (how long they took, never a target).
+  Assurance lists the eleven expected policies and which Files document is each (HQ writes none), pen
+  tests and findings with fix-by days (7, 30, 90, 180 days by severity, his to change), certification
+  with audits and surveillance, insurance, management reviews and their actions, and a Summary in
+  sentences that reads every module. Waitlist › Diligence gains **Questionnaires** (a buyer's CSV or
+  XLSX imported, columns mapped once, approved answers matched by question ID first and by words
+  second, never automatically, exported back in their own columns) and the **Answer library**; each
+  waitlist firm can carry a regulatory profile whose in-contract duties can make a fix-by day earlier,
+  and the finding names the firm and the duty. The XLSX reader and writer are written here, with no
+  dependency; inflate is capped and no entity or formula is ever expanded.
+- **Owner only.** Which person in the people ledger an account or a device belongs to, and every day
+  worked out from a last day (an account's close-by, a device owed back): through one Owner-only
+  service (`people-roster`), with the links in `tools/owner/` and `devices/owner/`, which an Admin's
+  backup leaves out. An Admin sees every tool, account and device as typed, and one line saying what
+  is left out. Proven per path in tests and in the merged checks.
+- **Nothing sends or fetches.** Dependabot alerts come in as a JSON file he saves with
+  `gh api --paginate --slurp` (the page prints the command; HQ never connects to the code host). The
+  CAIQ file is one he imports from CSA himself and submits himself. No CAIQ or SIG question text is in
+  the repo.
+- **Where the sources disagree:** where CERT-In logs may be kept. Direction (iv) says within India;
+  CERT-In's FAQ 35 says abroad is allowed if they can be produced in time. Both readings print beside
+  each log system; nothing is judged.
+- **Merged in the lead's copy:** U3's pen test line "not empanelled" could never show, because the
+  `cscrf-empanelled` duty has no effect on a day and `inForce` carries only duties with one; profiles
+  now also answer `inContract(today)`. The merge verifier changed no app code; six unit walk checks that only fitted the
+  stand-ins (devices, policies, tools, findings, assurance, logs) now read the real modules.
+- **On his real data at ship:** Systems and Assurance are empty (0 tools, 0 devices, 0 systems, 0 backups; Policies
+  "0 of 11 current"; no pen test, certification, insurance or customer duty); Diligence has no
+  questionnaire and the Answer library none. Nothing of his was migrated or rewritten. Sender: nothing
+  sending, 290 sent today, stop list 154 before and after, 40 modules ready.
+- **Verified on a copy** (`hq-sec`, next 3150, mocks 7120/7121): vitest 216 files / 1,886 tests (the same in the
+  live clone); the eleven merged cases (`tests/data/security-merged.test.ts`) green; `check:data`
+  2,234 / 0 (35 min 41 s); harness data 388, find 44; `check:mail-merge` 125 / 0; 27 pages at 412px as
+  the Owner and as an Admin, both themes, screen and print: no overflow, no "%", no console error. Rollback:
+  `~/Library/Caches/hq-work/ship-backup-20261120-security/`.
+- **Only he or a professional can settle:** which tools are critical for leavers; whether Admins see
+  account holders at all; his personal-device policy's numbers; where the product's, the cloud's and
+  the website's logs sit and for how long, and whether he relies on FAQ 35 (his lawyer); which
+  customers are regulated and what their contracts pass down; whether the pen tester must be
+  CERT-In-empanelled, and ISO 27001 now or when a buyer asks; which insurance to hold; whether to
+  publish a CAIQ for STAR Level 1 (and CSA's terms); the product repository's name for the `gh`
+  command; the two rail labels.
+- **Open, found in the checks:** printed at A4 width, six Systems and Assurance tables are wider
+  than the page by their own minimum widths (Devices and Backups 306px) and Chrome shrinks them to
+  fit; `company-merged` case 6 can fail once in a long run, as it searches a whole answer for the
+  stipend's digits and an id can hold them; `check:data` now takes about 36 minutes.
+
+**Before that: the duties batch: Registers, the rule book's duty rules, holidays, stipend tax, a cash
 view, Money records, statements, the monthly close and the MIS** (2026-11-19). Portal and the local
 sender; no service change, no migration. Spec: `ws-notes/duties/spec.md` in `~/Library/Caches/hq-work`;
 waves A–B of the second research report (`~/Documents/evm/reports/HQ complete company platform.md`).

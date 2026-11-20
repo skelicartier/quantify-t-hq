@@ -5,6 +5,7 @@ import { DueChip } from "@/components/crm/pills";
 import { DataUnavailable } from "@/components/data/data-down";
 import { PilotFields } from "@/components/data/pilots/pilot-fields";
 import { conversionWords, pilotValues, priceWords } from "@/components/data/pilots/pilot-words";
+import { EntryProfileSection } from "@/components/data/profiles/entry-profile-section";
 import { MailForm } from "@/components/mail/mail-form";
 import { PageHeader } from "@/components/shell/page-header";
 import { Callout } from "@/components/ui/callout";
@@ -350,6 +351,8 @@ function Pilot({ page, now }: { page: PilotPage; now: number }) {
             <AgreementLine page={page} />
           </RecordSection>
         )}
+
+        <EntryProfileSection entryId={pilot.entry_id} />
 
         <RecordSection id="pilot-activity" title="Activity">
           {page.events.length === 0 ? (

@@ -47,7 +47,7 @@ describe("capability-filtered navigation", () => {
     ).toBe(false);
   });
 
-  it("an Owner with local:data and local:data:owner sees fifteen Data links in order, right after Command", () => {
+  it("an Owner with local:data and local:data:owner sees seventeen Data links in order, right after Command", () => {
     const everything = NAV_GROUPS.flatMap((group) => group.links)
       .map((link) => link.capability)
       .filter((capability): capability is string => Boolean(capability));
@@ -70,6 +70,8 @@ describe("capability-filtered navigation", () => {
       "/data/people",
       "/data/registers",
       "/data/money",
+      "/data/systems",
+      "/data/assurance",
       "/data/dates",
       "/data/numbers",
     ]);
@@ -87,6 +89,8 @@ describe("capability-filtered navigation", () => {
       "People ledger",
       "Registers",
       "Money",
+      "Systems",
+      "Assurance",
       "Key dates",
       "Numbers",
     ]);
@@ -114,6 +118,8 @@ describe("capability-filtered navigation", () => {
       "/data/company",
       "/data/registers",
       "/data/money",
+      "/data/systems",
+      "/data/assurance",
       "/data/dates",
       "/data/numbers",
     ]);
@@ -122,7 +128,7 @@ describe("capability-filtered navigation", () => {
   it("no Data link shares its label with any other link in the rail", () => {
     const all = NAV_GROUPS.flatMap((group) => group.links);
     const data = NAV_GROUPS.find((group) => group.label === "Data")?.links ?? [];
-    expect(data.length).toBe(15);
+    expect(data.length).toBe(17);
     for (const link of data)
       expect(
         all.filter((other) => other.label === link.label).map((other) => other.href),

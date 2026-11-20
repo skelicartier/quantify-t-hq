@@ -63,8 +63,8 @@ describe("the link", () => {
       reads: 0,
     });
     const sources = page.sources as { name: string; here: boolean }[];
-    // The company batch's four and the duties batch's five (each batch's Step 0) are named
-    // too, and are not loaded in this stack.
+    // The company batch's four, the duties batch's five and the security batch's three (each
+    // batch's Step 0) are named too, and are not loaded in this stack.
     expect(sources.map((source) => source.name)).toEqual([
       "dates",
       "investors",
@@ -81,6 +81,9 @@ describe("the link", () => {
       "money",
       "close",
       "holidays",
+      "tools",
+      "recovery",
+      "assurance",
     ]);
     for (const name of ["dates", "waitlist", "replies"])
       expect(sources.find((source) => source.name === name)?.here).toBe(true);

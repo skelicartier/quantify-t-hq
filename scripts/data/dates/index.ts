@@ -38,6 +38,7 @@ import {
   type RegisterLookup,
 } from "../duties-contracts";
 import { LIMITS, clean, isDay } from "../guard";
+import { SECURITY_SERVICES, type ToolsLookup } from "../security-contracts";
 import type { Staff } from "../protocol";
 import { toCsv } from "../text";
 import { DATE_KINDS, DATE_STATES, DEFAULT_FOLDERS, REPEATS } from "../../../src/lib/data/labels";
@@ -162,13 +163,23 @@ export async function register(core: DataCore): Promise<void> {
       return 0;
     }
   };
-  const registerCounts = (): Pick<Facts, "domains" | "signing" | "marks"> => {
+  /** The suggestions a tool in Systems stands for (security spec §6.7): none when absent or failing. */
+  const coversOf = (ask: () => readonly string[] | undefined): string[] => {
+    try {
+      const value = ask();
+      return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  };
+  const registerCounts = (): Pick<Facts, "domains" | "signing" | "marks" | "tool_covers"> => {
     const domains = core.need<DomainsLookup>(DUTIES_SERVICES.domains);
     const marks = core.need<RegisterLookup>(DUTIES_SERVICES.marks);
     return {
       domains: countOf(() => domains?.count()),
       signing: countOf(() => domains?.signingCount()),
       marks: countOf(() => marks?.count()),
+      tool_covers: coversOf(() => core.need<ToolsLookup>(SECURITY_SERVICES.tools)?.keyDateCovers()),
     };
   };
 

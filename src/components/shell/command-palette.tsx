@@ -1,10 +1,12 @@
 "use client";
 
 import {
+  AppWindow,
   ArrowRight,
   BadgeCheck,
   BookOpen,
   BookUser,
+  Bug,
   Building2,
   CalendarDays,
   CircleHelp,
@@ -21,6 +23,7 @@ import {
   Keyboard,
   LifeBuoy,
   ListChecks,
+  MessageSquareQuote,
   Milestone,
   Moon,
   NotebookText,
@@ -85,6 +88,9 @@ const KIND_ICON: Record<SearchHit["kind"], typeof Search> = {
   data_domain: Globe,
   data_vendor: Store,
   data_bill: ReceiptText,
+  data_tool: AppWindow,
+  data_finding: Bug,
+  data_answer: MessageSquareQuote,
 };
 
 const KIND_LABEL: Record<SearchHit["kind"], string> = {
@@ -115,6 +121,9 @@ const KIND_LABEL: Record<SearchHit["kind"], string> = {
   data_domain: "Domains",
   data_vendor: "Vendors",
   data_bill: "Bills",
+  data_tool: "Tools",
+  data_finding: "Findings",
+  data_answer: "Answers",
 };
 
 /**

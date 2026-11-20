@@ -1,0 +1,187 @@
+/* Assurance: the Summary, Policies, Pen tests and findings (a pen test, a finding, the
+   dependency-alert import), Certification (a certification), Insurance, Management review
+   (a review) (ws-notes/security/spec.md §8.6). One column that never grows past the page;
+   dense tables that never cut a word; forms in popovers. Tokens only; radius 0; no side
+   stripe on anything; phone rules at 720px. Prefixed hqdata-. Printed, each page is its data
+   without the controls, with each source's address after its link. */
+@layer pages {
+  .hqdata-assurance {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    min-width: 0;
+  }
+
+  .hqdata-assurance > *,
+  .hqdata-assurance section {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hqdata-assurance p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-assurance__heading {
+    margin: 0;
+    font-size: var(--fs-section, 1rem);
+    font-weight: 600;
+  }
+
+  .hqdata-assurance__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    min-width: 0;
+  }
+
+  .hqdata-assurance__tools > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hqdata-assurance__links,
+  .hqdata-assurance__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .hqdata-assurance__inline {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+  }
+
+  .hqdata-assurance td .table-sub,
+  .hqdata-assurance td .hqdata-control-ref {
+    display: block;
+  }
+
+  .hqdata-assurance__late {
+    color: var(--danger);
+  }
+
+  .hqdata-assurance__check {
+    display: block;
+    color: var(--attention);
+    font-size: var(--fs-ui);
+  }
+
+  /* The attention words: a pill with words, never colour alone, set off from the sentence. */
+  .hqdata-assurance__attention {
+    display: inline-block;
+    margin-left: 8px;
+    white-space: nowrap;
+  }
+
+  /* A block of facts in a bordered box, never a side stripe. */
+  .hqdata-assurance__box {
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+  }
+
+  .hqdata-assurance__list {
+    margin: 0;
+    padding-left: 1.2em;
+  }
+
+  .hqdata-assurance__list li + li {
+    margin-top: 4px;
+  }
+
+  .hqdata-assurance__prose {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* The printed command: copyable, wrapped, never wider than the page. */
+  .hqdata-assurance__command {
+    display: block;
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+
+  .hqdata-assurance__inputs {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-assurance__inputs legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-assurance__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-assurance__holds {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-assurance__holds dt {
+    font-weight: 600;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-assurance__holds dd {
+    margin: 0 0 4px;
+    font-size: var(--fs-ui);
+  }
+
+  /* The Summary's three columns are sentences: on a phone they wrap rather than scroll aside. */
+  .hqdata-assurance [data-section^="summary-"] .data-table {
+    min-width: 0;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-assurance__pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* A finding's fix-by day comes first on a phone. */
+    .hqdata-assurance [data-section="finding-fix-by"] {
+      order: -1;
+    }
+  }
+}
+
+@media print {
+  .hqdata-assurance .popover,
+  .hqdata-assurance form,
+  .hqdata-assurance__acts,
+  .hqdata-assurance__links,
+  .hqdata-assurance__inline {
+    display: none !important;
+  }
+}

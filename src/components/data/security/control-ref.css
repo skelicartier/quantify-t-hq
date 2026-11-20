@@ -1,0 +1,24 @@
+/* A control reference or an interval beside a clock or a check
+   (ws-notes/security/spec.md §3.4): muted words, the source links underlined, each source's
+   address printed after it on paper only. Tokens only. Prefixed hqdata-. */
+@layer pages {
+  .hqdata-control-ref {
+    color: var(--muted);
+  }
+
+  .hqdata-control-ref a {
+    color: inherit;
+    text-decoration: underline;
+  }
+
+  .hqdata-control-ref__url {
+    display: none;
+  }
+
+  @media print {
+    .hqdata-control-ref__url {
+      display: inline;
+      overflow-wrap: anywhere;
+    }
+  }
+}

@@ -1,0 +1,19 @@
+/* Systems › Logs and time (ws-notes/security/spec.md §7.6): the check lines beside each system,
+   the two readings of where logs may be kept, and the block "What CERT-In asks". Tokens only;
+   radius 0; no side stripe. Prefixed hqdata-. */
+@layer pages {
+  .hqdata-logs__lines li {
+    display: grid;
+    gap: 2px;
+  }
+
+  /* A line that only says what is allowed: muted, not a warning. */
+  .hqdata-logs__lines .hqdata-logs__said {
+    color: var(--muted);
+  }
+
+  .hqdata-logs__readings {
+    display: grid;
+    gap: 8px;
+  }
+}

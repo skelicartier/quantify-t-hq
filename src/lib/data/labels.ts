@@ -46,6 +46,16 @@ export const DUE_KINDS = {
   bill: "Bill",
   export: "Export invoice",
   close: "Month close",
+  tool: "Tool",
+  account: "Account",
+  device: "Device",
+  log: "Logs and time",
+  backup: "Backup",
+  pen_test: "Pen test",
+  finding: "Finding",
+  certification: "Certification",
+  insurance: "Insurance",
+  management_review: "Management review",
 } as const;
 export type DueKind = keyof typeof DUE_KINDS;
 
@@ -217,6 +227,9 @@ export const AGENDA_SOURCE_LABELS = {
   money: "Money",
   close: "Month close",
   holidays: "Holidays",
+  tools: "Tools",
+  recovery: "Backups",
+  assurance: "Assurance",
 } as const;
 
 export const DATA_SEARCH_KINDS = {
@@ -235,6 +248,9 @@ export const DATA_SEARCH_KINDS = {
   domain: "Domains",
   vendor: "Vendors",
   bill: "Bills",
+  tool: "Tools",
+  finding: "Findings",
+  answer: "Answers",
 } as const;
 
 // ------------------------------------------------------------------ the waitlist

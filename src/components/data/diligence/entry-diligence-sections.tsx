@@ -1,5 +1,7 @@
 import "server-only";
 
+import Link from "next/link";
+
 import {
   addTrialAction,
   clearanceAction,
@@ -28,6 +30,7 @@ import {
   dayWords,
   termWords,
 } from "@/lib/data/labels-close";
+import { answeredWords } from "@/lib/data/labels-questionnaires";
 import { formatNumber } from "@/lib/format";
 import { dataRead } from "@/lib/data/read";
 
@@ -67,6 +70,19 @@ export async function EntryDiligenceSections({
                   {questionnaireWords(diligence.questionnaire)}
                   {diligence.questionnaire.questions !== null &&
                     ` · ${formatNumber(diligence.questionnaire.questions)} questions`}
+                  {read.data.linked ? (
+                    <Link className="table-sub text-link" href={read.data.linked.href}>
+                      {read.data.linked.title} ·{" "}
+                      {answeredWords(read.data.linked.answered, read.data.linked.total)}
+                    </Link>
+                  ) : (
+                    <Link
+                      className="table-sub text-link"
+                      href={`/data/waitlist/diligence/questionnaires/new?entry=${entry.entry_id}`}
+                    >
+                      Import their questionnaire
+                    </Link>
+                  )}
                 </dd>
                 <dd className="hqdata-kv__act">
                   <Popover label="Questionnaire" align="end" width="wide">

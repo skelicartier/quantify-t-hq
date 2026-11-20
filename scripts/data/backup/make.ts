@@ -19,6 +19,7 @@ import { Refused } from "../../mail-merge/engine";
 import type { BuildHandle, BuildInput } from "../builds";
 import type { DataCore } from "../core";
 import { localDay } from "../days";
+import { OWNER_FOLDERS } from "../security-contracts";
 import { ZIP_MAX_ENTRIES, ZipLimitError, ZipWriter, zipEntryName } from "../zip";
 import { readVault } from "./vault-index";
 
@@ -39,7 +40,13 @@ export const NEVER_IN_BACKUP = new Set(["provider.key", "provider-status.json", 
 
 /** Data's folders that are not records: the bytes (zipped from Files), the uploads, the read text. */
 const DATA_SKIP = new Set(["tmp", "files/blobs", "files/uploads", "files/text"]);
-const DATA_SKIP_PEOPLE = new Set([...DATA_SKIP, "people", "statements", "close/owner"]);
+const DATA_SKIP_PEOPLE = new Set([
+  ...DATA_SKIP,
+  "people",
+  "statements",
+  "close/owner",
+  ...OWNER_FOLDERS,
+]);
 
 type Entry =
   | { name: string; kind: "blob"; path: string; bytes: number; sha256: string }
@@ -265,9 +272,16 @@ export async function makeBackup(
         "- data/: Data's own records (folders, leads, replies, waitlist, investors and the round, key dates, notes, decisions and contacts, the calendar link's checksum, numbers and monthly updates, data-room packs).",
         "- mail-merge/: Mail merge's lists, mailings, written log, stop list, settings, tests log and delivery read back from the provider.",
         "- data/statements/, data/close/, data/money/, data/incidents/, data/marks/, data/domains/, data/holidays/, data/cash/: this batch's records.",
-        input.body.people === true
-          ? "- data/people/: the people ledger. The Owner made this backup: keep it as private as this Mac. It holds the people ledger and the bank statements."
-          : "- data/people/ is left out: only a backup the Owner makes holds the people ledger. data/statements/ and data/close/owner/ are left out too: only a backup the Owner makes holds the bank statements and the MIS's people figures.",
+        "- data/tools/, data/devices/, data/logs/, data/recovery/, data/policies/, data/findings/, data/assurance/, data/profiles/, data/questionnaires/: the security batch's records.",
+        ...(input.body.people === true
+          ? [
+              "- data/people/: the people ledger. The Owner made this backup: keep it as private as this Mac. It holds the people ledger and the bank statements.",
+              "- data/tools/owner/ and data/devices/owner/: which account and device belongs to whom in the people ledger.",
+            ]
+          : [
+              "- data/people/ is left out: only a backup the Owner makes holds the people ledger. data/statements/ and data/close/owner/ are left out too: only a backup the Owner makes holds the bank statements and the MIS's people figures.",
+              "- data/tools/owner/ and data/devices/owner/ are left out too: only a backup the Owner makes says which account and device belongs to whom in the people ledger.",
+            ]),
         "- manifest-sha256.txt: the SHA-256 of every file here, to check none changed.",
         "",
         "Mail merge's provider key is never in a backup: set it again in Mail merge's Setup.",

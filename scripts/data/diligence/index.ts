@@ -7,6 +7,10 @@
  *
  * Due rows (kind `diligence`, Data's Due only), `agenda:diligence`, and the `diligence`
  * service's "Used for" lines for the copies kept in "06 Contracts and NDAs › Diligence".
+ * The security batch (ws-notes/security/spec.md §9.6) adds `diligence-questionnaire`, U4's
+ * own seam: an imported questionnaire fills in the count and received day when they are
+ * empty, marking it sent records the answered day and the copy, and the Due row and the list
+ * carry the linked questionnaire's count ("38 of 200 answered").
  */
 
 import { randomUUID } from "node:crypto";
@@ -30,6 +34,8 @@ import {
   type WaitlistFeed,
 } from "../raise-contracts";
 import { TRIAL_DECISIONS, dayShort, dayWords } from "../../../src/lib/data/labels-close";
+import { answeredWords } from "../../../src/lib/data/labels-questionnaires";
+import { SECURITY_SERVICES, type QuestionnaireLine } from "../security-contracts";
 import {
   CLOSE_TOTALS,
   FOLDERS,
@@ -50,6 +56,12 @@ import {
   TRIAL_DECIDE_AHEAD,
   TRIAL_END_AHEAD,
 } from "./limits";
+import {
+  DILIGENCE_QUESTIONNAIRE,
+  type DiligenceQuestionnaire,
+  type DiligenceQuestionnaireView,
+  type QuestionnairesForDiligence,
+} from "./questionnaire";
 import type { Diligence, DiligenceEvent, Redline, Reference, Trial } from "./types";
 
 const FILE = "diligence/diligence.json";
@@ -168,6 +180,67 @@ export function register(core: DataCore): void {
   };
   core.provide(COMPANY_SERVICES.diligence, used);
 
+  // ---------------------------------------------------------------- the questionnaire it links (security §9.6)
+
+  const viewOf = (item: Diligence): DiligenceQuestionnaireView => ({
+    diligence_id: item.diligence_id,
+    entry_id: item.entry_id,
+    firm: item.firm,
+    state: item.state,
+    due_on: item.questionnaire.due_on,
+    received_on: item.questionnaire.received_on,
+    answered_on: item.questionnaire.answered_on,
+  });
+  const inside: DiligenceQuestionnaire = {
+    openFor: (entryId) => {
+      const found = diligence.find((item) => item.entry_id === entryId && item.state === "open");
+      return found ? viewOf(found) : null;
+    },
+    get: (diligenceId) => {
+      const found = diligence.find((item) => item.diligence_id === diligenceId);
+      return found ? viewOf(found) : null;
+    },
+    imported: (diligenceId, input, by) => {
+      const item = diligence.find((entry) => entry.diligence_id === diligenceId);
+      if (!item) return;
+      const before = item.questionnaire;
+      item.questionnaire = {
+        ...before,
+        questions: before.questions ?? input.questions,
+        received_on: before.received_on ?? input.received_on,
+        file_id: before.file_id ?? input.file_id,
+      };
+      touch(item, by);
+      save();
+      log("diligence", item.diligence_id, "questionnaire", `imported ${input.questions}`, by);
+    },
+    sent: (diligenceId, input, by) => {
+      const item = diligence.find((entry) => entry.diligence_id === diligenceId);
+      if (!item) return;
+      item.questionnaire = {
+        ...item.questionnaire,
+        answered_on: input.on,
+        answers_file_id: input.file_id ?? item.questionnaire.answers_file_id,
+      };
+      touch(item, by);
+      save();
+      log("diligence", item.diligence_id, "questionnaire", `answered ${input.on}`, by);
+    },
+  };
+  core.provide(DILIGENCE_QUESTIONNAIRE, inside);
+
+  /** The questionnaire imported for a diligence, with its count; null without the module or one. */
+  const linkedOf = (diligenceId: string): QuestionnaireLine | null => {
+    const service = core.need<QuestionnairesForDiligence>(SECURITY_SERVICES.questionnaires);
+    if (!service || typeof service.forDiligence !== "function") return null;
+    try {
+      return service.forDiligence(diligenceId);
+    } catch (error) {
+      core.log(`diligence: the questionnaires could not be read: ${errorName(error)}`);
+      return null;
+    }
+  };
+
   core.provideDue((): DueItem[] => {
     const today = core.day();
     const items: DueItem[] = [];
@@ -178,15 +251,19 @@ export function register(core: DataCore): void {
         due &&
         !item.questionnaire.answered_on &&
         due <= addDays(today, QUESTIONNAIRE_AHEAD)
-      )
+      ) {
+        const linked = linkedOf(item.diligence_id);
         items.push({
           key: `diligence:${item.diligence_id}:questionnaire`,
           kind: "diligence",
           title: `Answer ${item.firm}'s questionnaire`,
-          sub: "Diligence · their questionnaire",
+          sub: linked
+            ? `Diligence · their questionnaire · ${answeredWords(linked.answered, linked.total)}`
+            : "Diligence · their questionnaire",
           due_on: due,
           href: `/data/waitlist/${item.entry_id}#waitlist-diligence`,
         });
+      }
     }
     for (const trial of trials) {
       if (trial.decision) continue;
@@ -279,7 +356,11 @@ export function register(core: DataCore): void {
     return {
       diligence: [...diligence]
         .sort((a, b) => (a.state === b.state ? byFirm(a, b) : a.state === "open" ? -1 : 1))
-        .map((item) => ({ ...item, entry_stage: stageOf.get(item.entry_id) ?? null })),
+        .map((item) => ({
+          ...item,
+          entry_stage: stageOf.get(item.entry_id) ?? null,
+          linked: linkedOf(item.diligence_id),
+        })),
       trials: [...trials]
         .sort((a, b) => byFirm(a, b) || a.dataset.localeCompare(b.dataset))
         .map((trial) => ({ ...trial, entry_stage: stageOf.get(trial.entry_id) ?? null })),
@@ -296,8 +377,10 @@ export function register(core: DataCore): void {
   core.route("GET", "/data/diligence/for-entry/:entryId", (ctx) => {
     const entryId = ctx.params[0] ?? "";
     const mine = diligence.filter((item) => item.entry_id === entryId);
+    const open = mine.find((item) => item.state === "open") ?? null;
     return {
-      diligence: mine.find((item) => item.state === "open") ?? null,
+      diligence: open,
+      linked: open ? linkedOf(open.diligence_id) : null,
       closed: mine.filter((item) => item.state === "closed").length,
       trials: trials
         .filter((trial) => trial.entry_id === entryId)

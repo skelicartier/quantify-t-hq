@@ -1,0 +1,167 @@
+/* Systems › Tools, a tool and Accounts, and the person's Systems section
+   (ws-notes/security/spec.md §6.8). One column that never grows past the page; dense tables
+   that scroll inside their frame and never cut a cell; forms in popovers. Tokens only;
+   radius 0; no side stripe; phone rules at 720px. Prefixed hqdata-. Printed, each page is
+   its data without the controls, each source's address after its link. */
+@layer pages {
+  .hqdata-systems {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    min-width: 0;
+  }
+
+  .hqdata-systems > *,
+  .hqdata-systems section {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .hqdata-systems p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-systems__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    min-width: 0;
+  }
+
+  .hqdata-systems__tools > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hqdata-systems__links,
+  .hqdata-systems__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+  }
+
+  .hqdata-systems__acts {
+    margin-top: 4px;
+  }
+
+  .hqdata-systems__inline {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+  }
+
+  .hqdata-systems__possible {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .hqdata-systems__filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 6px 8px;
+    min-width: 0;
+  }
+
+  .hqdata-systems__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .hqdata-systems__holds {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 12px 12px;
+    border: 1px solid var(--line);
+  }
+
+  .hqdata-systems__holds legend {
+    padding: 0 4px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+  }
+
+  .hqdata-systems__check,
+  .hqdata-systems__late {
+    color: var(--attention);
+  }
+
+  .hqdata-systems__check {
+    display: block;
+    font-size: var(--fs-ui);
+  }
+
+  .hqdata-systems__gone {
+    color: var(--muted);
+  }
+
+  .hqdata-systems td .table-sub {
+    display: block;
+  }
+
+  .hqdata-systems__prose {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-systems__facts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    margin: 0;
+  }
+
+  .hqdata-systems__fact {
+    display: grid;
+    grid-template-columns: minmax(0, 14em) minmax(0, 1fr);
+    gap: 4px 12px;
+    min-width: 0;
+  }
+
+  .hqdata-systems__fact dt {
+    color: var(--muted);
+  }
+
+  .hqdata-systems__fact dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hqdata-systems__fact .table-sub {
+    display: block;
+  }
+
+  .hqdata-systems__list {
+    margin: 0;
+    padding-left: 1.2em;
+  }
+
+  @media (max-width: 720px) {
+    .hqdata-systems__pair,
+    .hqdata-systems__fact {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+}
+
+@media print {
+  .hqdata-systems .popover,
+  .hqdata-systems form,
+  .hqdata-systems__acts,
+  .hqdata-systems__links {
+    display: none !important;
+  }
+}

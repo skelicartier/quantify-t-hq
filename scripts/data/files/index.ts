@@ -16,6 +16,7 @@ import { decode, toCsv } from "../text";
 import { ZipLimitError, ZipWriter, zipEntryName } from "../zip";
 import { USED_FOR_SOURCES } from "../company-contracts";
 import { DUTIES_USED_FOR, HOLD_SOURCES, type FileHold, type HoldsFiles } from "../duties-contracts";
+import { SECURITY_USED_FOR } from "../security-contracts";
 import { dayWords } from "../../../src/lib/data/labels-company";
 import { Checker } from "./check";
 import { registerPacks } from "./packs";
@@ -594,7 +595,13 @@ function previewOf(text: TextJobs, version: Version): Preview {
 function detailOf(core: DataCore, vault: Vault, text: TextJobs, file: FileMeta): Answer {
   const current = vault.current(file);
   const used: { label: string; href: string }[] = [];
-  for (const name of ["leads", "waitlist", ...USED_FOR_SOURCES, ...DUTIES_USED_FOR]) {
+  for (const name of [
+    "leads",
+    "waitlist",
+    ...USED_FOR_SOURCES,
+    ...DUTIES_USED_FOR,
+    ...SECURITY_USED_FOR,
+  ]) {
     try {
       used.push(...(core.need<UsedFor>(name)?.usedFor?.(file.file_id) ?? []));
     } catch (error) {

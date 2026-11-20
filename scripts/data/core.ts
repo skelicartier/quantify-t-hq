@@ -16,6 +16,7 @@ import { Builds } from "./builds";
 import { localDay } from "./days";
 import type { CompanyDueKind } from "./company-contracts";
 import type { DutiesDueKind } from "./duties-contracts";
+import type { SecurityDueKind } from "./security-contracts";
 import { attemptOf, staffOf } from "./guard";
 import {
   type DataState,
@@ -80,7 +81,8 @@ export type DueKind =
   | "file_review"
   | "action"
   | CompanyDueKind
-  | DutiesDueKind;
+  | DutiesDueKind
+  | SecurityDueKind;
 export type DueItem = {
   key: string;
   kind: DueKind;
@@ -129,6 +131,15 @@ export const MODULES = [
   "statements",
   "close",
   "cash",
+  "tools",
+  "devices",
+  "logs",
+  "recovery",
+  "policies",
+  "findings",
+  "assurance",
+  "profiles",
+  "questionnaires",
   "backup",
 ] as const;
 export type ModuleName = (typeof MODULES)[number];

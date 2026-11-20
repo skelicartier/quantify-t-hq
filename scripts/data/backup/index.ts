@@ -14,6 +14,7 @@ import { Refused } from "../../mail-merge/engine";
 import type { DataCore } from "../core";
 import { clean, isRouteId } from "../guard";
 import type { Staff } from "../protocol";
+import { SECURITY_SERVICES, type BackupLast } from "../security-contracts";
 import { makeBackup } from "./make";
 
 const LAST = "backup/last.json";
@@ -73,6 +74,15 @@ export async function register(core: DataCore): Promise<void> {
   };
 
   core.builds.provide("backup", (handle, input) => makeBackup(core, handle, input, freeBytes));
+
+  /** When Data's own backup was last downloaded, for Systems › Backups (security spec §7.4). */
+  const backupLast: BackupLast = {
+    last: () => {
+      const found = last();
+      return found ? { at: found.at, bytes: found.bytes } : null;
+    },
+  };
+  core.provide(SECURITY_SERVICES.backupLast, backupLast);
 
   core.provideOverview("backup", () => ({
     last_at: last()?.at ?? null,
