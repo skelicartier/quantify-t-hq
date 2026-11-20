@@ -311,6 +311,66 @@ try {
   check((await text()).includes("Held back:"), "the left-out view gives the reasons");
   await audit(page, "mailing-finished");
 
+  console.log("Finding someone in the record");
+  const whoSection = page.locator('section[data-section="merge-recipients"]');
+  const findFor = async (words: string) => {
+    await whoSection.locator("#merge-record-find").fill(words);
+    await Promise.all([
+      page.waitForURL((url) => url.searchParams.get("find") === words),
+      whoSection.locator("button", { hasText: "Find" }).click(),
+    ]);
+    await page.waitForLoadState("networkidle");
+  };
+  const whoRows = whoSection.locator("tbody tr");
+  await page.goto(mailingUrl, { waitUntil: "networkidle" });
+  // MF1
+  await findFor("partner17@fund17.example");
+  check(
+    (await whoRows.count()) === 1 &&
+      (await whoRows.first().innerText()).includes("partner17@fund17.example"),
+    "MF1 the find box finds one address",
+    await whoRows.count(),
+  );
+  check(
+    (await whoSection.innerText()).includes(`1 of ${PEOPLE} matches`),
+    "MF1 and says how many it looked through",
+  );
+  check(page.url().endsWith("#merge-recipients"), "MF1 the page stays at the record", page.url());
+  // MF2: Fund 25 and Fund 250 to 259, whatever the capitals.
+  await findFor("FUND 25");
+  check((await whoRows.count()) === 11, "MF2 it finds a firm's people", await whoRows.count());
+  // MF3: Fund 29 and Fund 290 to 293; the last four were held back.
+  await findFor("fund 29");
+  check((await whoRows.count()) === 5, "MF3 five match in all", await whoRows.count());
+  await whoSection.locator("a", { hasText: "Left out" }).click();
+  await page.waitForURL((url) => url.searchParams.get("state") === "skipped");
+  await page.waitForLoadState("networkidle");
+  check(
+    (await whoRows.count()) === 4 &&
+      (await whoSection.innerText()).includes(`4 of ${HELD} match`) &&
+      (await whoSection.locator("#merge-record-find").inputValue()) === "fund 29",
+    "MF3 a filter keeps what is looked for",
+    await whoRows.count(),
+  );
+  await audit(page, "mailing-found");
+  // MF4
+  await findFor("nobody-of-that-name");
+  check(
+    (await whoSection.innerText()).includes("Nobody matches") &&
+      (await whoSection.innerText()).includes("Nobody found"),
+    "MF4 nobody found says so",
+  );
+  // MF5
+  await whoSection.locator("a", { hasText: "Clear" }).click();
+  await page.waitForURL((url) => !url.searchParams.has("find"));
+  await page.waitForLoadState("networkidle");
+  check(
+    (await whoRows.count()) === HELD &&
+      (await whoSection.locator("a", { hasText: "Clear" }).count()) === 0,
+    "MF5 Clear shows everyone again, in the same filter",
+    await whoRows.count(),
+  );
+
   console.log("Delivery read back");
   const deliverySection = page.locator('section[data-section="merge-delivery"]');
   // A stat's label is drawn in capitals by CSS, so innerText reads it that way: compare in lower case.

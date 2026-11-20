@@ -132,6 +132,7 @@ const ROUTES: JsonRoute[] = [
         offset: number(query, "offset"),
         preview: number(query, "preview"),
         ...(query.get("state") ? { state: query.get("state")! } : {}),
+        ...(query.get("q") ? { q: query.get("q")! } : {}),
       }),
   },
   {

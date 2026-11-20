@@ -172,6 +172,7 @@ export default async function MailingPage({
     from?: string;
     dview?: string;
     doffset?: string;
+    find?: string;
   }>;
 }) {
   const { mailingId } = await params;
@@ -183,6 +184,8 @@ export default async function MailingPage({
   const offset = Math.max(0, Number.parseInt(query.offset ?? "0", 10) || 0);
   const wanted = FILTERS.some((filter) => filter.key === query.state) ? query.state! : "all";
   const search = (query.q ?? "").slice(0, 200);
+  // The record's own find box, kept apart from the picker's `q` above it.
+  const find = (query.find ?? "").trim().slice(0, 200);
   const show = query.show === "picked" ? "picked" : "all";
   const from = Math.max(0, Number.parseInt(query.from ?? "0", 10) || 0);
   let detail: MergeMailingDetail | null = null;
@@ -195,7 +198,7 @@ export default async function MailingPage({
   let olderSender = false;
   if (allowed) {
     try {
-      detail = await readMergeMailing(mailingId, { preview, offset, state: wanted });
+      detail = await readMergeMailing(mailingId, { preview, offset, state: wanted, q: find });
       if (detail.mailing.editable && detail.mailing.pick_only)
         people = await readMergePeople(mailingId, { q: search, offset: from, view: show });
       if (detail.mailing.mode === "live" && detail.mailing.state !== "draft") {
@@ -234,11 +237,24 @@ export default async function MailingPage({
   };
   const sendable = detail?.audience.sendable ?? 0;
   const sendLabel = `Send to ${formatNumber(sendable)} ${sendable === 1 ? "person" : "people"}`;
-  const filterHref = (state: string) => (state === "all" ? path : `${path}?state=${state}`);
+  // The record's two keys: which outcome, and who is being looked for. A page starts over.
+  const recordHref = (next: { state?: string; offset?: number; find?: string }) => {
+    const params = new URLSearchParams();
+    const state = next.state ?? wanted;
+    if (state !== "all") params.set("state", state);
+    const looking = next.find ?? find;
+    if (looking) params.set("find", looking);
+    if (next.offset) params.set("offset", String(next.offset));
+    const text = params.toString();
+    // While someone is looked for (or the look is being cleared), the page stays at the record.
+    return `${path}${text ? `?${text}` : ""}${looking || find ? "#merge-recipients" : ""}`;
+  };
+  const filterHref = (state: string) => recordHref({ state });
   // The Delivery section's own two keys, kept apart from the recipients table's.
   const deliveryHref = (next: { view?: DeliveryViewKey; offset?: number }) => {
     const params = new URLSearchParams();
     if (wanted !== "all") params.set("state", wanted);
+    if (find) params.set("find", find);
     if (offset) params.set("offset", String(offset));
     const view = next.view ?? dview;
     if (view !== "didnt") params.set("dview", view);
@@ -250,6 +266,10 @@ export default async function MailingPage({
   const retryCount = delivered?.retry.count ?? 0;
   const reading = delivered?.read.reading === true;
   const deliveryView = DELIVERY_VIEWS.find((view) => view.key === dview)!;
+  // A sender started before the find box answers with everyone: say so, not a wrong list.
+  const findUnread = find !== "" && detail !== null && detail.recipients.q === undefined;
+  const found = detail?.recipients.total ?? 0;
+  const foundOf = detail?.recipients.of ?? found;
   return (
     <>
       <PageHeader
@@ -930,6 +950,33 @@ export default async function MailingPage({
                   </a>
                 }
               >
+                <form
+                  className="merge-search"
+                  method="get"
+                  action={`${path}#merge-recipients`}
+                  role="search"
+                >
+                  <label className="sr-only" htmlFor="merge-record-find">
+                    Find someone in this mailing by address, name, firm or list
+                  </label>
+                  <Input
+                    id="merge-record-find"
+                    name="find"
+                    type="search"
+                    maxLength={200}
+                    defaultValue={find}
+                    placeholder="Find by address, name, firm or list…"
+                  />
+                  {wanted !== "all" && <input type="hidden" name="state" value={wanted} />}
+                  <button type="submit" className="btn btn--small">
+                    Find
+                  </button>
+                  {find && (
+                    <Link className="btn btn--small btn--ghost" href={recordHref({ find: "" })}>
+                      Clear
+                    </Link>
+                  )}
+                </form>
                 <SegmentedLinks
                   label="Show"
                   items={FILTERS.map((filter) => ({
@@ -938,11 +985,31 @@ export default async function MailingPage({
                     current: filter.key === wanted,
                   }))}
                 />
+                {find &&
+                  (findUnread ? (
+                    <p className="side-quiet" role="status">
+                      The find box starts working when the sender is next restarted, between
+                      batches. Everyone is shown below.
+                    </p>
+                  ) : (
+                    <p className="side-quiet" role="status">
+                      {found === 0
+                        ? `Nobody matches “${find}”.`
+                        : `${formatNumber(found)} of ${formatNumber(foundOf)} ${
+                            found === 1 ? "matches" : "match"
+                          } “${find}”.`}
+                    </p>
+                  ))}
                 <DataTable
                   caption="Who was written to"
                   columns={RECIPIENT_COLUMNS}
                   isEmpty={detail.recipients.rows.length === 0}
-                  empty={<EmptyState compact title="Nobody here" />}
+                  empty={
+                    <EmptyState
+                      compact
+                      title={find && !findUnread ? "Nobody found" : "Nobody here"}
+                    />
+                  }
                 >
                   {detail.recipients.rows.map((row) => (
                     <tr key={row.email}>
@@ -975,9 +1042,7 @@ export default async function MailingPage({
                       detail.recipients.offset + detail.recipients.limit < detail.recipients.total
                     }
                     nextOffset={detail.recipients.offset + detail.recipients.limit}
-                    buildHref={(next) =>
-                      `${path}?offset=${next}${wanted === "all" ? "" : `&state=${wanted}`}`
-                    }
+                    buildHref={(next) => recordHref({ offset: next })}
                     noun="people"
                   />
                 )}

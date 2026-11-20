@@ -1304,7 +1304,10 @@ export class MergeEngine {
     return { deleted: mailing.name };
   }
 
-  mailingDetail(id: string, query: { state?: string; offset?: number; preview?: number }) {
+  mailingDetail(
+    id: string,
+    query: { state?: string; offset?: number; preview?: number; q?: string },
+  ) {
     const mailing = this.#mailing(id);
     const run = this.#runs.get(mailing.id);
     const showRun = run !== undefined && mailing.state !== "draft";
@@ -1334,22 +1337,34 @@ export class MergeEngine {
     const wanted = query.state ?? "all";
     const listNames = new Map([...this.#lists.values()].map((list) => [list.id, list.name]));
     const standings = showRun && run.mode === "live" ? this.#delivery.standings(mailing.id) : null;
-    const rows = showRun
-      ? run.recipients
-          .map((recipient) => {
-            const outcome = run.outcomes.get(recipient.key);
-            return {
-              email: recipient.email,
-              name: recipient.name,
-              list: listNames.get(recipient.list_id) ?? "A list since removed",
-              state: outcome ? outcome.state : ("waiting" as const),
-              reason: outcome?.reason ?? "",
-              at: outcome?.at ?? null,
-              delivery: standings?.get(recipient.email)?.shown ?? null,
-            };
-          })
-          .filter((row) => wanted === "all" || row.state === wanted)
+    // Finding one person in the record: the address, the name, the list or any column.
+    const needle = (query.q ?? "").trim().toLowerCase().slice(0, 200);
+    const inState = showRun
+      ? run.recipients.filter(
+          (recipient) =>
+            wanted === "all" || (run.outcomes.get(recipient.key)?.state ?? "waiting") === wanted,
+        )
       : [];
+    const rows = inState
+      .filter(
+        (recipient) =>
+          !needle ||
+          `${recipient.email} ${recipient.name} ${listNames.get(recipient.list_id) ?? ""} ${Object.values(recipient.values).join(" ")}`
+            .toLowerCase()
+            .includes(needle),
+      )
+      .map((recipient) => {
+        const outcome = run!.outcomes.get(recipient.key);
+        return {
+          email: recipient.email,
+          name: recipient.name,
+          list: listNames.get(recipient.list_id) ?? "A list since removed",
+          state: outcome ? outcome.state : ("waiting" as const),
+          reason: outcome?.reason ?? "",
+          at: outcome?.at ?? null,
+          delivery: standings?.get(recipient.email)?.shown ?? null,
+        };
+      });
     return {
       mailing: {
         ...this.#mailingSummary(mailing),
@@ -1398,6 +1413,9 @@ export class MergeEngine {
         offset,
         limit: PAGE,
         total: rows.length,
+        // What was looked for, and how many there are before looking.
+        q: needle,
+        of: inState.length,
       },
       key_set: this.#key !== "",
       sent_today: this.#sentToday(),

@@ -393,6 +393,9 @@ const mailingDetailSchema = ok.extend({
     offset: z.number(),
     limit: z.number(),
     total: z.number(),
+    // A sender from before the find box sends neither: it has not looked for anyone.
+    q: z.string().optional(),
+    of: z.number().optional(),
   }),
   key_set: z.boolean(),
   sent_today: z.number(),
@@ -593,12 +596,13 @@ export const createMergeMailing = (name: string) =>
   ask(mailingEnvelope, "POST", "/mailings", { name });
 export function readMergeMailing(
   mailingId: string,
-  query: { state?: string; offset?: number; preview?: number } = {},
+  query: { state?: string; offset?: number; preview?: number; q?: string } = {},
 ) {
   const search = new URLSearchParams();
   if (query.state) search.set("state", query.state);
   if (query.offset) search.set("offset", String(query.offset));
   if (query.preview) search.set("preview", String(query.preview));
+  if (query.q) search.set("q", query.q);
   const suffix = search.size > 0 ? `?${search.toString()}` : "";
   return ask(mailingDetailSchema, "GET", `/mailings/${id(mailingId)}${suffix}`);
 }

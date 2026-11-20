@@ -846,3 +846,74 @@ describe("a real send", () => {
     expect(await engine.syncStops()).toEqual({ added: 0, seen: 3 });
   });
 });
+
+describe("finding someone in the record of a send", () => {
+  const CSV = [
+    "First Name,Firm,Email",
+    "Asha,Northwind Capital,asha@northwind.test",
+    "Ben,Northwind Capital,ben@northwind.test",
+    "Chen,Harbour Partners,chen@harbour.test",
+    "Dee,Kestrel Fund,dee@kestrel.test",
+  ].join("\n");
+
+  async function sentTo(engine: MergeEngine) {
+    const made = await ready(engine, CSV);
+    provider.script.set("dee@kestrel.test", ["failed"]);
+    engine.startMailing(made.id, { confirm: 4 });
+    await drain(engine);
+    return made;
+  }
+  const found = (engine: MergeEngine, id: string, q: string, state?: string) => {
+    const { recipients } = engine.mailingDetail(id, { q, ...(state ? { state } : {}) });
+    return { emails: recipients.rows.map((row) => row.email), ...recipients, rows: undefined };
+  };
+
+  it("finds by address, name, firm or list, whatever the capitals", async () => {
+    const engine = open();
+    const { id } = await sentTo(engine);
+    expect(found(engine, id, "chen@harbour.test").emails).toEqual(["chen@harbour.test"]);
+    expect(found(engine, id, "  CHEN@Harbour ").emails).toEqual(["chen@harbour.test"]);
+    expect(found(engine, id, "asha").emails).toEqual(["asha@northwind.test"]);
+    expect(found(engine, id, "northwind capital")).toMatchObject({
+      emails: ["asha@northwind.test", "ben@northwind.test"],
+      total: 2,
+      of: 4,
+      q: "northwind capital",
+    });
+    expect(found(engine, id, "seed funds").total).toBe(4);
+  });
+
+  it("looks inside the outcome that is showing", async () => {
+    const engine = open();
+    const { id } = await sentTo(engine);
+    expect(found(engine, id, ".test", "failed")).toMatchObject({
+      emails: ["dee@kestrel.test"],
+      total: 1,
+      of: 1,
+    });
+    expect(found(engine, id, "kestrel", "sent")).toMatchObject({ emails: [], total: 0, of: 3 });
+    expect(found(engine, id, "northwind", "sent").emails).toEqual([
+      "asha@northwind.test",
+      "ben@northwind.test",
+    ]);
+  });
+
+  it("shows everyone when nothing is typed, and nobody when nothing matches", async () => {
+    const engine = open();
+    const { id } = await sentTo(engine);
+    expect(found(engine, id, "   ")).toMatchObject({ total: 4, of: 4, q: "" });
+    expect(engine.mailingDetail(id, {}).recipients).toMatchObject({ total: 4, of: 4, q: "" });
+    expect(found(engine, id, "nobody@elsewhere.test")).toMatchObject({
+      emails: [],
+      total: 0,
+      of: 4,
+    });
+    // A draft has no record to look through.
+    const draft = engine.createMailing({ name: "Next" }).mailing.id;
+    expect(engine.mailingDetail(draft, { q: "asha" }).recipients).toMatchObject({
+      rows: [],
+      total: 0,
+      of: 0,
+    });
+  });
+});

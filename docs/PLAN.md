@@ -473,6 +473,17 @@ on the stop list by itself. An unsubscribe that arrives as an email is recorded 
 Replies → No). Checked: vitest 141 files, 1,279 tests; the next draft's preview shows the link in
 both parts.
 
+**Added 2026-11-20: a find box in "Who was written to".** The founder asked to look up one address
+in a mailing's record. A mailing page that has run now has a find box over its recipients table
+(`find` in the page's address, kept apart from the picker's `q`): it matches the address, the
+name, the list's name or any column, whatever the capitals, inside the outcome filter that is
+showing, and says "3 of 290 match". The sender does the looking (`mailingDetail` takes `q` and
+answers `recipients.q` and `recipients.of`; `GET /mailings/{id}?q=`), so a sender started before
+this answers without them and the page says the box starts at the next restart. Filters, pages and
+the Delivery section's links keep what is looked for; Clear drops it; the CSV stays the whole
+record. Checked on a copy (`hq-find`): vitest 180 files, 1,586 tests; `check:mail-merge` 114/0
+(MF1 to MF5 are the new steps). Rollback: `ship-backup-20261120-find/`.
+
 **As of the delivery batch: Mail merge reads delivery back; Batches, lead source, trust packs**
 (2026-11-18). Portal and the local sender; no service change. Spec: `ws-notes/delivery/spec.md` in
 `~/Library/Caches/hq-work`; from the second research report
