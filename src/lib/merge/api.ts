@@ -606,6 +606,29 @@ export function readMergeMailing(
   const suffix = search.size > 0 ? `?${search.toString()}` : "";
   return ask(mailingDetailSchema, "GET", `/mailings/${id(mailingId)}${suffix}`);
 }
+const messageSchema = ok.extend({
+  message: z.object({
+    email: z.string(),
+    name: z.string(),
+    list: z.string(),
+    state: recipientState,
+    at: z.string().nullable(),
+    practice: z.boolean(),
+    from_email: z.string(),
+    from_name: z.string(),
+    subject: z.string(),
+    html: z.string(),
+    text: z.string(),
+  }),
+});
+export type MergeMessage = z.infer<typeof messageSchema>["message"];
+/** One person's message from a send, as it was made out for them. */
+export const readMergeMessage = (mailingId: string, email: string) =>
+  ask(
+    messageSchema,
+    "GET",
+    `/mailings/${id(mailingId)}/message?${new URLSearchParams({ email }).toString()}`,
+  );
 export function readMergePeople(
   mailingId: string,
   query: { q?: string; offset?: number; view?: string } = {},

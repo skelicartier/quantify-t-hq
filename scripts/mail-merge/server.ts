@@ -137,6 +137,12 @@ const ROUTES: JsonRoute[] = [
   },
   {
     method: "GET",
+    pattern: new RegExp(`^/mailings/${ID}/message$`),
+    run: (engine, [id], _b, query) =>
+      engine.mailingMessage(id!, { email: query.get("email") ?? "" }),
+  },
+  {
+    method: "GET",
     pattern: new RegExp(`^/mailings/${ID}/people$`),
     run: (engine, [id], _b, query) =>
       engine.people(id!, {

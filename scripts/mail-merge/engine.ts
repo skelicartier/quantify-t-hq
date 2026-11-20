@@ -1423,6 +1423,46 @@ export class MergeEngine {
     };
   }
 
+  /**
+   * One person's message from a send, as it was made out for them: the frozen words with
+   * their own row. Whoever the send left out has none.
+   */
+  mailingMessage(id: string, query: { email?: string }) {
+    const mailing = this.#mailing(id);
+    const run = this.#runs.get(mailing.id);
+    if (!run || mailing.state === "draft")
+      throw new Refused(409, "not_sent", "This mailing has not gone yet, so nobody has a message.");
+    // As the record holds it: an address from an older import need not pass today's check.
+    const email = (query.email ?? "").trim().toLowerCase().slice(0, 254);
+    const theirs = run.recipients.filter((item) => item.email === email);
+    if (!email || theirs.length === 0)
+      throw new Refused(404, "not_found", "Nobody by that address is in this mailing.");
+    const recipient = theirs.find((item) => run.outcomes.get(item.key)?.state !== "skipped");
+    if (!recipient)
+      throw new Refused(
+        409,
+        "left_out",
+        "They were left out of this send, so no message was made out to them.",
+      );
+    const outcome = run.outcomes.get(recipient.key);
+    const rendered = render(run.message, recipient.values);
+    return {
+      message: {
+        email: recipient.email,
+        name: recipient.name,
+        list: this.#lists.get(recipient.list_id)?.name ?? "A list since removed",
+        state: outcome ? outcome.state : ("waiting" as const),
+        at: outcome?.at ?? null,
+        practice: run.mode === "practice",
+        from_email: run.message.from_email,
+        from_name: run.message.from_name,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+      },
+    };
+  }
+
   /** The fields a message uses, for a form that asks for them. `email` needs no asking. */
   #messageFields(mailing: Mailing) {
     const labels = new Map(this.#fields(mailing).map((field) => [field.key, field.label]));

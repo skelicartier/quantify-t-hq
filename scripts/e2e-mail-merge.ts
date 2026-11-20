@@ -371,6 +371,83 @@ try {
     await whoRows.count(),
   );
 
+  console.log("Seeing one person's message");
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const sheet = page.locator("dialog.merge-message");
+  const seeLinks = whoSection.locator("a", { hasText: "See the mail" });
+  const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+  // MS1: the filter still shows the people left out, and none of them has a message.
+  check((await seeLinks.count()) === 0, "MS1 a person left out has no message to see");
+  await page.goto(mailingUrl, { waitUntil: "networkidle" });
+  await findFor("partner17@fund17.example");
+  const handed = sent().find((mail) => mail.to_email === "partner17@fund17.example");
+  // MS2
+  await seeLinks.first().click();
+  await sheet.waitFor({ state: "visible" });
+  await sheet.locator(".mail-preview__text pre").waitFor({ state: "attached" });
+  // The "Subject" label is drawn in capitals by CSS, and innerText reads it that way.
+  const sheetWords = (await sheet.innerText()).replace(/\s+/g, " ");
+  check(
+    sheetWords.includes("The mail to partner17@fund17.example") &&
+      sheetWords
+        .toLowerCase()
+        .includes(`subject ${(handed?.subject ?? "no such mail").toLowerCase()}`),
+    "MS2 See the mail opens that person's message",
+    sheetWords.slice(0, 160),
+  );
+  check(
+    (await sheet.locator(".mail-preview__text pre").textContent()) === handed?.text &&
+      (await sheet.locator("iframe").getAttribute("srcdoc")) === handed?.html,
+    "MS2 it is the message the provider was handed, both parts",
+  );
+  check(
+    new URL(page.url()).searchParams.get("find") === "partner17@fund17.example" &&
+      (await page.evaluate(() => window.scrollY)) > 200,
+    "MS2 the record stays where it was, with what was looked for",
+    page.url(),
+  );
+  // MS3
+  await sheet.locator("button", { hasText: "Copy the message" }).click();
+  await says(page, "Copied: the message.");
+  check((await clipboard()) === handed?.text, "MS3 Copy the message copies its words");
+  await sheet.locator("button", { hasText: "Copy the subject" }).click();
+  await says(page, "Copied: the subject.");
+  check((await clipboard()) === handed?.subject, "MS3 Copy the subject copies the subject");
+  await sheet.locator("button", { hasText: "Copy the address" }).click();
+  await says(page, "Copied: the address.");
+  check(
+    (await clipboard()) === "partner17@fund17.example",
+    "MS3 Copy the address copies the address",
+  );
+  await audit(page, "mailing-message");
+  // MS4
+  await sheet.locator("button", { hasText: "Close" }).click();
+  await page.waitForURL((url) => !url.searchParams.has("see"));
+  await sheet.waitFor({ state: "detached" });
+  check(
+    new URL(page.url()).searchParams.get("find") === "partner17@fund17.example" &&
+      (await whoRows.count()) === 1,
+    "MS4 Close goes back to the record as it was",
+    page.url(),
+  );
+  // MS5
+  await seeLinks.first().click();
+  await sheet.waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  await page.waitForURL((url) => !url.searchParams.has("see"));
+  await sheet.waitFor({ state: "detached" });
+  check(true, "MS5 Escape closes it too");
+  // MS6: an address typed into the page's own address, for someone the send left out.
+  await page.goto(`${mailingUrl}?see=partner290%40fund290.example`, { waitUntil: "networkidle" });
+  await sheet.waitFor({ state: "visible" });
+  check(
+    (await sheet.innerText()).includes("left out of this send") &&
+      (await sheet.locator("iframe").count()) === 0,
+    "MS6 a person left out has a sentence, not a message",
+  );
+  await sheet.locator("button", { hasText: "Close" }).click();
+  await sheet.waitFor({ state: "detached" });
+
   console.log("Delivery read back");
   const deliverySection = page.locator('section[data-section="merge-delivery"]');
   // A stat's label is drawn in capitals by CSS, so innerText reads it that way: compare in lower case.

@@ -1,0 +1,88 @@
+/* One person's message, opened over a mailing's record of who was written to. Tokens only;
+   radius 0; the sheet scrolls inside itself, and at phone width it takes the screen's width. */
+@layer pages {
+  .merge-message {
+    width: min(820px, calc(100vw - 32px));
+    max-height: 86vh;
+    margin: 7vh auto 0;
+    padding: 0;
+    border: 1px solid var(--line-strong);
+    color: var(--text);
+    background: var(--panel);
+    box-shadow: var(--lift-shadow);
+    overflow: auto;
+  }
+
+  .merge-message::backdrop {
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  .merge-message__frame {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+    padding: 16px 18px 20px;
+  }
+
+  .merge-message__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .merge-message__head h2 {
+    min-width: 0;
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .merge-message__facts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .merge-message__copy {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .merge-message__said {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .merge-message__note {
+    margin: 0;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .merge-message .mail-preview__frame {
+    min-height: 380px;
+  }
+
+  /* The row's button keeps to one line, so a row is never two lines tall for it. */
+  .merge-message__open {
+    white-space: nowrap;
+  }
+
+  @media (max-width: 720px) {
+    .merge-message {
+      margin-top: 3vh;
+      max-height: 94vh;
+    }
+
+    .merge-message__frame {
+      padding: 14px 14px 18px;
+    }
+  }
+}

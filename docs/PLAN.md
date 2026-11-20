@@ -484,6 +484,22 @@ the Delivery section's links keep what is looked for; Clear drops it; the CSV st
 record. Checked on a copy (`hq-find`): vitest 180 files, 1,586 tests; `check:mail-merge` 114/0
 (MF1 to MF5 are the new steps). Rollback: `ship-backup-20261120-find/`.
 
+**Added 2026-11-20: "See the mail" in "Who was written to".** The founder asked to see what one
+person was sent and to copy it. Each row of a mailing's record that has a message (everyone but
+the people left out) has a "See the mail" button. It opens that person's message over the page
+(`see` in the page's address; every other key is kept and the page does not move), as it
+arrived: who to, who from, the list, the outcome, the subject, the HTML in the sandboxed frame
+and the plain-text part, with "Copy the message" (the plain-text part), "Copy the subject" and
+"Copy the address". Close, Escape or a press outside goes back to the record as it was. The
+sender makes the message from the send's frozen words and the person's frozen row
+(`mailingMessage`, `GET /mailings/{id}/message?email=`), so it is what the provider was handed
+even after the footer changes or the list is deleted; a person left out, a stranger and a draft
+each get a sentence. A sender started before this answers `no_such_route` and the sheet says it
+starts at the next restart. New: `src/components/mail/merge-message.tsx`,
+`src/app/(portal)/mail/merge/message.css`. Checked on a copy (`hq-see`): vitest 180 files, 1,589
+tests; `check:mail-merge` 125/0 (MS1 to MS6 are the new steps). Rollback:
+`ship-backup-20261120-see/`.
+
 **As of the delivery batch: Mail merge reads delivery back; Batches, lead source, trust packs**
 (2026-11-18). Portal and the local sender; no service change. Spec: `ws-notes/delivery/spec.md` in
 `~/Library/Caches/hq-work`; from the second research report

@@ -917,3 +917,77 @@ describe("finding someone in the record of a send", () => {
     });
   });
 });
+
+describe("one person's message from a send", () => {
+  const CSV = [
+    "First Name,Firm,Email,CheckFirst",
+    "Asha,Northwind Capital,asha@northwind.test,",
+    "Ben,Harbour Partners,ben@harbour.test,Check this one",
+    "Chen,Kestrel Fund,chen@kestrel.test,",
+  ].join("\n");
+
+  async function sentTo(engine: MergeEngine) {
+    const made = await ready(engine, CSV);
+    engine.updateMailing(made.id, { hold_column: "checkfirst" });
+    engine.startMailing(made.id, { confirm: 2 });
+    await drain(engine);
+    return made;
+  }
+
+  it("is the message the provider was handed, whatever the capitals of the address", async () => {
+    const engine = open();
+    const { id } = await sentTo(engine);
+    const { message } = engine.mailingMessage(id, { email: "  ASHA@Northwind.test " });
+    expect(message).toMatchObject({
+      email: "asha@northwind.test",
+      list: "Seed funds",
+      state: "sent",
+      practice: false,
+      from_email: "aaryan@quantify.test",
+      from_name: "Aaryan",
+      subject: "Quantify Terminal x Northwind Capital",
+    });
+    expect(message.at).not.toBeNull();
+    expect(message.text).toContain("Hi Asha,");
+    expect(message.text).toContain("If you would rather not hear from me again");
+    const handed = provider.sent.find((mail) => mail.to_email === "asha@northwind.test")!;
+    expect([message.subject, message.html, message.text]).toEqual([
+      handed.subject,
+      handed.html,
+      handed.text,
+    ]);
+    // Each person's own: the next one reads their own name and firm.
+    expect(engine.mailingMessage(id, { email: "chen@kestrel.test" }).message).toMatchObject({
+      subject: "Quantify Terminal x Kestrel Fund",
+    });
+  });
+
+  it("stays as it was sent when the words or the list change afterwards", async () => {
+    const engine = open();
+    const { id, list } = await sentTo(engine);
+    const before = engine.mailingMessage(id, { email: "asha@northwind.test" }).message;
+    engine.saveSettings({ footer: "A different line under every message." });
+    engine.deleteList(list.id);
+    const after = engine.mailingMessage(id, { email: "asha@northwind.test" }).message;
+    expect([after.subject, after.html, after.text]).toEqual([
+      before.subject,
+      before.html,
+      before.text,
+    ]);
+    expect(after.list).toBe("A list since removed");
+  });
+
+  it("has nothing for a person left out, a stranger, or a draft", async () => {
+    const engine = open();
+    const { id } = await sentTo(engine);
+    expect(() => engine.mailingMessage(id, { email: "ben@harbour.test" })).toThrow("left out");
+    expect(() => engine.mailingMessage(id, { email: "nobody@elsewhere.test" })).toThrow(
+      "Nobody by that address",
+    );
+    expect(() => engine.mailingMessage(id, {})).toThrow("Nobody by that address");
+    const draft = engine.createMailing({ name: "Next" }).mailing.id;
+    expect(() => engine.mailingMessage(draft, { email: "asha@northwind.test" })).toThrow(
+      "has not gone yet",
+    );
+  });
+});

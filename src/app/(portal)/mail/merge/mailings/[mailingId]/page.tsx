@@ -24,6 +24,11 @@ import { MailTabs } from "@/components/mail/mail-tabs";
 import { MailingPill, RecipientPill, SenderDown } from "@/components/mail/merge";
 import { DeliveryPill, DeliveryWarnings, isDeliveryShown } from "@/components/mail/merge-delivery";
 import { MergeEditor } from "@/components/mail/merge-editor";
+import {
+  CopyMessageButtons,
+  MergeMessageDialog,
+  SeeMailLink,
+} from "@/components/mail/merge-message";
 import { PickBox } from "@/components/mail/merge-people";
 import { RenderedPreview } from "@/components/mail/rendered-preview";
 import { LiveRefresh } from "@/components/shell/live-refresh";
@@ -45,15 +50,18 @@ import {
   MergeUnavailableError,
   readMergeMailing,
   readMergeMailingDelivery,
+  readMergeMessage,
   readMergePeople,
   type MergeMailingDelivery,
   type MergeMailingDetail,
+  type MergeMessage,
   type MergePeople,
 } from "@/lib/merge/api";
 import { isRetry } from "@/lib/merge/delivery-contracts";
 import { requestNow } from "@/lib/request-time";
 
 import "../../delivery.css";
+import "../../message.css";
 
 export const metadata = { title: "Mailing" };
 export const dynamic = "force-dynamic";
@@ -65,6 +73,7 @@ const RECIPIENT_COLUMNS = [
   { key: "delivery", label: "Delivery" },
   { key: "why", label: "Why" },
   { key: "when", label: "When" },
+  { key: "mail", label: "Mail" },
 ];
 
 const DELIVERY_COLUMNS = [
@@ -101,6 +110,24 @@ async function readDelivery(
   } catch (error) {
     if (error instanceof MergeRequestError && error.code === "no_such_route") return "older_sender";
     if (error instanceof MergeRequestError || error instanceof MergeUnavailableError) return null;
+    throw error;
+  }
+}
+
+/**
+ * One person's message from a send. A sender older than this has no such answer; a person
+ * the send left out has no message, and the sender's own sentence says so.
+ */
+async function readMessage(
+  mailingId: string,
+  email: string,
+): Promise<MergeMessage | { refused: string } | "older_sender" | null> {
+  try {
+    return (await readMergeMessage(mailingId, email)).message;
+  } catch (error) {
+    if (error instanceof MergeRequestError && error.code === "no_such_route") return "older_sender";
+    if (error instanceof MergeRequestError) return { refused: error.message };
+    if (error instanceof MergeUnavailableError) return null;
     throw error;
   }
 }
@@ -173,6 +200,7 @@ export default async function MailingPage({
     dview?: string;
     doffset?: string;
     find?: string;
+    see?: string;
   }>;
 }) {
   const { mailingId } = await params;
@@ -186,6 +214,9 @@ export default async function MailingPage({
   const search = (query.q ?? "").slice(0, 200);
   // The record's own find box, kept apart from the picker's `q` above it.
   const find = (query.find ?? "").trim().slice(0, 200);
+  // Whose message is open over the record, if anyone's.
+  const see = (query.see ?? "").trim().slice(0, 254);
+  let seen: Awaited<ReturnType<typeof readMessage>> = null;
   const show = query.show === "picked" ? "picked" : "all";
   const from = Math.max(0, Number.parseInt(query.from ?? "0", 10) || 0);
   let detail: MergeMailingDetail | null = null;
@@ -206,6 +237,8 @@ export default async function MailingPage({
         delivered = read === "older_sender" ? null : read;
         olderSender = read === "older_sender";
       }
+      if (see && detail.mailing.state !== "draft" && detail.mailing.mode !== null)
+        seen = await readMessage(mailingId, see);
     } catch (error) {
       if (error instanceof MergeRequestError && error.status === 404) notFound();
       if (!(error instanceof MergeUnavailableError || error instanceof MergeRequestError))
@@ -250,6 +283,15 @@ export default async function MailingPage({
     return `${path}${text ? `?${text}` : ""}${looking || find ? "#merge-recipients" : ""}`;
   };
   const filterHref = (state: string) => recordHref({ state });
+  // A message opens over the page as it stands, so every key is kept; closing drops only `see`.
+  const seeHref = (email: string | null) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query))
+      if (typeof value === "string" && value && key !== "see") params.set(key, value);
+    if (email) params.set("see", email);
+    const text = params.toString();
+    return `${path}${text ? `?${text}` : ""}`;
+  };
   // The Delivery section's own two keys, kept apart from the recipients table's.
   const deliveryHref = (next: { view?: DeliveryViewKey; offset?: number }) => {
     const params = new URLSearchParams();
@@ -1030,6 +1072,11 @@ export default async function MailingPage({
                       </td>
                       <td>{row.reason}</td>
                       <td>{row.at && <Timestamp value={row.at} now={now} mode="relative" />}</td>
+                      <td>
+                        {row.state !== "skipped" && (
+                          <SeeMailLink href={seeHref(row.email)} email={row.email} />
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </DataTable>
@@ -1045,6 +1092,55 @@ export default async function MailingPage({
                     buildHref={(next) => recordHref({ offset: next })}
                     noun="people"
                   />
+                )}
+                {see && (
+                  <MergeMessageDialog
+                    key={see}
+                    title={`The mail to ${see.toLowerCase()}`}
+                    closeHref={seeHref(null)}
+                  >
+                    {seen === null ? (
+                      <p className="merge-message__note" role="status">
+                        The message could not be read from the sender just now.
+                      </p>
+                    ) : seen === "older_sender" ? (
+                      <p className="merge-message__note" role="status">
+                        Seeing a message starts when the sender is next restarted, between batches.
+                      </p>
+                    ) : "refused" in seen ? (
+                      <p className="merge-message__note" role="status">
+                        {seen.refused}
+                      </p>
+                    ) : (
+                      <>
+                        <p className="merge-message__facts">
+                          <span>
+                            To <span className="mono">{seen.email}</span>
+                            {seen.name ? ` (${seen.name})` : ""}
+                          </span>
+                          <span>
+                            From {seen.from_name} <span className="mono">{seen.from_email}</span>
+                          </span>
+                          <span>{seen.list}</span>
+                          <RecipientPill state={seen.state} practice={seen.practice} />
+                          {seen.at && <Timestamp value={seen.at} now={now} mode="relative" />}
+                        </p>
+                        <CopyMessageButtons
+                          items={[
+                            { key: "message", label: "Copy the message", text: seen.text },
+                            { key: "subject", label: "Copy the subject", text: seen.subject },
+                            { key: "address", label: "Copy the address", text: seen.email },
+                          ]}
+                        />
+                        <RenderedPreview
+                          subject={seen.subject}
+                          html={seen.html}
+                          text={seen.text}
+                          label={`The message to ${seen.email}`}
+                        />
+                      </>
+                    )}
+                  </MergeMessageDialog>
                 )}
               </RecordSection>
             )}
